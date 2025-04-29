@@ -1,0 +1,148 @@
+{
+    "actions": [
+        {"trigger": "open",                  "method": "windows.open_window",       "transcribe": false, "trigger_variants": ["focus", "focus on"], "params": {"center_mouse": false}},
+ 
+        {"trigger": "action",                "method": "actions.action",            "transcribe": false},
+        {"trigger": "snippet",               "method": "actions.snippet",           "transcribe": false},
+
+        {"trigger": "open file menu",        "method": "windows.open_file_menu",    "transcribe": false},
+
+        {"trigger": "hide oracle",           "method": "windows.hide_oracle",       "transcribe": false, "trigger_variants": ["hide globe", "i'd globe", "i'd oracle"]},
+        {"trigger": "show oracle",           "method": "windows.show_oracle",       "transcribe": false, "trigger_variants": ["show globe", "shew globe"]},
+        {"trigger": "change oracle",         "method": "windows.change_oracle",     "transcribe": false, "trigger_variants": ["change globe"]},
+
+        {"trigger": "open gpt",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["alt", "space"]},
+        {"trigger": "open spotlight",        "method": "shortcuts.keypress",        "trigger_variants": ["spotlight", "spotlight search"], "transcribe": false, "params": ["command", "space"]},
+
+        {"trigger": "new tab",               "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "t"]},
+        {"trigger": "previous tab",          "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "alt", "left"]},
+        {"trigger": "next tab",              "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "alt", "right"]} ,
+
+        {"trigger": "copy",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "c"]},
+        {"trigger": "paste",                 "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "v"]},
+        {"trigger": "cut",                   "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "x"]},
+        {"trigger": "down",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["down"]},
+        {"trigger": "up",                    "method": "shortcuts.keypress",        "transcribe": false, "params": ["up"]},
+        {"trigger": "next",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["right"]},
+        {"trigger": "previous",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["left"]},
+        {"trigger": "select all",            "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "a"]},
+        {"trigger": "space bar",             "method": "shortcuts.keypress",        "transcribe": false, "trigger_variants": ["space", "spacebar"], "params": ["space"]},
+        {"trigger": "control",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["ctrl"]},
+        {"trigger": "command",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["command"]},
+        {"trigger": "enter this",            "method": "shortcuts.keypress",        "transcribe": false, "trigger_variants": ["enter this"], "params": ["enter"]},
+        {"trigger": "undo",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "z"]},
+        {"trigger": "redo",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "shift", "z"]},
+        {"trigger": "back space",            "method": "shortcuts.keypress",        "transcribe": false, "trigger_variants": ["backspace"], "params": ["backspace"]},
+        {"trigger": "back",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "left"]},
+        {"trigger": "pause",                 "method": "shortcuts.keypress",        "transcribe": false, "params": ["pause"]},
+        {"trigger": "stop",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["stop"]},
+        {"trigger": "play",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["play"]},
+        {"trigger": "next track",            "method": "shortcuts.keypress",        "transcribe": false, "trigger_variants": ["next"], "params": ["next"]},
+        {"trigger": "previous track",        "method": "shortcuts.keypress",        "transcribe": false, "params": ["previous"]},
+        {"trigger": "mute",                  "method": "shortcuts.keypress",        "transcribe": false, "params": ["mute"]},
+        {"trigger": "volume up",             "method": "shortcuts.keypress",        "transcribe": false, "params": ["volume up"]},
+        {"trigger": "volume down",           "method": "shortcuts.keypress",        "transcribe": false, "params": ["volume down"]},
+        {"trigger": "tab",                   "method": "shortcuts.keypress",        "transcribe": false, "params": ["tab"]},
+        {"trigger": "command",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["command"]},
+
+        {"trigger": "delete",                "method": "shortcuts.keypress",        "transcribe": false, "params": ["delete"]},
+
+        {"trigger": "clear line",            "method": "shortcuts.keypress",        "transcribe": false, "params": [{"trigger":"select all"}, {"trigger":"back space"}]},
+
+        {"trigger": "delete line",            "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "shift", "k"]},
+        {"trigger": "press alt",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["alt"]},
+        {"trigger": "alt",                    "method": "shortcuts.keypress",        "transcribe": false, "params": ["alt"]},
+        {"trigger": "press escape",           "method": "shortcuts.keypress",        "transcribe": false, "trigger_variants": ["escape", "cancel"], "params": ["escape"]},
+
+        {"trigger": "press F1",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F1"], "variant": ["press f one"]},
+        {"trigger": "press F2",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F2"], "variant": ["press f two"]},
+        {"trigger": "press F3",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F3"], "variant": ["press f three"]},
+        {"trigger": "press F4",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F4"], "variant": ["press f four"]},
+        {"trigger": "press F5",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F5"], "variant": ["press f five"]},
+        {"trigger": "press F6",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F6"], "variant": ["press f six"]},
+        {"trigger": "press F7",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F7"], "variant": ["press f seven"]},
+        {"trigger": "press F8",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F8"], "variant": ["press f eight"]},
+        {"trigger": "press F9",               "method": "shortcuts.keypress",        "transcribe": false, "params": ["F9"], "variant": ["press f nine"]},
+        {"trigger": "press F10",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["F10"], "variant": ["press f ten"]},
+        {"trigger": "press F11",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["F11"], "variant": ["press f eleven"]},
+        {"trigger": "press F12",              "method": "shortcuts.keypress",        "transcribe": false, "params": ["F12"], "variant": ["press f twelve"]},
+
+        {"trigger": "close",                  "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "w"]},
+        {"trigger": "quit",                   "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "q"]},
+
+        {"trigger": "page up",                "method": "shortcuts.keypress",       "transcribe": false, "params": ["fn", "up"]},
+        {"trigger": "page down",              "method": "shortcuts.keypress",       "transcribe": false, "params": ["fn", "down"]},
+        {"trigger": "home",                   "method": "shortcuts.keypress",       "transcribe": false, "params": ["fn", "left"]},
+        {"trigger": "end",                    "method": "shortcuts.keypress",       "transcribe": false, "params": ["fn", "right"]},
+        {"trigger": "delete forward",         "method": "shortcuts.keypress",       "transcribe": false, "params": ["fn", "delete"]},
+
+        {"trigger": "force delete",           "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "backspace"]},
+
+        {"trigger": "refresh",                "method": "shortcuts.keypress",       "transcribe": false, "params": ["command", "r"]},
+        {"trigger": "reload",                 "method": "shortcuts.keypress",        "transcribe": false, "params": ["command", "r"]},
+
+        {"trigger": "mouse up",               "method": "windows.mouse_move",        "trigger_variants": ["cursor up", "move cursor up", "move mouse up"], "transcribe": false, "params": [0, -80]},
+        {"trigger": "mouse down",             "method": "windows.mouse_move",        "trigger_variants": ["cursor down", "move cursor down", "move mouse down"], "transcribe": false, "params": [0, 80]},
+        {"trigger": "mouse left",             "method": "windows.mouse_move",        "trigger_variants": ["move mouse left","move cursor left"], "transcribe": false, "params": [-80, 0]},
+        {"trigger": "mouse right",            "method": "windows.mouse_move",        "trigger_variants": ["move mouse right", "move cursor right"], "transcribe": false, "params": [80, 0]},
+
+        {"trigger": "mouse slow up",          "method": "windows.mouse_move",        "trigger_variants": ["cursor slow up", "move mouse slow up"], "transcribe": false, "params": [0, -30]},
+        {"trigger": "mouse slow down",        "method": "windows.mouse_move",        "trigger_variants": ["cursor slow down", "move mouse slow down"], "transcribe": false, "params": [0, 30]},
+        {"trigger": "mouse slow left",        "method": "windows.mouse_move",        "trigger_variants": ["cursor slow left", "move mouse slow left"], "transcribe": false, "params": [-30, 0]},
+        {"trigger": "mouse slow right",       "method": "windows.mouse_move",        "trigger_variants": ["cursor slow right", "move mouse slow right"], "transcribe": false, "params": [30, 0]},
+
+        {"trigger": "move mouse center",      "method": "windows.mouse_center",               "trigger_variants": ["move cursor center"], "transcribe": false},
+        {"trigger": "move mouse middle",      "method": "windows.mouse_horizontal_middle",    "trigger_variants": ["move cursor middle"], "transcribe": false},
+        {"trigger": "move mouse vertical middle", "method": "windows.mouse_vertical_middle", "trigger_variants": ["move cursor vertical middle"], "transcribe": false},
+
+        {"trigger": "move mouse top",         "method": "windows.mouse_top",           "trigger_variants": ["move cursor top", "move cursor far top"], "transcribe": false},
+        {"trigger": "move mouse bottom",      "method": "windows.mouse_bottom",        "trigger_variants": ["move cursor bottom", "move cursor far bottom"], "transcribe": false},
+        {"trigger": "move mouse left of screen",        "method": "windows.mouse_left",          "trigger_variants": ["move cursor left of screen", "move mouse far left", "move cursor far left"], "transcribe": false},
+        {"trigger": "move mouse right of screen",       "method": "windows.mouse_right",         "trigger_variants": ["move cursor right of screen", "move mouse far right", "move cursor far right"], "transcribe": false},
+
+        {"trigger": "right click",            "method": "windows.mouse_click",        "trigger_variants": ["cursor right click", "cursor click right", "mouse right click"], "transcribe": false, "params": ["right"]},
+        {"trigger": "click",                  "method": "windows.mouse_click",        "trigger_variants": ["cursor click left", "cursor click", "mouse click"], "transcribe": false, "params": ["left"]},
+        {"trigger": "double click",           "method": "windows.mouse_click",        "trigger_variants": ["cursor double click", "cursor double click left", "cursor double"], "transcribe": false, "params": ["left", "double"]},
+
+        {"trigger": "scroll up",             "method": "windows.mouse_scroll",        "trigger_variants": ["mouse scroll up", "cursor scroll up"], "transcribe": false, "params": [100]},
+        {"trigger": "scroll down",           "method": "windows.mouse_scroll",        "trigger_variants": ["mouse scroll down", "cursor scroll down"], "transcribe": false, "params": [-100]},
+
+        {"trigger": "copy transcription",    "method": "windows.copy",                "transcribe": false},
+
+        {"trigger": "up",                    "method": "shortcuts.keypress",          "transcribe": false, "params": ["up"]},
+        {"trigger": "down",                  "method": "shortcuts.keypress",          "transcribe": false, "params": ["down"]},
+        {"trigger": "left",                  "method": "shortcuts.keypress",          "transcribe": false, "params": ["left"]},
+        {"trigger": "right",                 "method": "shortcuts.keypress",          "transcribe": false, "params": ["right"]},
+
+        {"trigger": "dictate",               "method": "transcribe.response",         "transcribe": true, "end": {"words":["end this", "enter this", "stop listening"], "silence":true},  "clipboard":true, "params":{"method":"dictate", "speak":false}},
+        {"trigger": "transcribe",            "method": "transcribe.listen",           "trigger_variants": ["listen", "listen to"], "transcribe": true, "end": {"words":["end this", "enter this", "stop listening"], "silence":false}, "clipboard":true},
+        {"trigger": "read",                  "method": "transcribe.response",         "trigger_variants": ["read", "speak", "recite", "announce", "announce transcription", "announce", "read transcription", "read text"], "transcribe": true, "end": {"words":["end this", "enter this"], "silence":2}, "clipboard": true, "params":{"method":"default",  "speak":true}},
+
+        {"trigger": "agent",                 "method": "transcribe.response",         "trigger_variants": ["agent", "hey", "jarvis"], "transcribe": true, "end": {"words":["end this", "enter this"], "silence":true}, "clipboard": false, "params":{"method":"agent", "speak":true}},
+        {"trigger": "explain",               "method": "transcribe.response",         "trigger_variants": ["elaborate","could", "can", "why", "what", "when", "who", "refine"], "transcribe": true, "end": {"words":["end this", "enter this"], "silence":true}, "clipboard": true, "params":{"method":"explain", "speak":true}},
+        {"trigger": "calculate",             "method": "transcribe.response",         "trigger_variants": ["figure out", "understand", "decipher", "parse", "analyze", "break down", "break it down", "break it down for me"], "transcribe": true, "end": {"words":["end this", "enter this", "stop listening"], "silence":false}, "clipboard":true, "params":{"method":"transcribe", "speak":false}},
+        
+        {"trigger": "translate",             "method": "transcribe.response",        "trigger_variants": ["translate to", "translate into", "translate in to", "translate in"], "transcribe": true, "end": {"words":["end this", "enter this"], "silence":true}, "clipboard": true, "params":{"method":"translate", "speak":true}}
+    ],
+    "exit_words": ["exit", "quit"],
+    "start_listening": ["start listening", "listen", "listen to"],
+    "stop_listening": ["stop listening", "stop", "halt"],
+    "stop_speaking": ["stop speaking", "shut up", "be quiet", "shut it", "stop", "stop talking", "hold on", "wait", "hold up"],
+    "filler_words": ["um", "uh", "er", "ah", "hmm", "hmmm", "hmm", "mmhmm", "mm", "huh", "the"],
+    "confirm_words": ["enter this", "end this", "stop listening"],
+    "shortcut_names": {
+        "word": "Microsoft Word",
+        "excel": "Microsoft Excel",
+        "powerpoint": "Microsoft PowerPoint",
+        "chrome": "Google Chrome",
+        "safari": "Safari",
+        "firefox": "Firefox",
+        "brave": "Brave Browser",
+        "vlc": "VLC",
+        "v l c": "VLC",
+        "cursor": "Cursor"
+    },
+    "openai": {
+        "api_key": "<put your key here>"
+    }
+}

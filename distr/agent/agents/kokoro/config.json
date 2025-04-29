@@ -1,0 +1,5 @@
+{
+    "llm": "gemma3:4b",
+    "sst": "whisper.cpp",
+    "mode": "offline"
+}

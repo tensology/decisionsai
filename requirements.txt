@@ -1,0 +1,41 @@
+pywhispercpp @ git+https://github.com/abdeladim-s/pywhispercpp@8ecb35b5cf424239fd9fda2d9ca013de1d133397
+PyQt6
+vosk
+pyautogui
+pyaudio
+# sentence-transformers
+fuzzywuzzy
+setuptools-rust
+sqlalchemy
+python-Levenshtein
+beautifulsoup4
+transformers==4.38.0
+lxml
+langchain_community
+ollama
+torch
+torchaudio
+spacy
+open-interpreter
+PyQt6-QScintilla
+elevenlabs
+pyAudioDspTools
+resampy
+numpy
+sounddevice
+soundfile
+kokoro-onnx
+colorama
+
+
+## requires installation manually:
+# pip install git+https://github.com/aarnphm/whispercpp.git -vv
+# brew install portaudio
+# brew install ffmpeg
+
+syntok>=1.4.4
+# spaCy dependencies
+spacy>=3.5.0
+regex>=2023.0.0
+# spaCy model (will be installed by setup.py)
+# python -m spacy download en_core_web_lg

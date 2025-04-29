@@ -1,0 +1,10 @@
+{
+    "tts": "elevenlabs",
+    "sst": "whisper.cpp",
+    "data": "dir:./voice_samples/",
+    "mode": "online",
+    "voice_settings": {
+        "stability": 0.3,
+        "similarity_boost": 1
+    }
+}
