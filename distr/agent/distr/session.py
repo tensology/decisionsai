@@ -274,6 +274,13 @@ class AgentSession:
                                 print("[DEBUG] Clearing TTS and playback before new LLM response.")
                                 self.tts.cleanup()
                                 self.playback.clear_playlist()
+                                # Send ack to LLM if queue exists
+                                if hasattr(self.llm, 'tts_clear_ack_queue'):
+                                    try:
+                                        self.llm.tts_clear_ack_queue.put("ack")
+                                        print("[DEBUG] Sent TTS/playback clear ack to LLM.")
+                                    except Exception as e:
+                                        self.logger.error(f"Error sending TTS clear ack: {e}")
                     except Exception as e:
                         self.logger.error(f"Error processing LLM signal queue: {e}")
                     # ---------------------------------------------------------------

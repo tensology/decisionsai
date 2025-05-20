@@ -76,6 +76,7 @@ class LLMEngine:
         self.input_queue = MPQueue()    # Queue for incoming text to process
         self.output_queue = MPQueue()   # Queue for processed responses
         self.signal_queue = MPQueue()   # Queue for control signals between processes
+        self.tts_clear_ack_queue = MPQueue()  # Ack queue for TTS/playback clear
         
         # Initialize process control
         self.process = None
@@ -400,7 +401,12 @@ class LLMEngine:
         self.buffer = ""  # Clear sentence buffer
 
         # Signal to clear TTS and playback queue
-        self.signal_queue.put({"action": "clear_tts_and_playback"})        
+        self.signal_queue.put({"action": "clear_tts_and_playback"})
+        # Wait for AgentSession to acknowledge TTS/playback clear
+        try:
+            self.tts_clear_ack_queue.get(timeout=2.0)
+        except Exception:
+            self.logger.warning("Timeout waiting for TTS/playback clear ack")
         print(f"\n[{get_timestamp()}] --- Generating response ---")
         self.logger.info(f"--- Generating response ---")
         
