@@ -233,7 +233,7 @@ class STTEngine:
                             # If speech has continued for at least 0.5 seconds, clear the playback
                             if (speech_duration >= 0.5 and 
                                 not playback_cleared):
-                                print(f"\n[{get_timestamp()}] Speech continued for {speech_duration:.2f}s, clearing playback...")
+                                print(f"\n[{get_timestamp()}] Speech continued for {speech_duration:.2f}s, clearing playback... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                                 session = self._get_session_from_callback()
                                 if session and hasattr(session, 'clear_tts_and_playback'):
                                     session.clear_tts_and_playback()
@@ -241,6 +241,7 @@ class STTEngine:
                         
                         # Check if speech has been going on for more than max_speech_duration
                         if speech_duration >= self.max_speech_duration and not self.llm_interrupt_sent:
+                            print(f"[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                             self.signal_llm_interrupt()
                         
                         # For Vosk, process continuously

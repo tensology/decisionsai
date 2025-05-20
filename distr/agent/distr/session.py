@@ -24,7 +24,7 @@ class AgentSession:
                  tts_engine="kokoro", 
                  tts_api_key=None,
                  output_device=None,
-                 silence_threshold=0.0005,
+                 silence_threshold=0.03,
                  set_signal_handlers=True, 
                  *args, **kwargs):
         """
