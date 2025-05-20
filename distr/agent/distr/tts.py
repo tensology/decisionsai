@@ -586,6 +586,7 @@ class TTSEngine:
                     })
             # Sort by position to maintain sentence order
             playlist.sort(key=lambda x: x.get('position', 0))
+            print(f"[DEBUG] TTS.get_playlist returning {[item['file_path'] for item in playlist]}")
             return playlist
 
     def wait_for_generation(self, timeout=30):

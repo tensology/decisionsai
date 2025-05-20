@@ -327,33 +327,26 @@ class Playback:
         if not hasattr(tts_engine, 'get_playlist'):
             self.logger.error("TTSEngine does not have a get_playlist method")
             return False
-            
         try:
             tts_playlist = tts_engine.get_playlist()
+            print(f"[DEBUG] TTS.get_playlist() returned {len(tts_playlist)} items")
             if not tts_playlist:
                 self.logger.warning("TTS playlist is empty")
                 return False
-                
             self.logger.info(f"Processing TTS playlist with {len(tts_playlist)} items")
             added_count = 0
-            
             with self.lock:
                 # Group files by sentence_group to maintain order
                 for item in tts_playlist:
                     if item.get('status') == 'generated' and item.get('file_path'):
                         file_path = item['file_path']
-                        
-                        # Skip if file doesn't exist
+                        # Skip if file doesn't exist or is already in playlist
                         if not os.path.exists(file_path):
                             self.logger.warning(f"File does not exist: {file_path}")
                             continue
-                        
-                        with self.processed_files_lock:
-                            if file_path in self.processed_files:
-                                self.logger.debug(f"File already processed: {file_path}")
-                                continue
-                            self.processed_files.add(file_path)
-                                
+                        if any(entry.get('file_path') == file_path for entry in self.playlist):
+                            print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
+                            continue
                         entry = {
                             'file_path': file_path,
                             'added_at': time.time(),
@@ -368,15 +361,12 @@ class Playback:
                         }
                         self.playlist.append(entry)
                         added_count += 1
-                        self.logger.info(f"Added file to playlist: {file_path}")
-                        
+                        print(f"[DEBUG] Added file to playlist: {file_path}")
                 # Sort playlist by position to maintain sentence order
                 if added_count > 0:
                     self.playlist.sort(key=lambda x: x.get('position', 0))
                     self.logger.info(f"Added {added_count} files from TTSEngine to playlist")
-                    
             return added_count > 0
-            
         except Exception as e:
             self.logger.error(f"Error adding TTS playlist: {e}")
             return False
@@ -468,51 +458,43 @@ class Playback:
                 # Get current item with thread safety
                 current_item = None
                 file_path = None
-                
                 with self.lock:
+                    print(f"[DEBUG] Playlist before popping: {[entry.get('file_path') for entry in self.playlist]}")
                     if not self.playlist:
                         self.logger.info("Playlist is empty, stopping playback")
                         break
-                    
                     current_item = self.playlist[0]
                     file_path = current_item.get('file_path') if isinstance(current_item, dict) else current_item
-
                     if not file_path:
                         self.logger.warning("Empty file path in playlist item, skipping")
                         self.playlist.pop(0)
                         continue
-
                 self.logger.info(f"Playing audio file: {file_path}")
-
                 # Load and play audio outside the lock to avoid holding it during I/O
                 audio_data, sample_rate = self._load_audio_file(file_path)
                 if audio_data is None or sample_rate is None:
                     self.logger.error(f"Failed to load audio file: {file_path}")
                     with self.lock:
                         self.playlist.pop(0)
+                        print(f"[DEBUG] Playlist after popping (failed load): {[entry.get('file_path') for entry in self.playlist]}")
                     continue
-
                 # Ensure volume is synced before playing
                 with self.volume_lock:
                     current_system_volume = self._get_system_volume()
                     if self.is_ducking:
-                        # Volume transition is handled by _start_volume_transition
                         pass
                     else:
                         self.volume = current_system_volume
-                
                 # Play the audio with retry logic
                 max_retries = 3
                 retry_count = 0
                 success = False
-                
                 while retry_count < max_retries and not success and not self._stop_playback.is_set():
                     success = self._play_audio_data(audio_data, sample_rate)
                     if not success:
                         retry_count += 1
                         self.logger.warning(f"Playback attempt {retry_count} failed for {file_path}")
                         time.sleep(0.1)  # Brief pause between retries
-                
                 if success:
                     # Update playlist status with thread safety
                     with self.lock:
@@ -521,27 +503,24 @@ class Playback:
                             current_item['played_at'] = time.time()
                         if self.playlist and self.playlist[0].get('file_path') == file_path:  # Verify item is still first
                             self.playlist.pop(0)
+                            print(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
                             self.logger.info(f"Successfully played and removed: {file_path}")
-                            
-                            # Add a small delay after successful playback to ensure audio completes
                             time.sleep(0.1)
                 else:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {file_path}")
                     with self.lock:
-                        if self.playlist and self.playlist[0].get('file_path') == file_path:  # Verify item is still first
-                            self.playlist.pop(0)  # Remove failed item to prevent infinite loop
-
+                        if self.playlist and self.playlist[0].get('file_path') == file_path:
+                            self.playlist.pop(0)
+                            print(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
             except Exception as e:
                 self.logger.error(f"Error in playback loop: {e}")
-                # Don't break the loop on error, just continue to next item
                 with self.lock:
                     if self.playlist:
-                        self.playlist.pop(0)  # Remove problematic item
-                time.sleep(0.1)  # Brief pause before continuing
+                        self.playlist.pop(0)
+                        print(f"[DEBUG] Playlist after popping (exception): {[entry.get('file_path') for entry in self.playlist]}")
+                time.sleep(0.1)
                 continue
-
-        # Ensure we're really done before stopping
-        time.sleep(0.2)  # Give a moment for the last audio to complete
+        time.sleep(0.2)
         self.is_playing = False
         self.logger.info("Playback loop ended")
 
@@ -939,11 +918,9 @@ class Playback:
         with tts_engine.generation_lock:
             for file_id, file_info in tts_engine.generated_files.items():
                 if file_info.get('status') == 'generated' and file_info.get('file_path'):
-                    # Check if file is already in playlist
                     file_path = file_info.get('file_path')
                     with self.lock:
                         if not any(entry.get('file_path') == file_path for entry in self.playlist):
-                            # Add new file to playlist
                             entry = {
                                 'file_path': file_path,
                                 'added_at': time.time(),
@@ -956,8 +933,10 @@ class Playback:
                                 'position': len(self.playlist)
                             }
                             self.playlist.append(entry)
-                            print(f"Added file to playlist: {file_path}")
-                            
+                            print(f"[DEBUG] Added file to playlist: {file_path}")
+                        else:
+                            print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
+
     def _load_audio_file(self, file_path):
         """Load audio file with error handling and logging"""
         try:

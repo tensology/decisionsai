@@ -79,7 +79,7 @@ class STTEngine:
     # ===========================================
     # 1. Initialization and Setup
     # ===========================================
-    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None, silence_threshold=0.0005):
+    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None, silence_threshold=0.03):
         """
         Initialize the STT engine with device and engine settings.
         

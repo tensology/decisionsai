@@ -266,6 +266,17 @@ class AgentSession:
             # Main event loop
             while self.running and not self._stop_event.is_set():
                 try:
+                    # --- NEW: Process LLM signal queue for clearing TTS and playback ---
+                    try:
+                        while not self.llm.signal_queue.empty():
+                            signal = self.llm.signal_queue.get_nowait()
+                            if signal.get("action") == "clear_tts_and_playback":
+                                print("[DEBUG] Clearing TTS and playback before new LLM response.")
+                                self.tts.cleanup()
+                                self.playback.clear_playlist()
+                    except Exception as e:
+                        self.logger.error(f"Error processing LLM signal queue: {e}")
+                    # ---------------------------------------------------------------
                     # Check if all components are still running
                     if not self.stt.running or \
                        not self.llm.running or \
@@ -311,7 +322,6 @@ class AgentSession:
         self.logger.info(f"[{get_timestamp()}] Stopping {self.agent_name} session...")
         self.running = False
         self._stop_event.set()  # Make sure the stop event is set
-        
         try:
             # First stop TTS and wait for it to complete
             if hasattr(self, 'tts'):
@@ -326,16 +336,16 @@ class AgentSession:
                     self.logger.info(f"[{get_timestamp()}] TTS engine stopped successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error stopping TTS engine: {e}")
-
             # Then stop playback before STT to ensure no audio conflicts
             if hasattr(self, 'playback'):
                 self.logger.info(f"[{get_timestamp()}] Stopping playback...")
                 try:
                     self.playback.stop_playback()
+                    self.playback.clear_playlist()
+                    print("[DEBUG] Cleared playback playlist on session stop.")
                     self.logger.info(f"[{get_timestamp()}] Playback stopped successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error stopping playback: {e}")
-
             # Then stop STT and wait for it to complete
             if hasattr(self, 'stt'):
                 self.logger.info(f"[{get_timestamp()}] Stopping STT engine...")
@@ -344,7 +354,6 @@ class AgentSession:
                     self.logger.info(f"[{get_timestamp()}] STT engine stopped successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error stopping STT engine: {e}")
-            
             # Finally stop LLM
             if hasattr(self, 'llm'):
                 self.logger.info(f"[{get_timestamp()}] Stopping LLM engine...")
@@ -357,27 +366,23 @@ class AgentSession:
                     self.logger.info(f"[{get_timestamp()}] LLM engine stopped successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error stopping LLM engine: {e}")
-            
             # Now do final cleanup of playback resources
             if hasattr(self, 'playback'):
                 self.logger.info(f"[{get_timestamp()}] Performing final playback cleanup...")
                 try:
                     self.playback.clear_playlist()
+                    print("[DEBUG] Cleared playback playlist on final cleanup.")
                     self.playback.cleanup()
                     self.logger.info(f"[{get_timestamp()}] Playback cleanup completed successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error during final playback cleanup: {e}")
-                    
             self.logger.info(f"[{get_timestamp()}] All engines stopped successfully")
-            
             # Give a small delay to ensure all resources are properly released
             time.sleep(0.5)
-                    
         except Exception as e:
             self.logger.error(f"[{get_timestamp()}] Error during shutdown: {e}")
             import traceback
             traceback.print_exc()
-            
         # Force garbage collection
         try:
             import gc
