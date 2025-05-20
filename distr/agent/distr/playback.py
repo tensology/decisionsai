@@ -334,39 +334,20 @@ class Playback:
                 self.logger.warning("TTS playlist is empty")
                 return False
             self.logger.info(f"Processing TTS playlist with {len(tts_playlist)} items")
-            added_count = 0
             with self.lock:
-                # Group files by sentence_group to maintain order
-                for item in tts_playlist:
-                    if item.get('status') == 'generated' and item.get('file_path'):
-                        file_path = item['file_path']
-                        # Skip if file doesn't exist or is already in playlist
-                        if not os.path.exists(file_path):
-                            self.logger.warning(f"File does not exist: {file_path}")
-                            continue
-                        if any(entry.get('file_path') == file_path for entry in self.playlist):
-                            print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
-                            continue
-                        entry = {
-                            'file_path': file_path,
-                            'added_at': time.time(),
-                            'status': 'queued',
-                            'auto_delete': True,
-                            'played_at': None,
-                            'retry_count': 0,
-                            'is_playing': False,
-                            'sentence_id': item.get('sentence_id'),
-                            'sentence_group': item.get('sentence_group'),
-                            'position': item.get('position', len(self.playlist))
-                        }
+                existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
+                for entry in tts_playlist:
+                    key = (entry.get('sentence_id'), entry.get('file_path'))
+                    if key not in existing_keys:
+                        entry['is_played'] = False
                         self.playlist.append(entry)
-                        added_count += 1
-                        print(f"[DEBUG] Added file to playlist: {file_path}")
-                # Sort playlist by position to maintain sentence order
-                if added_count > 0:
-                    self.playlist.sort(key=lambda x: x.get('position', 0))
-                    self.logger.info(f"Added {added_count} files from TTSEngine to playlist")
-            return added_count > 0
+                        print(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
+                        existing_keys.add(key)
+                    else:
+                        print(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
+                # Always sort playlist by (sentence_group, position)
+                self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
+            return True
         except Exception as e:
             self.logger.error(f"Error adding TTS playlist: {e}")
             return False
@@ -468,9 +449,7 @@ class Playback:
                 print("[DEBUG] Playlist before popping (full):")
                 for item in self.playlist:
                     print(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
-                current_item = self.playlist.pop(0)
-                print(f"[DEBUG] Playing file: {current_item.get('file_path')} (sentence_id: {current_item.get('sentence_id')}, position: {current_item.get('position')}, group: {current_item.get('sentence_group')}, is_played: {current_item.get('is_played')}, text: {current_item.get('text')})")
-                # Load and play audio outside the lock to avoid holding it during I/O
+                current_item = self.playlist[0]
                 audio_data, sample_rate = self._load_audio_file(current_item['file_path'])
                 if audio_data is None or sample_rate is None:
                     self.logger.error(f"Failed to load audio file: {current_item['file_path']}")
@@ -493,12 +472,12 @@ class Playback:
                         self.logger.warning(f"Playback attempt {retry_count} failed for {current_item['file_path']}")
                         time.sleep(0.1)  # Brief pause between retries
                 if success:
-                    # Update playlist status with thread safety
                     with self.lock:
                         if isinstance(current_item, dict):
                             current_item['played'] = True
                             current_item['played_at'] = time.time()
-                        if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:  # Verify item is still first
+                        # Remove the played item from the playlist
+                        if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
                             print(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
                             self.logger.info(f"Successfully played and removed: {current_item['file_path']}")
                             time.sleep(0.1)
@@ -507,6 +486,16 @@ class Playback:
                                 if sentence_id:
                                     self.tts.mark_as_played(sentence_id)
                                     print(f"[DEBUG] Marked as played: {sentence_id}")
+                            # Remove the item from the playlist
+                            self.playlist.pop(0)
+                    # Prune all played files from the playlist
+                    with self.lock:
+                        before_prune = len(self.playlist)
+                        self.playlist = [entry for entry in self.playlist if not entry.get('is_played', False)]
+                        after_prune = len(self.playlist)
+                        print(f"[DEBUG] Pruned played files from playlist. Before: {before_prune}, After: {after_prune}")
+                        # Always sort playlist by (sentence_group, position)
+                        self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
                 else:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
                     if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
@@ -909,33 +898,25 @@ class Playback:
 
     def check_and_add_new_files(self, tts_engine):
         """
-        Check for new files from the TTS engine and add them to the playlist.
-        
-        Args:
-            tts_engine: The TTS engine instance to check for new files
+        Check for new TTS files and add them to the playlist, deduplicating by (sentence_id, file_path).
         """
-        with tts_engine.generation_lock:
-            for file_id, file_info in tts_engine.generated_files.items():
-                if file_info.get('status') == 'generated' and file_info.get('file_path'):
-                    file_path = file_info.get('file_path')
-                    with self.lock:
-                        if not any(entry.get('file_path') == file_path for entry in self.playlist):
-                            entry = {
-                                'file_path': file_path,
-                                'added_at': time.time(),
-                                'status': 'queued',
-                                'auto_delete': True,
-                                'played_at': None,
-                                'retry_count': 0,
-                                'is_playing': False,
-                                'sentence_id': file_id,
-                                'position': len(self.playlist)
-                            }
-                            self.playlist.append(entry)
-                            print(f"[DEBUG] Added file to playlist: {file_path}")
-                        else:
-                            print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
-                            
+        if not hasattr(tts_engine, 'get_playlist'):
+            return
+        tts_playlist = tts_engine.get_playlist()
+        with self.lock:
+            existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
+            for entry in tts_playlist:
+                key = (entry.get('sentence_id'), entry.get('file_path'))
+                if key not in existing_keys:
+                    entry['is_played'] = False
+                    self.playlist.append(entry)
+                    print(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
+                    existing_keys.add(key)
+                else:
+                    print(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
+            # Always sort playlist by (sentence_group, position)
+            self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
+
     def _load_audio_file(self, file_path):
         """Load audio file with error handling and logging"""
         try:

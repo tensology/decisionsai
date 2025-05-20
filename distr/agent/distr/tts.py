@@ -279,9 +279,14 @@ class TTSEngine:
             sentence_id = text.get('sentence_id', sentence_id)
             sentence_group = text.get('group_id', sentence_group)
             position = text.get('position', position)
-            text = text.get('text', '')
-        if not text or text.strip() == "":
+            text = text.get('text', text)
+        if not text or not isinstance(text, str):
             return
+        # Deduplicate: Only add if sentence_id not in generated_files
+        with self.generation_lock:
+            if sentence_id and sentence_id in self.generated_files:
+                return
+        # Continue with normal processing
         if sentence_id is None:
             sentence_id = str(uuid.uuid4())
         if position is None:
@@ -572,10 +577,9 @@ class TTSEngine:
             max_kept (int): Maximum number of played files to keep for history
         """
         with self.generation_lock:
-            played = [k for k, v in self.generated_files.items() if v.get('is_played')]
-            # Only keep the most recent max_kept played files
-            for sentence_id in played[:-max_kept]:
-                del self.generated_files[sentence_id]
+            played = [k for k, v in self.generated_files.items() if v.get('is_played', False)]
+            for k in played[:-max_kept]:
+                del self.generated_files[k]
 
     def clear_unplayed_files_from_previous_groups(self, keep_group=None):
         """
@@ -605,7 +609,7 @@ class TTSEngine:
 
     def get_playlist(self) -> List[Dict[str, Any]]:
         """
-        Return files ready for playback as a playlist, sorted by position, no duplicates.
+        Return files ready for playback as a playlist, sorted by group and position, no duplicates.
         Returns:
             List[Dict]: List of generated files ready for playback
         """
@@ -615,19 +619,20 @@ class TTSEngine:
             for sentence_id, file_info in self.generated_files.items():
                 if file_info.get('status') == 'generated' and not file_info.get('is_played', False):
                     file_path = file_info.get('file_path')
-                    if file_path and file_path not in seen:
+                    key = (sentence_id, file_path)
+                    if file_path and key not in seen:
                         playlist.append({
                             'sentence_id': sentence_id,
-                            'file_path': file_path,
+                            'file_path': file_info.get('file_path'),
                             'position': file_info.get('position'),
                             'status': file_info.get('status'),
                             'sentence_group': file_info.get('sentence_group'),
                             'is_played': file_info.get('is_played', False),
-                            'text': file_info.get('text')
+                            'text': file_info.get('text'),
                         })
-                        seen.add(file_path)
-            playlist.sort(key=lambda x: x.get('position', 0))
-            print(f"[DEBUG] TTS.get_playlist returning {[item['file_path'] for item in playlist]} (ordered by position)")
+                        seen.add(key)
+            # Sort by group and position
+            playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
             return playlist
 
     def wait_for_generation(self, timeout=30):

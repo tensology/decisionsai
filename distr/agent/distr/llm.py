@@ -416,9 +416,9 @@ class LLMEngine:
             self.current_stream = stream
             # Process streaming response
             response_text = ""
-            sentences_processed = []
             group_id = str(uuid.uuid4())
             position_counter = 0
+            sent_sentences = set()  # Track (sentence, group_id) sent to TTS
             for chunk in stream:
                 # Check for cancellation request
                 if self.should_cancel_response:
@@ -435,8 +435,9 @@ class LLMEngine:
                     sentences = self.extract_sentences(content)
                     # Process each complete sentence
                     for sentence in sentences:
-                        if sentence not in sentences_processed:
-                            sentences_processed.append(sentence)
+                        key = (sentence.strip(), group_id)
+                        if key not in sent_sentences:
+                            sent_sentences.add(key)
                             sentence_id = str(uuid.uuid4())
                             self.process_sentence(
                                 sentence,
@@ -447,8 +448,9 @@ class LLMEngine:
                             position_counter += 1
             # Process any remaining text in buffer
             if self.buffer.strip() and not self.should_cancel_response:
-                if self.buffer not in sentences_processed:
-                    sentences_processed.append(self.buffer)
+                key = (self.buffer.strip(), group_id)
+                if key not in sent_sentences:
+                    sent_sentences.add(key)
                     sentence_id = str(uuid.uuid4())
                     self.process_sentence(
                         self.buffer,

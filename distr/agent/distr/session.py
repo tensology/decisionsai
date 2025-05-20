@@ -456,3 +456,13 @@ class AgentSession:
                             pass
         except:
             pass
+
+    def clear_old_tts_files_before_llm_response(self, keep_group):
+        """
+        Clear all unplayed/generated TTS files from previous groups, keeping only the current group.
+        Args:
+            keep_group (str): The group_id to keep
+        """
+        if hasattr(self.tts, 'clear_unplayed_files_from_previous_groups'):
+            self.tts.clear_unplayed_files_from_previous_groups(keep_group=keep_group)
+            self.logger.info(f"[SESSION] Cleared old TTS files, keeping group {keep_group}")
