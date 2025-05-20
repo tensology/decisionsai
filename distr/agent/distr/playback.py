@@ -346,7 +346,7 @@ class Playback:
                             continue
                         if any(entry.get('file_path') == file_path for entry in self.playlist):
                             print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
-                            continue
+                                continue
                         entry = {
                             'file_path': file_path,
                             'added_at': time.time(),
@@ -936,7 +936,7 @@ class Playback:
                             print(f"[DEBUG] Added file to playlist: {file_path}")
                         else:
                             print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
-
+                            
     def _load_audio_file(self, file_path):
         """Load audio file with error handling and logging"""
         try:

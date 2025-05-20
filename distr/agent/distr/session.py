@@ -15,7 +15,7 @@ import sounddevice as sd
 
 class AgentSession:
     def __init__(self, input_device=None, 
-                 agent_name="Ethan",
+                 agent_name="Amber",
                  stt_engine="whisper.cpp", 
                  stt_api_key=None, 
                  llm_engine="ollama", 
@@ -170,8 +170,8 @@ class AgentSession:
             self.voice_name = self.agent_name
 
         if self.tts_engine == "kokoro":
-            self.voice_name = "am_nicole"
-            self.agent_name = "Nicole"
+            self.voice_name = "af_heart"
+            self.agent_name = "Amber"
             self.logger.info(f"[{get_timestamp()}] Using default voice {self.voice_name}")
         
 
@@ -262,6 +262,12 @@ class AgentSession:
             # Send welcome message
             self.logger.info(f"[{get_timestamp()}] {self.agent_name} will welcome you shortly")                    
             self.llm.send_welcome_message()
+            # --- Ensure welcome message is played ---
+            self.logger.info(f"[{get_timestamp()}] Checking for welcome message TTS files...")
+            self.playback.check_and_add_new_files(self.tts)
+            if self.playback.playlist and not self.playback.is_playing:
+                self.logger.info(f"[{get_timestamp()}] Starting playback of welcome message ({len(self.playback.playlist)} files)")
+                self.playback.start()
             
             # Main event loop
             while self.running and not self._stop_event.is_set():

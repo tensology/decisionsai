@@ -318,7 +318,7 @@ class TTSEngine:
         text = re.sub(r'\s+', ' ', text)
         
         # Remove leading/trailing whitespace
-        text = text.strip()
+        text = text.strip()        
         return text
 
     # ===========================================
