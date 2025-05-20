@@ -24,6 +24,7 @@ class AgentSession:
                  tts_engine="kokoro", 
                  tts_api_key=None,
                  output_device=None,
+                 silence_threshold=0.0005,
                  set_signal_handlers=True, 
                  *args, **kwargs):
         """
@@ -33,6 +34,7 @@ class AgentSession:
             agent_name (str): The name of the agent
             input_device (str, optional): The name of the input device to use
             output_device (str, optional): The name of the output device to use
+            silence_threshold (float, optional): Energy threshold for silence detection
             set_signal_handlers (bool, optional): Whether to set signal handlers
             *args: Additional arguments
             **kwargs: Additional keyword arguments
@@ -119,7 +121,8 @@ class AgentSession:
             engine_type=stt_engine,
             api_key=stt_api_key,
             device_info=self.device_info,
-            llm_callback=self.llm.process_text
+            llm_callback=self.llm.process_text,
+            silence_threshold=silence_threshold
         )
 
         # Set up signal handlers if requested (should be disabled when run as a separate process)

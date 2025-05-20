@@ -79,7 +79,7 @@ class STTEngine:
     # ===========================================
     # 1. Initialization and Setup
     # ===========================================
-    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None):
+    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None, silence_threshold=0.0005):
         """
         Initialize the STT engine with device and engine settings.
         
@@ -89,6 +89,7 @@ class STTEngine:
             model_path (str, optional): Path to the model file for local engines
             api_key (str, optional): API key for cloud-based engines (e.g., AssemblyAI)
             llm_callback (callable): Callback function to handle transcribed text
+            silence_threshold (float, optional): Energy threshold for silence detection
         """
         # Initialize logger
         self.logger = logging.getLogger(__name__)
@@ -106,7 +107,10 @@ class STTEngine:
         # Speech detection configuration
         self.required_silence_duration = 0.8  # Required silence duration in seconds
         self.min_speech_duration = 0.5  # Minimum speech duration in seconds
-        self.silence_threshold = 0.003
+        self.silence_threshold = silence_threshold
+        self._debug_energy_prints = 0
+        self._debug_energy_start_time = None
+        self.max_debug_energy_prints = 100  # Print 100 energies (~5s at 50Hz)
         self.max_speech_duration = 2.0  # Maximum speech duration before interrupting LLM
         self.llm_interrupt_sent = False  # Flag to track if we've sent an interrupt
         
@@ -166,6 +170,12 @@ class STTEngine:
             bool: True if the audio is below the silence threshold
         """
         energy = np.abs(audio_data).mean()
+        # Debug print for first 5 seconds
+        if self._debug_energy_prints < self.max_debug_energy_prints:
+            if self._debug_energy_start_time is None:
+                self._debug_energy_start_time = time.time()
+            print(f"[DEBUG] Input energy: {energy:.6f} (threshold: {self.silence_threshold})")
+            self._debug_energy_prints += 1
         is_silent = energy < self.silence_threshold
         if is_silent and self.is_speaking:
             print(f"\r[{get_timestamp()}] Silence energy: {energy:.6f}", end="", flush=True)
