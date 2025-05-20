@@ -140,6 +140,11 @@ class Playback:
         
         # Register cleanup
         atexit.register(self.cleanup)
+        
+        # Initialize played blacklist
+        self.played_sentence_ids = set()
+        self.played_file_paths = set()
+        self._blacklist_clear_timer = None
     
     def _initialize_audio_system(self):
         """Initialize the audio system with configured settings."""
@@ -338,6 +343,11 @@ class Playback:
                 existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
                 for entry in tts_playlist:
                     key = (entry.get('sentence_id'), entry.get('file_path'))
+                    # Blacklist check
+                    if (entry.get('sentence_id') in self.played_sentence_ids or
+                        entry.get('file_path') in self.played_file_paths):
+                        print(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
+                        continue
                     if key not in existing_keys:
                         entry['is_played'] = False
                         self.playlist.append(entry)
@@ -443,6 +453,9 @@ class Playback:
                     if not last_playlist_empty:
                         print("[DEBUG] Playlist is empty before popping.")
                         last_playlist_empty = True
+                        # Schedule blacklist clear if playlist is empty and playback is not running
+                        if not self.is_playing:
+                            self._schedule_blacklist_clear()
                     time.sleep(0.05)
                     continue
                 last_playlist_empty = False
@@ -486,6 +499,9 @@ class Playback:
                                 if sentence_id:
                                     self.tts.mark_as_played(sentence_id)
                                     print(f"[DEBUG] Marked as played: {sentence_id}")
+                            # Add to blacklist
+                            self.played_sentence_ids.add(current_item.get('sentence_id'))
+                            self.played_file_paths.add(current_item.get('file_path'))
                             # Remove the item from the playlist
                             self.playlist.pop(0)
                     # Prune all played files from the playlist
@@ -494,8 +510,10 @@ class Playback:
                         self.playlist = [entry for entry in self.playlist if not entry.get('is_played', False)]
                         after_prune = len(self.playlist)
                         print(f"[DEBUG] Pruned played files from playlist. Before: {before_prune}, After: {after_prune}")
-                        # Always sort playlist by (sentence_group, position)
                         self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
+                    # If playlist is empty after popping, schedule blacklist clear
+                    if not self.playlist:
+                        self._schedule_blacklist_clear()
                 else:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
                     if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
@@ -907,6 +925,11 @@ class Playback:
             existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
             for entry in tts_playlist:
                 key = (entry.get('sentence_id'), entry.get('file_path'))
+                # Blacklist check
+                if (entry.get('sentence_id') in self.played_sentence_ids or
+                    entry.get('file_path') in self.played_file_paths):
+                    print(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
+                    continue
                 if key not in existing_keys:
                     entry['is_played'] = False
                     self.playlist.append(entry)
@@ -914,7 +937,6 @@ class Playback:
                     existing_keys.add(key)
                 else:
                     print(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
-            # Always sort playlist by (sentence_group, position)
             self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
 
     def _load_audio_file(self, file_path):
@@ -1077,3 +1099,13 @@ class Playback:
     def set_tts_engine(self, tts_engine):
         """Set the TTS engine instance for marking files as played."""
         self.tts = tts_engine
+
+    def _schedule_blacklist_clear(self, delay=60):
+        if self._blacklist_clear_timer:
+            self._blacklist_clear_timer.cancel()
+        def clear_blacklist():
+            self.played_sentence_ids.clear()
+            self.played_file_paths.clear()
+            print("[DEBUG] Cleared played blacklist.")
+        self._blacklist_clear_timer = threading.Timer(delay, clear_blacklist)
+        self._blacklist_clear_timer.start()
