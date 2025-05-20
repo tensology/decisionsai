@@ -265,41 +265,46 @@ class TTSEngine:
         
         return sentences
 
-    def process_text(self, text: str) -> None:
+    def process_text(self, text: str, sentence_id=None, sentence_group=None, position=None) -> None:
         """
-        Process text and add it to the generation queue.
-        
+        Process text and add it to the generation queue with provided metadata.
         Args:
             text (str): Text to be processed and converted to audio
+            sentence_id (str): Unique ID for the sentence
+            sentence_group (str): Group ID for this batch
+            position (int): Order position
         """
+        if isinstance(text, dict):
+            # Accept dict from TTS input queue
+            sentence_id = text.get('sentence_id', sentence_id)
+            sentence_group = text.get('group_id', sentence_group)
+            position = text.get('position', position)
+            text = text.get('text', '')
         if not text or text.strip() == "":
             return
-            
-        sentence_id = str(uuid.uuid4())
+        if sentence_id is None:
+            sentence_id = str(uuid.uuid4())
+        if position is None:
+            with self.generation_lock:
+                position = self.next_position
+                self.next_position += 1
         with self.generation_lock:
-            position = self.next_position
-            self.next_position += 1
-            
-            # Add to generated files with initial status
             self.generated_files[sentence_id] = {
                 'text': text,
                 'status': 'queued',
                 'file_path': None,
                 'position': position,
                 'error': None,
-                'is_played': False,  # Track played status separately
-                'is_generated': False  # Track generation status separately
+                'sentence_group': sentence_group,
+                'is_played': False,
+                'is_generated': False
             }
-            
-        # Add to generation queue
         self.generation_queue.put({
             'id': sentence_id,
             'text': text,
             'position': position
         })
-        
-        # Log the queued text
-        self.logger.info(f"Queued text for TTS generation: {text}")
+        self.logger.info(f"Queued text for TTS generation: {text} (group: {sentence_group}, pos: {position})")
 
     def _clean_text(self, text: str) -> str:
         """
@@ -524,69 +529,105 @@ class TTSEngine:
 
     def queue_sentence(self, text: str) -> str:
         """
-        Queue a sentence for TTS generation.
-        
+        Queue a sentence for TTS generation, ensuring strict order and grouping.
         Args:
             text (str): Text to be converted to speech
-            
         Returns:
-            str: The sentence ID for tracking
+            str: The sentence group ID for tracking
         """
-        sentence_id = str(uuid.uuid4())
-        
-        # Split text into sentences and process each one
+        sentence_group = str(uuid.uuid4())
         sentences = self.split_into_sentences(text)
-        
-        # Track the base position for this group of sentences
         with self.generation_lock:
-            base_position = len(self.generated_files)
-        
+            base_position = self.next_position
         for i, sentence in enumerate(sentences):
             if not sentence.strip():
                 continue
-                
-            # Create a unique ID for each sentence
-            sub_id = str(uuid.uuid4())
-            
-            # Add to generated files with initial status
+            sentence_id = str(uuid.uuid4())
             with self.generation_lock:
-                self.generated_files[sub_id] = {
-                    'text': sentence,
-                    'status': 'queued',
-                    'file_path': None,
-                    'position': base_position + i,  # Maintain sentence order
-                    'error': None,
-                    'sentence_group': sentence_id,  # Track which group this belongs to
-                    'is_played': False,  # Track played status separately
-                    'is_generated': False  # Track generation status separately
-                }
-            
-            # Process the text
-            self.process_text(sentence)
-            
-        return sentence_id
+                position = self.next_position
+                self.next_position += 1
+            self.process_text(
+                sentence,
+                sentence_id=sentence_id,
+                sentence_group=sentence_group,
+                position=position
+            )
+        return sentence_group
+
+    def mark_as_played(self, sentence_id: str):
+        """
+        Mark a generated file as played.
+        Args:
+            sentence_id (str): The sentence ID to mark as played
+        """
+        with self.generation_lock:
+            if sentence_id in self.generated_files:
+                self.generated_files[sentence_id]['is_played'] = True
+                self.generated_files[sentence_id]['status'] = 'played'
+
+    def prune_played_files(self, max_kept=10):
+        """
+        Remove played files from generated_files, keeping only the most recent unplayed/generated ones.
+        Args:
+            max_kept (int): Maximum number of played files to keep for history
+        """
+        with self.generation_lock:
+            played = [k for k, v in self.generated_files.items() if v.get('is_played')]
+            # Only keep the most recent max_kept played files
+            for sentence_id in played[:-max_kept]:
+                del self.generated_files[sentence_id]
+
+    def clear_unplayed_files_from_previous_groups(self, keep_group=None):
+        """
+        Remove all unplayed/generated files from previous groups except the current one.
+        Args:
+            keep_group (str): The group ID to keep (current LLM response)
+        """
+        with self.generation_lock:
+            to_delete = []
+            for sid, info in self.generated_files.items():
+                if info.get('status') != 'generated' or info.get('is_played', False):
+                    # Only consider unplayed/generated files
+                    continue
+                if keep_group and info.get('sentence_group') != keep_group:
+                    to_delete.append(sid)
+            for sid in to_delete:
+                file_path = self.generated_files[sid].get('file_path')
+                if file_path and os.path.exists(file_path):
+                    try:
+                        os.remove(file_path)
+                        self.logger.info(f"[TTS] Removed old unplayed file: {file_path}")
+                    except Exception as e:
+                        self.logger.warning(f"[TTS] Failed to remove file {file_path}: {e}")
+                del self.generated_files[sid]
+            if to_delete:
+                self.logger.info(f"[TTS] Cleared {len(to_delete)} unplayed/generated files from previous groups.")
 
     def get_playlist(self) -> List[Dict[str, Any]]:
         """
-        Return files ready for playback as a playlist.
-        
+        Return files ready for playback as a playlist, sorted by position, no duplicates.
         Returns:
             List[Dict]: List of generated files ready for playback
         """
         with self.generation_lock:
+            seen = set()
             playlist = []
             for sentence_id, file_info in self.generated_files.items():
-                if file_info.get('status') == 'generated':
-                    playlist.append({
-                        'sentence_id': sentence_id,
-                        'file_path': file_info.get('file_path'),
-                        'position': file_info.get('position'),
-                        'status': 'generated',
-                        'sentence_group': file_info.get('sentence_group')
-                    })
-            # Sort by position to maintain sentence order
+                if file_info.get('status') == 'generated' and not file_info.get('is_played', False):
+                    file_path = file_info.get('file_path')
+                    if file_path and file_path not in seen:
+                        playlist.append({
+                            'sentence_id': sentence_id,
+                            'file_path': file_path,
+                            'position': file_info.get('position'),
+                            'status': file_info.get('status'),
+                            'sentence_group': file_info.get('sentence_group'),
+                            'is_played': file_info.get('is_played', False),
+                            'text': file_info.get('text')
+                        })
+                        seen.add(file_path)
             playlist.sort(key=lambda x: x.get('position', 0))
-            print(f"[DEBUG] TTS.get_playlist returning {[item['file_path'] for item in playlist]}")
+            print(f"[DEBUG] TTS.get_playlist returning {[item['file_path'] for item in playlist]} (ordered by position)")
             return playlist
 
     def wait_for_generation(self, timeout=30):
@@ -677,16 +718,16 @@ class TTSEngine:
                 # Process input queue items
                 try:
                     item = self.input_queue.get_nowait()
+                    self.logger.info(f"[TTS] Received from input queue: {item}")
                     if item and isinstance(item, dict):
                         text = item.get('text')
-                        if text:
-                            self.logger.info(f"📥 Received text from input queue: {text}")
-                            self.process_text(text)
+                        self.logger.info(f"[TTS] Calling process_text with: text={text}, sentence_id={item.get('sentence_id')}, group_id={item.get('group_id')}, position={item.get('position')}")
+                        self.process_text(item)
                 except queue.Empty:
                     # No new input items, try to generate next audio file
                     result = self.generate_next()
                     if result:
-                        # Add to playlist
+                        self.logger.info(f"[TTS] Generated audio file: {result}")
                         with self.generation_lock:
                             self.generated_files[result['id']] = {
                                 'text': result['text'],
@@ -695,16 +736,17 @@ class TTSEngine:
                                 'generated_at': time.time(),
                                 'position': result['position']
                             }
-                        self.logger.info(f"Generated audio file: {result['file_path']}")
+                        self.logger.info(f"[TTS] Added to generated_files: id={result['id']}, text={result['text']}, file_path={result['file_path']}, position={result['position']}")
                     else:
                         # No items to generate, small sleep to prevent CPU spinning
                         time.sleep(0.01)
                 except Exception as e:
-                    self.logger.error(f"Error processing input queue: {e}")
+                    self.logger.error(f"[TTS] Error processing input queue: {e}")
                     time.sleep(0.01)
             except Exception as e:
-                self.logger.error(f"Unexpected error in input queue processing: {e}")
+                self.logger.error(f"[TTS] Unexpected error in input queue processing: {e}")
                 time.sleep(0.01)
+        self.logger.warning("[TTS] Input queue thread exiting!")
 
     def stop(self) -> None:
         """

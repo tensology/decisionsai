@@ -130,6 +130,8 @@ class AgentSession:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
 
+        # After initializing self.tts and self.playback
+        self.playback.set_tts_engine(self.tts)
 
     def get_voice_config(self):
         # Check for role.txt in the agent directory
@@ -297,28 +299,29 @@ class AgentSession:
                         self.logger.error(f"[{get_timestamp()}] One or more components stopped unexpectedly")
                         break
 
+                    # Before queuing new LLM sentences, clear old unplayed/generated files
+                    # NOTE: Do NOT call queue_sentence or clear_unplayed_files_from_previous_groups here with a placeholder.
+                    # Instead, this logic should be placed where you actually queue a new LLM response to TTS.
+                    # For example, in the LLM callback or wherever you process new LLM output:
+                    #   group_id = self.tts.queue_sentence(llm_response)
+                    #   self.tts.clear_unplayed_files_from_previous_groups(keep_group=group_id)
+                    # This ensures only the current LLM response's files are kept.
+
                     # Handle TTS generation and playback
                     generated = self.tts.generate_next()
                     if generated:
                         self.logger.info(f"[{get_timestamp()}] Generated audio file: {generated.get('file_path')}")
                         self.playback.check_and_add_new_files(self.tts)
-                        
-                        # Wait for TTS to finish generating all files
-                        if self.tts.wait_for_generation(timeout=5):
-                            self.logger.info(f"[{get_timestamp()}] All TTS files generated")
-                            
-                            # Start playback if we have files and aren't already playing
-                            if self.playback.playlist and not self.playback.is_playing:
-                                self.logger.info(f"[{get_timestamp()}] Starting playback of {len(self.playback.playlist)} files")
-                                self.playback.start()
-                    
+                        self.logger.debug(f"[{get_timestamp()}] Checked and added new TTS files to playlist.")
+                        # Start playback immediately if not already playing and playlist has files
+                        if self.playback.playlist and not self.playback.is_playing:
+                            self.logger.info(f"[{get_timestamp()}] Starting playback immediately ({len(self.playback.playlist)} files)")
+                            self.playback.start()
                     # Check playback status
                     if self.playback.is_playing:
                         self.logger.debug(f"[{get_timestamp()}] Currently playing audio")
-                    
                     # Small sleep to prevent CPU spinning
-                    time.sleep(0.1)
-                    
+                    time.sleep(0.01)
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error in main loop: {e}")
                     break

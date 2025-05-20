@@ -346,7 +346,7 @@ class Playback:
                             continue
                         if any(entry.get('file_path') == file_path for entry in self.playlist):
                             print(f"[DEBUG] Skipping duplicate file in playlist: {file_path}")
-                                continue
+                            continue
                         entry = {
                             'file_path': file_path,
                             'added_at': time.time(),
@@ -452,31 +452,28 @@ class Playback:
         self._playback_thread.start()
 
     def _playback_loop(self):
-        """Main playback loop with volume synchronization"""
-        while not self._stop_playback.is_set():
+        """
+        Main playback loop for playing audio files from the playlist.
+        """
+        last_playlist_empty = False
+        while self.is_playing:
             try:
-                # Get current item with thread safety
-                current_item = None
-                file_path = None
-                with self.lock:
-                    print(f"[DEBUG] Playlist before popping: {[entry.get('file_path') for entry in self.playlist]}")
-                    if not self.playlist:
-                        self.logger.info("Playlist is empty, stopping playback")
-                        break
-                    current_item = self.playlist[0]
-                    file_path = current_item.get('file_path') if isinstance(current_item, dict) else current_item
-                    if not file_path:
-                        self.logger.warning("Empty file path in playlist item, skipping")
-                        self.playlist.pop(0)
-                        continue
-                self.logger.info(f"Playing audio file: {file_path}")
+                if not self.playlist:
+                    if not last_playlist_empty:
+                        print("[DEBUG] Playlist is empty before popping.")
+                        last_playlist_empty = True
+                    time.sleep(0.05)
+                    continue
+                last_playlist_empty = False
+                print("[DEBUG] Playlist before popping (full):")
+                for item in self.playlist:
+                    print(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+                current_item = self.playlist.pop(0)
+                print(f"[DEBUG] Playing file: {current_item.get('file_path')} (sentence_id: {current_item.get('sentence_id')}, position: {current_item.get('position')}, group: {current_item.get('sentence_group')}, is_played: {current_item.get('is_played')}, text: {current_item.get('text')})")
                 # Load and play audio outside the lock to avoid holding it during I/O
-                audio_data, sample_rate = self._load_audio_file(file_path)
+                audio_data, sample_rate = self._load_audio_file(current_item['file_path'])
                 if audio_data is None or sample_rate is None:
-                    self.logger.error(f"Failed to load audio file: {file_path}")
-                    with self.lock:
-                        self.playlist.pop(0)
-                        print(f"[DEBUG] Playlist after popping (failed load): {[entry.get('file_path') for entry in self.playlist]}")
+                    self.logger.error(f"Failed to load audio file: {current_item['file_path']}")
                     continue
                 # Ensure volume is synced before playing
                 with self.volume_lock:
@@ -493,7 +490,7 @@ class Playback:
                     success = self._play_audio_data(audio_data, sample_rate)
                     if not success:
                         retry_count += 1
-                        self.logger.warning(f"Playback attempt {retry_count} failed for {file_path}")
+                        self.logger.warning(f"Playback attempt {retry_count} failed for {current_item['file_path']}")
                         time.sleep(0.1)  # Brief pause between retries
                 if success:
                     # Update playlist status with thread safety
@@ -501,25 +498,27 @@ class Playback:
                         if isinstance(current_item, dict):
                             current_item['played'] = True
                             current_item['played_at'] = time.time()
-                        if self.playlist and self.playlist[0].get('file_path') == file_path:  # Verify item is still first
-                            self.playlist.pop(0)
+                        if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:  # Verify item is still first
                             print(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
-                            self.logger.info(f"Successfully played and removed: {file_path}")
+                            self.logger.info(f"Successfully played and removed: {current_item['file_path']}")
                             time.sleep(0.1)
+                            if hasattr(self, 'tts') and self.tts:
+                                sentence_id = current_item.get('sentence_id')
+                                if sentence_id:
+                                    self.tts.mark_as_played(sentence_id)
+                                    print(f"[DEBUG] Marked as played: {sentence_id}")
                 else:
-                    self.logger.error(f"Failed to play audio after {max_retries} attempts: {file_path}")
-                    with self.lock:
-                        if self.playlist and self.playlist[0].get('file_path') == file_path:
-                            self.playlist.pop(0)
-                            print(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
-            except Exception as e:
-                self.logger.error(f"Error in playback loop: {e}")
-                with self.lock:
-                    if self.playlist:
+                    self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
+                    if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
                         self.playlist.pop(0)
-                        print(f"[DEBUG] Playlist after popping (exception): {[entry.get('file_path') for entry in self.playlist]}")
-                time.sleep(0.1)
-                continue
+                        print(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
+                # Log the full playlist after popping
+                print("[DEBUG] Playlist after popping (full):")
+                for item in self.playlist:
+                    print(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+            except Exception as e:
+                print(f"[DEBUG] Error in playback loop: {e}")
+                time.sleep(0.05)
         time.sleep(0.2)
         self.is_playing = False
         self.logger.info("Playback loop ended")
@@ -1093,3 +1092,7 @@ class Playback:
         except Exception as e:
             self.logger.error(f"Error applying fade effects: {e}")
             return audio_data
+
+    def set_tts_engine(self, tts_engine):
+        """Set the TTS engine instance for marking files as played."""
+        self.tts = tts_engine

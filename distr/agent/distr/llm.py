@@ -280,38 +280,35 @@ class LLMEngine:
         sentences, self.buffer = extract_sentences(text, self.buffer)
         return sentences
 
-    def process_sentence(self, sentence):
-        """Process a sentence and send it to output queue."""
+    def process_sentence(self, sentence, sentence_id=None, group_id=None, position=None):
+        """Process a sentence and send it to output queue and TTS with metadata."""
         if not sentence or not isinstance(sentence, str):
             return
-        
         # Clean the text using TextProcessor
         text = TextProcessor.clean_sentence_for_tts(sentence)
-        
         # Skip if the text is empty after cleanup
         if not text:
             return
-        
         # Print the cleaned sentence with timestamp
         print(f"[{get_timestamp()}] {text}")
         self.logger.info(text)
-        
         # Store this sentence as the last processed one
         self.last_processed_sentence = text
-        
         try:
             # Send processed sentence to output queue
             self.output_queue.put({
                 "status": "sentence",
                 "text": text
             })
-            
             # Also send to TTS queue if available
             if self.tts_queue:
                 self.logger.info(f"[{get_timestamp()}] 📤 LLM sending to TTS queue: '{text}'")
-                # Ensure we're sending a proper dictionary with text
+                # Send with metadata for ordering and grouping
                 self.tts_queue.put({
                     "text": text,
+                    "sentence_id": sentence_id or str(uuid.uuid4()),
+                    "group_id": group_id,
+                    "position": position,
                     "status": "sentence",
                     "timestamp": time.time()
                 })
@@ -390,16 +387,13 @@ class LLMEngine:
             print(f"\n[{get_timestamp()}] Already generating a reply, cancelling previous request")
             self.logger.info(f"Already generating a reply, cancelling previous request")
             self.should_cancel_response = True
-            
             # Clear TTS and playback when cancelling
             self.signal_queue.put({"action": "clear_tts_and_playback"})
             return
-            
         # Set up for new response
         self.should_cancel_response = False
         self.generating_reply = True
         self.buffer = ""  # Clear sentence buffer
-
         # Signal to clear TTS and playback queue
         self.signal_queue.put({"action": "clear_tts_and_playback"})        
         # Wait for AgentSession to acknowledge TTS/playback clear
@@ -409,25 +403,22 @@ class LLMEngine:
             self.logger.warning("Timeout waiting for TTS/playback clear ack")
         print(f"\n[{get_timestamp()}] --- Generating response ---")
         self.logger.info(f"--- Generating response ---")
-        
         try:
             # Add user message to conversation history
             self.conversation_history.append({"role": "user", "content": text})
-            
             # Request streaming response from Ollama
             stream = ollama.chat(
                 model=self.model_name,
                 messages=self.conversation_history,
                 stream=True,
             )
-            
             # Store stream reference for potential cancellation
             self.current_stream = stream
-            
             # Process streaming response
             response_text = ""
             sentences_processed = []
-            
+            group_id = str(uuid.uuid4())
+            position_counter = 0
             for chunk in stream:
                 # Check for cancellation request
                 if self.should_cancel_response:
@@ -435,55 +426,63 @@ class LLMEngine:
                     self.logger.info(f"--- Response cancelled ---")
                     self.current_stream = None
                     break
-                
                 # Extract content from chunk
                 content = chunk['message']['content'] 
                 response_text += content
-                
                 # Process streaming response sentence by sentence
                 if self.stream:
                     # Extract complete sentences from the chunk
                     sentences = self.extract_sentences(content)
-                    
                     # Process each complete sentence
                     for sentence in sentences:
                         if sentence not in sentences_processed:
                             sentences_processed.append(sentence)
-                            self.process_sentence(sentence)
-            
+                            sentence_id = str(uuid.uuid4())
+                            self.process_sentence(
+                                sentence,
+                                sentence_id=sentence_id,
+                                group_id=group_id,
+                                position=position_counter
+                            )
+                            position_counter += 1
             # Process any remaining text in buffer
             if self.buffer.strip() and not self.should_cancel_response:
                 if self.buffer not in sentences_processed:
                     sentences_processed.append(self.buffer)
-                    self.process_sentence(self.buffer)
-                self.buffer = ""
-            
+                    sentence_id = str(uuid.uuid4())
+                    self.process_sentence(
+                        self.buffer,
+                        sentence_id=sentence_id,
+                        group_id=group_id,
+                        position=position_counter
+                    )
+                    self.buffer = ""
             # Handle response completion
             if not self.should_cancel_response and response_text:
                 # For non-streaming mode, process entire response at once
                 if not self.stream:
-                    self.process_sentence(response_text)
-                
+                    sentence_id = str(uuid.uuid4())
+                    self.process_sentence(
+                        response_text,
+                        sentence_id=sentence_id,
+                        group_id=group_id,
+                        position=0
+                    )
                 # Apply post-processing to the full response
                 clean_response = TextProcessor.clean_text(response_text)
-                
                 print(f"\n[{get_timestamp()}] --- Response complete ---")
                 self.logger.info(f"--- Response complete ---")
-                
                 # Add assistant response to conversation history
                 self.add_assistant_message(clean_response)
-                
                 # Send complete response to output queue
                 self.output_queue.put({
                     "status": "success",
                     "input": text,
                     "response": clean_response
                 })
-            
         except Exception as e:
             print(f"\n[{get_timestamp()}] Error generating response: {e}")
             self.logger.error(f"Error generating response: {e}")
-            
             # Report error through output queue
             self.output_queue.put({
                 "status": "error",
@@ -540,18 +539,15 @@ class LLMEngine:
                 "I'm here to help you with your questions.",
                 "What can I assist you with today?"
             ]
-                        
+            import time
             # Process each sentence with delay to ensure TTS processing
             for sentence in welcome_sentences:
                 self.process_sentence(sentence)
-                # Add delay between sentences for proper TTS sequencing
-                time.sleep(0.5)
-                
+                time.sleep(1.0)  # Robust delay for TTS to process
             # Combine sentences and add to conversation history
             full_message = " ".join(welcome_sentences)
             self.add_assistant_message(full_message)            
             return full_message
-            
         except Exception as e:
             self.logger.error(f"Error sending welcome message: {e}")
             return None
