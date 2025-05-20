@@ -35,6 +35,7 @@ from PyQt6.QtCore import QThreadPool, QTimer
 from PyQt6 import QtWidgets
 import sounddevice
 import AppKit
+from PyQt6.QtWidgets import QDialog, QVBoxLayout, QLabel, QComboBox, QPushButton
 
 # ===========================================
 # 3. Local Imports
@@ -117,79 +118,85 @@ def setup_logging():
 # ===========================================
 # 4. Agent Session Management
 # ===========================================
-def run_agent_session(settings):
+def get_device_choices():
+    """Return lists of input and output device names using sounddevice."""
+    devices = sounddevice.query_devices()
+    input_devices = [d['name'] for d in devices if d['max_input_channels'] > 0]
+    output_devices = [d['name'] for d in devices if d['max_output_channels'] > 0]
+    return input_devices, output_devices
+
+class DeviceSelectionDialog(QDialog):
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Select Audio Devices")
+        self.selected_input = None
+        self.selected_output = None
+        layout = QVBoxLayout()
+        input_devices, output_devices = get_device_choices()
+        layout.addWidget(QLabel("Select input device (microphone):"))
+        self.input_combo = QComboBox()
+        self.input_combo.addItems(input_devices)
+        layout.addWidget(self.input_combo)
+        layout.addWidget(QLabel("Select output device (speaker/headphones):"))
+        self.output_combo = QComboBox()
+        self.output_combo.addItems(output_devices)
+        layout.addWidget(self.output_combo)
+        self.ok_button = QPushButton("OK")
+        self.ok_button.clicked.connect(self.accept)
+        layout.addWidget(self.ok_button)
+        self.setLayout(layout)
+    def get_selection(self):
+        return self.input_combo.currentText(), self.output_combo.currentText()
+
+def run_agent_session(settings, input_device=None, output_device=None):
     """Runs the agent session in a separate process with proper error handling"""
     try:
-        # Proper exception handler to handle PortAudio errors
         def exception_handler(exc_type, exc_value, exc_traceback):
             if exc_type == sounddevice.PortAudioError and "PortAudio not initialized" in str(exc_value):
                 logger.info("Suppressing PortAudio termination error")
                 return
             sys.__excepthook__(exc_type, exc_value, exc_traceback)
-        
         sys.excepthook = exception_handler
-        
-        # Create proper signal handlers to clean up resources
         def agent_signal_handler(sig, frame):
             logger.info(f"Agent process received signal {sig}, shutting down...")
-            # Explicitly close any open file handles or resources if needed
             try:
-                # Force flush of logging handlers
                 for handler in logging.getLogger().handlers:
                     handler.flush()
             except:
                 pass
             return
-            
         signal.signal(signal.SIGINT, agent_signal_handler)
         signal.signal(signal.SIGTERM, agent_signal_handler)
-        
-        # Register cleanup function to run at exit
         def cleanup_at_exit():
             logger.info("Agent process exiting via atexit")
-            # Close any remaining resources
             try:
-                # Release any PortAudio resources
                 sounddevice.stop()
             except:
                 pass
-                
-            # Force flush logging
             for handler in logging.getLogger().handlers:
                 try:
                     handler.flush()
                 except:
                     pass
-        
         atexit.register(cleanup_at_exit)
-        
-        # Import session class here to prevent potential circular imports
         try:
-            # Initialize and run agent session
-            agent_session = AgentSession(input_device="MacBook Pro Microphone", settings=settings)
+            agent_session = AgentSession(input_device=input_device, output_device=output_device, settings=settings)
             agent_session.start()
         except Exception as e:
             logger.error(f"Error initializing or running agent session: {e}")
             import traceback
             traceback.print_exc()
-        
     except Exception as e:
         logger.error(f"Error in agent session process: {e}")
         import traceback
         traceback.print_exc()
     finally:
-        # Final cleanup
         logger.info("Agent session process exiting")
         try:
-            # Close any remaining resources explicitly
             sounddevice.stop()
         except:
             pass
-            
-        # Allow time for resources to be released
         time.sleep(0.5)
-        
-        # Force garbage collection
         gc.collect()
 
 # ===========================================
@@ -202,6 +209,10 @@ class Application(QtWidgets.QApplication):
         super().__init__(argv)
         self._quitting = False
         self.agent_process = None
+        self.selected_input_device = None
+        self.selected_output_device = None
+        # Prompt for device selection at startup
+        self.select_devices()
         
         # Initialize core components
         self.db_session = get_session()
@@ -318,6 +329,16 @@ class Application(QtWidgets.QApplication):
         signal_manager.sound_finished.connect(self.voice_box.on_sound_finished)
         QTimer.singleShot(500, self.start_agent_session)
 
+    def select_devices(self):
+        dialog = DeviceSelectionDialog()
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.selected_input_device, self.selected_output_device = dialog.get_selection()
+        else:
+            # Fallback to defaults if dialog is cancelled
+            input_devices, output_devices = get_device_choices()
+            self.selected_input_device = input_devices[0] if input_devices else None
+            self.selected_output_device = output_devices[0] if output_devices else None
+
     def start_agent_session(self):
         """Start the agent session in a separate process"""
         try:
@@ -330,7 +351,7 @@ class Application(QtWidgets.QApplication):
             
             self.agent_process = multiprocessing.Process(
                 target=run_agent_session,
-                args=(self.settings,),
+                args=(self.settings, self.selected_input_device, self.selected_output_device),
                 daemon=False
             )
             

@@ -311,15 +311,14 @@ class TTSEngine:
         Returns:
             str: Cleaned text ready for TTS processing
         """
-        # Remove emojis and special characters
-        text = re.sub(r'[^\w\s.,!?-]', '', text)
+        # Remove emojis and special characters, but preserve apostrophes
+        text = re.sub(r"[^\w\s.,!?'-]", '', text)
         
         # Remove multiple spaces
         text = re.sub(r'\s+', ' ', text)
         
         # Remove leading/trailing whitespace
         text = text.strip()
-        
         return text
 
     # ===========================================

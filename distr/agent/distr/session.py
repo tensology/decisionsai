@@ -8,7 +8,6 @@ import threading
 import logging
 import signal
 import time
-import glob
 import json
 import os
 import sounddevice as sd
@@ -24,14 +23,16 @@ class AgentSession:
                  llm_api_key=None, 
                  tts_engine="kokoro", 
                  tts_api_key=None,
+                 output_device=None,
                  set_signal_handlers=True, 
                  *args, **kwargs):
         """
-        Initialize the AgentSession with the given agent name and input device.
+        Initialize the AgentSession with the given agent name and input/output device.
         
         Args:
             agent_name (str): The name of the agent
             input_device (str, optional): The name of the input device to use
+            output_device (str, optional): The name of the output device to use
             set_signal_handlers (bool, optional): Whether to set signal handlers
             *args: Additional arguments
             **kwargs: Additional keyword arguments
@@ -48,7 +49,7 @@ class AgentSession:
         self.agent_name = agent_name
 
         # Initialize playback for output
-        self.playback = Playback()
+        self.playback = Playback(output_device=output_device)
         
         # Get input device info
         devices = sd.query_devices()
