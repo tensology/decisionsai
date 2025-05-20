@@ -441,7 +441,7 @@ class TTSEngine:
             text=text,
             voice=self.voice,
             model="eleven_multilingual_v2",
-            previous_text=self.previous_text,
+            # previous_text=self.previous_text,
             voice_settings=self.voice_settings,
         )
         

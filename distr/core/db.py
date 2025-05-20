@@ -72,6 +72,7 @@ class Settings(Base):
     speechmatics_enabled = Column(Boolean, default=False)
     openai_enabled = Column(Boolean, default=False)
     anthropic_enabled = Column(Boolean, default=False)
+    elevenlabs_enabled = Column(Boolean, default=False)
     ollama_enabled = Column(Boolean, default=True)  # Default to True for Ollama
 
     # Provider Keys/URLs
@@ -80,8 +81,13 @@ class Settings(Base):
     openai_key = Column(String, default='')
     anthropic_key = Column(String, default='')
     ollama_url = Column(String, default='http://localhost:11434/')
+    elevenlabs_key = Column(String, default='')
 
     last_listening_state = Column(Boolean, default=True)
+
+    voice_provider = Column(String, default='kokoro')
+    kokoro_voice = Column(String, default='af_heart')
+    elevenlabs_voice = Column(String, default='Hayley Williams')
 
 
 class Chat(Base):
@@ -189,7 +195,9 @@ def init_db():
                 indexed_folders='[]',
                 connected_accounts='[]',
                 last_listening_state=True,
-                accepted_eula=False  # Default to EULA not accepted
+                accepted_eula=False,  # Default to EULA not accepted
+                elevenlabs_enabled=False,
+                elevenlabs_key=''
             )
             session.add(default_settings)
             try:

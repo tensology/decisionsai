@@ -23,6 +23,7 @@ from distr.gui.settings.utils.settings import load_settings_from_db, save_settin
 from distr.core.signals import signal_manager
 import logging
 import sys
+import os
 
 class SettingsWindow(QtWidgets.QMainWindow):
     """
@@ -276,8 +277,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
                     
                     # Use the proper exit method from the application
                     self.hide()
-                    signal_manager.exit_app.emit()
+
+                    # Restart the application after saving
                     QtWidgets.QApplication.quit()
+                    os.execv(sys.executable, [sys.executable] + sys.argv)
                     return
                 else:
                     # Return to settings without saving
@@ -315,6 +318,9 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 input_field = getattr(self.ai_tab, f"{provider}_input")
                 settings[f"{provider}_enabled"] = checkbox.isChecked()
                 settings[f"{provider}_key"] = input_field.text()
+                if provider == "elevenlabs":
+                    print(f"[SAVE] ElevenLabs: enabled={checkbox.isChecked()}, key='{input_field.text()}', tts_provider='{self.ai_tab.tts_provider.currentText()}'")
+                    logging.debug(f"[SAVE] ElevenLabs: enabled={checkbox.isChecked()}, key='{input_field.text()}', tts_provider='{self.ai_tab.tts_provider.currentText()}'")
             
             # Save model selections
             settings['transcription_model'] = self.ai_tab.input_speech_combo.currentText()
@@ -325,10 +331,24 @@ class SettingsWindow(QtWidgets.QMainWindow):
             settings['tts_provider'] = self.ai_tab.tts_provider.currentText()
             settings['tts_voice'] = self.ai_tab.tts_voice.currentText()
             settings['playback_speed'] = float(self.ai_tab.speed_label.text().replace('x', ''))
+
+            # Save voice provider and selected voice
+            provider = self.ai_tab.tts_provider.currentText()
+            if provider == 'Kokoro (Offline)':
+                settings['voice_provider'] = 'kokoro'
+                settings['kokoro_voice'] = self.ai_tab.tts_voice.currentData() or self.ai_tab.tts_voice.currentText()
+            elif provider == 'ElevenLabs (Online)':
+                settings['voice_provider'] = 'elevenlabs'
+                settings['elevenlabs_voice'] = self.ai_tab.tts_voice.currentText()
+            else:
+                settings['voice_provider'] = 'kokoro'
             
             # Save settings
             save_settings_to_db(settings)
             logging.debug("Settings saved successfully")
+            # After saving, reload and print
+            reloaded = load_settings_from_db()
+            print(f"[RELOAD AFTER SAVE] ElevenLabs: enabled={reloaded.get('elevenlabs_enabled')}, key='{reloaded.get('elevenlabs_key')}', tts_provider='{reloaded.get('tts_provider')}'")
             
             # Save first-time EULA acceptance specially (this will emit signals if needed)
             was_previously_accepted = settings.get('accepted_eula', False) != eula_accepted and eula_accepted
@@ -340,6 +360,10 @@ class SettingsWindow(QtWidgets.QMainWindow):
             
             # Hide the window instead of closing it
             self.hide()
+
+            # Restart the application after saving
+            QtWidgets.QApplication.quit()
+            os.execv(sys.executable, [sys.executable] + sys.argv)
             
         except Exception as e:
             logging.error(f"Error saving settings: {str(e)}")

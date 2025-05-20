@@ -179,6 +179,7 @@ def run_agent_session(settings, input_device=None, output_device=None):
                 except:
                     pass
         atexit.register(cleanup_at_exit)
+
         try:
             agent_session = AgentSession(input_device=input_device, output_device=output_device, settings=settings)
             agent_session.start()
@@ -217,6 +218,11 @@ class Application(QtWidgets.QApplication):
         # Initialize core components
         self.db_session = get_session()
         self.settings = load_settings_from_db()
+        # Debug print for ElevenLabs config
+        eleven_enabled = self.settings.get('elevenlabs_enabled')
+        eleven_key = self.settings.get('elevenlabs_key')
+        tts_provider = self.settings.get('tts_provider')
+        print(f"[LOAD] ElevenLabs: enabled={eleven_enabled}, key='{eleven_key}', tts_provider='{tts_provider}'")
         self.action_handler = ActionHandler()
         self.chat_manager = ChatManager()
         

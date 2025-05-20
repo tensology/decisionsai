@@ -15,7 +15,7 @@ import sounddevice as sd
 
 class AgentSession:
     def __init__(self, input_device=None, 
-                 agent_name="Amber",
+                 agent_name="Heart",
                  stt_engine="whisper.cpp", 
                  stt_api_key=None, 
                  llm_engine="ollama", 
@@ -26,6 +26,7 @@ class AgentSession:
                  output_device=None,
                  silence_threshold=0.03,
                  set_signal_handlers=True, 
+                 settings=None,
                  *args, **kwargs):
         """
         Initialize the AgentSession with the given agent name and input/output device.
@@ -57,6 +58,7 @@ class AgentSession:
         devices = sd.query_devices()
         input_device_info = None
         
+        
         # If input device is specified, find it
         if input_device:
             for i, device in enumerate(devices):
@@ -83,28 +85,45 @@ class AgentSession:
         
         if not input_device_info:
             raise RuntimeError("No input devices available")
-            
+
+        print(f"[DEBUG] Settings: {settings}")
+
+
         self.device_info = input_device_info
         self.logger.info(f"Using input device: {self.device_info['name']} ({self.device_info['channels']} channels)")
 
         self.role = f"""You are {self.agent_name}, an AI assistant."""
-        self.tts_engine = tts_engine
-        self.voice_name = agent_name
-        self.voice_samples = []
-        self.voice_settings = {
-            "stability": 0.3,
-            "similarity_boost": 0.5,
-        }
+
+        if settings.get('elevenlabs_enabled'):
+            self.tts_engine = "elevenlabs"
+            self.tts_api_key = settings.get('elevenlabs_key')
+            self.agent_name = settings.get('elevenlabs_voice')
+            self.voice_name = settings.get('elevenlabs_voice')
+            self.voice_samples = []
+            self.voice_settings = {
+                "stability": 0.3,
+                "similarity_boost": 0.5,
+            }
+        else:
+            self.tts_engine = tts_engine
+            self.tts_api_key = tts_api_key
+            self.voice_name = agent_name
+            self.voice_samples = []
+            self.voice_settings = {
+                "stability": 0.3,
+                "similarity_boost": 0.5,
+            }
+
 
         self.get_voice_config()
-        
+
         # Initialize TTS engine first
         self.tts = TTSEngine(
-            engine=tts_engine,
-            api_key=tts_api_key,
+            engine=self.tts_engine,
+            api_key=self.tts_api_key,
             voice_name=self.voice_name,
             clone_samples=self.voice_samples,
-            voice_settings=self.voice_settings
+            voice_settings=self.voice_settings,
         )
         
         # Initialize LLM with role (but not TTS queue yet)
@@ -122,7 +141,8 @@ class AgentSession:
             api_key=stt_api_key,
             device_info=self.device_info,
             llm_callback=self.llm.process_text,
-            silence_threshold=silence_threshold
+            silence_threshold=silence_threshold,
+            playback=self.playback
         )
 
         # Set up signal handlers if requested (should be disabled when run as a separate process)
@@ -173,7 +193,7 @@ class AgentSession:
 
         if self.tts_engine == "kokoro":
             self.voice_name = "af_heart"
-            self.agent_name = "Amber"
+            self.agent_name = "Heart"
             self.logger.info(f"[{get_timestamp()}] Using default voice {self.voice_name}")
         
 

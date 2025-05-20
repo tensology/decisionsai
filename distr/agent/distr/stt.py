@@ -79,7 +79,7 @@ class STTEngine:
     # ===========================================
     # 1. Initialization and Setup
     # ===========================================
-    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None, silence_threshold=0.03):
+    def __init__(self, device_info, engine_type="whisper.cpp", model_path="base.en", api_key=None, llm_callback=None, silence_threshold=0.03, playback=None):
         """
         Initialize the STT engine with device and engine settings.
         
@@ -90,6 +90,7 @@ class STTEngine:
             api_key (str, optional): API key for cloud-based engines (e.g., AssemblyAI)
             llm_callback (callable): Callback function to handle transcribed text
             silence_threshold (float, optional): Energy threshold for silence detection
+            playback (object, optional): Playback object for volume ducking
         """
         # Initialize logger
         self.logger = logging.getLogger(__name__)
@@ -105,7 +106,7 @@ class STTEngine:
         self.audio_buffer = []
         
         # Speech detection configuration
-        self.required_silence_duration = 0.8  # Required silence duration in seconds
+        self.required_silence_duration = 1.5  # Required silence duration in seconds
         self.min_speech_duration = 0.5  # Minimum speech duration in seconds
         self.silence_threshold = silence_threshold
         self._debug_energy_prints = 0
@@ -133,6 +134,8 @@ class STTEngine:
         
         # Audio stream
         self.stream = None
+        
+        self.playback = playback
         
     def _setup_stt_engine(self):
         """
@@ -174,11 +177,11 @@ class STTEngine:
         if self._debug_energy_prints < self.max_debug_energy_prints:
             if self._debug_energy_start_time is None:
                 self._debug_energy_start_time = time.time()
-            print(f"[DEBUG] Input energy: {energy:.6f} (threshold: {self.silence_threshold})")
+            self.logger.debug(f"[DEBUG] Input energy: {energy:.6f} (threshold: {self.silence_threshold})")
             self._debug_energy_prints += 1
         is_silent = energy < self.silence_threshold
         if is_silent and self.is_speaking:
-            print(f"\r[{get_timestamp()}] Silence energy: {energy:.6f}", end="", flush=True)
+            self.logger.debug(f"\r[{get_timestamp()}] Silence energy: {energy:.6f}", end="", flush=True)
         return is_silent
 
     def process_audio(self):
@@ -231,9 +234,8 @@ class STTEngine:
                             speech_duration = current_time - speech_start_time
                             
                             # If speech has continued for at least 0.5 seconds, clear the playback
-                            if (speech_duration >= 0.5 and 
-                                not playback_cleared):
-                                print(f"\n[{get_timestamp()}] Speech continued for {speech_duration:.2f}s, clearing playback... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
+                            if (speech_duration and not playback_cleared):
+                                self.logger.warning(f"\n[{get_timestamp()}] Speech continued for {speech_duration:.2f}s, clearing playback... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                                 session = self._get_session_from_callback()
                                 if session and hasattr(session, 'clear_tts_and_playback'):
                                     session.clear_tts_and_playback()
@@ -242,13 +244,13 @@ class STTEngine:
                         # Check if speech has been going on for more than max_speech_duration
                         if speech_duration >= self.max_speech_duration:
                             if not ducking_applied:
-                                session = self._get_session_from_callback()
-                                if session and hasattr(session, 'playback') and hasattr(session.playback, 'duck_volume'):
-                                    print(f"[{get_timestamp()}] Ducking playback volume after {speech_duration:.2f}s of speech...")
-                                    session.playback.duck_volume(volume_ratio=0.3, wait_time=2.0, transition_duration=0.5, fallout_duration=0.5)
+                                if self.playback and hasattr(self.playback, 'duck_volume'):
+                                    self.logger.warning(f"[{get_timestamp()}] Ducking playback volume after {speech_duration:.2f}s of speech...")
+                                    self.playback.duck_volume(volume_ratio=0.3, wait_time=0.5, transition_duration=0.5, fallout_duration=0.5)
+                                    self.logger.warning(f"[{get_timestamp()}] Playback volume ducked due to long speech.")
                                     ducking_applied = True
                             if not self.llm_interrupt_sent:
-                                print(f"[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
+                                self.logger.warning(f"[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                                 self.signal_llm_interrupt()
                         
                         # For Vosk, process continuously
@@ -295,9 +297,8 @@ class STTEngine:
                             
                             # Restore volume to normal after processing speech
                             if ducking_applied:
-                                session = self._get_session_from_callback()
-                                if session and hasattr(session, 'playback'):
-                                    session.playback.duck_volume(False)
+                                if self.playback and hasattr(self.playback, 'duck_volume'):
+                                    self.playback.duck_volume(False)
                                     ducking_applied = False
                 else:
                     time.sleep(0.01)
@@ -397,31 +398,24 @@ class STTEngine:
         """
         if self.llm_callback and not self.llm_interrupt_sent:
             print(f"\n[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM...")
-            # Get the session object to access TTS and playback
-            session = self._get_session_from_callback()
-            if session:
-                try:
-                    # Duck playback volume immediately
-                    if hasattr(session, 'playback') and hasattr(session.playback, 'duck_volume'):
-                        print(f"[{get_timestamp()}] Calling playback.duck_volume for LLM interrupt...")
-                        session.playback.duck_volume(volume_ratio=0.3, wait_time=2.0, transition_duration=0.5, fallout_duration=0.5)
-                        print(f"[{get_timestamp()}] Playback volume ducked due to long speech.")
-                    # Clear TTS and playback first
-                    if hasattr(session, 'clear_tts_and_playback'):
-                        session.clear_tts_and_playback()
-                        print(f"[{get_timestamp()}] TTS and playback cleared")
-                    # Then interrupt LLM
-                    if hasattr(self.llm_callback, 'interrupt'):
-                        self.llm_callback.interrupt()
-                        self.llm_interrupt_sent = True
-                        print(f"[{get_timestamp()}] LLM interrupt signal sent")
-                    # Reset speech tracking
-                    self.speech_start_time = None
-                    self.speech_duration = 0
-                    self.ducking_applied = False
-                    self.playback_cleared = False
-                except Exception as e:
-                    print(f"[{get_timestamp()}] Error during interruption: {e}")
+            try:
+                # Duck playback volume immediately
+                if self.playback and hasattr(self.playback, 'duck_volume'):
+                    print(f"[{get_timestamp()}] Calling playback.duck_volume for LLM interrupt...")
+                    self.playback.duck_volume(volume_ratio=0.3, wait_time=2.0, transition_duration=0.5, fallout_duration=0.5)
+                    print(f"[{get_timestamp()}] Playback volume ducked due to long speech.")
+                # Then interrupt LLM
+                if hasattr(self.llm_callback, 'interrupt'):
+                    self.llm_callback.interrupt()
+                    self.llm_interrupt_sent = True
+                    print(f"[{get_timestamp()}] LLM interrupt signal sent")
+                # Reset speech tracking
+                self.speech_start_time = None
+                self.speech_duration = 0
+                self.ducking_applied = False
+                self.playback_cleared = False
+            except Exception as e:
+                print(f"[{get_timestamp()}] Error during interruption: {e}")
 
     def _get_session_from_callback(self):
         """

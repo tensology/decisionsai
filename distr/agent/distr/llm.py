@@ -448,6 +448,7 @@ class LLMEngine:
                                 group_id=group_id,
                                 position=position_counter
                             )
+                            time.sleep(0.5)  # Robust delay for TTS to process
                             position_counter += 1
             # Process any remaining text in buffer
             if self.buffer.strip() and not self.should_cancel_response:

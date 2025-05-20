@@ -57,7 +57,7 @@ class OracleWindow(QtWidgets.QMainWindow):
         self.settings = load_settings_from_db()
         
         # Initialize size from settings
-        self.content_size = self.settings.get('sphere_size', 180)  # Default to 180px
+        self.content_size = self.settings.get('sphere_size', 140)  # Default to 180px
         self.shadow_size = int(self.content_size * 0.022)  # ~4px at 180px
         self.stroke_width = int(self.content_size * 0.033)  # ~6px at 180px
         

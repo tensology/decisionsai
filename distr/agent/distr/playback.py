@@ -145,6 +145,8 @@ class Playback:
         self.played_sentence_ids = set()
         self.played_file_paths = set()
         self._blacklist_clear_timer = None
+        # Ducking cancellation event
+        self._ducking_cancel_event = threading.Event()
     
     def _initialize_audio_system(self):
         """Initialize the audio system with configured settings."""
@@ -334,7 +336,7 @@ class Playback:
             return False
         try:
             tts_playlist = tts_engine.get_playlist()
-            print(f"[DEBUG] TTS.get_playlist() returned {len(tts_playlist)} items")
+            self.logger.debug(f"[DEBUG] TTS.get_playlist() returned {len(tts_playlist)} items")
             if not tts_playlist:
                 self.logger.warning("TTS playlist is empty")
                 return False
@@ -346,15 +348,15 @@ class Playback:
                     # Blacklist check
                     if (entry.get('sentence_id') in self.played_sentence_ids or
                         entry.get('file_path') in self.played_file_paths):
-                        print(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
+                        self.logger.debug(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
                         continue
                     if key not in existing_keys:
                         entry['is_played'] = False
                         self.playlist.append(entry)
-                        print(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
+                        self.logger.debug(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
                         existing_keys.add(key)
                     else:
-                        print(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
+                        self.logger.debug(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
                 # Always sort playlist by (sentence_group, position)
                 self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
             return True
@@ -390,10 +392,15 @@ class Playback:
         """Start playing the playlist with proper volume synchronization"""
         if not self.playlist:
             return
-            
         if self.is_playing:
             return
-            
+        # Cancel ducking cut if in progress
+        with self.volume_lock:
+            if self.is_ducking and not self._ducking_cancel_event.is_set():
+                self._ducking_cancel_event.set()
+                self.is_ducking = False
+                self.volume = self.normal_volume
+                self.logger.info("Ducking cancelled due to new playback. Volume restored to normal.")
         # Ensure volume is properly synced before starting playback
         with self.volume_lock:
             current_system_volume = self._get_system_volume()
@@ -403,7 +410,7 @@ class Playback:
                 self.volume = current_system_volume
             self.system_volume = current_system_volume
             self.normal_volume = current_system_volume
-            print(f"Starting playback with volume: {self.volume:.2f} (system: {current_system_volume:.2f})")
+            self.logger.info(f"Starting playback with volume: {self.volume:.2f} (system: {current_system_volume:.2f})")
             
         self.is_playing = True
         self._stop_playback.clear()
@@ -418,11 +425,16 @@ class Playback:
         if not self.playlist:
             self.logger.warning("Cannot start playback: playlist is empty")
             return
-            
         if self.is_playing:
             self.logger.warning("Playback is already in progress")
             return
-            
+        # Cancel ducking cut if in progress
+        with self.volume_lock:
+            if self.is_ducking and not self._ducking_cancel_event.is_set():
+                self._ducking_cancel_event.set()
+                self.is_ducking = False
+                self.volume = self.normal_volume
+                self.logger.info("Ducking cancelled due to new playback. Volume restored to normal.")
         # Ensure volume is properly synced before starting playback
         with self.volume_lock:
             current_system_volume = self._get_system_volume()
@@ -451,7 +463,7 @@ class Playback:
             try:
                 if not self.playlist:
                     if not last_playlist_empty:
-                        print("[DEBUG] Playlist is empty before popping.")
+                        self.logger.debug("[DEBUG] Playlist is empty before popping.")
                         last_playlist_empty = True
                         # Schedule blacklist clear if playlist is empty and playback is not running
                         if not self.is_playing:
@@ -459,9 +471,9 @@ class Playback:
                     time.sleep(0.05)
                     continue
                 last_playlist_empty = False
-                print("[DEBUG] Playlist before popping (full):")
+                self.logger.debug("[DEBUG] Playlist before popping (full):")
                 for item in self.playlist:
-                    print(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+                    self.logger.debug(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
                 current_item = self.playlist[0]
                 audio_data, sample_rate = self._load_audio_file(current_item['file_path'])
                 if audio_data is None or sample_rate is None:
@@ -491,14 +503,14 @@ class Playback:
                             current_item['played_at'] = time.time()
                         # Remove the played item from the playlist
                         if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
-                            print(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
+                            self.logger.debug(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
                             self.logger.info(f"Successfully played and removed: {current_item['file_path']}")
                             time.sleep(0.1)
                             if hasattr(self, 'tts') and self.tts:
                                 sentence_id = current_item.get('sentence_id')
                                 if sentence_id:
                                     self.tts.mark_as_played(sentence_id)
-                                    print(f"[DEBUG] Marked as played: {sentence_id}")
+                                    self.logger.debug(f"[DEBUG] Marked as played: {sentence_id}")
                             # Add to blacklist
                             self.played_sentence_ids.add(current_item.get('sentence_id'))
                             self.played_file_paths.add(current_item.get('file_path'))
@@ -509,7 +521,7 @@ class Playback:
                         before_prune = len(self.playlist)
                         self.playlist = [entry for entry in self.playlist if not entry.get('is_played', False)]
                         after_prune = len(self.playlist)
-                        print(f"[DEBUG] Pruned played files from playlist. Before: {before_prune}, After: {after_prune}")
+                        self.logger.debug(f"[DEBUG] Pruned played files from playlist. Before: {before_prune}, After: {after_prune}")
                         self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
                     # If playlist is empty after popping, schedule blacklist clear
                     if not self.playlist:
@@ -518,13 +530,13 @@ class Playback:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
                     if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
                         self.playlist.pop(0)
-                        print(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
+                        self.logger.debug(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
                 # Log the full playlist after popping
-                print("[DEBUG] Playlist after popping (full):")
+                self.logger.debug("[DEBUG] Playlist after popping (full):")
                 for item in self.playlist:
-                    print(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+                    self.logger.debug(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
             except Exception as e:
-                print(f"[DEBUG] Error in playback loop: {e}")
+                self.logger.debug(f"[DEBUG] Error in playback loop: {e}")
                 time.sleep(0.05)
         time.sleep(0.2)
         self.is_playing = False
@@ -632,7 +644,7 @@ class Playback:
             steps = int(self.volume_transition_duration / self.volume_step_interval)
             self.volume_step = (target_volume - self.volume) / steps
             self.volume_steps_remaining = steps
-            print(f"Starting volume transition from {self.volume:.2f} to {target_volume:.2f}")
+            self.logger.info(f"Starting volume transition from {self.volume:.2f} to {target_volume:.2f}")
 
     def duck_volume(self, volume_ratio: float = 0.3, wait_time: float = 2.0, transition_duration: float = 1.0, fallout_duration: float = 1.0):
         """
@@ -646,10 +658,15 @@ class Playback:
         """
         with self.volume_lock:
             if not self.is_ducking:
+                # Immediately reset playback to prevent jumping
+                self.logger.info("Ducking triggered: resetting playback (stop and clear playlist) to prevent jumping.")
+                self.stop_playback()
+                self.clear_playlist()
                 self.is_ducking = True
+                self._ducking_cancel_event.clear()
                 # Calculate target volume based on current system volume
                 target_volume = self.system_volume * volume_ratio
-                print(f"\nDUCKING: Volume set to {target_volume:.2f} ({volume_ratio*100:.0f}% of system volume)")
+                self.logger.info(f"DUCKING: Volume set to {target_volume:.2f} ({volume_ratio*100:.0f}% of system volume)")
                 
                 # Set transition duration for initial ducking
                 self.volume_transition_duration = transition_duration
@@ -665,12 +682,22 @@ class Playback:
                     # Wait at ducked volume
                     time.sleep(wait_time)
                     
+                    # Check if ducking was cancelled
+                    if self._ducking_cancel_event.is_set():
+                        self.logger.info("Ducking cut cancelled before fade-out due to new playback.")
+                        return
+                    
                     # Set transition duration for fade-out
                     self.volume_transition_duration = fallout_duration
                     
                     # Start fade-out to 0
                     self._start_volume_transition(0.0)
                     time.sleep(fallout_duration)  # Wait for fade-out to complete
+                    
+                    # Check again if ducking was cancelled during fade-out
+                    if self._ducking_cancel_event.is_set():
+                        self.logger.info("Ducking cut cancelled during fade-out due to new playback.")
+                        return
                     
                     # Stop playback and clear playlist
                     self.stop_playback()
@@ -768,7 +795,7 @@ class Playback:
                 ratio = volume / self.system_volume if self.system_volume > 0 else 1.0
                 self.volume = self.system_volume * ratio
                 self.normal_volume = self.system_volume
-                print(f"Volume set to {self.volume:.2f} (ratio: {ratio:.2f} of system volume)")
+                self.logger.info(f"Volume set to {self.volume:.2f} (ratio: {ratio:.2f} of system volume)")
 
     # ===========================================
     # 6. Resource Management
@@ -928,15 +955,15 @@ class Playback:
                 # Blacklist check
                 if (entry.get('sentence_id') in self.played_sentence_ids or
                     entry.get('file_path') in self.played_file_paths):
-                    print(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
+                    self.logger.debug(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
                     continue
                 if key not in existing_keys:
                     entry['is_played'] = False
                     self.playlist.append(entry)
-                    print(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
+                    self.logger.debug(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
                     existing_keys.add(key)
                 else:
-                    print(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
+                    self.logger.debug(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
             self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
 
     def _load_audio_file(self, file_path):
@@ -997,7 +1024,7 @@ class Playback:
                             
                             # Update normal volume to match the ratio
                             self.normal_volume = new_system_volume
-                            print(f"Volume synced to system: {self.volume:.2f} (ratio: {current_ratio:.2f})")
+                            self.logger.info(f"Volume synced to system: {self.volume:.2f} (ratio: {current_ratio:.2f})")
                 except Exception as e:
                     self.logger.error(f"Error monitoring system volume: {e}")
                 time.sleep(0.05)  # More frequent checks for better sync
@@ -1046,7 +1073,7 @@ class Playback:
         """Apply volume change immediately without transition"""
         with self.volume_lock:
             self.volume = target_volume
-            print(f"Volume changed immediately to {self.volume:.2f}")
+            self.logger.info(f"Volume changed immediately to {self.volume:.2f}")
 
     def _resample_audio(self, audio_data, original_rate, target_rate):
         """Resample audio data to target sample rate"""
@@ -1106,6 +1133,6 @@ class Playback:
         def clear_blacklist():
             self.played_sentence_ids.clear()
             self.played_file_paths.clear()
-            print("[DEBUG] Cleared played blacklist.")
+            self.logger.debug("[DEBUG] Cleared played blacklist.")
         self._blacklist_clear_timer = threading.Timer(delay, clear_blacklist)
         self._blacklist_clear_timer.start()

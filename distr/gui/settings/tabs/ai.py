@@ -23,7 +23,7 @@ class AITab(QtWidgets.QWidget):
     This class provides the UI and functionality for the AI settings tab,
     including provider configuration, model selection, and TTS settings.
     """
-    
+
     def __init__(self, parent=None):
         """
         Initialize the AI settings tab.
@@ -112,13 +112,9 @@ class AITab(QtWidgets.QWidget):
         # Provider and voice selection
         tts_provider_layout = QtWidgets.QHBoxLayout()
         self.tts_provider = QtWidgets.QComboBox()
-        self.tts_provider.addItems([
-            "Kokoro (Offline)", 
-            "ElevenLabs (Online)"
-        ])
-        self.tts_provider.currentTextChanged.connect(self.update_tts_voices)
-
         self.tts_voice = QtWidgets.QComboBox()
+        self._update_tts_provider_options()
+        self.tts_provider.currentTextChanged.connect(self.update_tts_voices)
 
         # Voice selection and play button layout
         voice_layout = QtWidgets.QHBoxLayout()
@@ -150,6 +146,39 @@ class AITab(QtWidgets.QWidget):
 
         tts_group.setLayout(tts_layout)
         parent_layout.addWidget(tts_group)
+
+        # Connect ElevenLabs checkbox and input to provider update
+        # (Do this after API keys section is set up)
+        QtCore.QTimer.singleShot(0, self._connect_elevenlabs_signals)
+
+    def _connect_elevenlabs_signals(self):
+        # Connect signals for ElevenLabs checkbox and input
+        if hasattr(self, 'elevenlabs_checkbox') and hasattr(self, 'elevenlabs_input'):
+            self.elevenlabs_checkbox.stateChanged.connect(self._update_tts_provider_options)
+            self.elevenlabs_input.textChanged.connect(self._update_tts_provider_options)
+
+    def _is_elevenlabs_available(self):
+        # Returns True if ElevenLabs is enabled and has a non-empty API key
+        enabled = self.elevenlabs_checkbox.isChecked() if hasattr(self, 'elevenlabs_checkbox') else False
+        key = self.elevenlabs_input.text().strip() if hasattr(self, 'elevenlabs_input') else ''
+        return enabled and bool(key)
+
+    def _update_tts_provider_options(self):
+        # Save current selection
+        current = self.tts_provider.currentText() if self.tts_provider.count() > 0 else None
+        self.tts_provider.blockSignals(True)
+        self.tts_provider.clear()
+        self.tts_provider.addItem("Kokoro (Offline)")
+        if self._is_elevenlabs_available():
+            self.tts_provider.addItem("ElevenLabs (Online)")
+        # Restore selection if possible, else default to Kokoro
+        idx = self.tts_provider.findText(current)
+        if idx >= 0:
+            self.tts_provider.setCurrentIndex(idx)
+        else:
+            self.tts_provider.setCurrentIndex(0)
+        self.tts_provider.blockSignals(False)
+        self.update_tts_voices()
 
     def _setup_llm_section(self, parent_layout, title_font):
         """Set up the Large Language Models section."""
@@ -284,18 +313,52 @@ class AITab(QtWidgets.QWidget):
     def _load_settings(self):
         """Load settings from database and update UI."""
         settings = load_settings_from_db()
+        print(f"[AI LOAD] ElevenLabs: enabled={settings.get('elevenlabs_enabled')}, key='{settings.get('elevenlabs_key')}'")
         
         # Load provider settings
         for provider in ["assemblyai", "openai", "anthropic", "elevenlabs"]:
             checkbox = getattr(self, f"{provider}_checkbox")
             input_field = getattr(self, f"{provider}_input")
-            
             enabled = settings.get(f"{provider}_enabled", False)
             checkbox.setChecked(enabled)
             input_field.setEnabled(enabled)
-            
             value = settings.get(f"{provider}_key", "")
             input_field.setText(value)
+
+        # Update TTS provider dropdown based on loaded state
+        self._update_tts_provider_options()
+        # Set the provider dropdown to the saved value if available
+        provider_map = {'kokoro': 'Kokoro (Offline)', 'elevenlabs': 'ElevenLabs (Online)'}
+        voice_provider = settings.get('voice_provider', 'kokoro')
+        tts_provider = provider_map.get(voice_provider, 'Kokoro (Offline)')
+        idx = self.tts_provider.findText(tts_provider)
+        if idx >= 0:
+            self.tts_provider.setCurrentIndex(idx)
+        else:
+            self.tts_provider.setCurrentIndex(0)
+        # Populate voices for the selected provider
+        self.update_tts_voices()
+        # Set the voice dropdown to the saved value
+        if voice_provider == 'kokoro':
+            kokoro_voice = settings.get('kokoro_voice', 'af_heart')
+            idx = self.tts_voice.findData(kokoro_voice)
+            if idx < 0:
+                idx = self.tts_voice.findText(kokoro_voice)
+            if idx >= 0:
+                self.tts_voice.setCurrentIndex(idx)
+            else:
+                self.tts_voice.setCurrentIndex(0)
+        elif voice_provider == 'elevenlabs':
+            elevenlabs_voice = settings.get('elevenlabs_voice', 'Jessica')
+            idx = self.tts_voice.findData(elevenlabs_voice)
+            if idx < 0:
+                idx = self.tts_voice.findText(elevenlabs_voice)
+            if idx >= 0:
+                self.tts_voice.setCurrentIndex(idx)
+            else:
+                self.tts_voice.setCurrentIndex(0)
+        else:
+            self.tts_voice.setCurrentIndex(0)
         
         # Load Ollama URL
         ollama_url = settings.get('ollama_url', 'http://localhost:11434/')
@@ -318,12 +381,6 @@ class AITab(QtWidgets.QWidget):
         index = self.code_provider.findText(code_provider)
         if index >= 0:
             self.code_provider.setCurrentIndex(index)
-        
-        # Load TTS provider and voice
-        tts_provider = settings.get('tts_provider', 'Kokoro (Offline)')
-        index = self.tts_provider.findText(tts_provider)
-        if index >= 0:
-            self.tts_provider.setCurrentIndex(index)
         
         # Load playback speed
         speed = settings.get('playback_speed', 1.0)
@@ -374,17 +431,72 @@ class AITab(QtWidgets.QWidget):
         """Update TTS voice options based on selected provider."""
         provider = self.tts_provider.currentText()
         self.tts_voice.clear()
-        
+        settings = load_settings_from_db()
         if provider == "Kokoro (Offline)":
-            voices = [{"id":"k1", "name":"Kokoro Default"}, {"id":"k2", "name":"Kokoro Alt"}]
+            # Full Kokoro American English voices (from HuggingFace VOICES.md) with improved names
+            voices = [
+                {"id": "af_heart", "name": "Heart (Female, Highest Quality)"},
+                {"id": "af_alloy", "name": "Alloy (Female, Good Quality)"},
+                {"id": "af_aoede", "name": "Aoede (Female, Good Quality)"},
+                {"id": "af_bella", "name": "Bella (Female, Highest Quality)"},
+                {"id": "af_jessica", "name": "Jessica (Female, Fair Quality)"},
+                {"id": "af_kore", "name": "Kore (Female, Good Quality)"},
+                {"id": "af_nicole", "name": "Nicole (Female, Good Quality)"},
+                {"id": "af_nova", "name": "Nova (Female, Fair Quality)"},
+                {"id": "af_river", "name": "River (Female, Fair Quality)"},
+                {"id": "af_sarah", "name": "Sarah (Female, Good Quality)"},
+                {"id": "af_sky", "name": "Sky (Female, Basic Quality)"},
+                {"id": "am_adam", "name": "Adam (Male, Low Quality)"},
+                {"id": "am_echo", "name": "Echo (Male, Fair Quality)"},
+                {"id": "am_eric", "name": "Eric (Male, Fair Quality)"},
+                {"id": "am_fenrir", "name": "Fenrir (Male, Good Quality)"},
+                {"id": "am_liam", "name": "Liam (Male, Fair Quality)"},
+                {"id": "am_michael", "name": "Michael (Male, Good Quality)"},
+                {"id": "am_onyx", "name": "Onyx (Male, Fair Quality)"},
+                {"id": "am_puck", "name": "Puck (Male, Good Quality)"},
+                {"id": "am_santa", "name": "Santa (Male, Basic Quality)"},
+            ]
+            for voice in voices:
+                self.tts_voice.addItem(voice["name"], voice["id"])
+            # Select saved voice
+            kokoro_voice = settings.get('kokoro_voice', 'af_heart')
+            idx = self.tts_voice.findData(kokoro_voice)
+            if idx < 0:
+                idx = self.tts_voice.findText(kokoro_voice)
+            if idx >= 0:
+                self.tts_voice.setCurrentIndex(idx)
+            else:
+                self.tts_voice.setCurrentIndex(0)
         elif provider == "ElevenLabs (Online)":
-            voices = [{"id":"e1", "name":"Rachel"}, {"id":"e2", "name":"Drew"}, 
-                     {"id":"e3", "name":"Clyde"}, {"id":"e4", "name":"Domi"}]
+            # Dynamically fetch voices from ElevenLabs using the saved key
+            elevenlabs_key = settings.get('elevenlabs_key', '')
+            if not elevenlabs_key:
+                QtWidgets.QMessageBox.warning(self, "ElevenLabs Key Missing", "No ElevenLabs API key found in settings.")
+                return
+            try:
+                from elevenlabs import ElevenLabs
+                print(f"[DEBUG] ElevenLabs API key before loading library: '{elevenlabs_key}'")
+                client = ElevenLabs(api_key=elevenlabs_key)
+                voices = client.voices.get_all().voices
+                if not voices:
+                    QtWidgets.QMessageBox.warning(self, "No Voices", "No voices found in ElevenLabs account.")
+                    return
+                for voice in voices:
+                    self.tts_voice.addItem(voice.name, voice.voice_id)
+                # Select saved voice
+                elevenlabs_voice = settings.get('elevenlabs_voice', voices[0].voice_id)
+                idx = self.tts_voice.findData(elevenlabs_voice)
+                if idx < 0:
+                    idx = self.tts_voice.findText(elevenlabs_voice)
+                if idx >= 0:
+                    self.tts_voice.setCurrentIndex(idx)
+                else:
+                    self.tts_voice.setCurrentIndex(0)
+            except Exception as e:
+                QtWidgets.QMessageBox.critical(self, "ElevenLabs Error", f"Failed to load ElevenLabs voices.\n{e}")
+                self.tts_voice.clear()
         else:
-            voices = []
-        
-        for voice in voices:
-            self.tts_voice.addItem(voice["name"], voice["id"])
+            self.tts_voice.clear()
 
     def update_agent_models(self):
         """Update agent model options based on selected provider."""
