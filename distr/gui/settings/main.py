@@ -13,7 +13,7 @@ Key Features:
 """
 
 from PyQt6 import QtWidgets, QtGui, QtCore
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal
 from distr.gui.settings.tabs.general import GeneralTab
 from distr.gui.settings.tabs.audio import AudioTab
 from distr.gui.settings.tabs.ai import AITab
@@ -32,6 +32,8 @@ class SettingsWindow(QtWidgets.QMainWindow):
     This class provides the main window for managing application settings,
     integrating all settings tabs and handling window management.
     """
+    
+    settings_saved = pyqtSignal()
     
     def __init__(self, parent=None):
         """
@@ -243,6 +245,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
         
     def save_settings(self):
         """Save all settings and close the window."""
+        self.settings_saved.emit()
         try:
             # Get settings from all tabs
             settings = load_settings_from_db()

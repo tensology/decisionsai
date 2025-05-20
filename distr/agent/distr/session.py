@@ -101,19 +101,14 @@ class AgentSession:
             self.voice_name = settings.get('elevenlabs_voice')
             self.voice_samples = []
             self.voice_settings = {
-                "stability": 0.3,
-                "similarity_boost": 0.5,
+                "stability": 0.5,
+                "similarity_boost": 0.7,
             }
         else:
             self.tts_engine = tts_engine
             self.tts_api_key = tts_api_key
             self.voice_name = agent_name
             self.voice_samples = []
-            self.voice_settings = {
-                "stability": 0.3,
-                "similarity_boost": 0.5,
-            }
-
 
         self.get_voice_config()
 

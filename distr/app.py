@@ -234,6 +234,10 @@ class Application(QtWidgets.QApplication):
         self._initialize_windows()
         self._setup_window_connections()
         
+        # Connect settings_saved to playback duck/reset
+        if hasattr(self, 'settings_window'):
+            self.settings_window.settings_saved.connect(self._on_settings_saved)
+        
         # Configure startup behavior
         self._configure_startup()
         
@@ -478,6 +482,28 @@ class Application(QtWidgets.QApplication):
             
             # Now quit
             super().quit()
+
+    def _on_settings_saved(self):
+        # Try to duck and stop playback
+        try:
+            # Try to access playback via agent session or voice box
+            if hasattr(self, 'voice_box') and hasattr(self.voice_box, 'playback'):
+                pb = self.voice_box.playback
+            elif hasattr(self, 'oracle_window') and hasattr(self.oracle_window, 'playback'):
+                pb = self.oracle_window.playback
+            elif hasattr(self, 'agent_process') and hasattr(self.agent_process, 'playback'):
+                pb = self.agent_process.playback
+            else:
+                pb = None
+            if pb:
+                pb.duck_volume()
+                pb.stop_playback()
+                pb.clear_playlist()
+                print("[DEBUG] Playback ducked and reset on settings save.")
+            else:
+                print("[DEBUG] No playback instance found to duck/reset on settings save.")
+        except Exception as e:
+            print(f"[DEBUG] Error ducking/resetting playback on settings save: {e}")
 
 # ===========================================
 # 6. Application Entry Point
