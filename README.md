@@ -9,7 +9,7 @@ DecisionsAI is an intelligent digital assistant designed to understand and execu
 </p>
 
 > **WARNING**: This project currently requires significant memory resources to run. The current implementation uses the following models:
-> - Vosk speech recognition model (en-us-0.22)
+> - Whisper.cpp / Vosk speech recognition model (en-us-0.22)
 > - Kokoro text-to-speech model
 > - Ollama Gemma 3 4B language model
 > - spaCy en_core_web_lg for NLP
