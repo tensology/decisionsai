@@ -4,7 +4,9 @@ DecisionsAI is an intelligent digital assistant designed to understand and execu
 
 > **IMPORTANT**: This project is currently in an experimental stage and not fully functional. It is actively being developed and updated. Contributions are deeply encouraged and welcome!
 
-![DecisionsAI About](readme/about.png)
+<p align="center">
+  <img src="readme/example.png" alt="DecisionsAI UI">
+</p>
 
 > **WARNING**: This project currently requires significant memory resources to run. The current implementation uses the following models:
 > - Vosk speech recognition model (en-us-0.22)
@@ -21,9 +23,7 @@ DecisionsAI is an intelligent digital assistant designed to understand and execu
 > - Translation features are experimental and may be unstable
 > - Dictation and transcription features may be unreliable
 
-<p align="center">
-  <img src="readme/example.png" alt="DecisionsAI UI">
-</p>
+![DecisionsAI About](readme/about.png)
 
 ## Vision
 
