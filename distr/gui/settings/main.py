@@ -310,10 +310,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 input_field = getattr(self.ai_tab, f"{provider}_input")
                 settings[f"{provider}_enabled"] = checkbox.isChecked()
                 settings[f"{provider}_key"] = input_field.text()
-                if provider == "elevenlabs":
-                    print(f"[SAVE] ElevenLabs: enabled={checkbox.isChecked()}, key='{input_field.text()}', tts_provider='{self.ai_tab.tts_provider.currentText()}'")
-                    logging.debug(f"[SAVE] ElevenLabs: enabled={checkbox.isChecked()}, key='{input_field.text()}', tts_provider='{self.ai_tab.tts_provider.currentText()}'")
-            
+                            
             # Save model selections
             settings['transcription_model'] = self.ai_tab.input_speech_combo.currentText()
             settings['agent_provider'] = self.ai_tab.agent_provider.currentText()
@@ -340,7 +337,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
             logging.debug("Settings saved successfully")
             # After saving, reload and print
             reloaded = load_settings_from_db()
-            print(f"[RELOAD AFTER SAVE] ElevenLabs: enabled={reloaded.get('elevenlabs_enabled')}, key='{reloaded.get('elevenlabs_key')}', tts_provider='{reloaded.get('tts_provider')}'")
             
             # Save first-time EULA acceptance specially (this will emit signals if needed)
             was_previously_accepted = settings.get('accepted_eula', False) != eula_accepted and eula_accepted

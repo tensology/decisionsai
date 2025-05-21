@@ -1,4 +1,4 @@
-from .utils import get_timestamp
+from .utils import get_timestamp, KOKORO_VOICES
 
 from .playback import Playback
 from .stt import STTEngine
@@ -84,21 +84,42 @@ class AgentSession:
 
         self.role = f"""You are {self.agent_name}, an AI assistant."""
 
-        if settings.get('elevenlabs_enabled'):
-            self.tts_engine = "elevenlabs"
+        self.voice_samples = []
+        self.voice_settings = {
+            "stability": 0.5,
+            "similarity_boost": 0.7,
+        }
+
+        self.tts_api_key = tts_api_key
+
+        tts_provider = settings.get("tts_provider")
+        if tts_provider:
+            self.tts_engine = tts_provider
+        else:
+            self.tts_engine = tts_engine
+
+        if tts_provider == "elevenlabs":
             self.tts_api_key = settings.get('elevenlabs_key')
             self.agent_name = settings.get('elevenlabs_voice')
             self.voice_name = settings.get('elevenlabs_voice')
-            self.voice_samples = []
+            self.voice_settings = {
+                "stability": 0.5,
+                "similarity_boost": 0.7,
+            }
+        elif tts_provider == "Kokoro (Offline)":
+            self.tts_api_key = None
+            voice = settings.get('kokoro_voice')
+            print(voice)
+            self.agent_name = KOKORO_VOICES[voice]
+            self.voice_name = voice
             self.voice_settings = {
                 "stability": 0.5,
                 "similarity_boost": 0.7,
             }
         else:
-            self.tts_engine = tts_engine
-            self.tts_api_key = tts_api_key
-            self.voice_name = agent_name
-            self.voice_samples = []
+            self.voice_name = "af_heart"
+            self.agent_name = "Heart"
+            self.logger.info(f"[{get_timestamp()}] Using default voice {self.voice_name}")
 
         self.get_voice_config()
 
@@ -183,17 +204,6 @@ class AgentSession:
                 self.role = (role_text)
             except Exception as e:
                 self.logger.error(f"[{get_timestamp()}] Error loading role file: {e}")
-                # Fallback to default role
-                self.role = (f"""You are {self.agent_name}, an AI assistant.""")
-        else:
-            self.logger.error(f"[{get_timestamp()}] No role file found at {role_path}, using default role")
-            self.role = (f"""You are {self.agent_name}, an AI assistant.""")        
-            self.voice_name = self.agent_name
-
-        if self.tts_engine == "kokoro":
-            self.voice_name = "af_heart"
-            self.agent_name = "Heart"
-            self.logger.info(f"[{get_timestamp()}] Using default voice {self.voice_name}")
         
 
     def _signal_handler(self, sig, frame):

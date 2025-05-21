@@ -10,6 +10,31 @@ warnings.filterwarnings('ignore', category=UserWarning)
 warnings.filterwarnings('ignore', category=FutureWarning)
 warnings.filterwarnings('ignore', category=DeprecationWarning)
 
+
+KOKORO_VOICES = {
+    "af_heart": "Heart",
+    "af_alloy": "Alloy",
+    "af_aoede": "Aoede",
+    "af_bella": "Bella",
+    "af_jessica": "Jessica",
+    "af_kore": "Kore",
+    "af_nicole": "Nicole",
+    "af_nova": "Nova",
+    "af_river": "River",
+    "af_sarah": "Sarah",
+    "af_sky": "Sky",
+    "am_adam": "Adam",
+    "am_echo": "Echo",
+    "am_eric": "Eric",
+    "am_fenrir": "Fenrir",
+    "am_liam": "Liam",
+    "am_michael": "Michael",
+    "am_onyx": "Onyx",
+    "am_puck": "Puck",
+    "am_santa": "Santa",
+}
+
+
 @contextmanager
 def suppress_stdout():
     """Context manager to temporarily suppress stdout and stderr"""

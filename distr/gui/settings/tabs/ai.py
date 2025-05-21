@@ -313,7 +313,6 @@ class AITab(QtWidgets.QWidget):
     def _load_settings(self):
         """Load settings from database and update UI."""
         settings = load_settings_from_db()
-        print(f"[AI LOAD] ElevenLabs: enabled={settings.get('elevenlabs_enabled')}, key='{settings.get('elevenlabs_key')}'")
         
         # Load provider settings
         for provider in ["assemblyai", "openai", "anthropic", "elevenlabs"]:
