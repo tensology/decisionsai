@@ -58,7 +58,7 @@ class TTSEngine:
     """
     
     # ===========================================
-    # 1. Initialization and Setup
+    # 1. Initialization and Setup Text-to-Speech
     # ===========================================
     def __init__(self, 
                  engine: str = "kokoro", 
@@ -244,32 +244,11 @@ class TTSEngine:
     # ===========================================
     # 3. Text Processing
     # ===========================================
-    def split_into_sentences(self, text: str) -> List[str]:
-        """
-        Split text into sentences using basic punctuation rules.
-        
-        Args:
-            text (str): Text to split into sentences
-            
-        Returns:
-            List[str]: List of sentences
-        """
-        if not text or text.strip() == "":
-            return []
-            
-        # Split on sentence-ending punctuation
-        sentences = re.split(r'(?<=[.!?])\s+', text)
-        
-        # Filter out empty sentences
-        sentences = [s.strip() for s in sentences if s.strip()]
-        
-        return sentences
-
     def process_text(self, text: str, sentence_id=None, sentence_group=None, position=None) -> None:
         """
         Process text and add it to the generation queue with provided metadata.
         Args:
-            text (str): Text to be processed and converted to audio
+            text (str): Text to be processed and converted to audio (should be a single sentence or chunk)
             sentence_id (str): Unique ID for the sentence
             sentence_group (str): Group ID for this batch
             position (int): Order position
@@ -534,29 +513,24 @@ class TTSEngine:
 
     def queue_sentence(self, text: str) -> str:
         """
-        Queue a sentence for TTS generation, ensuring strict order and grouping.
+        Queue a single sentence or text chunk for TTS generation. TTS expects pre-split text.
         Args:
-            text (str): Text to be converted to speech
+            text (str): Text to be converted to speech (should be a single sentence or chunk)
         Returns:
             str: The sentence group ID for tracking
         """
+        assert isinstance(text, str), "TTS expects a single sentence or chunk as a string. Sentence splitting must be handled upstream."
         sentence_group = str(uuid.uuid4())
-        sentences = self.split_into_sentences(text)
+        sentence_id = str(uuid.uuid4())
         with self.generation_lock:
-            base_position = self.next_position
-        for i, sentence in enumerate(sentences):
-            if not sentence.strip():
-                continue
-            sentence_id = str(uuid.uuid4())
-            with self.generation_lock:
-                position = self.next_position
-                self.next_position += 1
-            self.process_text(
-                sentence,
-                sentence_id=sentence_id,
-                sentence_group=sentence_group,
-                position=position
-            )
+            position = self.next_position
+            self.next_position += 1
+        self.process_text(
+            text,
+            sentence_id=sentence_id,
+            sentence_group=sentence_group,
+            position=position
+        )
         return sentence_group
 
     def mark_as_played(self, sentence_id: str):

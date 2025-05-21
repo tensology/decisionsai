@@ -1,40 +1,35 @@
+from .utils import get_timestamp
+
 from .playback import Playback
 from .stt import STTEngine
 from .llm import LLMEngine
 from .tts import TTSEngine
-
-from .utils import get_timestamp
+import sounddevice as sd
 import threading
 import logging
 import signal
 import time
 import json
 import os
-import sounddevice as sd
 
 
 class AgentSession:
-    def __init__(self, input_device=None, 
+    def __init__(self, 
+                 input_device=None, output_device=None,
+                 stt_engine="whisper.cpp", stt_api_key=None, 
+                 llm_engine="ollama", llm_model="gemma3:4b", llm_api_key=None, 
+                 tts_engine="kokoro", tts_api_key=None,
                  agent_name="Heart",
-                 stt_engine="whisper.cpp", 
-                 stt_api_key=None, 
-                 llm_engine="ollama", 
-                 llm_model="gemma3:4b",
-                 llm_api_key=None, 
-                 tts_engine="kokoro", 
-                 tts_api_key=None,
-                 output_device=None,
                  silence_threshold=0.03,
                  set_signal_handlers=True, 
-                 settings=None,
-                 *args, **kwargs):
+                 settings=None, *args, **kwargs):
         """
         Initialize the AgentSession with the given agent name and input/output device.
         
         Args:
-            agent_name (str): The name of the agent
             input_device (str, optional): The name of the input device to use
             output_device (str, optional): The name of the output device to use
+            agent_name (str): The name of the agent
             silence_threshold (float, optional): Energy threshold for silence detection
             set_signal_handlers (bool, optional): Whether to set signal handlers
             *args: Additional arguments
@@ -51,15 +46,12 @@ class AgentSession:
 
         self.agent_name = agent_name
 
-        # Initialize playback for output
-        self.playback = Playback(output_device=output_device)
         
         # Get input device info
         devices = sd.query_devices()
         input_device_info = None
         
-        
-        # If input device is specified, find it
+                # If input device is specified, find it
         if input_device:
             for i, device in enumerate(devices):
                 if device['name'] == input_device and device['max_input_channels'] > 0:
@@ -88,7 +80,6 @@ class AgentSession:
 
         print(f"[DEBUG] Settings: {settings}")
 
-
         self.device_info = input_device_info
         self.logger.info(f"Using input device: {self.device_info['name']} ({self.device_info['channels']} channels)")
 
@@ -112,7 +103,11 @@ class AgentSession:
 
         self.get_voice_config()
 
-        # Initialize TTS engine first
+        # Initialize playback for output
+        self.playback = Playback(output_device=output_device)
+
+        # Initialize TTS engine first - even though it's the last in the happy flow
+        # STT -> LLM -> TTS | Playback
         self.tts = TTSEngine(
             engine=self.tts_engine,
             api_key=self.tts_api_key,

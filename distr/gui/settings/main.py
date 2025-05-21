@@ -11,16 +11,14 @@ Key Features:
 - Window management
 - Signal handling
 """
-
-from PyQt6 import QtWidgets, QtGui, QtCore
-from PyQt6.QtCore import Qt, pyqtSignal
+from distr.gui.settings.utils.settings import load_settings_from_db, save_settings_to_db
+from distr.gui.settings.tabs.advanced import AdvancedTab
 from distr.gui.settings.tabs.general import GeneralTab
 from distr.gui.settings.tabs.audio import AudioTab
-from distr.gui.settings.tabs.ai import AITab
-from distr.gui.settings.tabs.advanced import AdvancedTab
 from distr.gui.settings.tabs.eula import EulaTab
-from distr.gui.settings.utils.settings import load_settings_from_db, save_settings_to_db
-from distr.core.signals import signal_manager
+from distr.gui.settings.tabs.ai import AITab
+from PyQt6.QtCore import Qt
+from PyQt6 import QtWidgets
 import logging
 import sys
 import os
@@ -33,8 +31,7 @@ class SettingsWindow(QtWidgets.QMainWindow):
     integrating all settings tabs and handling window management.
     """
     
-    settings_saved = pyqtSignal()
-    
+   
     def __init__(self, parent=None):
         """
         Initialize the settings window.
@@ -245,7 +242,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
         
     def save_settings(self):
         """Save all settings and close the window."""
-        self.settings_saved.emit()
         try:
             # Get settings from all tabs
             settings = load_settings_from_db()

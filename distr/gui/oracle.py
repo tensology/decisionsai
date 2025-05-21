@@ -1,30 +1,18 @@
-from PyQt6.QtCore import (
-    QTimer, 
-    QPropertyAnimation, 
-    QEasingCurve, 
-    QSequentialAnimationGroup, 
-    QParallelAnimationGroup,
-    Qt,
-    QPoint,
-    pyqtProperty
-)
-from distr.core.utils import (
-    load_settings_from_db, 
-    save_settings_to_db, 
-    get_screens_hash,    
-)
+from PyQt6.QtCore import QTimer, QPropertyAnimation, QEasingCurve, QSequentialAnimationGroup, QParallelAnimationGroup, Qt, QPoint, pyqtProperty
+from distr.core.utils import load_settings_from_db, save_settings_to_db, get_screens_hash
 from distr.core.constants import ICONS_DIR, IMAGES_DIR, ORACLE_DIR
-from distr.core.db import get_session, ScreenPosition, Chat
+from distr.core.db import get_session, ScreenPosition
 from distr.core.signals import signal_manager  
+from distr.gui.snippets import SnippetWindow
 from PyQt6 import QtWidgets, QtGui, QtCore
+from distr.gui.action import ActionWindow
 from PyQt6.QtWidgets import QApplication
 from distr.gui.chat import ChatWindow 
-from distr.gui.snippets import SnippetWindow
-from distr.gui.action import ActionWindow
+from PyQt6.QtGui import QAction
+import hashlib  
 import logging
 import os
-from PyQt6.QtGui import QAction
-import hashlib  # Add this import at the top of the file
+
 
 logger = logging.getLogger(__name__)
 

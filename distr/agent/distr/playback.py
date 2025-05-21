@@ -38,16 +38,14 @@ from .utils import get_timestamp
 import sounddevice as sd
 import soundfile as sf
 import numpy as np
+import subprocess
 import threading
 import resampy
 import logging
+import atexit
 import time
 import os
-import atexit
-import sys
-import subprocess
 
-logger = logging.getLogger(__name__)
 
 class Playback:
     """

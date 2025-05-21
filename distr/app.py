@@ -70,11 +70,11 @@ def setup_logging():
     log_file = os.path.join(log_dir, 'decisions.log')
 
     # First, set root logger to ERROR to suppress most logs
-    logging.getLogger().setLevel(logging.ERROR)
+    # logging.getLogger().setLevel(logging.ERROR)
     
     # Then set up our application logging
     app_logger = logging.getLogger('distr')
-    app_logger.setLevel(logging.INFO)
+    # app_logger.setLevel(logging.INFO)
     
     # Create handlers
     file_handler = logging.FileHandler(log_file)
@@ -103,12 +103,12 @@ def setup_logging():
         'PIL'
     ]
     
-    for logger_name in silent_loggers:
-        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
-        # Also silence all child loggers
-        for name in logging.root.manager.loggerDict:
-            if name.startswith(logger_name):
-                logging.getLogger(name).setLevel(logging.CRITICAL)
+    # for logger_name in silent_loggers:
+    #     logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+    #     # Also silence all child loggers
+    #     for name in logging.root.manager.loggerDict:
+    #         if name.startswith(logger_name):
+    #             logging.getLogger(name).setLevel(logging.CRITICAL)
 
     # Disable propagation for all loggers except our app
     for name in logging.root.manager.loggerDict:
@@ -233,11 +233,7 @@ class Application(QtWidgets.QApplication):
         # Initialize windows
         self._initialize_windows()
         self._setup_window_connections()
-        
-        # Connect settings_saved to playback duck/reset
-        if hasattr(self, 'settings_window'):
-            self.settings_window.settings_saved.connect(self._on_settings_saved)
-        
+                
         # Configure startup behavior
         self._configure_startup()
         

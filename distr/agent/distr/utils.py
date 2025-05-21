@@ -1,14 +1,9 @@
 from contextlib import contextmanager
-import sys
-import io
-import os
 import warnings
-import time
 import datetime
+import sys
 import re
-import importlib.util
-import logging
-import regex
+import os
 
 # Suppress specific warnings
 warnings.filterwarnings('ignore', category=UserWarning)
@@ -105,18 +100,9 @@ class TextProcessor:
         # Convert Unicode characters to ASCII equivalents
         text = text.replace('’', "'")  # Curly apostrophe to straight apostrophe
         text = text.replace('"', '"')  # Smart quotes to straight quotes
-        text = text.replace('"', '"')
         text = text.replace('–', '-')  # En dash to hyphen
-        text = text.replace('—', '-')  # Em dash to hyphen
-        text = text.replace('…', '...')  # Ellipsis to three dots
-        
-        # Direct fix for Tensology.com split issue
-        if text.strip().lower() == "com" or text.strip().lower() == "com.":
-            return "com"
-            
-        if text.strip().endswith("Tensology") or text.strip().endswith("Tensology."):
-            return text.strip().rstrip(".") + ".com"
-        
+        text = text.replace('…', '...')  # Ellipsis to three dots          
+       
         # Fix URLs in markdown format: convert [text](url) to just url
         text = re.sub(r'\[(.*?)\]\((https?://[^\s]+)\)', r'\2', text)
         
