@@ -358,6 +358,11 @@ class Application(QtWidgets.QApplication):
         """Initialize the application and start the agent session"""
         thread_pool = QThreadPool.globalInstance()
         thread_pool.waitForDone()
+        # Always (re)connect the signal to ensure it's hooked up
+        try:
+            signal_manager.sound_finished.disconnect()
+        except Exception:
+            pass
         signal_manager.sound_finished.connect(self.player_window.on_sound_finished)
         QTimer.singleShot(500, self.start_agent_session)
 
@@ -502,10 +507,16 @@ class Application(QtWidgets.QApplication):
     def check_agent_events(self):
         while not self.agent_event_queue.empty():
             event, data = self.agent_event_queue.get()
-            if event == 'playback_started':
-                signal_manager.sound_started.emit()
+            logger.info(f"[EVENT QUEUE] Received event: {event}")
+            if event == 'playback_pending':
+                logger.info("[EVENT QUEUE] Showing PlayerWindow in pending state")
+                self.player_window.show_pending()
+            elif event == 'playback_started':
+                logger.info("[EVENT QUEUE] Starting GIF animation in PlayerWindow")
+                self.player_window.start_gif()
             elif event == 'playback_stopped':
-                signal_manager.sound_finished.emit()
+                logger.info("[EVENT QUEUE] Stopping and resetting GIF, hiding PlayerWindow")
+                self.player_window.stop_and_reset_gif_and_hide()
 
 # ===========================================
 # 6. Application Entry Point

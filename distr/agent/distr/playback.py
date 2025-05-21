@@ -299,12 +299,6 @@ class Playback:
     def add_to_playlist(self, file_path: str) -> bool:
         """
         Add a file to the playlist if it hasn't been processed yet.
-        
-        Args:
-            file_path (str): Path to the audio file to add
-            
-        Returns:
-            bool: True if file was added, False otherwise
         """
         if not file_path or not os.path.exists(file_path):
             self.logger.error(f"Invalid file path: {file_path}")
@@ -323,6 +317,10 @@ class Playback:
                 'played': False
             })
             self.logger.info(f"Added file to playlist: {file_path}")
+        # TEMPORARY: Always send playback_pending for debug
+        if self.event_queue:
+            self.logger.info("[DEBUG] Forcing playback_pending event for test (should see PlayerWindow)")
+            self.event_queue.put(('playback_pending', None))
         return True
 
     def get_playlist(self) -> List[Dict]:
@@ -530,6 +528,10 @@ class Playback:
                     # If playlist is empty after popping, schedule blacklist clear
                     if not self.playlist:
                         self._schedule_blacklist_clear()
+                        # Immediately notify main process that playback has stopped
+                        if self.event_queue:
+                            self.logger.info("[DEBUG] Playlist empty after play, sending playback_stopped event")
+                            self.event_queue.put(('playback_stopped', None))
                 else:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
                     if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
@@ -548,8 +550,9 @@ class Playback:
         time.sleep(0.2)
         self.is_playing = False
         self.logger.info("Playback loop ended")
-        # Notify main process that playback has stopped
+        # Notify main process that playback has stopped (fallback)
         if self.event_queue:
+            self.logger.info("[DEBUG] Playback loop exited, sending playback_stopped event (fallback)")
             self.event_queue.put(('playback_stopped', None))
 
     def stop_playback(self):

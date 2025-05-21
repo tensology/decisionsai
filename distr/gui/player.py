@@ -217,30 +217,12 @@ class PlayerWindow(QtWidgets.QWidget):
         self.hide_window()
 
     def on_sound_started(self):
-        self.show_window()  # Ensure the window is visible and positioned
-        # Stop GIF immediately when window is shown
-        if self.movie:
-            self.movie.stop()
-            self.animation_timer.stop()
-        # Start GIF after 2 seconds
-        if hasattr(self, '_gif_start_timer') and self._gif_start_timer:
-            self._gif_start_timer.stop()
-        self._gif_start_timer = QTimer(self)
-        self._gif_start_timer.setSingleShot(True)
-        self._gif_start_timer.timeout.connect(self._start_gif_after_delay)
-        self._gif_start_timer.start(2000)  # 2 seconds
-
-    def _start_gif_after_delay(self):
-        if self.movie:
-            self.movie.start()
-            self.animation_timer.start(33)  # ~30fps
+        self.logger.info("[PlayerWindow] on_sound_started called (legacy, no-op)")
+        # No-op: handled by start_gif
 
     def on_sound_finished(self):
-        # Stop GIF and hide window when playback stops
-        if self.movie:
-            self.movie.stop()
-            self.animation_timer.stop()
-        self.hide()
+        self.logger.info("[PlayerWindow] on_sound_finished called (legacy, no-op)")
+        # No-op: handled by stop_and_reset_gif_and_hide
 
     def on_sound_stopped(self):
         print("Sound stopped manually")
@@ -273,6 +255,44 @@ class PlayerWindow(QtWidgets.QWidget):
         if self.movie:
             self.movie.stop()
             self.animation_timer.stop()
+
+    def show_pending(self):
+        self.logger.info("[PlayerWindow] show_pending: show window, reset GIF to frame 144 paused (before show)")
+        print("[PlayerWindow] show_pending: called")
+        self.show()
+        self.raise_()
+        self.activateWindow()
+        self.logger.info("[PlayerWindow] show_pending: after self.show() and raise_()")
+        # Fallback: if oracle_window is not set or not visible, center on screen
+        if not self.oracle_window or not self.oracle_window.isVisible():
+            screen = QtWidgets.QApplication.primaryScreen()
+            if screen:
+                screen_geo = screen.geometry()
+                x = screen_geo.left() + (screen_geo.width() - self.width()) // 2
+                y = screen_geo.top() + (screen_geo.height() - self.height()) // 2
+                self.move(x, y)
+        else:
+            self.update_position()
+        if self.movie:
+            self.movie.stop()
+            self.animation_timer.stop()
+            self.movie.jumpToFrame(144)
+            self.movie.setPaused(True)
+
+    def start_gif(self):
+        self.logger.info("[PlayerWindow] start_gif: start GIF animation")
+        if self.movie:
+            self.movie.start()
+            self.animation_timer.start(33)
+
+    def stop_and_reset_gif_and_hide(self):
+        self.logger.info("[PlayerWindow] stop_and_reset_gif_and_hide: stop GIF, reset to frame 144 paused, hide window")
+        if self.movie:
+            self.movie.stop()
+            self.animation_timer.stop()
+            self.movie.jumpToFrame(144)
+            self.movie.setPaused(True)
+        self.hide()
 
 
 
