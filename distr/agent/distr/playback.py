@@ -133,6 +133,10 @@ class Playback:
         # Initialize audio system
         self._initialize_audio_system()
         
+        # Device validation: ensure output device is valid
+        if not self._validate_device(self.output_device):
+            raise RuntimeError(f"Playback initialization failed: Output device '{self.output_device}' is not available. Please check your audio device settings.")
+        
         # Start volume monitoring
         self._start_volume_monitor()
         
@@ -319,49 +323,6 @@ class Playback:
             self.logger.info(f"Added file to playlist: {file_path}")
         return True
 
-    def add_tts_playlist(self, tts_engine) -> bool:
-        """
-        Add all generated files from a TTSEngine to the playlist.
-        
-        Args:
-            tts_engine: TTSEngine instance with get_playlist method
-            
-        Returns:
-            bool: True if any files were added, False otherwise
-        """
-        if not hasattr(tts_engine, 'get_playlist'):
-            self.logger.error("TTSEngine does not have a get_playlist method")
-            return False
-        try:
-            tts_playlist = tts_engine.get_playlist()
-            self.logger.debug(f"[DEBUG] TTS.get_playlist() returned {len(tts_playlist)} items")
-            if not tts_playlist:
-                self.logger.warning("TTS playlist is empty")
-                return False
-            self.logger.info(f"Processing TTS playlist with {len(tts_playlist)} items")
-            with self.lock:
-                existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
-                for entry in tts_playlist:
-                    key = (entry.get('sentence_id'), entry.get('file_path'))
-                    # Blacklist check
-                    if (entry.get('sentence_id') in self.played_sentence_ids or
-                        entry.get('file_path') in self.played_file_paths):
-                        self.logger.debug(f"[DEBUG] Blacklist: Skipping already played file: {entry.get('file_path')}")
-                        continue
-                    if key not in existing_keys:
-                        entry['is_played'] = False
-                        self.playlist.append(entry)
-                        self.logger.debug(f"[DEBUG] Added file to playlist: {entry.get('file_path')}")
-                        existing_keys.add(key)
-                    else:
-                        self.logger.debug(f"[DEBUG] Skipping duplicate file in playlist: {entry.get('file_path')}")
-                # Always sort playlist by (sentence_group, position)
-                self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
-            return True
-        except Exception as e:
-            self.logger.error(f"Error adding TTS playlist: {e}")
-            return False
-            
     def get_playlist(self) -> List[Dict]:
         """
         Return a copy of the current playlist.
@@ -382,6 +343,37 @@ class Playback:
                     self._delete_file(item['file_path'])
             self.playlist.clear()
             self.logger.info("Playlist cleared")
+
+    def queue_generated_tts_file(self, file_info: dict) -> bool:
+        """
+        Add a generated TTS file to the playlist if not already present.
+        Args:
+            file_info (dict): Dictionary with keys like 'id', 'text', 'file_path', 'position'.
+        Returns:
+            bool: True if file was added, False otherwise
+        """
+        if not file_info or not file_info.get('file_path') or not os.path.exists(file_info['file_path']):
+            self.logger.error(f"Invalid TTS file info or file does not exist: {file_info}")
+            return False
+        with self.lock:
+            existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
+            key = (file_info.get('id'), file_info.get('file_path'))
+            if key in existing_keys:
+                self.logger.debug(f"[DEBUG] Duplicate TTS file not added to playlist: {file_info.get('file_path')}")
+                return False
+            entry = {
+                'sentence_id': file_info.get('id'),
+                'file_path': file_info.get('file_path'),
+                'position': file_info.get('position', 0),
+                'status': 'generated',
+                'sentence_group': file_info.get('sentence_group'),
+                'is_played': False,
+                'text': file_info.get('text'),
+            }
+            self.playlist.append(entry)
+            self.logger.info(f"Queued TTS file for playback: {file_info.get('file_path')}")
+            self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
+        return True
 
     # ===========================================
     # 4. Playback Control
@@ -457,8 +449,10 @@ class Playback:
         Main playback loop for playing audio files from the playlist.
         """
         last_playlist_empty = False
+        self.logger.debug("[DEBUG] Playback loop started. Initial playlist: %s", [item.get('file_path') for item in self.playlist])
         while self.is_playing:
             try:
+                self.logger.debug("[DEBUG] Top of playback loop. Playlist length: %d", len(self.playlist))
                 if not self.playlist:
                     if not last_playlist_empty:
                         self.logger.debug("[DEBUG] Playlist is empty before popping.")
@@ -469,13 +463,17 @@ class Playback:
                     time.sleep(0.05)
                     continue
                 last_playlist_empty = False
-                self.logger.debug("[DEBUG] Playlist before popping (full):")
-                for item in self.playlist:
-                    self.logger.debug(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+                self.logger.debug("[DEBUG] Playlist before popping (full): %s", [item.get('file_path') for item in self.playlist])
                 current_item = self.playlist[0]
+                self.logger.debug("[DEBUG] Attempting to play file: %s", current_item.get('file_path'))
                 audio_data, sample_rate = self._load_audio_file(current_item['file_path'])
                 if audio_data is None or sample_rate is None:
                     self.logger.error(f"Failed to load audio file: {current_item['file_path']}")
+                    # Remove the file from playlist and delete it if it exists
+                    self._delete_file(current_item['file_path'])
+                    with self.lock:
+                        self.playlist.pop(0)
+                        self.logger.debug("[DEBUG] Removed file after failed load. Playlist now: %s", [item.get('file_path') for item in self.playlist])
                     continue
                 # Ensure volume is synced before playing
                 with self.volume_lock:
@@ -489,6 +487,7 @@ class Playback:
                 retry_count = 0
                 success = False
                 while retry_count < max_retries and not success and not self._stop_playback.is_set():
+                    self.logger.debug("[DEBUG] Playback attempt %d for file: %s", retry_count+1, current_item.get('file_path'))
                     success = self._play_audio_data(audio_data, sample_rate)
                     if not success:
                         retry_count += 1
@@ -504,22 +503,21 @@ class Playback:
                             self.logger.debug(f"[DEBUG] Playlist after popping: {[entry.get('file_path') for entry in self.playlist]}")
                             self.logger.info(f"Successfully played and removed: {current_item['file_path']}")
                             time.sleep(0.1)
-                            if hasattr(self, 'tts') and self.tts:
-                                sentence_id = current_item.get('sentence_id')
-                                if sentence_id:
-                                    self.tts.mark_as_played(sentence_id)
-                                    self.logger.debug(f"[DEBUG] Marked as played: {sentence_id}")
                             # Add to blacklist
                             self.played_sentence_ids.add(current_item.get('sentence_id'))
                             self.played_file_paths.add(current_item.get('file_path'))
                             # Remove the item from the playlist
                             self.playlist.pop(0)
+                            self.logger.debug("[DEBUG] Removed file after play. Playlist now: %s", [item.get('file_path') for item in self.playlist])
+                            # Delete the file after playing
+                            self._delete_file(current_item['file_path'])
                     # Prune all played files from the playlist
                     with self.lock:
                         before_prune = len(self.playlist)
                         self.playlist = [entry for entry in self.playlist if not entry.get('is_played', False)]
                         after_prune = len(self.playlist)
                         self.logger.debug(f"[DEBUG] Pruned played files from playlist. Before: {before_prune}, After: {after_prune}")
+                        self.logger.debug("[DEBUG] Playlist after prune: %s", [item.get('file_path') for item in self.playlist])
                         self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
                     # If playlist is empty after popping, schedule blacklist clear
                     if not self.playlist:
@@ -528,14 +526,17 @@ class Playback:
                     self.logger.error(f"Failed to play audio after {max_retries} attempts: {current_item['file_path']}")
                     if self.playlist and self.playlist[0].get('file_path') == current_item['file_path']:
                         self.playlist.pop(0)
-                        self.logger.debug(f"[DEBUG] Playlist after popping (failed play): {[entry.get('file_path') for entry in self.playlist]}")
+                        self.logger.debug("[DEBUG] Removed file after failed play. Playlist now: %s", [item.get('file_path') for item in self.playlist])
+                    # Delete the file if playback failed
+                    self._delete_file(current_item['file_path'])
                 # Log the full playlist after popping
-                self.logger.debug("[DEBUG] Playlist after popping (full):")
-                for item in self.playlist:
-                    self.logger.debug(f"  - sentence_id: {item.get('sentence_id')}, file_path: {item.get('file_path')}, position: {item.get('position')}, status: {item.get('status')}, group: {item.get('sentence_group')}, is_played: {item.get('is_played')}, text: {item.get('text')}")
+                self.logger.debug("[DEBUG] Playlist after popping (full): %s", [item.get('file_path') for item in self.playlist])
             except Exception as e:
-                self.logger.debug(f"[DEBUG] Error in playback loop: {e}")
+                self.logger.error(f"[DEBUG] Error in playback loop: {e}")
+                import traceback
+                self.logger.error(traceback.format_exc())
                 time.sleep(0.05)
+        self.logger.debug("[DEBUG] Playback loop exited. Final playlist: %s", [item.get('file_path') for item in self.playlist])
         time.sleep(0.2)
         self.is_playing = False
         self.logger.info("Playback loop ended")
@@ -1120,10 +1121,6 @@ class Playback:
         except Exception as e:
             self.logger.error(f"Error applying fade effects: {e}")
             return audio_data
-
-    def set_tts_engine(self, tts_engine):
-        """Set the TTS engine instance for marking files as played."""
-        self.tts = tts_engine
 
     def _schedule_blacklist_clear(self, delay=60):
         if self._blacklist_clear_timer:

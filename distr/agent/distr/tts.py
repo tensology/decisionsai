@@ -67,10 +67,10 @@ class TTSEngine:
                  clone_samples: Optional[List[str]] = None, 
                  delete_cloned_voices: Optional[bool] = False,
                  voice_settings: Optional[Dict[str, Any]] = None,
-                 model_dir: Optional[str] = None):
+                 model_dir: Optional[str] = None,
+                 playback=None):
         """
         Initialize the TTS engine with configuration options.
-        
         Args:
             engine (str): TTS engine to use ('kokoro' or 'elevenlabs')
             api_key (str, optional): API key for cloud TTS services
@@ -78,6 +78,8 @@ class TTSEngine:
             voice_name (str, optional): Name of the voice to use
             clone_samples (List[str], optional): List of audio sample paths for voice cloning
             voice_settings (Dict, optional): Engine-specific voice settings
+            model_dir (str, optional): Path to model directory
+            playback: Playback instance to queue generated files for playback (required)
         """
         # Initialize logger
         self.logger = logging.getLogger(__name__)
@@ -90,6 +92,9 @@ class TTSEngine:
         self.delete_cloned_voices = delete_cloned_voices
         self.clone_samples = clone_samples
         self.model_dir = model_dir
+        self.playback = playback
+        if self.playback is None:
+            raise ValueError("TTSEngine requires a playback instance for direct file queueing.")
         
         # Text conditioning state
         self.previous_text = None
@@ -315,49 +320,32 @@ class TTSEngine:
     # ===========================================
     def generate_next(self) -> Optional[Dict[str, Any]]:
         """
-        Generate the next queued sentence into an audio file.
-        
+        Generate the next queued sentence into an audio file and immediately queue it for playback.
         Returns:
             dict: Generated file information or None if nothing to generate
         """
         if not self.is_running.value:
             return None
-        
-        # Check if there's anything in the queue to generate
         try:
             if self.generation_queue.empty():
                 return None
-            
-            # Get the next sentence from the queue
             sentence_info = self.generation_queue.get_nowait()
-            
-            # Get the actual text to generate
             text = sentence_info.get('text')
             sentence_id = sentence_info.get('id')
-            
             if not text or not sentence_id:
                 self.logger.error("Invalid sentence information in queue")
                 return None
-            
-            # Clean the text
             cleaned_text = self._clean_text(text)
-            
             if not cleaned_text:
                 self.logger.warning(f"Text '{text}' became empty after cleaning, skipping")
                 return None
-            
-            # Create a temporary file for the audio
             with tempfile.NamedTemporaryFile(suffix='.wav', delete=False) as temp_file:
                 audio_file = temp_file.name
-            
             try:
-                # Generate the audio based on the selected engine
                 if self.engine == "elevenlabs":
                     self._generate_elevenlabs_audio(cleaned_text, audio_file)
                 else:
                     self._generate_kokoro_audio(cleaned_text, audio_file)
-                
-                # Update the generated files
                 with self.generation_lock:
                     self.generated_files[sentence_id] = {
                         'text': text,
@@ -365,18 +353,19 @@ class TTSEngine:
                         'status': 'generated',
                         'generated_at': time.time(),
                         'position': sentence_info.get('position', 0),
-                        'is_played': False,  # Track played status separately
-                        'is_generated': True  # Mark as generated
+                        'is_played': False,
+                        'is_generated': True
                     }
-                
                 self.logger.info(f"Generated audio file: {audio_file}")
-                return {
+                file_info = {
                     'id': sentence_id,
                     'text': text,
                     'file_path': audio_file,
                     'position': sentence_info.get('position', 0)
                 }
-                
+                # Immediately queue for playback
+                self.playback.queue_generated_tts_file(file_info)
+                return file_info
             except Exception as e:
                 self.logger.error(f"Error generating audio: {e}")
                 if os.path.exists(audio_file):
@@ -384,7 +373,6 @@ class TTSEngine:
                         os.remove(audio_file)
                     except Exception:
                         pass
-                
                 with self.generation_lock:
                     self.generated_files[sentence_id] = {
                         'text': text,
@@ -395,7 +383,6 @@ class TTSEngine:
                         'is_generated': False
                     }
                 return None
-                
         except queue.Empty:
             return None
         except Exception as e:
@@ -532,17 +519,6 @@ class TTSEngine:
             position=position
         )
         return sentence_group
-
-    def mark_as_played(self, sentence_id: str):
-        """
-        Mark a generated file as played.
-        Args:
-            sentence_id (str): The sentence ID to mark as played
-        """
-        with self.generation_lock:
-            if sentence_id in self.generated_files:
-                self.generated_files[sentence_id]['is_played'] = True
-                self.generated_files[sentence_id]['status'] = 'played'
 
     def prune_played_files(self, max_kept=10):
         """

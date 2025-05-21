@@ -268,18 +268,11 @@ class SettingsWindow(QtWidgets.QMainWindow):
                 if result == QtWidgets.QMessageBox.StandardButton.Yes:
                     # Save settings with the unchecked EULA status
                     save_settings_to_db(settings)
-                    
                     # Notify parent about acceptance change
                     self.eula_tab.eula_accepted.emit(eula_accepted)
-                    
                     logging.info("Exiting application - EULA not accepted")
-                    
                     # Use the proper exit method from the application
                     self.hide()
-
-                    # Restart the application after saving
-                    QtWidgets.QApplication.quit()
-                    os.execv(sys.executable, [sys.executable] + sys.argv)
                     return
                 else:
                     # Return to settings without saving
@@ -360,10 +353,6 @@ class SettingsWindow(QtWidgets.QMainWindow):
             # Hide the window instead of closing it
             self.hide()
 
-            # Restart the application after saving
-            QtWidgets.QApplication.quit()
-            os.execv(sys.executable, [sys.executable] + sys.argv)
-            
         except Exception as e:
             logging.error(f"Error saving settings: {str(e)}")
             QtWidgets.QMessageBox.critical(

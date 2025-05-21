@@ -20,7 +20,7 @@ class AgentSession:
                  llm_engine="ollama", llm_model="gemma3:4b", llm_api_key=None, 
                  tts_engine="kokoro", tts_api_key=None,
                  agent_name="Heart",
-                 silence_threshold=0.03,
+                 silence_threshold=0.009,
                  set_signal_handlers=True, 
                  settings=None, *args, **kwargs):
         """
@@ -46,6 +46,7 @@ class AgentSession:
 
         self.agent_name = agent_name
 
+        self.logger.info(f"[DEBUG] AgentSession initializing with input_device={input_device}, output_device={output_device}")
         
         # Get input device info
         devices = sd.query_devices()
@@ -78,8 +79,6 @@ class AgentSession:
         if not input_device_info:
             raise RuntimeError("No input devices available")
 
-        print(f"[DEBUG] Settings: {settings}")
-
         self.device_info = input_device_info
         self.logger.info(f"Using input device: {self.device_info['name']} ({self.device_info['channels']} channels)")
 
@@ -104,7 +103,12 @@ class AgentSession:
         self.get_voice_config()
 
         # Initialize playback for output
-        self.playback = Playback(output_device=output_device)
+        try:
+            self.playback = Playback(output_device=output_device)
+        except Exception as e:
+            self.logger.error(f"Failed to initialize Playback: {e}")
+            import sys
+            sys.exit(f"[FATAL] Playback initialization failed: {e}")
 
         # Initialize TTS engine first - even though it's the last in the happy flow
         # STT -> LLM -> TTS | Playback
@@ -114,6 +118,7 @@ class AgentSession:
             voice_name=self.voice_name,
             clone_samples=self.voice_samples,
             voice_settings=self.voice_settings,
+            playback=self.playback
         )
         
         # Initialize LLM with role (but not TTS queue yet)
@@ -126,22 +131,26 @@ class AgentSession:
         )
         
         # Initialize STT with LLM callback
-        self.stt = STTEngine(
-            engine_type=stt_engine,
-            api_key=stt_api_key,
-            device_info=self.device_info,
-            llm_callback=self.llm.process_text,
-            silence_threshold=silence_threshold,
-            playback=self.playback
-        )
+        self.logger.info(f"[DEBUG] Initializing STTEngine with device_info: {input_device_info}")
+        try:
+            self.stt = STTEngine(
+                engine_type=stt_engine,
+                api_key=stt_api_key,
+                device_info=self.device_info,
+                llm_callback=self.llm.process_text,
+                silence_threshold=silence_threshold,
+                playback=self.playback
+            )
+        except Exception as e:
+            import traceback
+            traceback.print_exc()
+            self.logger.error(f"[FATAL] Exception during STTEngine init: {e}")
+            raise
 
         # Set up signal handlers if requested (should be disabled when run as a separate process)
         if set_signal_handlers:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
-
-        # After initializing self.tts and self.playback
-        self.playback.set_tts_engine(self.tts)
 
     def get_voice_config(self):
         # Check for role.txt in the agent directory
@@ -245,10 +254,10 @@ class AgentSession:
             self.tts.start()
             self.logger.info(f"[{get_timestamp()}] ✅ TTS engine started successfully")
             
-            # Connect playback to TTS
-            self.logger.info(f"[{get_timestamp()}] 🔄 Connecting playback to TTS")
-            self.playback.add_tts_playlist(self.tts)
-            self.logger.info(f"[{get_timestamp()}] ✅ Playback connected to TTS")
+            # Add any pre-existing TTS files to playback playlist
+            for file_info in self.tts.get_playlist():
+                self.playback.queue_generated_tts_file(file_info)
+            self.logger.info(f"[{get_timestamp()}] ✅ Playback playlist initialized with TTS files")
             
             # Now that TTS is started, connect it to LLM
             self.logger.info(f"[{get_timestamp()}] 🔄 Connecting LLM to TTS input queue")
@@ -289,14 +298,14 @@ class AgentSession:
                         while not self.llm.signal_queue.empty():
                             signal = self.llm.signal_queue.get_nowait()
                             if signal.get("action") == "clear_tts_and_playback":
-                                print("[DEBUG] Clearing TTS and playback before new LLM response.")
+                                self.logger.info("[DEBUG] Clearing TTS and playback before new LLM response.")
                                 self.tts.cleanup()
                                 self.playback.clear_playlist()
                                 # Send ack to LLM if queue exists
                                 if hasattr(self.llm, 'tts_clear_ack_queue'):
                                     try:
                                         self.llm.tts_clear_ack_queue.put("ack")
-                                        print("[DEBUG] Sent TTS/playback clear ack to LLM.")
+                                        self.logger.info("[DEBUG] Sent TTS/playback clear ack to LLM.")
                                     except Exception as e:
                                         self.logger.error(f"Error sending TTS clear ack: {e}")
                     except Exception as e:
@@ -306,7 +315,7 @@ class AgentSession:
                     if not self.stt.running or \
                        not self.llm.running or \
                        not self.tts.is_running.value:
-                        self.logger.error(f"[{get_timestamp()}] One or more components stopped unexpectedly")
+                        self.logger.error(f"One or more components stopped unexpectedly")
                         break
 
                     # Before queuing new LLM sentences, clear old unplayed/generated files
@@ -368,7 +377,7 @@ class AgentSession:
                 try:
                     self.playback.stop_playback()
                     self.playback.clear_playlist()
-                    print("[DEBUG] Cleared playback playlist on session stop.")
+                    self.logger.info("[DEBUG] Cleared playback playlist on session stop.")
                     self.logger.info(f"[{get_timestamp()}] Playback stopped successfully")
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error stopping playback: {e}")
@@ -397,7 +406,7 @@ class AgentSession:
                 self.logger.info(f"[{get_timestamp()}] Performing final playback cleanup...")
                 try:
                     self.playback.clear_playlist()
-                    print("[DEBUG] Cleared playback playlist on final cleanup.")
+                    self.logger.info("[DEBUG] Cleared playback playlist on final cleanup.")
                     self.playback.cleanup()
                     self.logger.info(f"[{get_timestamp()}] Playback cleanup completed successfully")
                 except Exception as e:

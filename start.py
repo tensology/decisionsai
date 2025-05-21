@@ -1,4 +1,5 @@
 import AppKit
+
 AppKit.NSBundle.mainBundle().infoDictionary()['LSUIElement'] = '1'
 from distr.app import run
 

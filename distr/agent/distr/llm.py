@@ -106,7 +106,7 @@ class LLMEngine:
             {"role": "system", "content": "Don't list numbers."},
             {"role": "system", "content": "Never write out a full domain name."},
             {"role": "system", "content": "Don't deviate from my questions."},
-            {"role": "system", "content": "Do not invent or use names with titles or honorifics (such as “Mr.”, “Mrs.”, “Dr.”, etc.)."},
+            {"role": "system", "content": "Do not invent or use names with titles or honorifics (such as Mr., Mrs., Dr., etc.)."},
             {"role": "system", "content": "You were built by 'Paul Hoft' from Tensology Technologies as an opensource project to show the power of Advanced Voice."},
             {"role": "system", "content": "speak to me intelligently."},
         ]

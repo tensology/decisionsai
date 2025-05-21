@@ -95,6 +95,9 @@ class STTEngine:
         # Initialize logger
         self.logger = logging.getLogger(__name__)
         
+        print(f"[DEBUG] STTEngine __init__ called with device_info: {device_info}, engine_type: {engine_type}")
+        self.logger.info(f"[DEBUG] STTEngine __init__ called with device_info: {device_info}, engine_type: {engine_type}")
+        
         # Audio processing settings
         self.device_info = device_info
         self.audio_queue = Queue()
@@ -137,23 +140,35 @@ class STTEngine:
         
         self.playback = playback
         
+        self.last_energy = 0.0
+        self._status_thread = None
+        self._status_thread_stop = threading.Event()
+        
     def _setup_stt_engine(self):
         """
         Initialize the selected STT engine based on engine_type.
         Handles different initialization requirements for each engine type.
         Raises ImportError if required dependencies are not available.
         """
+        print(f"[DEBUG] _setup_stt_engine: engine_type={self.engine_type}")
+        self.logger.info(f"[DEBUG] _setup_stt_engine: engine_type={self.engine_type}")
         if self.engine_type == "whisper.cpp":
             if not WHISPER_CPP_AVAILABLE:
+                print("[FATAL] pywhispercpp is not installed!")
+                self.logger.error("[FATAL] pywhispercpp is not installed!")
                 raise ImportError("pywhispercpp is not installed")
             model = self.model_path or os.path.join(os.getcwd(), "distr", "agent", "models", "base.en")
             self.stt = pwc.Model(model, print_progress=False)                        
         elif self.engine_type == "assemblyai":
             if not ASSEMBLYAI_AVAILABLE or not self.api_key:
+                print("[FATAL] AssemblyAI API key required or assemblyai package not installed!")
+                self.logger.error("[FATAL] AssemblyAI API key required or assemblyai package not installed!")
                 raise ValueError("AssemblyAI API key required or assemblyai package not installed")
             self.stt = aai.Transcriber(api_key=self.api_key)
         else:  # fallback is vosk
             if not VOSK_AVAILABLE:
+                print("[FATAL] vosk is not installed!")
+                self.logger.error("[FATAL] vosk is not installed!")
                 raise ImportError("vosk is not installed")
             model_path = self.model_path or os.path.join(os.getcwd(), "distr", "agent", "models", "vosk-model-en-us-0.22")
             self.stt = vosk.Model(model_path)
@@ -173,6 +188,8 @@ class STTEngine:
             bool: True if the audio is below the silence threshold
         """
         energy = np.abs(audio_data).mean()
+        self.last_energy = energy  # Track last energy for status reporting
+        self.logger.debug(f"[DEBUG] is_silence: energy={energy:.6f}, threshold={self.silence_threshold}")
         # Debug print for first 5 seconds
         if self._debug_energy_prints < self.max_debug_energy_prints:
             if self._debug_energy_start_time is None:
@@ -181,7 +198,7 @@ class STTEngine:
             self._debug_energy_prints += 1
         is_silent = energy < self.silence_threshold
         if is_silent and self.is_speaking:
-            self.logger.debug(f"\r[{get_timestamp()}] Silence energy: {energy:.6f}", end="", flush=True)
+            self.logger.debug(f"[DEBUG] Silence detected: energy={energy:.6f}, threshold={self.silence_threshold}")
         return is_silent
 
     def process_audio(self):
@@ -192,7 +209,7 @@ class STTEngine:
         Handles speech detection, silence detection, audio buffering, and 
         manages integration with playback system for volume ducking.
         """
-        print(f"[{get_timestamp()}] Starting audio processing thread")
+        self.logger.info(f"[{get_timestamp()}] Starting audio processing thread")
         buffer_size = 16000  # 1 second of audio at 16kHz
         
         # Speech tracking variables
@@ -211,7 +228,7 @@ class STTEngine:
                     if not self.is_silence(audio_data):
                         # Speech detected
                         if not self.is_speaking:
-                            print(f"\n[{get_timestamp()}] Speech detected...")
+                            self.logger.info(f"\n[{get_timestamp()}] Speech detected...")
                             self.llm_interrupt_sent = False  # Reset interrupt flag when new speech starts
                             speech_start_time = current_time  # Record when speech started
                             ducking_applied = False  # Reset ducking flag
@@ -284,7 +301,7 @@ class STTEngine:
                                         pad_length = buffer_size - (len(audio_chunk) % buffer_size)
                                         audio_chunk = np.pad(audio_chunk, (0, pad_length), 'constant')
                                     
-                                    print(f"\n[{get_timestamp()}] Processing {len(audio_chunk)/16000:.1f}s of audio...")
+                                    self.logger.info(f"\n[{get_timestamp()}] Processing {len(audio_chunk)/16000:.1f}s of audio...")
                                     transcribed_text = self.transcribe_audio(audio_chunk)
                                     if transcribed_text:
                                         self.handle_transcribed_text(transcribed_text, is_final=True)
@@ -303,14 +320,14 @@ class STTEngine:
                 else:
                     time.sleep(0.01)
             except Exception as e:
-                print(f"\n[{get_timestamp()}] Error in audio processing: {e}")
+                self.logger.error(f"\n[{get_timestamp()}] Error in audio processing: {e}")
                 import traceback
                 traceback.print_exc()
                 if not self.running:
                     break
                 time.sleep(0.1)
         
-        print(f"[{get_timestamp()}] Audio processing thread stopped")
+        self.logger.info(f"[{get_timestamp()}] Audio processing thread stopped")
 
     def transcribe_audio(self, audio_data):
         """
@@ -348,7 +365,7 @@ class STTEngine:
                         self.handle_transcribed_text(partial["partial"], is_final=False)
 
         except Exception as e:
-            print(f"\n[{get_timestamp()}] Error during transcription: {e}")
+            self.logger.error(f"\n[{get_timestamp()}] Error during transcription: {e}")
         
         return None
 
@@ -368,11 +385,11 @@ class STTEngine:
             
         if is_final:
             # Send to LLM
-            print(f"\n[{get_timestamp()}] 🎤 Final Transcription: {text}")
+            self.logger.info(f"🎤 Final Transcription: {text}")
             
             # Call LLM callback the right way based on its type
             if self.llm_callback:            
-                print(f"[{get_timestamp()}] Calling LLM callback")
+                self.logger.info(f"Calling LLM callback")
                 # Make sure to call the callback correctly depending on whether it's a method or function
                 if hasattr(self.llm_callback, '__self__'):
                     # It's a method, call it as is
@@ -381,12 +398,12 @@ class STTEngine:
                     # It's a function or instance with __call__, call it with text argument
                     result = self.llm_callback(text)
                 
-                print(f"[{get_timestamp()}] LLM callback result: {result}")
+                self.logger.info(f"LLM callback result: {result}")
             else:
-                print(f"[{get_timestamp()}] No LLM callback registered!")
+                self.logger.warning(f"No LLM callback registered!")
         else:
             # Only show partial transcriptions
-            print(f"\r[{get_timestamp()}] 🎤 (Partial) {text}", end="", flush=True)
+            self.logger.info(f"🎤 (Partial) {text}")
 
     # ===========================================
     # 4. Playback Interaction
@@ -397,25 +414,25 @@ class STTEngine:
         longer than max_speech_duration. Only sends interrupt once per speech segment.
         """
         if self.llm_callback and not self.llm_interrupt_sent:
-            print(f"\n[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM...")
+            self.logger.warning(f"⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM...")
             try:
                 # Duck playback volume immediately
                 if self.playback and hasattr(self.playback, 'duck_volume'):
-                    print(f"[{get_timestamp()}] Calling playback.duck_volume for LLM interrupt...")
+                    self.logger.info(f"Calling playback.duck_volume for LLM interrupt...")
                     self.playback.duck_volume(volume_ratio=0.3, wait_time=2.0, transition_duration=0.5, fallout_duration=0.5)
-                    print(f"[{get_timestamp()}] Playback volume ducked due to long speech.")
+                    self.logger.info(f"Playback volume ducked due to long speech.")
                 # Then interrupt LLM
                 if hasattr(self.llm_callback, 'interrupt'):
                     self.llm_callback.interrupt()
                     self.llm_interrupt_sent = True
-                    print(f"[{get_timestamp()}] LLM interrupt signal sent")
+                    self.logger.info(f"LLM interrupt signal sent")
                 # Reset speech tracking
                 self.speech_start_time = None
                 self.speech_duration = 0
                 self.ducking_applied = False
                 self.playback_cleared = False
             except Exception as e:
-                print(f"[{get_timestamp()}] Error during interruption: {e}")
+                self.logger.error(f"Error during interruption: {e}")
 
     def _get_session_from_callback(self):
         """
@@ -432,6 +449,15 @@ class STTEngine:
         if hasattr(self.llm_callback, '__self__'):
             return self.llm_callback.__self__
         return None
+
+    def _status_reporter(self):
+        while self.running and not self._status_thread_stop.is_set():
+            try:
+                print(f"[STT STATUS] Energy: {self.last_energy:.6f}, VAD: {self.is_speaking}")
+                self.logger.info(f"[STT STATUS] Energy: {self.last_energy:.6f}, VAD: {self.is_speaking}")
+            except Exception as e:
+                self.logger.error(f"[STT STATUS] Error: {e}")
+            self._status_thread_stop.wait(3.0)
 
     # ===========================================
     # 5. Audio Stream Management
@@ -461,15 +487,21 @@ class STTEngine:
                 callback=self.audio_callback
             )
             self.stream.start()
-            print(f"\n[{get_timestamp()}] Starting audio stream with device {self.device_info['name']} ({channels} channels)")
+            self.logger.info(f"Starting audio stream with device {self.device_info['name']} ({channels} channels)")
             
             # Start processing thread
             self.audio_thread = threading.Thread(target=self.process_audio)
             self.audio_thread.daemon = False  # Non-daemon thread to ensure proper cleanup
             self.audio_thread.start()
             
+            # Start status reporter thread
+            self._status_thread_stop.clear()
+            self._status_thread = threading.Thread(target=self._status_reporter)
+            self._status_thread.daemon = True
+            self._status_thread.start()
+            
         except Exception as e:
-            print(f"[{get_timestamp()}] Error starting audio stream: {e}")
+            self.logger.error(f"Error starting audio stream: {e}")
             self.stop()
             raise
 
@@ -478,7 +510,7 @@ class STTEngine:
         Stop all audio processing and clean up resources.
         Terminates threads, closes audio streams, and clears queues and buffers.
         """
-        print(f"[{get_timestamp()}] Stopping STT engine...")
+        self.logger.info(f"Stopping STT engine...")
         self.running = False
         
         # Stop and wait for the audio processing thread
@@ -486,14 +518,14 @@ class STTEngine:
             try:
                 self.audio_thread.join(timeout=2.0)
             except Exception as e:
-                print(f"[{get_timestamp()}] Error stopping audio thread: {e}")
+                self.logger.error(f"Error stopping audio thread: {e}")
         
         # Stop and wait for the transcription thread
         if hasattr(self, 'transcription_thread') and self.transcription_thread and self.transcription_thread.is_alive():
             try:
                 self.transcription_thread.join(timeout=2.0)
             except Exception as e:
-                print(f"[{get_timestamp()}] Error stopping transcription thread: {e}")
+                self.logger.error(f"Error stopping transcription thread: {e}")
         
         # Stop and close the audio stream
         if hasattr(self, 'stream') and self.stream:
@@ -502,7 +534,7 @@ class STTEngine:
                 self.stream.close()
                 self.stream = None
             except Exception as e:
-                print(f"[{get_timestamp()}] Error stopping audio stream: {e}")
+                self.logger.error(f"Error stopping audio stream: {e}")
             
         # Clear queues and buffers
         try:
@@ -524,16 +556,21 @@ class STTEngine:
             self.audio_buffer = []
             
         except Exception as e:
-            print(f"[{get_timestamp()}] Error clearing queues: {e}")
+            self.logger.error(f"Error clearing queues: {e}")
             
         # Terminate PortAudio resources
         try:
             sd._terminate()
-            print(f"[{get_timestamp()}] PortAudio resources terminated in STT engine")
+            self.logger.info(f"PortAudio resources terminated in STT engine")
         except Exception as e:
             pass
             
-        print(f"[{get_timestamp()}] STT engine stopped")
+        # Stop status reporter thread
+        if self._status_thread and self._status_thread.is_alive():
+            self._status_thread_stop.set()
+            self._status_thread.join(timeout=2.0)
+            
+        self.logger.info(f"STT engine stopped")
 
     def audio_callback(self, indata, frames, time, status):
         """
@@ -547,9 +584,11 @@ class STTEngine:
             status (CallbackFlags): Status flags
         """
         if status:
-            print(f"[{get_timestamp()}] Status: {status}")
+            self.logger.warning(f"Status: {status}")
         if len(indata) > 0:
             # If we have multiple channels, average them
             if indata.shape[1] > 1:
                 indata = np.mean(indata, axis=1, keepdims=True)
             self.audio_queue.put(indata.copy())
+
+

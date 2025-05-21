@@ -1,6 +1,10 @@
 """
 app.py - Main Application Entry Point
 
+# LOGGING POLICY:
+# Only call setup_logging() in the main process (in run()) and in run_agent_session (for the agent subprocess).
+# Do NOT call setup_logging() in any other module or at import time.
+
 This module serves as the main entry point for the Decisions AI application.
 It handles:
 - Application initialization and setup
@@ -66,15 +70,18 @@ def setup_logging():
     log_dir = os.path.join(DB_DIR, 'logs')
     if not os.path.exists(log_dir):
         os.makedirs(log_dir)
-        
     log_file = os.path.join(log_dir, 'decisions.log')
 
-    # First, set root logger to ERROR to suppress most logs
-    # logging.getLogger().setLevel(logging.ERROR)
-    
+    # Remove all handlers from root logger and 'distr' logger to prevent duplicates
+    for logger_name in ('distr', ''):
+        logger = logging.getLogger(logger_name)
+        while logger.handlers:
+            handler = logger.handlers[0]
+            logger.removeHandler(handler)
+            handler.close()
+        
     # Then set up our application logging
     app_logger = logging.getLogger('distr')
-    # app_logger.setLevel(logging.INFO)
     
     # Create handlers
     file_handler = logging.FileHandler(log_file)
@@ -85,9 +92,17 @@ def setup_logging():
     file_handler.setFormatter(formatter)
     console_handler.setFormatter(formatter)
     
+    # Set log levels to reduce spam
+    file_handler.setLevel(logging.INFO)      # Only log INFO and above to file
+    console_handler.setLevel(logging.WARNING) # Only show warnings/errors in console
+    app_logger.setLevel(logging.INFO)
+    logging.getLogger().setLevel(logging.INFO)
+    
     # Add handlers to our app logger
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
+    # Also add file handler to root logger to catch all logs from all modules
+    logging.getLogger().addHandler(file_handler)
     
     # Explicitly silence noisy modules
     silent_loggers = [
@@ -102,13 +117,11 @@ def setup_logging():
         'matplotlib',
         'PIL'
     ]
-    
-    # for logger_name in silent_loggers:
-    #     logging.getLogger(logger_name).setLevel(logging.CRITICAL)
-    #     # Also silence all child loggers
-    #     for name in logging.root.manager.loggerDict:
-    #         if name.startswith(logger_name):
-    #             logging.getLogger(name).setLevel(logging.CRITICAL)
+    for logger_name in silent_loggers:
+        logging.getLogger(logger_name).setLevel(logging.CRITICAL)
+        for name in logging.root.manager.loggerDict:
+            if name.startswith(logger_name):
+                logging.getLogger(name).setLevel(logging.CRITICAL)
 
     # Disable propagation for all loggers except our app
     for name in logging.root.manager.loggerDict:
@@ -150,6 +163,7 @@ class DeviceSelectionDialog(QDialog):
 
 def run_agent_session(settings, input_device=None, output_device=None):
     """Runs the agent session in a separate process with proper error handling"""
+    setup_logging()  # Ensure logging is set up in the agent subprocess
     try:
         def exception_handler(exc_type, exc_value, exc_traceback):
             if exc_type == sounddevice.PortAudioError and "PortAudio not initialized" in str(exc_value):
@@ -218,11 +232,7 @@ class Application(QtWidgets.QApplication):
         # Initialize core components
         self.db_session = get_session()
         self.settings = load_settings_from_db()
-        # Debug print for ElevenLabs config
-        eleven_enabled = self.settings.get('elevenlabs_enabled')
-        eleven_key = self.settings.get('elevenlabs_key')
-        tts_provider = self.settings.get('tts_provider')
-        print(f"[LOAD] ElevenLabs: enabled={eleven_enabled}, key='{eleven_key}', tts_provider='{tts_provider}'")
+ 
         self.action_handler = ActionHandler()
         self.chat_manager = ChatManager()
         
