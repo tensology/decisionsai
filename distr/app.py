@@ -53,7 +53,7 @@ from distr.core.db import get_session
 from distr.core.constants import DB_DIR
 
 from distr.gui.settings.main import SettingsWindow
-from distr.gui.player import VoiceBoxWindow
+from distr.gui.player import PlayerWindow
 from distr.gui.oracle import OracleWindow
 from distr.gui.about import AboutWindow
 
@@ -161,7 +161,7 @@ class DeviceSelectionDialog(QDialog):
     def get_selection(self):
         return self.input_combo.currentText(), self.output_combo.currentText()
 
-def run_agent_session(settings, input_device=None, output_device=None):
+def run_agent_session(settings, input_device=None, output_device=None, command_queue=None, event_queue=None):
     """Runs the agent session in a separate process with proper error handling"""
     setup_logging()  # Ensure logging is set up in the agent subprocess
     try:
@@ -195,7 +195,13 @@ def run_agent_session(settings, input_device=None, output_device=None):
         atexit.register(cleanup_at_exit)
 
         try:
-            agent_session = AgentSession(input_device=input_device, output_device=output_device, settings=settings)
+            agent_session = AgentSession(
+                input_device=input_device, 
+                output_device=output_device, 
+                settings=settings,
+                command_queue=command_queue,
+                event_queue=event_queue
+            )
             agent_session.start()
         except Exception as e:
             logger.error(f"Error initializing or running agent session: {e}")
@@ -226,6 +232,8 @@ class Application(QtWidgets.QApplication):
         self.agent_process = None
         self.selected_input_device = None
         self.selected_output_device = None
+        self.agent_command_queue = multiprocessing.Queue()
+        self.agent_event_queue = multiprocessing.Queue()
         # Prompt for device selection at startup
         self.select_devices()
         
@@ -247,18 +255,23 @@ class Application(QtWidgets.QApplication):
         # Configure startup behavior
         self._configure_startup()
         
+        # Start polling for agent events
+        self.event_timer = QTimer()
+        self.event_timer.timeout.connect(self.check_agent_events)
+        self.event_timer.start(100)
+        
     def _initialize_windows(self):
         """Initialize all application windows"""
-        self.voice_box = VoiceBoxWindow()
+        self.player_window = PlayerWindow()
         self.about_window = AboutWindow()
         self.settings_window = SettingsWindow()
         self.oracle_window = OracleWindow(
             self.settings_window,
             self.about_window,
-            self.voice_box,
+            self.player_window,
             self.chat_manager
         )
-        self.voice_box.set_oracle_window(self.oracle_window)
+        self.player_window.set_oracle_window(self.oracle_window)
         
     def _setup_window_connections(self):
         """Set up signal connections between windows"""
@@ -269,6 +282,9 @@ class Application(QtWidgets.QApplication):
         
         # Connect EULA acceptance signal to handler - triggered when Save is clicked and EULA is accepted for first time
         signal_manager.eula_accepted.connect(self.on_eula_accepted)
+        
+        # Connect duck playback signal to handler
+        signal_manager.duck_playback.connect(self.on_duck_playback)
     
     def on_eula_accepted(self):
         """
@@ -297,8 +313,8 @@ class Application(QtWidgets.QApplication):
             logger.info("About window disabled in settings")
             
         # Continue with normal startup
-        if self.settings.get("load_splash_sound", False):
-            QTimer.singleShot(500, self.initialize_voice_box)
+        # if self.settings.get("load_splash_sound", False):
+            # QTimer.singleShot(500, self.initialize_player_window)
         
         # Re-enable other windows
         signal_manager.eula_check_required.emit(False)
@@ -331,9 +347,9 @@ class Application(QtWidgets.QApplication):
             else:
                 logger.info("About window disabled in settings")
 
-            if self.settings.get("load_splash_sound", False):
+            # if self.settings.get("load_splash_sound", False):
                 # self.sound_player.play_decisions_sound()
-                QTimer.singleShot(500, self.initialize_voice_box)
+                # QTimer.singleShot(500, self.initialize_player_window)
 
         # Always initialize the app after checking EULA status
         QTimer.singleShot(100, self.initialize_app)
@@ -342,7 +358,7 @@ class Application(QtWidgets.QApplication):
         """Initialize the application and start the agent session"""
         thread_pool = QThreadPool.globalInstance()
         thread_pool.waitForDone()
-        signal_manager.sound_finished.connect(self.voice_box.on_sound_finished)
+        signal_manager.sound_finished.connect(self.player_window.on_sound_finished)
         QTimer.singleShot(500, self.start_agent_session)
 
     def select_devices(self):
@@ -359,30 +375,20 @@ class Application(QtWidgets.QApplication):
         """Start the agent session in a separate process"""
         try:
             logger = logging.getLogger(__name__)
-            
             if hasattr(self, 'agent_process') and self.agent_process and self.agent_process.is_alive():
                 logger.info("Terminating existing agent process")
                 self.agent_process.terminate()
                 self.agent_process.join(timeout=1.0)
-            
             self.agent_process = multiprocessing.Process(
                 target=run_agent_session,
-                args=(self.settings, self.selected_input_device, self.selected_output_device),
+                args=(self.settings, self.selected_input_device, self.selected_output_device, self.agent_command_queue, self.agent_event_queue),
                 daemon=False
             )
-            
             self.agent_process.start()
             logger.info(f"Agent process started with PID: {self.agent_process.pid}")
-            
         except Exception as e:
             logger = logging.getLogger(__name__)
             logger.error(f"Error starting agent session process: {e}")
-
-    def initialize_voice_box(self):
-        """Initialize and show the voice box window"""
-        if self.voice_box:
-            self.voice_box.show_window()
-            self.voice_box.on_sound_started()
 
     def _cleanup_agent_process(self):
         """Clean up the agent process with proper signal handling"""
@@ -409,7 +415,7 @@ class Application(QtWidgets.QApplication):
             except Exception as e:
                 logger.error(f"Error stopping agent process: {e}")
             
-            # Close the process connection completely to release resources
+            # Close the process connection completely to release resourceson_duck_playback
             if hasattr(self.agent_process, 'close'):
                 try:
                     self.agent_process.close()
@@ -489,27 +495,17 @@ class Application(QtWidgets.QApplication):
             # Now quit
             super().quit()
 
-    def _on_settings_saved(self):
-        # Try to duck and stop playback
-        try:
-            # Try to access playback via agent session or voice box
-            if hasattr(self, 'voice_box') and hasattr(self.voice_box, 'playback'):
-                pb = self.voice_box.playback
-            elif hasattr(self, 'oracle_window') and hasattr(self.oracle_window, 'playback'):
-                pb = self.oracle_window.playback
-            elif hasattr(self, 'agent_process') and hasattr(self.agent_process, 'playback'):
-                pb = self.agent_process.playback
-            else:
-                pb = None
-            if pb:
-                pb.duck_volume()
-                pb.stop_playback()
-                pb.clear_playlist()
-                print("[DEBUG] Playback ducked and reset on settings save.")
-            else:
-                print("[DEBUG] No playback instance found to duck/reset on settings save.")
-        except Exception as e:
-            print(f"[DEBUG] Error ducking/resetting playback on settings save: {e}")
+    def on_duck_playback(self, params):
+        if hasattr(self, 'agent_command_queue') and self.agent_command_queue:
+            self.agent_command_queue.put(('duck_playback', params))
+
+    def check_agent_events(self):
+        while not self.agent_event_queue.empty():
+            event, data = self.agent_event_queue.get()
+            if event == 'playback_started':
+                signal_manager.sound_started.emit()
+            elif event == 'playback_stopped':
+                signal_manager.sound_finished.emit()
 
 # ===========================================
 # 6. Application Entry Point

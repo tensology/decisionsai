@@ -77,6 +77,7 @@ class Playback:
             fade_in_duration (float): Duration of fade-in effect in seconds
             fade_out_duration (float): Duration of fade-out effect in seconds
             normalize_volume (bool): Whether to normalize volume between tracks
+            event_queue (Queue): Queue for communication with main process
         """
         # Initialize logger
         self.logger = logging.getLogger(__name__)
@@ -92,6 +93,7 @@ class Playback:
         self.fade_out_duration = kwargs.get('fade_out_duration', 0.0)
         self.normalize_volume = kwargs.get('normalize_volume', False)
         self.chunk_duration = kwargs.get('chunk_duration', 0.1)  # Duration of each audio chunk in seconds
+        self.event_queue = kwargs.get('event_queue')
         
         # Initialize device management
         self.available_devices = self._get_output_devices()
@@ -384,6 +386,9 @@ class Playback:
             return
         if self.is_playing:
             return
+        # Notify main process that playback is starting
+        if self.event_queue:
+            self.event_queue.put(('playback_started', None))
         # Cancel ducking cut if in progress
         with self.volume_lock:
             if self.is_ducking and not self._ducking_cancel_event.is_set():
@@ -418,6 +423,9 @@ class Playback:
         if self.is_playing:
             self.logger.warning("Playback is already in progress")
             return
+        # Notify main process that playback is starting
+        if self.event_queue:
+            self.event_queue.put(('playback_started', None))
         # Cancel ducking cut if in progress
         with self.volume_lock:
             if self.is_ducking and not self._ducking_cancel_event.is_set():
@@ -540,6 +548,9 @@ class Playback:
         time.sleep(0.2)
         self.is_playing = False
         self.logger.info("Playback loop ended")
+        # Notify main process that playback has stopped
+        if self.event_queue:
+            self.event_queue.put(('playback_stopped', None))
 
     def stop_playback(self):
         """

@@ -21,8 +21,8 @@ def response(chat_manager, action, data):
 
     if speak:
         # Emit the signal to open the voice box 
-        signal_manager.show_voice_box.emit()
-        signal_manager.reset_voice_box.emit() # don't play audio yet
+        signal_manager.show_player_window.emit()
+        signal_manager.reset_player_window.emit() # don't play audio yet
 
     prompt_response = get_prompt(chat_manager, action, data)
 

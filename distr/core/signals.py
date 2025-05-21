@@ -3,12 +3,12 @@ from PyQt6.QtCore import QObject, pyqtSignal
 class SignalManager(QObject):
 
     # VoiceBox-related signals
-    update_voice_box_position = pyqtSignal()
+    update_player_window_position = pyqtSignal()
 
-    show_voice_box = pyqtSignal()
-    hide_voice_box = pyqtSignal()
+    show_player_window = pyqtSignal()
+    hide_player_window = pyqtSignal()
 
-    reset_voice_box = pyqtSignal()
+    reset_player_window = pyqtSignal()
 
     # Sound-related signals
     sound_started = pyqtSignal()
@@ -90,6 +90,9 @@ class SignalManager(QObject):
     # Add EULA-related signals
     eula_accepted = pyqtSignal()  # Emitted when user accepts the EULA
     eula_check_required = pyqtSignal(bool)  # Controls whether EULA check is required
+
+    # Add this signal
+    duck_playback = pyqtSignal(dict)  # or pyqtSignal(float, float, float, float)
 
     def __init__(self):
         super().__init__()

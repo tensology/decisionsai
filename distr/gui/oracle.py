@@ -37,7 +37,7 @@ class RoundContainer(QtWidgets.QWidget):
 
 class OracleWindow(QtWidgets.QMainWindow):
 
-    def __init__(self, settings_window, about_window, voice_box, chat_manager, parent=None):
+    def __init__(self, settings_window, about_window, player_window, chat_manager, parent=None):
         super().__init__(parent)
         self._updating_menu = False
         self.is_exiting = False  # Flag to track exit state
@@ -66,11 +66,11 @@ class OracleWindow(QtWidgets.QMainWindow):
         self.current_screens_hash = get_screens_hash()
         logging.debug(f"Oracle init - Current screens hash: {self.current_screens_hash}")
         
-        self.voice_box = voice_box
+        self.player_window = player_window
         self.chat_manager = chat_manager
         self.settings_window = settings_window
         self.about_window = about_window
-        # Connect the OracleWindow's move event to trigger VoiceBox position update
+        # Connect the OracleWindow's move event to trigger PlayerWindow position update
         self.moveEvent = self.on_move_event
 
         signal_manager.change_oracle.connect(self.next_image)
@@ -219,8 +219,8 @@ class OracleWindow(QtWidgets.QMainWindow):
         
         logging.debug(f"Initialized listening state: {should_listen}")
 
-    def set_voice_box(self, voice_box):
-        self.voice_box = voice_box
+    def set_player_window(self, player_window):
+        self.player_window = player_window
         
 
     def enable_tray(self):
@@ -532,8 +532,8 @@ class OracleWindow(QtWidgets.QMainWindow):
         signal_manager.exit_app.emit()
         
         # Hide all windows first
-        if hasattr(self, 'voice_box') and self.voice_box:
-            self.voice_box.hide()
+        if hasattr(self, 'player_window') and self.player_window:
+            self.player_window.hide()
         if hasattr(self, 'about_window') and self.about_window:
             self.about_window.hide()
         if hasattr(self, 'settings_window') and self.settings_window:
@@ -585,18 +585,18 @@ class OracleWindow(QtWidgets.QMainWindow):
 
     def on_move_event(self, event):
         super().moveEvent(event)
-        signal_manager.update_voice_box_position.emit()
+        signal_manager.update_player_window_position.emit()
 
-    def play_voice_box(self):
-        print("Playing voice box animation")
-        signal_manager.update_voice_box_position.emit()
-        self.voice_box.setVisible(True)  # Use setVisible
-        self.voice_box.play_gif()
+    def play_player_window(self):
+        print("Playing player window animation")
+        signal_manager.update_player_window_position.emit()
+        self.player_window.setVisible(True)
+        self.player_window.play_gif()
 
-    def stop_voice_box(self):
-        print("Stopping voice box")
-        self.voice_box.stop_gif()
-        self.voice_box.hide()
+    def stop_player_window(self):
+        print("Stopping player window")
+        self.player_window.stop_gif()
+        self.player_window.hide()
 
     def dragEnterEvent(self, event):
         if event.mimeData().hasUrls():
@@ -837,9 +837,9 @@ class OracleWindow(QtWidgets.QMainWindow):
         if self.settings.get('restore_position'):
             self.save_current_position()
         
-        # Update voice box position if needed
-        if hasattr(self, 'voice_box'):
-            self.voice_box.update_position()
+        # Update player window position if needed
+        if hasattr(self, 'player_window'):
+            self.player_window.update_position()
 
     def save_current_position(self):
         """Save the current window position"""

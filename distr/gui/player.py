@@ -3,15 +3,21 @@ from distr.core.signals import signal_manager
 from PyQt6.QtGui import QMovie, QImageReader
 from PyQt6 import QtWidgets, QtCore, QtGui
 from PyQt6.QtCore import Qt, QSize, QTimer
+import logging
 import os
 
-class VoiceBoxWindow(QtWidgets.QWidget):
-
+class PlayerWindow(QtWidgets.QWidget):
+    """
+    PlayerWindow: Always-on-top floating window for voice activity and controls.
+    Formerly VoiceBoxWindow.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
-        print("VoiceBoxWindow initialized")
+        
         self.oracle_window = None
         
+        self.logger = logging.getLogger(__name__)
+
         # Initialize animation timer first
         self.animation_timer = QTimer()
         self.animation_timer.timeout.connect(self.update_animation)
@@ -19,8 +25,8 @@ class VoiceBoxWindow(QtWidgets.QWidget):
         
         # Set window flags to ensure it stays on top independently
         self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.WindowStaysOnTopHint | 
+            Qt.WindowType.FramelessWindowHint | 
             Qt.WindowType.Tool
         )
         
@@ -37,20 +43,15 @@ class VoiceBoxWindow(QtWidgets.QWidget):
         
         # Connect signals after UI setup
         self.connect_signals()
-        
-        # Setup periodic window state check
-        self.state_check_timer = QTimer()
-        self.state_check_timer.timeout.connect(self.check_window_state)
-        self.state_check_timer.start(100)  # Check every 100ms
 
     def connect_signals(self):
-        signal_manager.update_voice_box_position.connect(self.update_position)
-        signal_manager.show_voice_box.connect(self.show_window)
-        signal_manager.hide_voice_box.connect(self.hide_window)
+        signal_manager.update_player_window_position.connect(self.update_position)
+        signal_manager.show_player_window.connect(self.show_window)
+        signal_manager.hide_player_window.connect(self.hide_window)
         signal_manager.sound_started.connect(self.on_sound_started)
         signal_manager.sound_finished.connect(self.on_sound_finished)
         signal_manager.sound_stopped.connect(self.on_sound_stopped)
-        signal_manager.reset_voice_box.connect(self.reset)
+        signal_manager.reset_player_window.connect(self.reset)
 
     def set_oracle_window(self, oracle_window):
         self.oracle_window = oracle_window
@@ -87,20 +88,6 @@ class VoiceBoxWindow(QtWidgets.QWidget):
         self.show()
         self.windowHandle().setFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setWindowState(self.windowState() & ~Qt.WindowState.WindowMinimized | Qt.WindowState.WindowActive)
-
-    def reinforce_always_on_top(self):
-        """Ensure window stays on top without stealing focus"""
-        if self.isVisible():
-            current_pos = self.pos()
-            self.setWindowFlags(
-                Qt.WindowType.FramelessWindowHint | 
-                Qt.WindowType.WindowStaysOnTopHint |
-                Qt.WindowType.Tool
-            )
-            self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
-            self.move(current_pos)
-            self.show()
-            self.raise_()
 
     def paintEvent(self, event):
         painter = QtGui.QPainter(self)
@@ -219,21 +206,40 @@ class VoiceBoxWindow(QtWidgets.QWidget):
                 self.movie.setPaused(True)
 
     def on_stop_clicked(self):
-        print("Stop button clicked")
-        # self.sound_player.stop_sound()
-        signal_manager.sound_stopped.emit()
+        self.logger.info("[ACTION] Stop button clicked")
+        signal_manager.duck_playback.emit({
+            "volume_ratio": 0.3,
+            "wait_time": 0.0,
+            "transition_duration": 0.3,
+            "fallout_duration": 0.3
+        })
         self.reset()
         self.hide_window()
 
     def on_sound_started(self):
+        self.show_window()  # Ensure the window is visible and positioned
+        # Stop GIF immediately when window is shown
+        if self.movie:
+            self.movie.stop()
+            self.animation_timer.stop()
+        # Start GIF after 2 seconds
+        if hasattr(self, '_gif_start_timer') and self._gif_start_timer:
+            self._gif_start_timer.stop()
+        self._gif_start_timer = QTimer(self)
+        self._gif_start_timer.setSingleShot(True)
+        self._gif_start_timer.timeout.connect(self._start_gif_after_delay)
+        self._gif_start_timer.start(2000)  # 2 seconds
+
+    def _start_gif_after_delay(self):
         if self.movie:
             self.movie.start()
             self.animation_timer.start(33)  # ~30fps
-        else:
-            print("Warning: Attempted to start animation without initialized movie")
 
     def on_sound_finished(self):
-        self.reset()
+        # Stop GIF and hide window when playback stops
+        if self.movie:
+            self.movie.stop()
+            self.animation_timer.stop()
         self.hide()
 
     def on_sound_stopped(self):
@@ -244,13 +250,8 @@ class VoiceBoxWindow(QtWidgets.QWidget):
         if not self.oracle_window:
             print("Warning: Oracle window not set")
             return
-        
         self.show()
-        self.raise_() 
         self.update_position()
-        
-        # Force window to stay on top after showing
-        QTimer.singleShot(50, self.reinforce_always_on_top)
 
     def hide_window(self):
         self.reset()
@@ -261,10 +262,17 @@ class VoiceBoxWindow(QtWidgets.QWidget):
         event.ignore()
         self.hide()
 
-    def check_window_state(self):
-        """Ensure window stays on top and visible when it should be"""
-        if self.isVisible() and not self.windowHandle().isActive():
-            self.reinforce_always_on_top()
+    def play_gif(self):
+        """Start the GIF animation if available."""
+        if self.movie:
+            self.movie.start()
+            self.animation_timer.start(33)
+
+    def stop_gif(self):
+        """Stop the GIF animation if available."""
+        if self.movie:
+            self.movie.stop()
+            self.animation_timer.stop()
 
 
 

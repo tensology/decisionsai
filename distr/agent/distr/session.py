@@ -22,7 +22,7 @@ class AgentSession:
                  agent_name="Heart",
                  silence_threshold=0.009,
                  set_signal_handlers=True, 
-                 settings=None, *args, **kwargs):
+                 settings=None, command_queue=None, event_queue=None, *args, **kwargs):
         """
         Initialize the AgentSession with the given agent name and input/output device.
         
@@ -124,7 +124,7 @@ class AgentSession:
 
         # Initialize playback for output
         try:
-            self.playback = Playback(output_device=output_device)
+            self.playback = Playback(output_device=output_device, event_queue=event_queue)
         except Exception as e:
             self.logger.error(f"Failed to initialize Playback: {e}")
             import sys
@@ -171,6 +171,9 @@ class AgentSession:
         if set_signal_handlers:
             signal.signal(signal.SIGINT, self._signal_handler)
             signal.signal(signal.SIGTERM, self._signal_handler)
+
+        self.command_queue = command_queue
+        self.event_queue = event_queue
 
     def get_voice_config(self):
         # Check for role.txt in the agent directory
@@ -350,6 +353,12 @@ class AgentSession:
                         self.logger.debug(f"[{get_timestamp()}] Currently playing audio")
                     # Small sleep to prevent CPU spinning
                     time.sleep(0.01)
+
+                    # Check for commands from the main process
+                    if self.command_queue and not self.command_queue.empty():
+                        cmd, params = self.command_queue.get()
+                        if cmd == 'duck_playback':
+                            self.duck_volume(**params)
                 except Exception as e:
                     self.logger.error(f"[{get_timestamp()}] Error in main loop: {e}")
                     break
@@ -494,3 +503,14 @@ class AgentSession:
         if hasattr(self.tts, 'clear_unplayed_files_from_previous_groups'):
             self.tts.clear_unplayed_files_from_previous_groups(keep_group=keep_group)
             self.logger.info(f"[SESSION] Cleared old TTS files, keeping group {keep_group}")
+
+    def duck_volume(self, **params):
+        """
+        Handle the duck_volume command.
+        Args:
+            **params: Additional keyword arguments for duck_volume method
+        """
+        if hasattr(self.playback, 'duck_volume'):
+            self.playback.duck_volume(**params)
+        else:
+            self.logger.warning("Playback instance does not have a duck_volume method")
