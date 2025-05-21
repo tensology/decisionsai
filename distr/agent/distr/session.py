@@ -109,7 +109,6 @@ class AgentSession:
         elif tts_provider == "Kokoro (Offline)":
             self.tts_api_key = None
             voice = settings.get('kokoro_voice')
-            print(voice)
             self.agent_name = KOKORO_VOICES[voice]
             self.voice_name = voice
             self.voice_settings = {

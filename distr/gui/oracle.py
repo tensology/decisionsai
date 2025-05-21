@@ -521,8 +521,7 @@ class OracleWindow(QtWidgets.QMainWindow):
 
     def exit_app(self):
         self.reload_settings()
-        print("Exiting app")
-
+ 
         # Hide the oracle window itself
         self.hide_globe()
         
@@ -560,6 +559,7 @@ class OracleWindow(QtWidgets.QMainWindow):
         QtCore.QCoreApplication.processEvents()
         
         # Finally quit the application
+        logging.info("[ORACLE] Calling QApplication.instance().quit()") 
         QApplication.instance().quit()
 
     def mouseMoveEvent(self, event):

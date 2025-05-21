@@ -20,18 +20,18 @@ logger = logging.getLogger(__name__)
 SCREEN_EDGE_PERCENTAGE = 15
 
 def open_window(chat_manager, action, data):
-    print(f"open_window function called with action: {action} and data: {data}")
+    logging.info(f"[ACTION] open_window function called with action: {action} and data: {data}")
     speech = data.get('text', '').lower()
-    print(f"Received request to open/focus on: {speech}")
+    logging.info(f"[ACTION] Received request to open/focus on: {speech}")
     
     # Load the actions.config.json file
     config = load_actions_config()
     shortcut_names = config.get('shortcut_names', {})
-    print(f"Loaded shortcut names: {shortcut_names}")
+    logging.info(f"[ACTION] Loaded shortcut names: {shortcut_names}")
     
     # Handle "open spotlight" separately
     if "spotlight" in speech:
-        print("Executing spotlight command")
+        logging.info("[ACTION] Executing spotlight command")
         pyautogui.hotkey('command', 'space')
         return
 
@@ -39,22 +39,22 @@ def open_window(chat_manager, action, data):
     app_name = extract_app_name(speech, shortcut_names)
     
     if not app_name:
-        print("No application name found in shortcut names, trying running apps...")
+        logging.info("[ACTION] No application name found in shortcut names, trying running apps...")
         app_name = find_app_in_running_apps(speech)
 
     if not app_name:
-        print("No application name found in running apps, trying all installed apps...")
+        logging.info("[ACTION] No application name found in running apps, trying all installed apps...")
         app_name = find_app_in_installed_apps(speech)
     
     if not app_name:
-        print("No application name could be extracted")
+        logging.info("[ACTION] No application name could be extracted")
         return
     
-    print(f"Attempting to open or focus on: {app_name}")
+    logging.info(f"[ACTION] Attempting to open or focus on: {app_name}")
     
     workspace = NSWorkspace.sharedWorkspace()
     running_apps = workspace.runningApplications()
-    print(f"Number of running applications: {len(running_apps)}")
+    logging.info(f"[ACTION] Number of running applications: {len(running_apps)}")
 
     # Function to check if an app is running (case-insensitive)
     def is_app_running(name):
@@ -64,39 +64,39 @@ def open_window(chat_manager, action, data):
     app_variations = [app_name, app_name.title(), app_name.lower(), app_name.upper()]
     target_app = None
     for variation in app_variations:
-        print(f"Checking for running app with name: {variation}")
+        logging.info(f"[ACTION] Checking for running app with name: {variation}")
         if is_app_running(variation):
             target_app = next(app for app in running_apps if app.localizedName().lower() == variation.lower())
-            print(f"Found running app: {target_app.localizedName()}")
+            logging.info(f"[ACTION] Found running app: {target_app.localizedName()}")
             break
     
     if target_app:
         # Application is already running, bring it to front
-        print(f"Activating existing app: {target_app.localizedName()}")
+        logging.info(f"[ACTION] Activating existing app: {target_app.localizedName()}")
         target_app.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-        print(f"Focused on {target_app.localizedName()}")
+        logging.info(f"[ACTION] Focused on {target_app.localizedName()}")
         center_mouse_on_app(target_app)
     else:
         # Application is not running, try to open it
-        print(f"App not found running. Attempting to launch: {app_name}")
+        logging.info(f"[ACTION] App not found running. Attempting to launch: {app_name}")
         try:
             workspace.launchApplication_(app_name)
-            print(f"Launched {app_name}")
+            logging.info(f"[ACTION] Launched {app_name}")
             time.sleep(1)  # Wait for the app to launch
             center_mouse_on_app(app_name)
         except Exception as e:
-            print(f"Failed to open {app_name}. Error: {str(e)}")
+            logging.info(f"[ACTION] Failed to open {app_name}. Error: {str(e)}")
             # Try alternative methods to open the application
             try:
-                print(f"Attempting to open {app_name} using subprocess")
+                logging.info(f"[ACTION] Attempting to open {app_name} using subprocess")
                 subprocess.run(["open", "-a", app_name], check=True)
-                print(f"Opened {app_name} using alternative method")
+                logging.info(f"[ACTION] Opened {app_name} using alternative method")
                 time.sleep(1)  # Wait for the app to launch
                 center_mouse_on_app(app_name)
             except subprocess.CalledProcessError as e:
-                print(f"Failed to open {app_name} using alternative method. Error: {str(e)}")
+                logging.info(f"[ACTION] Failed to open {app_name} using alternative method. Error: {str(e)}")
     
-    print(f"Completed attempt to open or focus on {app_name}")
+    logging.info(f"[ACTION] Completed attempt to open or focus on {app_name}")
 
 def extract_app_name(speech, shortcut_names):
     words = speech.split()
@@ -124,7 +124,7 @@ def find_app_in_running_apps(speech):
             best_match = app_name
     
     if highest_ratio > 80:  # You can adjust this threshold
-        print(f"Found running app match: {best_match} with confidence {highest_ratio}%")
+        logging.info(f"[ACTION] Found running app match: {best_match} with confidence {highest_ratio}%")
         return best_match
     return None
 
@@ -142,7 +142,7 @@ def find_app_in_installed_apps(speech):
             best_match = app
     
     if highest_ratio > 80:  # You can adjust this threshold
-        print(f"Found installed app match: {best_match} with confidence {highest_ratio}%")
+        logging.info(f"[ACTION] Found installed app match: {best_match} with confidence {highest_ratio}%")
         return best_match
     return None
 
@@ -170,13 +170,13 @@ def center_mouse_on_app(app):
                 
                 # Move the mouse to the center of the window
                 pyautogui.moveTo(center_x, center_y)
-                print(f"Moved mouse to center of {target_app.localizedName()} window")
+                logging.info(f"[ACTION] Moved mouse to center of {target_app.localizedName()} window")
             else:
-                print(f"Could not get window bounds for {target_app.localizedName()}")
+                logging.info(f"[ACTION] Could not get window bounds for {target_app.localizedName()}")
         else:
-            print(f"Could not find window for {target_app.localizedName()}")
+            logging.info(f"[ACTION] Could not find window for {target_app.localizedName()}")
     else:
-        print(f"Could not find running app to center mouse on")
+        logging.info(f"[ACTION] Could not find running app to center mouse on")
 
 def open_file_menu(chat_manager, action, data):
     # Code to open the file menu
@@ -322,7 +322,7 @@ def change_oracle(chat_manager, action, data):
 
 
 def exit_app(chat_manager, action, data):
-    print("Exiting application...")
+    logging.info("[ACTION] Exiting application...")
     signal_manager.exit_app.emit()
 
 

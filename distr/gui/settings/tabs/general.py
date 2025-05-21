@@ -76,7 +76,7 @@ class GeneralTab(QtWidgets.QWidget):
             container_layout.setSpacing(15)
             
             checkbox.setText("")
-            checkbox.setStyleSheet("QCheckBox { margin-right: 10px; }")
+            checkbox.setStyleSheet("QCheckBox { /* margin-right: 10px; */ }")
             
             label = QtWidgets.QLabel(label_text)
             label.setBuddy(checkbox)
@@ -108,7 +108,6 @@ class GeneralTab(QtWidgets.QWidget):
             QRadioButton::indicator {
                 width: 16px;
                 height: 16px;
-                margin-right: 15px;
             }
         """
 

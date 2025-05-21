@@ -1,8 +1,0 @@
-{
-    "tts": "coqui-ai",
-    "llm": "gemma2:latest",
-    "sst": "whisper.cpp",
-    "mode": "offline",
-    "data": "file:./voices.json",
-    "role": "file:role.txt"
-}

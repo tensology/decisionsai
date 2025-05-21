@@ -136,7 +136,6 @@ class ChatWindowStyles:
         }
         QTextEdit:focus {
             border-color: #565869;
-            box-shadow: 0 0 2px rgba(255, 255, 255, 0.1);
         }
         QTextEdit::placeholder {
             color: #8e8ea0;
