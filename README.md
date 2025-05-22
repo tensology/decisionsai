@@ -106,10 +106,10 @@ This project is actively being developed. Current focus areas include:
 
 ## Other Scripts
 
-Using [Open-Interpreter](https://www.openinterpreter.com/), there's a script called `agent` that carries out tasks on your local machine:
+Using [Open-Interpreter](https://www.openinterpreter.com/), there's a script called `test_interpreter` that carries out tasks on your local machine:
 
 ```bash
-python ./scripts/agent.py
+python ./playground/test_interpreter.py
 ```
 
 When prompted, try entering a command like:
