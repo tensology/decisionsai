@@ -64,7 +64,7 @@ Our vision is to develop an intelligent system assistant that:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.com/webfarmer/decisionsai.git
+   git clone https://github.com/tensology/decisionsai.git
    ```
 
 2. Install system dependencies:
