@@ -402,6 +402,37 @@ class Playback:
             self.playlist.clear()
             self.logger.info("Playlist cleared")
 
+    def queue_generated_tts_file(self, file_info: dict) -> bool:
+        """
+        Add a generated TTS file to the playlist if not already present.
+        Args:
+            file_info (dict): Dictionary with keys like 'id', 'text', 'file_path', 'position'.
+        Returns:
+            bool: True if file was added, False otherwise
+        """
+        if not file_info or not file_info.get('file_path') or not os.path.exists(file_info['file_path']):
+            self.logger.error(f"Invalid TTS file info or file does not exist: {file_info}")
+            return False
+        with self.lock:
+            existing_keys = set((item.get('sentence_id'), item.get('file_path')) for item in self.playlist)
+            key = (file_info.get('id'), file_info.get('file_path'))
+            if key in existing_keys:
+                self.logger.debug(f"[DEBUG] Duplicate TTS file not added to playlist: {file_info.get('file_path')}")
+                return False
+            entry = {
+                'sentence_id': file_info.get('id'),
+                'file_path': file_info.get('file_path'),
+                'position': file_info.get('position', 0),
+                'status': 'generated',
+                'sentence_group': file_info.get('sentence_group'),
+                'is_played': False,
+                'text': file_info.get('text'),
+            }
+            self.playlist.append(entry)
+            self.logger.info(f"Queued TTS file for playback: {file_info.get('file_path')}")
+            self.playlist.sort(key=lambda x: (x.get('sentence_group'), x.get('position', 0)))
+        return True
+
     # ===========================================
     # 4. Playback Control
     # ===========================================
