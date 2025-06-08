@@ -221,6 +221,7 @@ class AgentSession:
         Clear TTS and playback resources.
         This is called when speech is detected to interrupt current playback.
         """
+        self.logger.info("[LOG] clear_tts_and_playback called")
         current_time = time.time()
         if current_time - self._last_clear_time < 0.1:  # Reduced debounce time
             return
@@ -510,7 +511,13 @@ class AgentSession:
         Args:
             **params: Additional keyword arguments for duck_volume method
         """
+        self.logger.info(f"[LOG] duck_volume called with params={params}")
         if hasattr(self.playback, 'duck_volume'):
             self.playback.duck_volume(**params)
         else:
             self.logger.warning("Playback instance does not have a duck_volume method")
+
+    def force_reset_audio(self):
+        """Forcefully stop and clear playback and TTS, for use by UI or external triggers."""
+        self.logger.info("[LOG] force_reset_audio called")
+        self.clear_tts_and_playback()

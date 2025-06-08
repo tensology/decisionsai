@@ -235,7 +235,7 @@ class LLMEngine:
         Interrupt the current response generation.
         Sends a signal to stop the current response and reset state.
         """
-        self.logger.info(f"⚠️ LLM received interrupt signal, cancelling current response...")
+        self.logger.info("[LOG] LLMEngine.interrupt called")
         self.should_cancel_response = True
         
         # Reset state to allow new responses
@@ -248,8 +248,11 @@ class LLMEngine:
             if hasattr(self.llm_callback, '__self__'):
                 session = self.llm_callback.__self__
                 if hasattr(session, 'clear_tts_and_playback'):
+                    self.logger.info("[LLM] Calling clear_tts_and_playback on interrupt")
                     session.clear_tts_and_playback()
                     self.logger.info("Cleared TTS and playback")
+                else:
+                    self.logger.warning("[LLM] Session or clear_tts_and_playback not found on interrupt")
         except Exception as e:
             self.logger.error(f"Error clearing TTS and playback: {e}")
         
@@ -385,6 +388,7 @@ class LLMEngine:
         Args:
             text (str): User text to process
         """
+        self.logger.info("[LOG] LLMEngine.get_llm_response called")
         # Check if already generating a response
         if self.generating_reply:
             print(f"\n[{get_timestamp()}] Already generating a reply, cancelling previous request")

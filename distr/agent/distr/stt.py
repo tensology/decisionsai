@@ -33,7 +33,7 @@ Class Organization:
 """
 
 from multiprocessing import Queue
-from .utils import get_timestamp
+from .utils import get_timestamp, TextProcessor
 import sounddevice as sd
 from queue import Queue
 import numpy as np
@@ -209,7 +209,7 @@ class STTEngine:
         Handles speech detection, silence detection, audio buffering, and 
         manages integration with playback system for volume ducking.
         """
-        self.logger.info(f"[{get_timestamp()}] Starting audio processing thread")
+        self.logger.info(f"[STT] process_audio started")
         buffer_size = 16000  # 1 second of audio at 16kHz
         
         # Speech tracking variables
@@ -217,6 +217,7 @@ class STTEngine:
         speech_duration = 0
         ducking_applied = False
         playback_cleared = False
+        last_transcribed_text = None
         
         while self.running:
             try:
@@ -233,14 +234,26 @@ class STTEngine:
                             speech_start_time = current_time  # Record when speech started
                             ducking_applied = False  # Reset ducking flag
                             playback_cleared = False  # Reset playback cleared flag
-                            
-                            # Try to get parent session to access playback
-                            session = self._get_session_from_callback()
-                            if session and hasattr(session, 'playback'):
-                                # Apply volume ducking immediately when speech is detected
-                                session.playback.duck_volume(True)
-                                ducking_applied = True
-                                
+                            # Transcribe a short chunk to check for artifact
+                            transcribed_text = self.transcribe_audio(audio_data)
+                            last_transcribed_text = transcribed_text
+                            if transcribed_text and not TextProcessor.is_audio_artifact(transcribed_text):
+                                # Prefer self.playback for ducking
+                                if self.playback and hasattr(self.playback, 'duck_volume'):
+                                    self.logger.info("[STT] Calling duck_volume on self.playback due to speech detected")
+                                    self.playback.duck_volume(True)
+                                    ducking_applied = True
+                                else:
+                                    # Fallback to session.playback if available
+                                    session = self._get_session_from_callback()
+                                    if session and hasattr(session, 'playback') and hasattr(session.playback, 'duck_volume'):
+                                        self.logger.info("[STT] Calling duck_volume on session.playback due to speech detected (fallback)")
+                                        session.playback.duck_volume(True)
+                                        ducking_applied = True
+                                    else:
+                                        self.logger.error("[STT] No playback object available for duck_volume! Ducking will not occur.")
+                            else:
+                                self.logger.info(f"[STT] Detected artifact or non-speech: '{transcribed_text}'. Skipping ducking.")
                         self.is_speaking = True
                         self.last_speech_time = current_time
                         self.silence_duration = 0
@@ -255,6 +268,7 @@ class STTEngine:
                                 self.logger.warning(f"\n[{get_timestamp()}] Speech continued for {speech_duration:.2f}s, clearing playback... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                                 session = self._get_session_from_callback()
                                 if session and hasattr(session, 'clear_tts_and_playback'):
+                                    self.logger.info("[STT] Calling clear_tts_and_playback due to continued speech")
                                     session.clear_tts_and_playback()
                                     playback_cleared = True
                         
@@ -262,10 +276,12 @@ class STTEngine:
                         if speech_duration >= self.max_speech_duration:
                             if not ducking_applied:
                                 if self.playback and hasattr(self.playback, 'duck_volume'):
-                                    self.logger.warning(f"[{get_timestamp()}] Ducking playback volume after {speech_duration:.2f}s of speech...")
+                                    self.logger.info("[STT] Ducking playback volume due to long speech")
                                     self.playback.duck_volume(volume_ratio=0.3, wait_time=0.5, transition_duration=0.5, fallout_duration=0.5)
-                                    self.logger.warning(f"[{get_timestamp()}] Playback volume ducked due to long speech.")
+                                    self.logger.info("[STT] Playback volume ducked due to long speech.")
                                     ducking_applied = True
+                                else:
+                                    self.logger.warning("[STT] Playback or duck_volume not found for ducking")
                             if not self.llm_interrupt_sent:
                                 self.logger.warning(f"[{get_timestamp()}] ⚠️ Speech continuing for more than {self.max_speech_duration} seconds, interrupting LLM... (energy: {np.abs(audio_data).mean():.6f}, threshold: {self.silence_threshold})")
                                 self.signal_llm_interrupt()
