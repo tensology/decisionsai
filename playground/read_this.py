@@ -4,6 +4,12 @@ import time
 import logging
 from multiprocessing import Process, Queue, Event
 from queue import Empty
+from tqdm import tqdm
+import threading
+
+# === MONOLITH MODE VARIABLE ===
+MONOLITH_MODE = True  # Set to True for monolith mode (single audio file, no sentence splitting)
+MONOLITH_CPS = 140  # Characters per second for TTS progress estimation (based on observed speed)
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
@@ -81,15 +87,123 @@ def main():
     if not text:
         logger.error("Document is empty after cleanup.")
         return
+
+    models_dir = os.path.join(os.path.dirname(__file__), '..', 'distr', 'agent', 'models')
+    voice_name = "af_heart"
+
+    if MONOLITH_MODE:
+        # === MONOLITH MODE: Generate a single audio file for the whole document ===
+        logger.info("MONOLITH_MODE is enabled: generating a single audio file for the entire document.")
+        tts = TTSEngine(model_dir=models_dir, voice_name=voice_name)
+        tts.start()
+        # Generate WAV file
+        output_dir = os.path.join(os.path.dirname(__file__), 'tmp')
+        os.makedirs(output_dir, exist_ok=True)
+        wav_path = os.path.join(output_dir, 'read_this.wav')
+        mp3_path = os.path.join(output_dir, 'read_this.mp3')
+        try:
+            tts._initialize_engine()  # Ensure engine is ready
+            # --- Real-Time Progress Bar (Dynamic Character-Based Estimate) ---
+            total_chars = len(text)
+            estimated_total_time = total_chars / MONOLITH_CPS if MONOLITH_CPS > 0 else 1
+
+            progress_bar = tqdm(
+                total=estimated_total_time,
+                desc="Generating audio",
+                bar_format="{l_bar}{bar}| {percentage:3.0f}% [elapsed: {elapsed}]",
+                dynamic_ncols=True
+            )
+            stop_progress = threading.Event()
+            elapsed_holder = {'elapsed': 0}
+            def update_progress():
+                start_time = time.time()
+                while not stop_progress.is_set():
+                    elapsed = time.time() - start_time
+                    elapsed_holder['elapsed'] = elapsed
+                    progress_bar.n = min(elapsed, estimated_total_time)
+                    progress_bar.refresh()
+                    time.sleep(0.1)
+            progress_thread = threading.Thread(target=update_progress)
+            progress_thread.start()
+            if tts.engine == "elevenlabs":
+                tts._generate_elevenlabs_audio(text, wav_path)
+            else:
+                tts._generate_kokoro_audio(text, wav_path)
+            stop_progress.set()
+            progress_thread.join()
+            # Set bar to 100% and close
+            progress_bar.n = estimated_total_time
+            progress_bar.refresh()
+            progress_bar.close()
+            actual_time = elapsed_holder['elapsed']
+            if actual_time > 0:
+                observed_cps = total_chars / actual_time
+                print(f"\nActual TTS generation time: {actual_time:.1f} seconds for {total_chars} characters.")
+                print(f"Observed CPS: {observed_cps:.2f} — set MONOLITH_CPS = {observed_cps:.2f} for best progress accuracy.")
+            else:
+                print(f"\nActual TTS generation time: {actual_time:.1f} seconds.")
+            logger.info(f"Generated WAV file: {wav_path}")
+            # Convert to MP3 if possible
+            try:
+                import soundfile as sf
+                import numpy as np
+                import subprocess
+                # Use ffmpeg if available
+                if os.path.exists(wav_path):
+                    cmd = [
+                        'ffmpeg', '-y', '-i', wav_path, '-codec:a', 'libmp3lame', '-qscale:a', '2', mp3_path
+                    ]
+                    subprocess.run(cmd, check=True)
+                    logger.info(f"Generated MP3 file: {mp3_path}")
+            except Exception as e:
+                logger.warning(f"Could not convert to MP3: {e}")
+            # --- Prompt for Output Device Selection ---
+            dummy_playback = Playback()  # Temporary instance to access device listing
+            devices = dummy_playback._get_output_devices()
+            print("\nAvailable output devices:")
+            for i, device in enumerate(devices):
+                print(f"{i}: {device['name']}")
+            print("--------------------------------")
+            try:
+                selection = int(input("Select output device number: "))
+                if 0 <= selection < len(devices):
+                    output_device = devices[selection]['name']
+                else:
+                    print("Invalid selection. Using default device.")
+                    output_device = None
+            except (ValueError, EOFError):
+                print("Invalid input. Using default device.")
+                output_device = None
+            # Playback
+            playback = Playback(
+                output_device=output_device,
+                crossfade_duration=1.0,
+                sample_rate=44100,
+                channels=2,
+                buffer_size=1024,
+                queue_size=10,
+                fade_in_duration=0.1,
+                fade_out_duration=0.1,
+                normalize_volume=True
+            )
+            logger.info(f"Using output device: {playback.output_device}")
+            playback.add_to_playlist(wav_path)
+            playback.start()
+            while playback.is_playing or len(playback.playlist) > 0:
+                time.sleep(0.1)
+            logger.info("Playback complete. Files are preserved in tmp directory.")
+        finally:
+            tts.stop()
+            # Do NOT delete wav_path or mp3_path in monolith mode
+        return
+    # === END MONOLITH MODE ===
+
     sentences = split_sentences(text)
     if not sentences:
         logger.error("No sentences found in document after cleanup.")
         return
 
     # Initialize TTS and playback for voice selection
-    models_dir = os.path.join(os.path.dirname(__file__), '..', 'distr', 'agent', 'models')
-    voice_name = "af_heart"
-
     tts = TTSEngine(model_dir=models_dir, voice_name=voice_name)
     tts.start()
     # voices = tts.get_available_voices() if hasattr(tts, 'get_available_voices') else tts.get_all_voices()
