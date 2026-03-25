@@ -397,6 +397,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             "PyAutoGUI: GUI Automation (Used for Actions)": "https://pyautogui.readthedocs.io/",
             "Pydantic: Data Validation": "https://pydantic-docs.helpmanual.io/",
             "PyQt6: GUI Framework": "https://www.riverbankcomputing.com/software/pyqt/",
+            "Masko: AI-Powered Design & Creative Tools": "http://masko.ai/",
         }
         
         # Oracle Globe Animation credits
