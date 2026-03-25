@@ -76,7 +76,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | Section | What you do there |
 |---|---|
 | **Preferences** | Choose models and voices, add API keys, connect Google and Telegram, tune behavior |
-| **Skins** | Browse and swap avatar skins in a visual gallery |
+| **Skins** | Browse and swap avatar skins in Preferences |
 | **Chat** | Browse and manage conversation threads |
 | **Actions** | View, edit, rename, and trigger recorded macros |
 | **Snippets** | Manage text or code snippets with trigger words |
@@ -132,9 +132,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 |---|---|---|
 | ≤ 9 GB | `qwen3:1.7b` | ~1.5 GB |
 | 10–11 GB | `qwen3:4b` | ~3.5 GB |
-| 12–23 GB | `qwen3:8b` | ~6 GB |
-| 24–47 GB | `qwen3:14b` | ~10 GB |
-| 48+ GB | `qwen3:32b` | ~22 GB |
+| 12+ GB | `qwen3:8b` | ~6 GB |
 
 ### Online / cloud mode
 
