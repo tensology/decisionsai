@@ -54,10 +54,17 @@ function renderSkinsGrid() {
 
         if (skin.type === 'oracle') {
             // Oracle: round preview with cover
-            previewEl = document.createElement('img');
-            previewEl.src = previewUrl;
+            if (isVideo) {
+                previewEl = document.createElement('video');
+                previewEl.src = previewUrl;
+                previewEl.autoplay = true; previewEl.muted = true; previewEl.loop = true;
+                previewEl.setAttribute('playsinline', '');
+            } else {
+                previewEl = document.createElement('img');
+                previewEl.src = previewUrl;
+                previewEl.onerror = function() { this.style.display = 'none'; };
+            }
             previewEl.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
-            previewEl.onerror = function() { this.style.display = 'none'; };
         } else if (isVideo) {
             previewEl = document.createElement('video');
             previewEl.src = previewUrl;

@@ -6,7 +6,7 @@
     "border": false,
     "shadow": false,
     "glow_on_hold": false,
-    "image_scale": 1.0,
+    "image_scale": 1,
     "image_offset_x": 0,
     "image_offset_y": 0,
     "chroma_key": null,
@@ -14,7 +14,7 @@
   },
   "events": {
     "idle": {
-      "animation": "idle.webp",
+      "animation": "done.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -29,7 +29,7 @@
       "playback": "loop"
     },
     "hands_free_listening": {
-      "animation": "idle.webp",
+      "animation": "thinking.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -44,7 +44,7 @@
       "playback": "loop"
     },
     "ptt_active": {
-      "animation": "idle.webp",
+      "animation": "processing.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -59,7 +59,7 @@
       "playback": "loop"
     },
     "dictation": {
-      "animation": "processing.webp",
+      "animation": "music.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -89,7 +89,7 @@
       "playback": "loop"
     },
     "file_drop_success": {
-      "animation": "idle.webp",
+      "animation": "baloon.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -119,7 +119,7 @@
       "playback": "loop"
     },
     "running_action": {
-      "animation": "processing.webp",
+      "animation": "music.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -134,7 +134,7 @@
       "playback": "loop"
     },
     "running_step_runner": {
-      "animation": "processing.webp",
+      "animation": "music.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -149,7 +149,7 @@
       "playback": "loop"
     },
     "snippet_copied": {
-      "animation": "idle.webp",
+      "animation": "thinking.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

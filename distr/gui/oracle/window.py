@@ -527,11 +527,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Get chroma-key from skin config
         chroma_key = None
         chroma_threshold = 35
+        image_scale = 1.0
         if self._skin_config and self._skin_config.rendering:
             chroma_key = self._skin_config.rendering.chroma_key
             chroma_threshold = self._skin_config.rendering.chroma_threshold
+            image_scale = self._skin_config.rendering.image_scale
 
-        self._animation_player.set_size(self.content_size, self.content_size)
+        # Extract frames at the scaled size so downscaling (not upscaling) happens
+        # in _on_skin_frame_ready, avoiding pixelation
+        extract_size = int(self.content_size * max(image_scale, 1.0))
+        self._animation_player.set_size(extract_size, extract_size)
         self._animation_player.load(
             anim_path,
             playback=response.playback,

@@ -566,7 +566,7 @@ class AboutWindow(QtWidgets.QMainWindow):
         
         # Add image
         self.image_label = QtWidgets.QLabel()
-        avatar_path = os.path.join(IMAGES_DIR, "avatar.jpg")
+        avatar_path = os.path.join(IMAGES_DIR, "avatar.webp")
         pixmap = QtGui.QPixmap(avatar_path)
         image_height = int(self.height() * 0.7)
         scaled_pixmap = pixmap.scaledToHeight(image_height, QtCore.Qt.TransformationMode.SmoothTransformation)
