@@ -35,7 +35,7 @@
 | 🎭 | **Animated skins** | Clippy, Nugget, Rusty, Masko, Madame Patate — each with idle, thinking, working, and attention animations. Drop a folder with `skin.json` for your own |
 
 <p align="center">
-  <img src="assets/readme/avatars.webp" alt="DecisionsAI Skins" />
+  <img src="assets/readme/avatar.webp" alt="DecisionsAI Skins" />
 </p>
 
 | | | |
