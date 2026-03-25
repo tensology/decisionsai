@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+
+{% block title %}Preferences{% endblock %}
+
+{% block body_scripts %}
+<script src="/settings/static/js/settings.js"></script>
+<script src="/settings/static/js/general.js"></script>
+<script src="/settings/static/js/audio.js"></script>
+<script src="/settings/static/js/thirdparty.js"></script>
+<script src="/settings/static/js/llms.js"></script>
+<script src="/settings/static/js/skins.js"></script>
+<script src="/settings/static/js/advanced.js"></script>
+<script src="/settings/static/js/logs.js"></script>
+<script src="/static/shared/js/provider_model_info.js"></script>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-6 py-8 max-w-7xl">
+    <!-- Tabs and Content -->
+    <div class="flex gap-6">
+        <!-- Tab Navigation: all 5 sections must always be visible -->
+        <div id="settings-sidebar" class="settings-sidebar w-64 flex-shrink-0" role="navigation" aria-label="Settings sections">
+            <nav id="settings-nav" class="space-y-1 sticky top-20">
+                <a href="#general" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="general">
+                    <span class="font-medium">General</span>
+                </a>
+                <a href="#audio" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="audio">
+                    <span class="font-medium">Audio</span>
+                </a>
+                <a href="#thirdparty" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="thirdparty">
+                    <span class="font-medium">Third Party Providers</span>
+                </a>
+                <a href="#llms" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="llms">
+                    <span class="font-medium">LLMs</span>
+                </a>
+                <a href="#skins" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="skins">
+                    <span class="font-medium">Skins</span>
+                </a>
+                <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
+                    <span class="font-medium">Advanced</span>
+                </a>
+                <a href="#logs" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="logs">
+                    <span class="font-medium">Activity Logs</span>
+                </a>
+            </nav>
+        </div>
+
+        <!-- Tab Content -->
+        <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-[#565869] p-8 relative min-h-0">
+            <!-- Reload / Save floating top-right (section title is in each tab) -->
+            <div class="settings-actions-float">
+                <button type="button" id="btn_cancel" class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">Reload</button>
+                <button type="button" id="btn_save" class="px-5 py-2 rounded-md text-sm font-medium bg-[#f97316] text-white hover:bg-[#ea580c] transition-colors">Save</button>
+            </div>
+            <div class="settings-tab-inner">
+
+                <div id="tab-general" class="tab-content">  
+                    {% include "settings/sections/general.html" %}
+                </div>
+                <div id="tab-audio" class="tab-content">
+                    {% include "settings/sections/audio.html" %}
+                </div>
+                <div id="tab-thirdparty" class="tab-content">
+                    {% include "settings/sections/thirdparty.html" %}
+                </div>
+                <div id="tab-llms" class="tab-content">
+                    {% include "settings/sections/llms.html" %}
+                </div>
+                <div id="tab-skins" class="tab-content">
+                    {% include "settings/sections/skins.html" %}
+                </div>
+                <div id="tab-advanced" class="tab-content">
+                    {% include "settings/sections/advanced.html" %}
+                </div>
+                <div id="tab-logs" class="tab-content">
+                    {% include "settings/sections/logs.html" %}
+                </div>
+                {% include "settings/sections/modals.html" %}
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

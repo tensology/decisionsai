@@ -1,0 +1,1728 @@
+"""
+AgentSession - Pipecat-based Voice Agent Session
+
+This module provides a Pipecat-based agent session that integrates with the
+application's settings system and supports real-time voice interaction.
+
+Key Features:
+- Pipecat pipeline integration
+- Signal-based communication
+- Multithreaded execution
+- Settings integration and reloading
+- Device selection support
+- Hands-free and push-to-talk modes
+"""
+
+import asyncio
+import os
+import sys
+import logging
+import signal
+import time
+import threading
+import json
+from typing import Optional, Dict, Any
+from queue import Queue, Empty
+
+# Suppress MallocStackLogging warnings on macOS
+if sys.platform == 'darwin':
+    if "MallocStackLogging" in os.environ:
+        del os.environ["MallocStackLogging"]
+    if "MallocStackLoggingDirectory" in os.environ:
+        del os.environ["MallocStackLoggingDirectory"]
+
+# Suppress specific RuntimeWarning about unawaited coroutine
+import warnings
+warnings.filterwarnings(
+    "ignore",
+    category=RuntimeWarning,
+    message="coroutine 'FrameProcessor.__process_frame_task_handler' was never awaited",
+)
+
+# Local imports
+from .libs import (
+    Pipeline, PipelineRunner, PipelineTask,
+    LocalAudioTransportParams, SileroVADAnalyzer, VADParams,
+    sd, ElevenLabs,
+)
+from distr.core.agent.transport import HotSwappableLocalAudioTransport
+from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller
+from .services import WhisperSTTService, KokoroTTSService, ElevenLabsTTSService
+try:
+    from .services import OpenAITTSService
+    OPENAI_TTS_AVAILABLE = (OpenAITTSService is not None)
+except ImportError:
+    OPENAI_TTS_AVAILABLE = False
+    OpenAITTSService = None
+try:
+    from .services import VoskSTTService
+    VOSK_AVAILABLE = (VoskSTTService is not None)
+except ImportError:
+    VOSK_AVAILABLE = False
+    VoskSTTService = None
+try:
+    from .services import OpenAIWhisperSTTService
+    OPENAI_STT_AVAILABLE = (OpenAIWhisperSTTService is not None)
+except ImportError:
+    OPENAI_STT_AVAILABLE = False
+    OpenAIWhisperSTTService = None
+try:
+    from .services import AssemblyAISTTService
+    ASSEMBLYAI_STT_AVAILABLE = (AssemblyAISTTService is not None)
+except ImportError:
+    ASSEMBLYAI_STT_AVAILABLE = False
+    AssemblyAISTTService = None
+
+from distr.core.chat_manager import ChatManagerCore
+from distr.core.signals import signal_manager
+from distr.core.db import get_session, Chat, Settings
+from distr.core.llm_factory import normalize_provider
+
+logger = logging.getLogger(__name__)
+
+# Re-export for backward compatibility (importers of session.KOKORO_VOICES still work)
+from distr.core.agent.constants import (
+    KOKORO_VOICES,
+    DEFAULT_KOKORO_VOICE, DEFAULT_KOKORO_AGENT,
+    DEFAULT_OPENAI_VOICE, DEFAULT_OPENAI_AGENT, DEFAULT_QWEN3_VOICE, DEFAULT_QWEN3_AGENT,
+    DEFAULT_COQUI_VOICE, DEFAULT_COQUI_AGENT,
+    DEFAULT_ELEVENLABS_AGENT,
+    TTS_KOKORO, TTS_ELEVENLABS, TTS_OPENAI, TTS_QWEN3, TTS_COQUI,
+    DEFAULT_MODELS, PROVIDER_TO_ENGINE, API_KEY_NAMES,
+    KOKORO_MODEL_FILE, KOKORO_VOICES_FILE,
+    SAMPLE_RATE_KOKORO, SAMPLE_RATE_ELEVENLABS, SAMPLE_RATE_OPENAI_TTS, SAMPLE_RATE_QWEN3,
+    SPEED_BOUNDS, ELEVENLABS_DEFAULTS,
+    VAD_DEFAULT_THRESHOLD, VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX, VAD_START_SECS,
+    DEFAULT_OPENAI_WHISPER_MODEL, DEFAULT_ASSEMBLYAI_MODEL,
+    DEFAULT_VOSK_MODEL_DIR, WELCOME_DELAY_SECS, COMMAND_POLL_TIMEOUT,
+)
+
+
+class AgentSession:
+    """
+    Pipecat-based agent session that manages voice interaction.
+    
+    This class creates and manages a Pipecat pipeline with STT, LLM, and TTS services.
+    It supports settings-based configuration, device selection, and signal-based
+    communication with the main application.
+    """
+    
+    # Default configurations (used when settings are not available)
+    DEFAULT_CONFIG = {
+        'stt': {
+            'engine': 'whisper',
+            'model_path': 'base.en'
+        },
+        'llm': {
+            'engine': 'ollama',
+            'model_name': DEFAULT_MODELS['ollama'],
+            'system_prompt': None
+        },
+        'tts': {
+            'engine': 'kokoro',
+            'voice_name': DEFAULT_KOKORO_VOICE
+        },
+        'audio': {
+            'input_sample_rate': 16000,
+            'output_sample_rate': 24000,  # Kokoro TTS outputs at 24kHz
+            'input_device': None,  # None = system default
+            'output_device': None  # None = system default
+        },
+        'vad': {
+            'enabled': True
+        }
+    }
+    
+    def __init__(self, 
+                 settings: Optional[Dict[str, Any]] = None,
+                 input_device: Optional[str] = None,
+                 output_device: Optional[str] = None,
+                 command_queue: Optional[Queue] = None,
+                 event_queue: Optional[Queue] = None,
+                 confirmation_results_dict=None,
+                 skip_welcome: bool = False,
+                 agent_current_chat_id: Optional[int] = None,
+                 **kwargs):
+        """
+        Initialize the agent session.
+        
+        Args:
+            settings: Settings dictionary from database
+            input_device: Input device name (overrides settings)
+            output_device: Output device name (overrides settings)
+            command_queue: Queue for receiving commands from main process
+            event_queue: Queue for sending events to main process
+            skip_welcome: If True, skip the welcome message on startup (used for reloads)
+            agent_current_chat_id: Optional chat ID passed from model_hot_reload signal (for hot reloads)
+        """
+        self.logger = logging.getLogger(__name__)
+        self.settings = settings or {}
+        self._agent_current_chat_id_from_signal = agent_current_chat_id  # Store for _load_config
+        self.command_queue = command_queue
+        self.event_queue = event_queue
+        self.confirmation_results_dict = confirmation_results_dict
+        self.skip_welcome = skip_welcome
+        
+        self.running = False
+        self._stop_event = threading.Event()
+        self._reload_event = asyncio.Event() # Changed from threading.Event() as per instruction
+        self._restart_requested = False # Added as per instruction
+        
+        # Pipeline components
+        self.pipeline = None
+        self.runner = None
+        self.task = None
+        self.transport = None
+        self.stt_service = None
+        self.llm_service = None
+        self.tts_service = None
+        self.vad_analyzer = None
+        self.chat_manager = None  # Will be instantiated in _create_services
+        
+        # Thread management
+        self._command_thread = None
+        
+        # Welcome message task (for cancellation)
+        self._welcome_task = None
+        
+        # Device configuration
+        self.input_device = input_device
+        self.output_device = output_device
+        
+        # State management
+        self.is_listening = True  # Default to listening enabled
+        # Default to False (push-to-talk mode) if not set
+        # Explicitly check for False to avoid any truthy value issues
+        hands_free_setting = settings.get('hands_free_mode', False)
+        self.is_hands_free = bool(hands_free_setting) if hands_free_setting is not None else False
+        self.ptt_active = False  # Push-to-talk state
+        
+        # Log initial state for debugging
+        self.logger.debug(f"AgentSession initialized: hands_free_mode={self.is_hands_free} (PTT mode: {not self.is_hands_free}, default: push-to-talk)")
+        self.logger.debug(f"  - Raw setting value: {settings.get('hands_free_mode', 'NOT SET')}")
+        self.logger.debug(f"  - Settings keys: {list(settings.keys()) if settings else 'NO SETTINGS'}")
+        self.logger.debug(f"  - Agent Model in Settings: {settings.get('agent_model', 'NOT SET')}")
+        
+        # Agent name default; will be set from config (chat's voice) after _load_config so role matches voice
+        self.agent_name = DEFAULT_KOKORO_AGENT
+        self._custom_voice_personality = ''  # Personality from custom voice DB, appended to role
+        
+        # Load configuration from settings/DB (includes current chat's voice from agent_current_chat_id)
+        self.config = self._load_config()
+        
+        # Set agent name and role from TTS config (chat's voice) so LLM gets correct persona.
+        try:
+            from . import service_factory
+            tts_cfg = self.config.get('tts') or {}
+            engine = (tts_cfg.get('engine') or '').strip().lower()
+            # Resolve voice_model for custom voice personality loading
+            vm = tts_cfg.get('voice_name') or tts_cfg.get('voice_id') or ''
+            if vm:
+                self._load_custom_voice_personality(engine or 'kokoro', vm)
+            self.agent_name = service_factory.resolve_agent_name_from_tts_config(tts_cfg, self.settings)
+            self.role = self._load_agent_role()
+            self.logger.debug("Agent name from config: '%s' (%s)", self.agent_name, engine or 'default')
+        except Exception as e:
+            self.logger.warning("Could not set agent/role from config (using fallback): %s", e, exc_info=True)
+            self.agent_name = DEFAULT_KOKORO_AGENT
+            self.role = self._load_agent_role()
+        
+        # Log final STT configuration for debugging
+        self.logger.debug(f"🔍 FINAL STT CONFIG: engine={self.config['stt'].get('engine')}, model={self.config['stt'].get('model', 'N/A')}")
+        self.logger.debug(f"AgentSession initialized with agent: {self.agent_name}")
+    
+    def _determine_agent_name(self) -> str:
+        """Determine agent name from current TTS config or settings.
+        
+        Delegates to service_factory.resolve_agent_name_from_tts_config which is
+        the single source of truth for voice → display name resolution.
+        """
+        from . import service_factory
+        tts_cfg = (self.config or {}).get('tts') or {}
+        return service_factory.resolve_agent_name_from_tts_config(tts_cfg, self.settings)
+    
+    def _load_custom_voice_personality(self, provider: str, voice_id: str):
+        """Look up personality from CustomVoice DB for the given provider/voice_id.
+        Sets self._custom_voice_personality. Call before _load_agent_role()."""
+        self._custom_voice_personality = ''
+        if not voice_id:
+            return
+        try:
+            from distr.core.db import get_session, CustomVoice
+            session = get_session()
+            try:
+                if voice_id.startswith('custom_'):
+                    db_id = int(voice_id.split('_', 1)[1])
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id, CustomVoice.status == 'ready').first()
+                else:
+                    cv = session.query(CustomVoice).filter(
+                        CustomVoice.provider == provider,
+                        CustomVoice.provider_voice_id == voice_id,
+                        CustomVoice.status == 'ready',
+                    ).first()
+                if cv and cv.personality:
+                    self._custom_voice_personality = cv.personality.strip()
+            finally:
+                session.close()
+        except Exception as e:
+            self.logger.debug("Could not load custom voice personality: %s", e)
+
+    def _load_agent_role(self) -> str:
+        """Return the agent persona, appending any custom voice personality."""
+        from .constants import DEFAULT_PERSONA
+        role = DEFAULT_PERSONA
+        if getattr(self, '_custom_voice_personality', ''):
+            role += f"\n\n{self._custom_voice_personality}"
+        return role
+    
+    def _load_config(self, agent_config: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        """Load configuration from settings or use defaults"""
+        agent_config = agent_config or {}
+        config = self.DEFAULT_CONFIG.copy()
+        
+        # Log all settings for debugging
+        self.logger.debug(f"🔧 _load_config: settings keys = {list(self.settings.keys())}")
+        self.logger.debug(f"🔧 _load_config: agent_config = {agent_config}")
+        
+        # STT configuration
+        # PRIORITY: User settings (transcription_model) FIRST, then agent config as fallback
+        transcription_model = self.settings.get('transcription_model', '')
+        # Also check old input_speech setting for backwards compatibility
+        if not transcription_model:
+            transcription_model = self.settings.get('input_speech', '')
+            if transcription_model:
+                self.logger.debug(f"📝 STT Configuration: Using legacy input_speech='{transcription_model}' (transcription_model not set)")
+        
+        # If still no transcription model, fall back to agent config
+        if not transcription_model:
+            stt_engine = agent_config.get('sst') or agent_config.get('stt')
+            if stt_engine:
+                transcription_model = stt_engine
+                self.logger.debug(f"📝 STT Configuration: Using agent config fallback: '{transcription_model}'")
+        
+        self.logger.debug(f"📝 STT Configuration: transcription_model='{transcription_model}'")
+        self.logger.debug(f"📝 STT Configuration: All settings keys: {list(self.settings.keys())}")
+        self.logger.debug(f"📝 STT Configuration: input_speech='{self.settings.get('input_speech', 'NOT SET')}'")
+        
+        from . import config_loader
+        stt_parsed = config_loader.resolve_stt_config(transcription_model)
+        if stt_parsed['engine']:
+            config['stt']['engine'] = stt_parsed['engine']
+            if 'model' in stt_parsed:
+                config['stt']['model'] = stt_parsed['model']
+            self.logger.debug(f"✅ Selected STT engine: {stt_parsed['engine']} (model: {stt_parsed.get('model', 'N/A')})")
+        # Fallback to old input_speech setting
+        elif self.settings.get('input_speech') == 'Whisper':
+            config['stt']['engine'] = 'whisper'
+            self.logger.debug(f"✅ Selected STT engine: whisper (from input_speech fallback)")
+        elif self.settings.get('input_speech') == 'Vosk':
+            config['stt']['engine'] = 'vosk'
+            self.logger.debug(f"✅ Selected STT engine: vosk (from input_speech fallback)")
+        else:
+            self.logger.warning(f"⚠️  No STT engine matched transcription_model='{transcription_model}', using default: whisper")
+            config['stt']['engine'] = 'whisper'
+        
+        # LLM and TTS configuration: check current chat first (provider, model, voice), then fall back to settings
+        # Query database directly since ChatManager might not exist yet during initialization
+        chat_provider = None
+        chat_model = None
+        chat_voice_provider = None
+        chat_voice_model = None
+        try:
+            session = get_session()
+            settings_row = session.query(Settings).first()
+            chat = None
+            
+            # Use agent_current_chat_id from signal first (for hot reloads), then from settings
+            effective_chat_id = self._agent_current_chat_id_from_signal
+            if not effective_chat_id and settings_row:
+                effective_chat_id = getattr(settings_row, 'agent_current_chat_id', None) if settings_row else None
+            
+            last_cid = getattr(settings_row, 'last_chat_id', None) if settings_row else None
+            self.logger.debug(f"🔧 _load_config: effective_chat_id={effective_chat_id} (from_signal={self._agent_current_chat_id_from_signal is not None}), last_chat_id={last_cid}")
+            # Store for _create_services so chat_manager gets initial current chat (PTT and first input use same chat as web).
+            self._initial_chat_id = effective_chat_id or last_cid
+
+            # Prefer agent_current_chat_id (chat "in agent") so TTS/voice from loaded chat is used after create/load-in-agent
+            if effective_chat_id:
+                chat = session.get(Chat, effective_chat_id)
+                if chat:
+                    self.logger.debug(f"🔧 _load_config: Loaded chat by effective_chat_id={effective_chat_id}: provider={getattr(chat, 'provider', None)}, model_name={getattr(chat, 'model_name', None)}")
+                else:
+                    self.logger.warning(f"🔧 _load_config: No chat found for effective_chat_id={effective_chat_id}, falling back to last_chat_id")
+            if not chat and last_cid:
+                chat = session.get(Chat, last_cid)
+                if chat:
+                    self.logger.debug(f"🔧 _load_config: Loaded chat by last_chat_id={last_cid}: provider={getattr(chat, 'provider', None)}, model_name={getattr(chat, 'model_name', None)}")
+            if chat:
+                if chat.provider:
+                    raw = (chat.provider or "").strip()
+                    chat_provider = normalize_provider(raw) if raw else None
+                    chat_model = chat.model_name
+                    self.logger.debug(f"Using chat provider from database: {chat_provider}, model: {chat_model}")
+                if getattr(chat, 'voice_provider', None) or getattr(chat, 'voice_model', None):
+                    chat_voice_provider = (chat.voice_provider or "").strip().lower() if chat.voice_provider else None
+                    chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
+                    if chat_voice_provider or chat_voice_model:
+                        self.logger.debug(f"Using chat voice from database: provider={chat_voice_provider}, model={chat_voice_model} (TTS will use this voice)")
+            session.close()
+        except Exception as e:
+            self.logger.warning(f"Could not get chat provider from database: {e}")
+        
+        # Also try ChatManager if it exists (for hot-reload scenarios)
+        if not chat_provider and self.chat_manager:
+            current_chat_id = self.chat_manager.get_current_chat()
+            if current_chat_id:
+                try:
+                    session = get_session()
+                    chat = session.get(Chat, current_chat_id)
+                    if chat:
+                        if chat.provider:
+                            raw = (chat.provider or "").strip()
+                            chat_provider = normalize_provider(raw) if raw else None
+                            chat_model = chat.model_name
+                            self.logger.debug(f"Using chat provider from ChatManager: {chat_provider}, model: {chat_model}")
+                        if not chat_voice_provider and (getattr(chat, 'voice_provider', None) or getattr(chat, 'voice_model', None)):
+                            chat_voice_provider = (chat.voice_provider or "").strip().lower() if chat.voice_provider else None
+                            chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
+                            if chat_voice_provider or chat_voice_model:
+                                self.logger.debug(f"Using chat voice from ChatManager: provider={chat_voice_provider}, model={chat_voice_model}")
+                    session.close()
+                except Exception as e:
+                    self.logger.warning(f"Could not get chat provider from ChatManager: {e}")
+        
+        # Use chat provider/model first; then conversational_llm_* (what web/settings UI shows); then legacy agent_*
+        raw_provider = chat_provider or self.settings.get('conversational_llm_provider') or self.settings.get('agent_provider', 'Ollama')
+        provider = normalize_provider(raw_provider)
+        model_name = (chat_model or self.settings.get('conversational_llm_model') or self.settings.get('agent_model', '') or '').strip()
+
+        # Infer provider from model when model clearly indicates a different provider
+        from distr.core.llm_factory import infer_provider_from_model
+        provider = infer_provider_from_model(provider, model_name)
+        self.logger.debug("_load_config: LLM provider=%s model=%s", provider, model_name)
+
+        # Map provider to engine and resolve config
+        from .constants import PROVIDER_TO_ENGINE
+        engine = PROVIDER_TO_ENGINE.get(provider, 'ollama')
+        config['llm']['engine'] = engine
+        config['llm']['model_name'] = model_name or agent_config.get('llm') or DEFAULT_MODELS.get(engine, DEFAULT_MODELS['ollama'])
+        if engine in API_KEY_NAMES:
+            config['llm']['api_key'] = self.settings.get(API_KEY_NAMES[engine], '')
+        
+        # TTS configuration
+        # Prefer current chat's voice, then voice_provider setting, then tts_provider setting.
+        from .constants import normalize_voice_provider
+        tts_engine_override = agent_config.get('tts')
+        if tts_engine_override:
+            config['tts']['engine'] = normalize_voice_provider(tts_engine_override)
+
+        # Resolve voice provider: chat voice > voice_provider setting > tts_provider setting
+        voice_provider_raw = chat_voice_provider or self.settings.get('voice_provider', '') or self.settings.get('tts_provider', '')
+        voice_provider = normalize_voice_provider(voice_provider_raw)
+        voice_model_from_chat = chat_voice_model
+
+        # Voice settings lookup table: provider -> (engine, voice_key, default, extra_keys)
+        _VOICE_SETTINGS = {
+            'kokoro':     ('kokoro',     'kokoro_voice',     DEFAULT_KOKORO_VOICE, {}),
+            'elevenlabs': ('elevenlabs', 'elevenlabs_voice', '',                   {'api_key': 'elevenlabs_key'}),
+            'openai':     ('openai',     'openai_voice',     DEFAULT_OPENAI_VOICE, {'api_key': 'openai_key'}),
+            'qwen3':      ('qwen3',      'qwen3_voice',      DEFAULT_QWEN3_VOICE,  {'model_name': 'qwen3_model_name', 'device': 'qwen3_device'}),
+            'coqui':      ('coqui',      'coqui_voice',      DEFAULT_COQUI_VOICE,  {'device': 'coqui_device'}),
+        }
+        vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
+        tts_engine, voice_settings_key, voice_default, extra_keys = vp_entry
+        config['tts']['engine'] = tts_engine
+        resolved_voice = voice_model_from_chat or self.settings.get(voice_settings_key, voice_default)
+        config['tts']['voice_id'] = resolved_voice
+        config['tts']['voice_name'] = resolved_voice if tts_engine != 'elevenlabs' else None
+        for cfg_key, settings_key in extra_keys.items():
+            config['tts'][cfg_key] = self.settings.get(settings_key) or ''
+        self.logger.debug("TTS: engine=%s voice=%s (from %s)", tts_engine, resolved_voice, "chat" if chat_voice_provider else "settings")
+        # Add more TTS engines as needed
+        
+        # Audio device configuration
+        if self.input_device:
+            config['audio']['input_device'] = self.input_device
+        elif self.settings.get('input_device') and self.settings.get('input_device') != 'System Default':
+            config['audio']['input_device'] = self.settings.get('input_device')
+        
+        if self.output_device:
+            config['audio']['output_device'] = self.output_device
+        elif self.settings.get('output_device') and self.settings.get('output_device') != 'System Default':
+            config['audio']['output_device'] = self.settings.get('output_device')
+        
+        # Update output sample rate based on TTS engine
+        from .constants import TTS_SAMPLE_RATES
+        tts_rate = TTS_SAMPLE_RATES.get(config['tts']['engine'], SAMPLE_RATE_KOKORO)
+        config['audio']['output_sample_rate'] = tts_rate
+        
+        return config
+    
+    def _get_device_index(self, device_name: Optional[str], is_input: bool) -> Optional[int]:
+        """Get device index from device name."""
+        from . import config_loader
+        return config_loader.resolve_device_index(device_name, is_input, sd_module=sd)
+    
+    def _create_stt_service(self):
+        """Create STT service based on configuration"""
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+        models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+
+        # Clean up old STT service before creating new one
+        # CRITICAL: Preserve hands-free and PTT state before cleanup
+        old_hands_free = None
+        old_ptt_active = None
+        if hasattr(self, 'stt_service') and self.stt_service is not None:
+            old_service_type = type(self.stt_service).__name__
+            self.logger.debug(f"Cleaning up old STT service: {old_service_type}")
+            
+            # Preserve state from old service
+            if hasattr(self.stt_service, '_is_hands_free'):
+                old_hands_free = self.stt_service._is_hands_free
+            elif hasattr(self.stt_service, 'is_hands_free'):
+                old_hands_free = self.stt_service.is_hands_free
+            else:
+                # Fall back to session state
+                old_hands_free = self.is_hands_free
+            
+            if hasattr(self.stt_service, '_ptt_active'):
+                old_ptt_active = self.stt_service._ptt_active
+            elif hasattr(self.stt_service, 'ptt_active'):
+                old_ptt_active = self.stt_service.ptt_active
+            else:
+                # Fall back to session state
+                old_ptt_active = getattr(self, 'ptt_active', False)
+            
+            self.logger.debug(f"  Preserved state: hands_free={old_hands_free}, ptt_active={old_ptt_active}")
+            
+            try:
+                # Try to clean up any resources
+                # Use explicit cleanup method if available (e.g., WhisperSTTService)
+                if hasattr(self.stt_service, 'cleanup'):
+                    try:
+                        self.logger.debug("Calling STT service cleanup method")
+                        self.stt_service.cleanup()
+                    except Exception as cleanup_error:
+                        # Log but don't crash on cleanup errors (e.g., Metal backend issues)
+                        self.logger.warning(f"Error during STT service cleanup: {cleanup_error}")
+
+                # Fallback: manual cleanup for services without cleanup method
+                if hasattr(self.stt_service, 'model'):
+                    # Vosk/Whisper models might need cleanup
+                    self.stt_service.model = None
+                if hasattr(self.stt_service, 'recognizer'):
+                    # Vosk recognizer cleanup
+                    self.stt_service.recognizer = None
+                # Clear audio buffers
+                if hasattr(self.stt_service, '_audio_buffer'):
+                    self.stt_service._audio_buffer = []
+                if hasattr(self.stt_service, '_ptt_buffer_accumulator'):
+                    self.stt_service._ptt_buffer_accumulator = []
+            except Exception as e:
+                self.logger.debug(f"Error cleaning up old STT service: {e}")
+            self.stt_service = None
+        
+        # Create STT service
+        stt_config = self.config['stt']
+        if stt_config['engine'] == 'whisper':
+            # pywhispercpp manages models in Application Support directory
+            # Just use the model name directly (e.g., 'base.en', 'small.en', etc.)
+            # The library will download it if needed
+            whisper_model = stt_config['model_path']
+
+            # Note: pywhispercpp auto-detects and uses Metal (GPU) if available
+            # There's no runtime option to disable it - it's compiled into the library
+            self.logger.info(f"🔧 Creating Whisper.cpp STT service with model: {whisper_model} (managed by pywhispercpp)")
+            self.logger.debug("⚠️  Metal (GPU) backend is auto-detected and used if available. Exception handling in place for crash prevention.")
+
+            self.stt_service = WhisperSTTService(
+                model_path=whisper_model,
+                event_queue=self.event_queue,
+                is_hands_free=self.is_hands_free
+            )
+            self.logger.info(f"✅ Whisper.cpp STT service created successfully (type: {type(self.stt_service).__name__})")
+        elif stt_config['engine'] == 'vosk':
+            if not VOSK_AVAILABLE or VoskSTTService is None:
+                raise ImportError("VoskSTTService is not available. Please ensure vosk is installed and model is downloaded.")
+            # Vosk model path
+            vosk_model_path = os.path.join(models_dir, DEFAULT_VOSK_MODEL_DIR)
+            if not os.path.exists(vosk_model_path):
+                raise FileNotFoundError(f"Vosk model not found at {vosk_model_path}. Please download it using Settings > AI > Transcription Model.")
+            self.logger.debug(f"Creating Vosk STT service with model: {vosk_model_path}")
+            self.stt_service = VoskSTTService(
+                model_path=vosk_model_path,
+                event_queue=self.event_queue,
+                is_hands_free=self.is_hands_free
+            )
+            self.logger.debug(f"✅ Vosk STT service created successfully")
+        elif stt_config['engine'] == 'openai_whisper':
+            if not OPENAI_STT_AVAILABLE or OpenAIWhisperSTTService is None:
+                raise ImportError("OpenAIWhisperSTTService is not available. Please ensure openai library is installed.")
+            api_key = self.settings.get('openai_key', '')
+            if not api_key:
+                raise ValueError("OpenAI API key is required but not found in settings for STT")
+            model = stt_config.get('model', DEFAULT_OPENAI_WHISPER_MODEL)
+            self.logger.debug(f"Creating OpenAI Whisper STT service with model: {model}")
+            self.stt_service = OpenAIWhisperSTTService(
+                api_key=api_key,
+                model=model,
+                event_queue=self.event_queue,
+                is_hands_free=self.is_hands_free
+            )
+            self.logger.debug(f"✅ OpenAI Whisper STT service created successfully")
+        elif stt_config['engine'] == 'assemblyai':
+            if not ASSEMBLYAI_STT_AVAILABLE or AssemblyAISTTService is None:
+                raise ImportError("AssemblyAISTTService is not available. Please ensure assemblyai library is installed. Install with: pip install assemblyai")
+            api_key = self.settings.get('assemblyai_key', '')
+            if not api_key:
+                raise ValueError("AssemblyAI API key is required but not found in settings for STT")
+            model_name = stt_config.get('model', DEFAULT_ASSEMBLYAI_MODEL)
+            self.logger.info(f"🔧 Creating AssemblyAI STT service with model: {model_name}")
+            self.logger.debug(f"🔧 AssemblyAI API key present: {bool(api_key)}")
+            self.stt_service = AssemblyAISTTService(
+                api_key=api_key,
+                model=model_name,
+                event_queue=self.event_queue,
+                is_hands_free=self.is_hands_free
+            )
+            self.logger.info(f"✅ AssemblyAI STT service created successfully (type: {type(self.stt_service).__name__})")
+        else:
+            raise ValueError(f"Unsupported STT engine: {stt_config['engine']}")
+        
+        # CRITICAL: Restore hands-free and PTT state after creating new STT service
+        # This ensures all three interaction modes work correctly after swapping:
+        #
+        # 1. VAD (Voice Activity Detection):
+        #    - Always enabled in the transport
+        #    - Sends UserStartedSpeakingFrame/UserStoppedSpeakingFrame to STT
+        #    - STT filters these based on hands_free mode:
+        #      * Hands-free: VAD frames processed → can interrupt TTS/LLM
+        #      * PTT: VAD frames silently ignored → no interruptions
+        #
+        # 2. Push-to-Talk (PTT) Mode:
+        #    - set_ptt_active(True) when button pressed
+        #    - STT cancels ongoing transcription, sends InterruptionFrame
+        #    - Audio is KILLED (not ducked) via InterruptionFrame
+        #    - VAD frames are ignored while PTT is active
+        #
+        # 3. Continuous Talk (Hands-free) Mode:
+        #    - set_hands_free(True)
+        #    - VAD frames are processed and can interrupt
+        #    - Audio is ducked (volume reduced) when user speaks
+        #    - Interruptions happen automatically via VAD
+        if old_hands_free is not None or old_ptt_active is not None:
+            # Use preserved state if available, otherwise use session state
+            hands_free_state = old_hands_free if old_hands_free is not None else self.is_hands_free
+            ptt_state = old_ptt_active if old_ptt_active is not None else getattr(self, 'ptt_active', False)
+            
+            self.logger.debug(f"🔄 Restoring STT state after swap: hands_free={hands_free_state}, ptt_active={ptt_state}")
+            
+            # Restore hands-free state (affects VAD interruption filtering)
+            if hasattr(self.stt_service, 'set_hands_free'):
+                self.stt_service.set_hands_free(hands_free_state)
+                self.logger.debug(f"  ✅ Hands-free state restored: {hands_free_state} (VAD interruptions: {'enabled' if hands_free_state else 'filtered'})")
+            else:
+                self.logger.warning("  ⚠️  New STT service doesn't support set_hands_free() - VAD behavior may be incorrect")
+            
+            # Restore PTT state if it was active (affects interruption handling)
+            if ptt_state:
+                if hasattr(self.stt_service, 'set_ptt_active'):
+                    self.stt_service.set_ptt_active(ptt_state)
+                    self.logger.debug(f"  ✅ PTT state restored: {ptt_state} (interruptions via InterruptionFrame)")
+                else:
+                    self.logger.warning("  ⚠️  New STT service doesn't support set_ptt_active() - PTT may not work correctly")
+        else:
+            # No old service existed, just ensure current session state is set
+            if hasattr(self.stt_service, 'set_hands_free'):
+                self.stt_service.set_hands_free(self.is_hands_free)
+            if getattr(self, 'ptt_active', False):
+                if hasattr(self.stt_service, 'set_ptt_active'):
+                    self.stt_service.set_ptt_active(self.ptt_active)
+        
+        self.logger.info(f"✅ STT service swap complete - VAD enabled, hands_free={self.is_hands_free}, ptt_active={getattr(self, 'ptt_active', False)}")
+        
+        # Emit stt_ready event to notify GUI that PTT is safe to use
+        if self.event_queue:
+            try:
+                self.event_queue.put(('stt_ready', {}), block=False)
+                self.logger.info("📢 Emitted stt_ready event - PTT is now safe to use")
+            except Exception as e:
+                self.logger.warning(f"Failed to emit stt_ready event: {e}")
+
+    def _create_services(self):
+        """Create STT, LLM, and TTS services based on configuration"""
+        # Log system resources once at startup
+        try:
+            from distr.core.system_resources import log_system_resources
+            log_system_resources()
+        except Exception:
+            pass
+
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+        models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+
+        # Create ChatManager for agent process
+        # This ensures we have a database connection and can manage chats
+        if not self.chat_manager:
+            self.chat_manager = ChatManagerCore()
+            self.logger.debug("ChatManagerCore instantiated in AgentSession (no Qt needed)")
+            # Set initial current chat from settings so PTT and first input use same chat as web (congruent agent).
+            if getattr(self, '_initial_chat_id', None):
+                self.chat_manager.set_current_chat(self._initial_chat_id)
+                self.logger.debug("ChatManager: set initial current chat to %s (from agent_current_chat_id/last_chat_id)", self._initial_chat_id)
+            self._setup_signal_bridging()
+
+        # Create STT service
+        self._create_stt_service()
+
+        # Determine agent name from TTS config BEFORE creating LLM service
+        from . import service_factory
+        tts_config = self.config['tts']
+        self.agent_name = service_factory.resolve_agent_name_from_tts_config(tts_config, self.settings)
+        self.logger.debug("Agent name set to '%s' (engine=%s)", self.agent_name, tts_config.get('engine'))
+        
+        # Create LLM service (delegates to service_factory via _create_llm_service_only)
+        self._create_llm_service_only()
+        self.logger.debug(f"LLM service created: {self.config['llm']['engine']} / {self.config['llm'].get('model_name')}")
+        
+        # Create TTS service
+        tts_config = self.config['tts']
+        if tts_config['engine'] == 'kokoro':
+            kokoro_model = os.path.join(models_dir, KOKORO_MODEL_FILE)
+            kokoro_voices = os.path.join(models_dir, KOKORO_VOICES_FILE)
+            
+            if not os.path.exists(kokoro_model):
+                raise FileNotFoundError(f"Kokoro model not found at {kokoro_model}")
+            
+            # Get playback speed from settings (clamp to Kokoro's supported range: 0.5-2.0)
+            playback_speed = self.settings.get('playback_speed', 1.0)
+            playback_speed = max(SPEED_BOUNDS['kokoro'][0], min(SPEED_BOUNDS['kokoro'][1], playback_speed))
+            if playback_speed != self.settings.get('playback_speed', 1.0):
+                logger.warning(f"Playback speed clamped from {self.settings.get('playback_speed', 1.0):.1f}x to {playback_speed:.1f}x (Kokoro supports 0.5-2.0x)")
+            
+            # We handle volume in Transport for real-time updates
+            # Pass 100 to TTS so it generates full volume audio (avoid double scaling)
+            
+            # Resolve custom voice reference clip for voice cloning (Kanade)
+            _kokoro_ref_voice_path = None
+            _kokoro_voice_name = tts_config['voice_name']
+            if _kokoro_voice_name and _kokoro_voice_name.startswith('custom_'):
+                _kokoro_ref_voice_path, _kokoro_voice_name = self._resolve_kokoro_custom_voice(_kokoro_voice_name)
+                if _kokoro_ref_voice_path:
+                    self._load_custom_voice_personality('kokoro', tts_config['voice_name'])
+                    self.logger.debug("Kokoro voice cloning: ref=%s", _kokoro_ref_voice_path)
+
+            self.tts_service = KokoroTTSService(
+                model_path=kokoro_model,
+                voices_path=kokoro_voices,
+                voice_name=_kokoro_voice_name,
+                stt_service=self.stt_service,
+                playback_speed=playback_speed,
+                event_queue=self.event_queue,
+                speech_volume=100,
+                reference_voice_path=_kokoro_ref_voice_path,
+            )
+            self.tts_service.set_hands_free(self.is_hands_free)
+
+            # Pass TTS service to LLM service so tools can use it
+            if hasattr(self, 'llm_service') and self.llm_service:
+                self.llm_service.set_tts_service(self.tts_service)
+        elif tts_config['engine'] == 'elevenlabs':
+            api_key = tts_config.get('api_key', '')
+            voice_id_or_name = tts_config.get('voice_id', '')
+            
+            if not api_key:
+                raise ValueError("ElevenLabs API key is required but not found in settings")
+            if not voice_id_or_name:
+                raise ValueError("ElevenLabs voice ID is required but not found in settings")
+            
+            logger.debug(f"ElevenLabs voice setting value: '{voice_id_or_name}' (type: {type(voice_id_or_name).__name__})")
+            
+            # Resolve voice_id - it might be a name or an ID
+            voice_id = None
+            voice_name = voice_id_or_name  # Default to what we have
+            
+            try:
+                if not ElevenLabs:
+                    raise ImportError("ElevenLabs library not installed")
+                    
+                client = ElevenLabs(api_key=api_key)
+                voices = client.voices.get_all().voices
+                
+                if not voices:
+                    raise ValueError("No voices available in ElevenLabs account")
+                
+                # Check if voice_id_or_name is actually a voice_id (UUID-like string)
+                # Voice IDs are typically long alphanumeric strings without spaces (usually 20+ chars)
+                # Check for alphanumeric string without spaces that's at least 15 characters
+                # Also check if it contains only alphanumeric characters (no spaces, punctuation that would be in names)
+                is_likely_id = (len(voice_id_or_name) >= 15 and 
+                               ' ' not in voice_id_or_name and 
+                               voice_id_or_name.replace('_', '').replace('-', '').isalnum())
+                
+                logger.debug(f"Resolving ElevenLabs voice: '{voice_id_or_name}' (likely_id={is_likely_id})")
+                logger.debug(f"Available voices: {[v.name for v in voices]}")
+                
+                # First, try to match by voice_id if it looks like an ID
+                if is_likely_id:
+                    for voice in voices:
+                        if voice.voice_id == voice_id_or_name:
+                            voice_id = voice.voice_id
+                            voice_name = voice.name
+                            logger.debug(f"Found voice by ID: {voice_name} (ID: {voice_id})")
+                            break
+                
+                # If not found by ID, try to match by name (case-insensitive)
+                if not voice_id:
+                    voice_id_or_name_lower = voice_id_or_name.lower().strip()
+                    for voice in voices:
+                        if voice.name.lower().strip() == voice_id_or_name_lower:
+                            voice_id = voice.voice_id
+                            voice_name = voice.name
+                            logger.debug(f"Found voice by name (case-insensitive): {voice_name} (ID: {voice_id})")
+                            break
+                
+                # If we still don't have a voice_id, use the first voice as fallback
+                if not voice_id:
+                    logger.warning(f"Could not find voice '{voice_id_or_name}' in available voices: {[v.name for v in voices]}. Using first available voice.")
+                    voice_id = voices[0].voice_id
+                    voice_name = voices[0].name
+                    
+            except Exception as e:
+                logger.error(f"Error resolving ElevenLabs voice: {e}", exc_info=True)
+                raise ValueError(f"Could not resolve ElevenLabs voice '{voice_id_or_name}': {str(e)}")
+            
+            if not voice_id:
+                raise ValueError(f"Could not resolve ElevenLabs voice ID from '{voice_id_or_name}'")
+            
+            logger.debug(f"Using ElevenLabs voice: {voice_name} (ID: {voice_id})")
+            
+            # Get playback speed from settings
+            playback_speed = self.settings.get('playback_speed', 1.0)
+            stability = float(self.settings.get('elevenlabs_stability', ELEVENLABS_DEFAULTS['stability']))
+            similarity_boost = float(self.settings.get('elevenlabs_similarity_boost', ELEVENLABS_DEFAULTS['similarity_boost']))
+            style = float(self.settings.get('elevenlabs_style', ELEVENLABS_DEFAULTS['style']))
+            use_speaker_boost = bool(self.settings.get('elevenlabs_use_speaker_boost', ELEVENLABS_DEFAULTS['use_speaker_boost']))
+            
+            # We handle volume in Transport for real-time updates
+            # Pass 100 to TTS so it generates full volume audio (avoid double scaling)
+            
+            self.tts_service = ElevenLabsTTSService(
+                api_key=api_key,
+                voice_id=voice_id,
+                voice_name=voice_name,
+                stt_service=self.stt_service,
+                playback_speed=playback_speed,
+                event_queue=self.event_queue,
+                speech_volume=100,
+                stability=stability,
+                similarity_boost=similarity_boost,
+                style=style,
+                use_speaker_boost=use_speaker_boost,
+                on_quota_exceeded=self._do_elevenlabs_quota_fallback,
+            )
+            # Initialize TTS with current hands-free state
+            self.tts_service.set_hands_free(self.is_hands_free)
+            
+            # Update agent name with the resolved voice name
+            self._apply_agent_name(voice_name)
+
+            # Pass TTS service to LLM service so tools can use it
+            if hasattr(self, 'llm_service') and self.llm_service:
+                self.llm_service.set_tts_service(self.tts_service)
+        elif tts_config['engine'] == 'openai':
+            api_key = tts_config.get('api_key', '')
+            voice_id = tts_config.get('voice_id', DEFAULT_OPENAI_VOICE)
+            
+            if not api_key:
+                raise ValueError("OpenAI API key is required but not found in settings")
+            if not voice_id:
+                raise ValueError("OpenAI voice ID is required but not found in settings")
+            
+            if not OpenAITTSService:
+                raise ImportError("OpenAITTSService is not available. Please ensure openai library is installed.")
+            
+            logger.debug(f"Using OpenAI TTS voice: {voice_id}")
+            
+            # Get playback speed from settings (clamp to OpenAI's supported range: 0.25-4.0)
+            playback_speed = self.settings.get('playback_speed', 1.0)
+            playback_speed = max(SPEED_BOUNDS['openai'][0], min(SPEED_BOUNDS['openai'][1], playback_speed))
+            if playback_speed != self.settings.get('playback_speed', 1.0):
+                logger.warning(f"Playback speed clamped from {self.settings.get('playback_speed', 1.0):.1f}x to {playback_speed:.1f}x (OpenAI supports 0.25-4.0x)")
+            
+            # We handle volume in Transport for real-time updates
+            self.tts_service = OpenAITTSService(
+                api_key=api_key,
+                voice_id=voice_id,
+                voice_name=voice_id,
+                stt_service=self.stt_service,
+                playback_speed=playback_speed,
+                event_queue=self.event_queue,
+                speech_volume=100
+            )
+            # Initialize TTS with current hands-free state
+            self.tts_service.set_hands_free(self.is_hands_free)
+            
+            # Pass TTS service to LLM service so tools can use it
+            if hasattr(self, 'llm_service') and self.llm_service:
+                self.llm_service.set_tts_service(self.tts_service)
+        else:
+            raise ValueError(f"Unsupported TTS engine: {tts_config['engine']}")
+            
+    def _setup_signal_bridging(self):
+        """Bridge signals from ChatManager and SignalManager to event_queue"""
+        if not self.event_queue:
+            return
+            
+        self.logger.debug("Setting up signal bridging to event_queue")
+        
+        # Bridge ChatManagerCore events (pure Python callbacks) to event_queue
+        if self.chat_manager:
+            self.chat_manager.on('chat_created',
+                lambda chat_id: self.event_queue.put(('chat_created', {'chat_id': chat_id}))
+            )
+            self.chat_manager.on('chat_updated',
+                lambda chat_id: self.event_queue.put(('chat_updated', {'chat_id': chat_id}))
+            )
+            self.chat_manager.on('chat_deleted',
+                lambda chat_id: self.event_queue.put(('chat_deleted', {'chat_id': chat_id}))
+            )
+            self.chat_manager.on('current_chat_changed',
+                lambda chat_id: self.event_queue.put(('current_chat_changed', {'chat_id': chat_id}))
+            )
+            
+        # Bridge SignalManager signals (emitted by OllamaLLMService)
+        # Note: signals must be connected to a slot, lambda works fine
+        signal_manager.chat_stream_started.connect(
+            lambda chat_id: self.event_queue.put(('chat_stream_started', {'chat_id': chat_id}))
+        )
+        signal_manager.chat_stream_token.connect(
+            lambda token: self.event_queue.put(('chat_stream_token', {'token': token}))
+        )
+        signal_manager.chat_stream_finished.connect(
+            lambda chat_id: self.event_queue.put(('chat_stream_finished', {'chat_id': chat_id}))
+        )
+        signal_manager.chat_stream_error.connect(
+            lambda error: self.event_queue.put((
+                'chat_stream_error',
+                {
+                    'error': error,
+                    'chat_id': (self.chat_manager.get_current_chat() if self.chat_manager else None),
+                }
+            ))
+        )
+        signal_manager.typing_indicator_changed.connect(
+            lambda show: self.event_queue.put(('typing_indicator_changed', {'show': show}))
+        )
+        signal_manager.chat_message_added.connect(
+            lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
+        )
+        
+        # Model hot-reload signal - update ChatManager model immediately
+        signal_manager.model_hot_reload.connect(self._on_model_hot_reload)
+        
+        self.logger.debug("Signal bridging setup complete")
+    
+    def _on_model_hot_reload(self, provider: str, model_name: str, chat_id: Optional[int] = None):
+        """Handle model hot-reload signal — hot-swap LLM and TTS to match chat.
+        
+        NOTE: In the agent subprocess this is connected to signal_manager.model_hot_reload
+        (a Qt signal), but since there's no Qt event loop in the agent process, this handler
+        is effectively unreachable there. The agent uses event_queue instead, which routes
+        through check_agent_events -> _cmd_hot_swap_llm in command_handler.py.
+        
+        Kept for the main-process path (settings UI model change) where Qt signals work.
+        Delegates to command_handler._cmd_hot_swap_llm logic to avoid duplication.
+        """
+        provider_names = ["Ollama", "OpenAI", "Anthropic", "OpenRouter", "Groq", "KiloCode"]
+        if model_name in provider_names:
+            self.logger.warning("AgentSession: Rejecting provider name as model: %s", model_name)
+            return
+
+        self.logger.debug("Model hot-reload (signal): %s / %s (chat_id=%s)", provider, model_name, chat_id)
+
+        if chat_id:
+            self._agent_current_chat_id_from_signal = chat_id
+        if self.chat_manager:
+            self.chat_manager.update_provider(provider)
+            self.chat_manager.update_model(model_name)
+
+        # Delegate to the same path as the command queue handler
+        from .command_handler import _cmd_hot_swap_llm
+        _cmd_hot_swap_llm(self, {
+            'provider': provider,
+            'model_name': model_name,
+            'chat_id': chat_id,
+        })
+    
+    def _create_llm_service_only(self):
+        """Create a new LLM service from current self.config['llm'].
+
+        Returns the newly created service (also sets self.llm_service).
+        """
+        from . import service_factory
+        self.llm_service = service_factory.create_llm_service(
+            self.config['llm'],
+            role=self.role,
+            agent_name=self.agent_name,
+            event_queue=self.event_queue,
+            is_listening=self.is_listening,
+            chat_manager=self.chat_manager,
+            command_queue=self.command_queue,
+            confirmation_results_dict=self.confirmation_results_dict,
+            is_hands_free=self.is_hands_free,
+            voice_enabled=self.settings.get('voice_enabled', self.settings.get('chat_voice_enabled', True)),
+            tts_service=getattr(self, 'tts_service', None),
+        )
+        return self.llm_service
+
+    def _hot_swap_llm_service(
+        self,
+        provider: str,
+        model_name: str,
+        chat_id: int = None,
+        speak: bool = None,
+        voice_provider: str = None,
+        voice_model: str = None,
+    ):
+        """Swap the LLM service in the running pipeline without restarting.
+
+        Follows the same pattern as the proven STT hot-swap (preserve pipeline
+        direction + event loop, replace processor in _processors list).
+        speak: When provided (from web request), set speaker on new LLM immediately so TTS responds.
+        voice_provider/voice_model: When provided (e.g. from create-chat), set agent identity from
+        these so persona matches the new chat immediately.
+        """
+        self.logger.debug(
+            "HOT-SWAP LLM: provider=%s, model=%s, chat_id=%s, speak=%s, voice=%s/%s",
+            provider, model_name, chat_id, speak, voice_provider, voice_model,
+        )
+
+        old_service = self.llm_service
+        old_pipeline_direction = getattr(old_service, '_pipeline_direction', None) if old_service else None
+        old_event_loop = getattr(old_service, '_event_loop', None) if old_service else None
+
+        norm_provider = normalize_provider(provider)
+        engine = PROVIDER_TO_ENGINE.get(norm_provider, 'ollama')
+
+        # Reload config for new provider/model
+        self.config['llm']['engine'] = engine
+        self.config['llm']['model_name'] = model_name
+
+        # Resolve API key from settings
+        from distr.core.settings import load_settings_from_db
+        fresh_settings = load_settings_from_db()
+        self.settings = fresh_settings
+        if engine in API_KEY_NAMES:
+            self.config['llm']['api_key'] = (fresh_settings.get(API_KEY_NAMES[engine]) or '').strip()
+
+        # Reload agent role so persona matches the chat's voice (use params when provided, else DB)
+        vp = (voice_provider or '').strip() or None
+        vm = (voice_model or '').strip() or None
+        if not (vp and vm) and chat_id:
+            try:
+                from distr.core.db import get_session, Chat
+                with get_session() as db_sess:
+                    chat = db_sess.get(Chat, chat_id)
+                    if chat and getattr(chat, 'voice_model', None):
+                        vp = (chat.voice_provider or '').strip() or None
+                        vm = (chat.voice_model or '').strip() or None
+            except Exception as e:
+                self.logger.warning("HOT-SWAP LLM: could not load chat voice info: %s", e)
+        if vp and vm:
+            from . import service_factory
+            new_name = service_factory.resolve_voice_to_display_name(vp, vm, self.settings or {})
+            if new_name != self.agent_name:
+                self.agent_name = new_name
+                self.role = self._load_agent_role()
+                self.logger.info("HOT-SWAP LLM: agent name changed to %s", self.agent_name)
+
+        # Disconnect old LLM service's ChatManagerCore event listeners before replacing.
+        if old_service and self.chat_manager:
+            for event_name, method_name in [('chat_deleted', 'on_chat_deleted'),
+                                             ('chat_cleared', 'on_chat_cleared')]:
+                handler = getattr(old_service, method_name, None)
+                if handler:
+                    self.chat_manager.off(event_name, handler)
+
+        # Create new service
+        try:
+            self._create_llm_service_only()
+        except Exception as e:
+            self.logger.error("HOT-SWAP LLM: failed to create new service: %s", e, exc_info=True)
+            return
+
+        # Copy preserved pipeline state
+        if old_pipeline_direction is not None:
+            self.llm_service._pipeline_direction = old_pipeline_direction
+        if old_event_loop is not None:
+            self.llm_service._event_loop = old_event_loop
+
+        # Apply web speak override immediately (new LLM created from settings; web request takes precedence)
+        if speak is not None:
+            self.llm_service.set_speaker_enabled(bool(speak))
+            self.logger.debug("HOT-SWAP LLM: speaker set to %s (from web request)", speak)
+
+        # Replace in pipeline
+        from . import service_factory
+        if hasattr(self, 'pipeline') and self.pipeline is not None and old_service is not None:
+            if not service_factory.swap_processor_in_pipeline(self.pipeline, old_service, self.llm_service):
+                self.logger.warning("HOT-SWAP LLM: could not find old service in pipeline processors")
+
+        # Mark the new processor as started so Pipecat doesn't reject frames.
+        # We can't send StartFrame via process_frame because the TaskManager
+        # isn't initialized yet (it's created BY StartFrame processing).
+        setattr(self.llm_service, '_FrameProcessor__started', True)
+        self.logger.debug("HOT-SWAP LLM: marked new service as started")
+
+        # Update chat_manager to reflect the provider/model we actually use.
+        # NOTE: Do NOT call set_current_chat here — the caller (_cmd_current_chat_changed)
+        # handles that after the swap to avoid triggering on_chat_changed on the old service.
+        if chat_id and self.chat_manager:
+            if provider and model_name:
+                self.chat_manager.current_provider = norm_provider
+                self.chat_manager.current_model = model_name
+
+        self.logger.debug("HOT-SWAP LLM: complete (engine=%s, model=%s)", engine, model_name)
+
+    def _do_elevenlabs_quota_fallback(self):
+        """Fallback to Kokoro when ElevenLabs quota exceeded. Returns new TTS service for retry."""
+        kokoro_voice = (self.settings or {}).get('kokoro_voice', '') or DEFAULT_KOKORO_VOICE
+        self._hot_swap_tts_service('kokoro', kokoro_voice)
+        return self.tts_service
+
+    def _create_tts_service_only(self):
+        """Create a TTS service from current self.config['tts'].
+
+        Returns the newly created service (also sets self.tts_service).
+        """
+        from . import service_factory
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+        models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
+        # Build a settings dict with _event_queue so the factory can pass it through
+        factory_settings = dict(self.settings)
+        factory_settings['_event_queue'] = self.event_queue
+        factory_settings['_on_quota_exceeded'] = self._do_elevenlabs_quota_fallback
+        self.tts_service = service_factory.create_tts_service(
+            self.config['tts'],
+            settings=factory_settings,
+            stt_service=self.stt_service,
+            is_hands_free=self.is_hands_free,
+            models_dir=models_dir,
+        )
+        return self.tts_service
+
+    def _hot_swap_tts_service(self, voice_provider: str, voice_model: str):
+        """Swap TTS service in the running pipeline without restarting."""
+        from .constants import normalize_voice_provider, KOKORO_VOICE_BY_DISPLAY_NAME
+        from . import service_factory
+
+        vp = normalize_voice_provider(voice_provider)
+        self.logger.debug("HOT-SWAP TTS: provider=%s model=%s", vp, voice_model)
+
+        old_service = self.tts_service
+        old_pipeline_direction = getattr(old_service, '_pipeline_direction', None) if old_service else None
+        old_event_loop = getattr(old_service, '_event_loop', None) if old_service else None
+
+        # Resolve agent name from the new voice
+        new_agent_name = service_factory.resolve_voice_to_display_name(vp, voice_model or '', self.settings or {})
+        self._load_custom_voice_personality(vp, voice_model or '')
+
+        # --- Kokoro: in-place voice swap (no processor replacement needed) ---
+        if vp == 'kokoro':
+            self._custom_voice_personality = ''
+            self.config['tts']['engine'] = 'kokoro'
+            from .services import KokoroTTSService
+            resolved = (voice_model or '').strip()
+            if resolved in KOKORO_VOICE_BY_DISPLAY_NAME:
+                resolved = KOKORO_VOICE_BY_DISPLAY_NAME[resolved]
+            elif resolved not in KOKORO_VOICES and not resolved.startswith('custom_'):
+                resolved = resolved or DEFAULT_KOKORO_VOICE
+            self.config['tts']['voice_name'] = resolved
+            self._load_custom_voice_personality('kokoro', resolved)
+
+            if resolved.startswith('custom_'):
+                _ref_path, _base_voice = self._resolve_kokoro_custom_voice(resolved)
+                new_agent_name = service_factory.resolve_voice_to_display_name('kokoro', resolved, self.settings or {})
+                if isinstance(old_service, KokoroTTSService):
+                    old_service.set_voice(_base_voice)
+                    old_service.set_reference_voice(_ref_path)
+                    self._apply_agent_name(new_agent_name)
+                    self.logger.debug("HOT-SWAP TTS: complete (voice cloning, ref=%s)", _ref_path)
+                    return
+            else:
+                new_agent_name = KOKORO_VOICES.get(resolved, DEFAULT_KOKORO_AGENT)
+                if isinstance(old_service, KokoroTTSService):
+                    old_service.set_voice(resolved)
+                    old_service.set_reference_voice(None)
+                    self._apply_agent_name(new_agent_name)
+                    self.logger.debug("HOT-SWAP TTS: complete (in-place voice=%s)", resolved)
+                    return
+
+        # --- Qwen3: in-place voice swap when already running Qwen3 ---
+        elif vp == 'qwen3':
+            self.config['tts']['engine'] = 'qwen3'
+            self.config['tts']['voice_id'] = voice_model or DEFAULT_QWEN3_VOICE
+            self.config['tts']['voice_name'] = self.config['tts']['voice_id']
+            try:
+                from .services import Qwen3TTSService as _Q3
+                if isinstance(old_service, _Q3):
+                    old_service.set_voice(voice_model or DEFAULT_QWEN3_VOICE)
+                    self._apply_agent_name(new_agent_name)
+                    self.logger.debug("HOT-SWAP TTS: complete (in-place qwen3 voice=%s)", voice_model)
+                    return
+            except ImportError:
+                pass
+
+        # --- OpenAI ---
+        elif vp == 'openai':
+            self._custom_voice_personality = ''
+            self.config['tts']['engine'] = 'openai'
+            self.config['tts']['voice_id'] = voice_model or DEFAULT_OPENAI_VOICE
+            self.config['tts']['api_key'] = (self.settings.get('openai_key') or '').strip()
+
+        # --- ElevenLabs ---
+        elif vp == 'elevenlabs':
+            self.config['tts']['engine'] = 'elevenlabs'
+            self.config['tts']['voice_id'] = voice_model or ''
+            self.config['tts']['api_key'] = (self.settings.get('elevenlabs_key') or '').strip()
+
+        else:
+            self.logger.warning("HOT-SWAP TTS: unknown provider %s, skipping", voice_provider)
+            return
+
+        # --- Full service replacement (non-in-place path) ---
+        self._apply_agent_name(new_agent_name)
+
+        try:
+            self._create_tts_service_only()
+        except Exception as e:
+            self.logger.error("HOT-SWAP TTS: failed: %s", e, exc_info=True)
+            return
+
+        if old_pipeline_direction is not None:
+            self.tts_service._pipeline_direction = old_pipeline_direction
+        if old_event_loop is not None:
+            self.tts_service._event_loop = old_event_loop
+
+        if hasattr(self, 'pipeline') and self.pipeline is not None and old_service is not None:
+            if not service_factory.swap_processor_in_pipeline(self.pipeline, old_service, self.tts_service):
+                self.logger.warning("HOT-SWAP TTS: could not find old service in pipeline")
+
+        setattr(self.tts_service, '_FrameProcessor__started', True)
+
+        if hasattr(self, 'llm_service') and self.llm_service:
+            self.llm_service.set_tts_service(self.tts_service)
+            if hasattr(self.llm_service, 'set_agent_name'):
+                self.llm_service.set_agent_name(self.agent_name)
+
+        self.logger.debug("HOT-SWAP TTS: complete (engine=%s, voice=%s)", self.config['tts']['engine'], voice_model)
+
+    def _apply_agent_name(self, new_name: str):
+        """Update agent name, role, and LLM system prompt if the name changed."""
+        if new_name and new_name != self.agent_name:
+            self.agent_name = new_name
+            self.role = self._load_agent_role()
+            self.logger.info("Agent name changed to %s", self.agent_name)
+        if hasattr(self, 'llm_service') and self.llm_service and hasattr(self.llm_service, 'set_agent_name'):
+            self.llm_service.set_agent_name(self.agent_name)
+
+    def _resolve_kokoro_custom_voice(self, voice_id: str):
+        """Resolve a Kokoro custom voice (custom_N) to (ref_audio_path, base_voice).
+        
+        Returns (None, 'af_heart') on failure.
+        """
+        ref_path = None
+        base_voice = 'af_heart'
+        try:
+            from distr.core.db import get_session as _gs, CustomVoice as _CV
+            db_id = int(voice_id.split('_', 1)[1])
+            with _gs() as sess:
+                cv = sess.query(_CV).filter(
+                    _CV.id == db_id, _CV.provider == 'kokoro', _CV.status == 'ready'
+                ).first()
+                if cv and cv.audio_dir:
+                    for fn in os.listdir(cv.audio_dir):
+                        if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
+                            ref_path = os.path.join(cv.audio_dir, fn)
+                            break
+                gender = getattr(cv, 'gender', 'female') if cv else 'female'
+                base_voice = 'am_puck' if gender == 'male' else 'af_heart'
+        except Exception as e:
+            self.logger.warning("Could not resolve Kokoro custom voice: %s", e)
+        return ref_path, base_voice
+
+    def _create_pipeline(self):
+        """Create the Pipecat pipeline"""
+        # Clean up old pipeline if it exists
+        if hasattr(self, 'pipeline') and self.pipeline is not None:
+            self.logger.info("Cleaning up old pipeline before creating new one")
+            try:
+                # Stop the old pipeline if it's running
+                if hasattr(self.pipeline, 'cancel'):
+                    self.pipeline.cancel()
+                if hasattr(self, 'pipeline_task') and self.pipeline_task:
+                    if hasattr(self.pipeline_task, 'cancel'):
+                        self.pipeline_task.cancel()
+            except Exception as e:
+                self.logger.debug(f"Error cleaning up old pipeline: {e}")
+            self.pipeline = None
+            self.pipeline_task = None
+        
+        # Create services (this will clean up old STT service)
+        self._create_services()
+        
+        # Always create VAD if enabled in config
+        # VAD is always enabled - InterruptionFrames from VAD are filtered in services based on hands-free mode
+        # This allows VAD to still detect speech for STT even in PTT mode, but interruptions only apply in hands-free mode
+        self.vad_analyzer = None
+        if self.config['vad']['enabled']:
+            self.vad_analyzer = SileroVADAnalyzer()
+            
+            # DEBUG: Inspect VAD params to fix "unexpected keyword argument" error
+            try:
+                import inspect
+                sig = inspect.signature(self.vad_analyzer.set_params)
+                self.logger.debug(f"DEBUG: SileroVADAnalyzer.set_params signature: {sig}")
+                self.logger.debug(f"DEBUG: SileroVADAnalyzer dir: {dir(self.vad_analyzer)}")
+            except Exception as e:
+                self.logger.error(f"DEBUG: Failed to inspect VAD: {e}")
+
+            # Adjust VAD to trigger quickly for first word detection
+            try:
+                # Load threshold from settings (default 50 -> 0.5 confidence)
+                vad_threshold = self.settings.get('vad_threshold', VAD_DEFAULT_THRESHOLD)
+                confidence = max(VAD_CONFIDENCE_MIN, min(VAD_CONFIDENCE_MAX, vad_threshold / 100.0))
+                if VADParams:
+                    params = VADParams(start_secs=VAD_START_SECS, confidence=confidence)
+                    self.vad_analyzer.set_params(params)
+                else:
+                    self.vad_analyzer.set_params(start_secs=VAD_START_SECS, confidence=confidence)
+                self.logger.debug(f"VAD analyzer initialized with confidence {confidence:.2f}")
+                
+                # Initialize transport's base confidence (will be done after transport creation, but we can save it here if needed)
+                # Actually, transport isn't created yet. We'll set it after transport creation.
+            except Exception as e:
+                self.logger.debug(f"VAD set_params failed: {e}")
+            self.logger.info(f"VAD analyzer created (always enabled - interruptions filtered by hands_free={self.is_hands_free})")
+        else:
+            self.logger.info(f"VAD disabled in config")
+            confidence = 0.5 # Default for later use if needed
+        
+        # Get device indices
+        input_device_idx = self._get_device_index(
+            self.config['audio']['input_device'],
+            is_input=True
+        )
+        output_device_idx = self._get_device_index(
+            self.config['audio']['output_device'],
+            is_input=False
+        )
+        
+        # Verify audio devices are accessible and log them clearly
+        try:
+            if sd:
+                devices = sd.query_devices()
+                
+                # Log INPUT device
+                if input_device_idx is not None:
+                    if input_device_idx < len(devices):
+                        input_device = devices[input_device_idx]
+                        self.logger.debug(f"🎤 INPUT device: {input_device['name']}, max_input_channels={input_device.get('max_input_channels', 0)}")
+                        self.logger.info(f"AUDIO INPUT: {input_device['name']}")
+                        if input_device.get('max_input_channels', 0) == 0:
+                            self.logger.warning("Input device has no input channels!")
+                            self.logger.warning("Input device has no input channels!")
+                    else:
+                        self.logger.warning(f"Input device index {input_device_idx} is out of range!")
+                else:
+                    default_input = sd.query_devices(kind='input')
+                    self.logger.debug(f"🎤 Using default INPUT device: {default_input['name'] if default_input else 'None'}")
+                    self.logger.info(f"AUDIO INPUT (default): {default_input['name'] if default_input else 'None'}")
+                
+                # Log OUTPUT device
+                if output_device_idx is not None:
+                    if output_device_idx < len(devices):
+                        output_device = devices[output_device_idx]
+                        self.logger.debug(f"🔊 OUTPUT device: {output_device['name']}, max_output_channels={output_device.get('max_output_channels', 0)}")
+                        self.logger.info(f"AUDIO OUTPUT: {output_device['name']}")
+                        if output_device.get('max_output_channels', 0) == 0:
+                            self.logger.warning("Output device has no output channels!")
+                    else:
+                        self.logger.warning(f"Output device index {output_device_idx} is out of range!")
+                else:
+                    default_output = sd.query_devices(kind='output')
+                    self.logger.debug(f"🔊 Using default OUTPUT device: {default_output['name'] if default_output else 'None'}")
+                    self.logger.info(f"AUDIO OUTPUT (default): {default_output['name'] if default_output else 'None'}")
+            else:
+                self.logger.warning("sounddevice not available, cannot verify audio devices")
+        except Exception as e:
+            self.logger.warning(f"Could not verify audio devices: {e}")
+        
+        # Create transport
+        audio_config = self.config['audio']
+        
+        # Log device configuration for debugging
+        self.logger.info(f"Audio config: input_sample_rate={audio_config['input_sample_rate']}, output_sample_rate={audio_config['output_sample_rate']}")
+        self.logger.debug(f"Device indices: input={input_device_idx}, output={output_device_idx}")
+        
+        # Set pipecat logging to WARNING to reduce console noise
+        pipecat_logger = logging.getLogger("pipecat")
+        pipecat_logger.setLevel(logging.WARNING)
+        self.logger.debug("Set pipecat logging to WARNING level")
+        
+        # Create AEC (Acoustic Echo Cancellation) filter and shared reference buffer.
+        # The reference buffer carries the speaker output signal; the NLMS filter
+        # subtracts it from the mic input before the VAD ever sees it.
+        aec_ref_buf = ReferenceBuffer(
+            max_duration_secs=2.0,
+            sample_rate=audio_config['output_sample_rate'],
+        )
+        aec_filter = NLMSEchoCanceller(
+            reference_buffer=aec_ref_buf,
+            filter_length=800,    # 50ms impulse response @ 16kHz
+            mu=0.5,
+            output_sample_rate=audio_config['output_sample_rate'],
+        )
+        
+        self.transport = HotSwappableLocalAudioTransport(
+            LocalAudioTransportParams(
+                sample_rate=audio_config['input_sample_rate'],
+                audio_out_sample_rate=audio_config['output_sample_rate'],  # Use audio_out_sample_rate (correct attribute name)
+                audio_in_enabled=True,
+                audio_out_enabled=True,
+                vad_analyzer=self.vad_analyzer,
+                input_device_index=input_device_idx,
+                output_device_index=output_device_idx,
+                audio_in_filter=aec_filter,
+            ),
+            event_queue=self.event_queue,
+            aec_reference_buffer=aec_ref_buf,
+        )
+        
+        # Give the STT service access to the AEC reference buffer so it can
+        # gate VAD interruptions during TTS playback (echo suppression).
+        if self.stt_service is not None:
+            self.stt_service._aec_ref_buf = aec_ref_buf
+            # Provide a callback so the echo gate can cancel the welcome task
+            # on barge-in without needing a direct session reference.
+            def _cancel_welcome():
+                if self._welcome_task and not self._welcome_task.done():
+                    self._welcome_task.cancel()
+            self.stt_service._cancel_welcome_callback = _cancel_welcome
+        
+        # Initialize base VAD confidence in transport for ducking logic
+        if self.config['vad']['enabled']:
+            try:
+                vad_threshold = self.settings.get('vad_threshold', VAD_DEFAULT_THRESHOLD)
+                confidence = max(VAD_CONFIDENCE_MIN, min(VAD_CONFIDENCE_MAX, vad_threshold / 100.0))
+                self.transport.output().set_base_vad_confidence(confidence)
+                self.logger.debug(f"Initialized transport base VAD confidence to {confidence:.2f}")
+            except Exception as e:
+                self.logger.warning(f"Failed to set initial transport base VAD confidence: {e}")
+        
+        # Set initial volume and speed from settings
+        initial_volume = self.settings.get('speech_volume', 100) / 100.0
+        initial_speed = self.settings.get('playback_speed', 1.0)
+        self.transport.output().set_volume(initial_volume)
+        self.transport.output().set_speed(initial_speed)
+        
+        self.logger.info(f"Transport created: audio_in={True}, audio_out={True}, volume={initial_volume:.2f}, speed={initial_speed:.2f}x")
+        
+        # Create pipeline
+        self.pipeline = Pipeline(
+            [
+                self.transport.input(),
+                self.stt_service,
+                self.llm_service,
+                self.tts_service,
+                self.transport.output()
+            ]
+        )
+        
+        # Create task
+        self.task = PipelineTask(self.pipeline)
+        
+        # Create runner (will use current running event loop)
+        self.runner = PipelineRunner()
+        
+        self.logger.info("Pipeline created successfully")
+    
+    async def _run_pipeline(self):
+        """Run the pipeline in async context"""
+        try:
+            # Set event loop immediately so interrupt_tts / send_text_input can schedule work
+            # even during _create_pipeline() (e.g. while whisper is loading).
+            self._main_loop = asyncio.get_running_loop()
+            self.running = True
+
+            # Create pipeline (no loop needed - will use current running loop)
+            self._create_pipeline()
+
+            # Flush any process_text_input that arrived before the loop was ready (e.g. from web send-to-agent)
+            pending = getattr(self, '_pending_text_inputs', None)
+            if pending:
+                self._pending_text_inputs = []
+                for (text, is_telegram, uploaded_image_path, speaker_override) in pending:
+                    if text and hasattr(self, 'llm_service') and self.llm_service:
+                        self.logger.debug("Processing pending text input: '%s...'", (text or "")[:50])
+                        asyncio.create_task(self.llm_service.process_chat_input(text, is_telegram=is_telegram, uploaded_image_path=uploaded_image_path or None, speaker_enabled=speaker_override))
+            
+            # Handle SIGTERM for clean exit
+            try:
+                def handle_sigterm(*args):
+                    raise KeyboardInterrupt()
+                signal.signal(signal.SIGTERM, handle_sigterm)
+            except (ValueError, RuntimeError):
+                # Signal handlers may not work in all contexts
+                pass
+            
+            # Run pipeline
+            self.logger.info("Starting pipeline...")
+            
+            # Create a task to send welcome message after pipeline starts (only if enabled)
+            async def send_welcome_after_start():
+                # Check if welcome should be skipped (e.g., during reload)
+                if self.skip_welcome:
+                    self.logger.debug("Skipping welcome message (reload detected)")
+                    return
+                
+                # Check if welcome/greet is enabled in settings (defaults to True)
+                welcome_enabled = self.settings.get('welcome_greet_me', True)
+                if not welcome_enabled:
+                    self.logger.info("Welcome/Greet Me is disabled in settings - skipping welcome message")
+                    return
+                
+                # Wait for pipeline to initialize (give it time to process StartFrame).
+                # Short delay (1.5s) so welcome plays soon on fresh load or after load-in-agent reload.
+                try:
+                    await asyncio.sleep(WELCOME_DELAY_SECS)
+                except asyncio.CancelledError:
+                    self.logger.debug("Welcome message task cancelled during initialization wait")
+                    raise  # Re-raise to properly handle cancellation
+                
+                # Send welcome message directly to TTS, bypassing the pipeline frame queue.
+                # Pushing frames from the LLM via push_frame() from a concurrent asyncio task
+                # doesn't reliably flow through Pipecat's internal processor queues.
+                # Instead, we call the LLM's send_welcome_message but redirect frame
+                # delivery to the TTS's process_frame directly.
+                try:
+                    self.logger.info("Sending welcome message (pipeline ready)")
+                    
+                    if not self.llm_service or not self.tts_service:
+                        self.logger.warning("Welcome message skipped - LLM or TTS service not available")
+                        return
+                    
+                    from pipecat.frames.frames import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
+                    from pipecat.processors.frame_processor import FrameDirection
+                    
+                    tts = self.tts_service
+                    direction = FrameDirection.DOWNSTREAM
+                    
+                    # Use the LLM's _build_welcome_sentences which loads chat history
+                    # and generates a conversation summary via the provider's API.
+                    # We route frames directly to TTS (pipeline frame queue is unreliable
+                    # for concurrent tasks).
+                    welcome_sentences = await self.llm_service._build_welcome_sentences(
+                        self.agent_name or "Heart"
+                    )
+                    
+                    full_message = " ".join(welcome_sentences)
+                    self.logger.info("WELCOME: %s", full_message)
+                    
+                    await tts.process_frame(LLMFullResponseStartFrame(), direction)
+                    
+                    for sentence in welcome_sentences:
+                        if getattr(self, '_welcome_task', None) and self._welcome_task.cancelled():
+                            break
+                        if hasattr(tts, '_cancelled') and tts._cancelled:
+                            break
+                        await tts.process_frame(TextFrame(text=sentence), direction)
+                        await asyncio.sleep(0.15)
+                    
+                    await tts.process_frame(LLMFullResponseEndFrame(), direction)
+                    
+                    # Persist to LLM message history so context is maintained
+                    if hasattr(self.llm_service, '_messages'):
+                        self.llm_service._messages.append({"role": "assistant", "content": full_message})
+                    
+                    self.logger.info("Welcome message sent via direct TTS routing")
+                    
+                except asyncio.CancelledError:
+                    # Task was cancelled (e.g., by interrupt_tts) - this is expected
+                    self.logger.debug("Welcome message task cancelled during send")
+                    raise  # Re-raise to properly handle cancellation
+                except Exception as e:
+                    self.logger.error(f"Error sending welcome message: {e}", exc_info=True)
+            
+            # Start welcome message task (runs concurrently with pipeline)
+            self._welcome_task = asyncio.create_task(send_welcome_after_start())
+            
+            try:
+                # Run pipeline (this blocks until pipeline stops)
+                await self.runner.run(self.task)
+            except (KeyboardInterrupt, asyncio.CancelledError):
+                self.logger.info("Pipeline interrupted")
+            except Exception as e:
+                # Suppress RuntimeError about closed event loop during shutdown
+                if "Event loop is closed" not in str(e) and "coroutine" not in str(e).lower():
+                    self.logger.error(f"Pipeline error: {e}", exc_info=True)
+            finally:
+                self.running = False
+                # Clean shutdown - stop transport first, then runner
+                try:
+                    if hasattr(self, 'transport') and self.transport:
+                        # Stop the transport to close audio streams
+                        if hasattr(self.transport, 'cleanup'):
+                            try:
+                                await self.transport.cleanup()
+                            except (RuntimeError, asyncio.CancelledError):
+                                # Suppress errors during shutdown
+                                pass
+                except (RuntimeError, asyncio.CancelledError, Exception) as e:
+                    # Suppress errors during shutdown
+                    if "Event loop is closed" not in str(e):
+                        self.logger.debug(f"Error cleaning up transport: {e}")
+                
+                try:
+                    if hasattr(self, 'runner') and self.runner:
+                        try:
+                            await self.runner.stop()
+                        except (RuntimeError, asyncio.CancelledError):
+                            # Suppress errors during shutdown
+                            pass
+                except (RuntimeError, asyncio.CancelledError, Exception) as e:
+                    # Suppress errors during shutdown
+                    if "Event loop is closed" not in str(e):
+                        self.logger.debug(f"Error stopping runner: {e}")
+
+                # Clean up STT service to prevent Metal crashes on exit
+                try:
+                    if hasattr(self, 'stt_service') and self.stt_service:
+                        self.logger.debug("Cleaning up STT service on shutdown")
+                        if hasattr(self.stt_service, 'cleanup'):
+                            try:
+                                self.stt_service.cleanup()
+                            except Exception as cleanup_error:
+                                # Log but don't crash - Metal cleanup may fail
+                                self.logger.warning(f"STT cleanup error on shutdown (non-fatal): {cleanup_error}")
+                        self.stt_service = None
+                except Exception as e:
+                    # Suppress all STT cleanup errors during shutdown
+                    self.logger.debug(f"Error during STT cleanup on shutdown: {e}")
+
+                # Cancel welcome task if still running
+                try:
+                    if self._welcome_task and not self._welcome_task.done():
+                        self._welcome_task.cancel()
+                        try:
+                            await self._welcome_task
+                        except (asyncio.CancelledError, RuntimeError):
+                            pass
+                except (RuntimeError, Exception):
+                    pass
+        except Exception as e:
+            self.logger.error(f"Error in pipeline: {e}", exc_info=True)
+            self.running = False
+    
+    def _command_worker(self):
+        """Worker thread that processes commands from the main process"""
+        while not self._stop_event.is_set():
+            try:
+                if self.command_queue:
+                    try:
+                        command, params = self.command_queue.get(timeout=COMMAND_POLL_TIMEOUT)
+                        
+                        # CRITICAL: Clear thread-local flags to prevent state leakage from previous commands
+                        # This thread (Thread-1) is reused, so flags set in one command persist to the next if not cleared
+                        try:
+                            if hasattr(threading.current_thread(), 'telegram_request'):
+                                del threading.current_thread().telegram_request
+                            if hasattr(threading.current_thread(), 'telegram_file_sent'):
+                                del threading.current_thread().telegram_file_sent
+                            if hasattr(threading.current_thread(), 'telegram_wants_text_response'):
+                                del threading.current_thread().telegram_wants_text_response
+                        except Exception as e:
+                            self.logger.error(f"Error clearing thread flags: {e}")
+                            
+                        self.logger.debug(f"[COMMAND WORKER] Received command: {command} with params: {params}")
+                        if command == 'update_stt_model':
+                            self.logger.debug(f"🎤 [COMMAND WORKER] Processing update_stt_model command: {params.get('transcription_model')}")
+                        self._handle_command(command, params)
+                    except Empty:
+                        continue
+                else:
+                    time.sleep(0.1)
+            except Exception as e:
+                self.logger.error(f"Error processing command: {e}", exc_info=True)
+    
+    def _handle_command(self, command: str, params: Dict[str, Any]):
+        """Handle commands from the main process."""
+        from . import command_handler
+        if not command_handler.dispatch(self, command, params):
+            self.logger.warning(f"Unknown command: {command}")
+    
+    def start(self):
+        """Start the agent session"""
+        if self.running:
+            self.logger.warning("Session already running")
+            return
+
+        self.logger.debug("Starting agent session...")
+
+        # Start command processing thread
+        if self.command_queue:
+            self._command_thread = threading.Thread(target=self._command_worker, daemon=True)
+            self._command_thread.start()
+
+        # Run pipeline in async context (like test_pipecat.py)
+        try:
+            asyncio.run(self._run_pipeline())
+        except KeyboardInterrupt:
+            self.logger.debug("Agent session interrupted")
+        except Exception as e:
+            self.logger.error(f"Error running agent session: {e}", exc_info=True)
+        finally:
+            self.running = False
+            self.stop()
+
+        self.logger.debug("Agent session started")
+    
+    def stop(self):
+        """Stop the agent session and clean up resources"""
+        # Prevent infinite recursion
+        if hasattr(self, '_stopping') and self._stopping:
+            return
+        self._stopping = True
+        
+        self.logger.debug("Stopping agent session...")
+        self.running = False
+        
+        # Signal stop event
+        if hasattr(self, '_stop_event'):
+            self._stop_event.set()
+        
+        # Stop transport to prevent audio callbacks from using closed event loop
+        try:
+            if hasattr(self, 'transport') and self.transport:
+                # Transport cleanup will be handled in _run_pipeline finally block
+                pass
+        except Exception as e:
+            self.logger.debug(f"Error stopping transport: {e}")
+        
+        # Join command thread
+        if hasattr(self, '_command_thread') and self._command_thread and self._command_thread.is_alive():
+            try:
+                self._command_thread.join(timeout=1.0)
+            except Exception as e:
+                self.logger.debug(f"Error joining command thread: {e}")
+        
+        self.logger.debug("Agent session stopped")
+    
+    def reload(self):
+        """Reload configuration from settings"""
+        if self.command_queue:
+            self.command_queue.put(('reload', {}))
+        else:
+            self.config = self._load_config()
+            self._reload_event.set()

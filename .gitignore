@@ -1,0 +1,99 @@
+# =============================================================================
+# DecisionsAI .gitignore
+# =============================================================================
+
+# --- IDE / Editor configs (personal, not project) ---
+.claude/
+.cursor/
+.kiro/
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+*.kate-swp
+
+# --- OS junk ---
+.DS_Store
+.thumb
+Thumbs.db
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.pyo
+.Python
+*.egg-info
+.installed.cfg
+build/
+develop-eggs/
+eggs/
+dist/
+db.sqlite3
+
+# --- Virtual environments ---
+venv/
+.venv/
+env/
+ENV/
+
+# --- Testing / Linting caches ---
+.pytest_cache/
+.ruff_cache/
+.hypothesis/
+
+# --- Runtime / generated data (never commit) ---
+*.db
+*.pid
+llama_index_storage/
+logs/*
+tmp/
+assets/tmp/*
+distr/core/db/tool_embeddings_cache.json
+
+# --- Models (large binaries, downloaded at runtime) ---
+models/*
+distr/core/agent/models/
+
+# --- Dev scratch & utility scripts (local only) ---
+playground/
+scripts/
+
+# --- Databases ---
+db/*
+
+# --- Docs (auto-generated / to be rewritten) ---
+docs/*
+
+# --- Installer build artifacts ---
+installer/build/
+installer/dist/
+installer/*.app
+installer/*.dmg
+installer/.requirements_installed*
+*.spec
+*.app
+*.dmg
+
+# --- Recordings ---
+distr/recordings/
+recordings/
+
+# --- Environment / secrets ---
+.env
+.env.*
+.secret_keys
+*.secret_keys
+secrets/
+!secrets/.gitkeep
+
+# --- macOS app bundle metadata ---
+info.plist
+
+# --- VSCode extension ---
+vscode_extension/node_modules/
+
+# --- Custom voices / clones (local only) ---
+clone/

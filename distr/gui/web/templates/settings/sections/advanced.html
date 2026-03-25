@@ -1,0 +1,60 @@
+<!-- Advanced Tab -->
+    <div class="mb-6 pb-4 border-b border-[#565869]">
+        <h2 class="text-xl font-semibold text-white mb-1">Advanced Settings</h2>
+        <p class="text-sm text-gray-400">AI safety, data handling, and directory management</p>
+    </div>
+
+    <div class="space-y-6">
+        <!-- AI Safety & Data Handling -->
+        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">AI Safety & Data Handling</h3>
+            <p class="text-sm text-[#ececf1] leading-relaxed text-justify mb-6">
+                This software is provided as-is, without warranties or guarantees. All data is stored locally on your device. The AI models and features are for personal use. You are responsible for reviewing and verifying any information or suggestions provided.
+            </p>
+
+            <!-- Connection Buttons -->
+            <div class="flex justify-center gap-4">
+                <button type="button" id="google_connect_btn"
+                        class="px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors">
+                    Google
+                </button>
+                <button type="button" id="telegram_connect_btn"
+                        class="px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors">
+                    Telegram
+                </button>
+                <button type="button" id="trello_connect_btn"
+                        class="px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors">
+                    Trello
+                </button>
+                <button type="button" id="jira_connect_btn"
+                        class="px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors">
+                    Jira
+                </button>
+            </div>
+        </div>
+
+        <!-- Directory Management (tree like native: QTreeView from ~/, expand to see subfolders, checkboxes = indexed_folders) -->
+        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">Directory Management</h3>
+
+            <!-- Directory tree: root from ~/, expand loads children, checked = saved indexed_folders -->
+            <div class="bg-[#40414f] border border-[#565869] rounded-md overflow-hidden mb-4" style="min-height: 200px;">
+                <div id="directory_tree" class="p-2 min-h-[200px] max-h-96 overflow-y-auto text-sm text-[#ececf1]">
+                    <p class="text-[#9ca3af] py-2">Loading...</p>
+                </div>
+            </div>
+
+            <!-- Exclude file types and Reindex (single row like native exclude_layout) -->
+            <div class="flex items-center gap-4 pt-2">
+                <label for="exclude_types" class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Exclude file types:</label>
+                <input type="text" id="exclude_types" name="exclude_types"
+                        placeholder="e.g., .jpg, .pdf, .doc"
+                        class="flex-1 bg-[#40414f] border border-[#565869] rounded-md px-4 py-2 text-white text-sm
+                                focus:outline-none focus:border-[#ececf1] transition-colors">
+                <button type="button" id="reindex_button"
+                        class="px-6 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-semibold transition-colors whitespace-nowrap">
+                    Reindex Models
+                </button>
+            </div>
+        </div>
+    </div>

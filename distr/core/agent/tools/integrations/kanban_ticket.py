@@ -1,0 +1,822 @@
+"""
+Kanban Board Ticket Tool — create, list, and manage tickets on Kanban boards.
+
+Replaces the old CreateCursorTicketTool. Works with the database-backed
+KanbanBoard / KanbanLane / KanbanTicket models and supports attaching files
+(images, documents, etc.) that were received in the conversation thread
+(e.g. from Telegram).
+"""
+import json
+import logging
+import os
+import re
+import shutil
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, List, Optional
+
+from langchain.tools import BaseTool
+from pydantic import Field
+
+logger = logging.getLogger(__name__)
+
+
+class KanbanTicketTool(BaseTool):
+    """Create and manage tickets on Kanban boards.
+
+    ACTIONS (pass as the 'action' parameter):
+      list_boards        — list all boards
+      create_board       — create a new board (requires board_name)
+      delete_board       — delete a board (requires board_id or board_name)
+      list_lanes         — list lanes for a board (requires board_id or board_name)
+      create_ticket      — create a ticket (requires board_name or board_id, plus title)
+      list_tickets       — list tickets in a board or lane
+      get_ticket         — get ticket details (requires ticket_id)
+      update_ticket      — update a ticket (requires ticket_id)
+      move_ticket        — move ticket to a different lane (requires ticket_id, lane_name)
+      delete_ticket      — delete a ticket (requires ticket_id)
+      attach_file        — attach a local file to a ticket (requires ticket_id, file_path)
+      delete_file        — remove an attached file (requires ticket_id, file_path as filename)
+      add_todo           — add a checklist item (requires ticket_id, text)
+      toggle_todo        — toggle a checklist item done/undone (requires ticket_id, todo_text)
+      delete_todo        — remove a checklist item (requires ticket_id, todo_text)
+      add_link           — add a URL link (requires ticket_id, title, url)
+      delete_link        — remove a link (requires ticket_id, url)
+      send_to_project    — send ticket to linked project's .tickets folder (requires ticket_id)
+
+    REQUIRED PARAMETERS:
+      action  — one of the actions above
+      text    — free-form instruction (the tool will parse board/lane/title from it)
+
+    OPTIONAL PARAMETERS:
+      board_name   — board name (fuzzy matched)
+      board_id     — board ID (exact)
+      lane_name    — lane name (fuzzy matched, defaults to first lane / "Backlog")
+      title        — ticket title
+      description  — ticket description
+      priority     — low / medium / high / critical
+      ticket_id    — ticket ID for get/update/attach/todo/link actions
+      file_path    — local file path for attach_file action
+      url          — URL for add_link action
+      todo_text    — text for add_todo action
+
+    CONVERSATION CONTEXT:
+      When creating a ticket, the tool automatically gathers the recent conversation
+      thread (including references to files/images received from Telegram) and uses
+      it to build a rich ticket description. If images or documents were mentioned
+      or received in the thread, they are attached to the ticket automatically.
+    """
+
+    name: str = "create_ticket"
+    description: str = (
+        "Full CRUD for Kanban boards and tickets. "
+        "Use action='create_ticket' with board_name and title to create a ticket. "
+        "Use action='list_boards' to see available boards. "
+        "Use action='create_board' with board_name to create a new board. "
+        "Use action='delete_ticket' with ticket_id to delete a ticket. "
+        "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
+        "Use action='attach_file' with ticket_id and file_path to attach files. "
+        "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
+        "The tool automatically gathers conversation context and attaches any "
+        "images/documents from the chat thread to the ticket. "
+        "IMPORTANT: When user says 'create a ticket', call this tool with "
+        "action='create_ticket'. Pass the user's full instruction as 'text'."
+    )
+
+    chat_manager: Any = Field(default=None, exclude=True)
+    llm_service: Any = Field(default=None, exclude=True)
+    event_queue: Any = Field(default=None, exclude=True)
+
+    # Track last created ticket for follow-up commands
+    _last_ticket_id: Optional[int] = None
+    _last_board_id: Optional[int] = None
+
+    def __init__(self, chat_manager=None, llm_service=None, event_queue=None, **kwargs):
+        super().__init__(**kwargs)
+        self.chat_manager = chat_manager
+        self.llm_service = llm_service
+        self.event_queue = event_queue
+
+    def get_triggers(self) -> list[str]:
+        return [
+            "create a ticket", "create ticket", "make a ticket",
+            "add a ticket", "new ticket", "add ticket",
+            "list boards", "show boards", "my boards",
+            "list tickets", "show tickets",
+        ]
+
+    # ── DB helpers ────────────────────────────────────────────────────────
+
+    def _get_session(self):
+        from distr.core.db import get_session
+        return get_session()
+
+    def _all_boards(self) -> List[Dict]:
+        from distr.core.db.kanban import KanbanBoard
+        with self._get_session() as s:
+            boards = s.query(KanbanBoard).order_by(KanbanBoard.name).all()
+            return [{"id": b.id, "name": b.name, "description": b.description or "",
+                     "default_project_id": b.default_project_id} for b in boards]
+
+    def _find_board(self, board_id: Optional[int] = None, board_name: Optional[str] = None) -> Optional[Dict]:
+        """Find a board by ID or fuzzy name match."""
+        from distr.core.db.kanban import KanbanBoard
+        with self._get_session() as s:
+            if board_id:
+                b = s.query(KanbanBoard).get(board_id)
+                if b:
+                    return {"id": b.id, "name": b.name, "description": b.description or "",
+                            "default_project_id": b.default_project_id}
+                return None
+            if board_name:
+                name_lower = board_name.strip().lower()
+                boards = s.query(KanbanBoard).all()
+                # Exact match first
+                for b in boards:
+                    if b.name.lower() == name_lower:
+                        return {"id": b.id, "name": b.name, "description": b.description or "",
+                                "default_project_id": b.default_project_id}
+                # Fuzzy: board name contains search or search contains board name
+                for b in boards:
+                    if name_lower in b.name.lower() or b.name.lower() in name_lower:
+                        return {"id": b.id, "name": b.name, "description": b.description or "",
+                                "default_project_id": b.default_project_id}
+                # Single board? Use it.
+                if len(boards) == 1:
+                    b = boards[0]
+                    return {"id": b.id, "name": b.name, "description": b.description or "",
+                            "default_project_id": b.default_project_id}
+        return None
+
+    def _get_lanes(self, board_id: int) -> List[Dict]:
+        from distr.core.db.kanban import KanbanLane
+        with self._get_session() as s:
+            lanes = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position).all()
+            return [{"id": l.id, "name": l.name, "position": l.position} for l in lanes]
+
+    def _find_lane(self, board_id: int, lane_name: Optional[str] = None) -> Optional[Dict]:
+        lanes = self._get_lanes(board_id)
+        if not lanes:
+            return None
+        if not lane_name:
+            # Default to first lane (usually "Backlog")
+            return lanes[0]
+        name_lower = lane_name.strip().lower()
+        for l in lanes:
+            if l["name"].lower() == name_lower:
+                return l
+        for l in lanes:
+            if name_lower in l["name"].lower() or l["name"].lower() in name_lower:
+                return l
+        return lanes[0]  # fallback to first
+
+    # ── Conversation context ─────────────────────────────────────────────
+
+    def _get_conversation_context(self, max_messages: int = 30) -> tuple[str, List[str]]:
+        """Return (conversation_text, list_of_file_paths_mentioned).
+
+        Scans recent messages for file paths (images/docs saved from Telegram)
+        and builds a text summary of the conversation thread.
+        """
+        file_paths: List[str] = []
+        conversation_lines: List[str] = []
+
+        if not self.chat_manager:
+            return "", file_paths
+
+        try:
+            current_chat_id = self.chat_manager.get_current_chat()
+            if not current_chat_id:
+                return "", file_paths
+
+            history = self.chat_manager.get_chat_history(current_chat_id)
+            recent = [m for m in history if m.get("role") in ("user", "assistant")][-max_messages:]
+
+            # Regex to find file paths in messages
+            path_re = re.compile(r'(?:/[^\s\]]+|~/[^\s\]]+)')
+            telegram_file_re = re.compile(r'\[Telegram \w+ saved to ([^\]]+)\]')
+
+            for msg in recent:
+                role = msg.get("role", "unknown")
+                content = (msg.get("content") or "").strip()
+                if not content:
+                    continue
+
+                prefix = "User" if role == "user" else "Assistant"
+                conversation_lines.append(f"{prefix}: {content}")
+
+                # Extract file paths
+                for m in telegram_file_re.finditer(content):
+                    fp = m.group(1).strip()
+                    if os.path.exists(fp):
+                        file_paths.append(fp)
+                for m in path_re.finditer(content):
+                    fp = os.path.expanduser(m.group(0).strip())
+                    if os.path.isfile(fp) and fp not in file_paths:
+                        file_paths.append(fp)
+
+        except Exception as e:
+            logger.error("Error gathering conversation context: %s", e, exc_info=True)
+
+        return "\n".join(conversation_lines), file_paths
+
+    # ── File attachment ───────────────────────────────────────────────────
+
+    def _attach_file_to_ticket(self, ticket_id: int, file_path: str) -> Optional[str]:
+        """Copy file into kanban_uploads and create a KanbanTicketFile record."""
+        from distr.core.db.kanban import KanbanTicketFile
+        from distr.core.paths import DB_DIR
+
+        if not os.path.isfile(file_path):
+            return None
+
+        upload_dir = os.path.join(DB_DIR, "kanban_uploads", str(ticket_id))
+        os.makedirs(upload_dir, exist_ok=True)
+
+        safe_name = os.path.basename(file_path)
+        dest = os.path.join(upload_dir, safe_name)
+
+        # Avoid overwriting — add timestamp if collision
+        if os.path.exists(dest):
+            stem, ext = os.path.splitext(safe_name)
+            ts = datetime.now().strftime("%H%M%S")
+            safe_name = f"{stem}_{ts}{ext}"
+            dest = os.path.join(upload_dir, safe_name)
+
+        shutil.copy2(file_path, dest)
+
+        with self._get_session() as s:
+            rec = KanbanTicketFile(ticket_id=ticket_id, filename=safe_name, file_path=dest)
+            s.add(rec)
+            s.flush()
+            return safe_name
+
+    # ── LLM-based ticket summarisation ────────────────────────────────────
+
+    def _summarise_for_ticket(self, raw_text: str) -> Dict[str, str]:
+        """Use the LLM to extract a title and description from raw conversation text.
+
+        Returns {"title": ..., "description": ...}.
+        Falls back to simple extraction if LLM is unavailable.
+        """
+        # Try LLM summarisation
+        if self.llm_service and hasattr(self.llm_service, '_model_name'):
+            try:
+                prompt = (
+                    "You are a project manager. Given the following conversation, "
+                    "extract a concise ticket title (max 10 words) and a clear description. "
+                    "If files or images are mentioned, note them in the description. "
+                    "Reply ONLY in this exact format:\n"
+                    "Title: <title>\n"
+                    "Description: <description>\n\n"
+                    f"Conversation:\n{raw_text[:3000]}"
+                )
+                # Use a simple sync call via the configured provider
+                result = self._call_llm_sync(prompt)
+                if result:
+                    title_match = re.search(r'^Title:\s*(.+)', result, re.MULTILINE | re.IGNORECASE)
+                    desc_match = re.search(r'^Description:\s*(.+)', result, re.MULTILINE | re.IGNORECASE | re.DOTALL)
+                    title = title_match.group(1).strip() if title_match else ""
+                    desc = desc_match.group(1).strip() if desc_match else result
+                    if title:
+                        return {"title": title, "description": desc}
+            except Exception as e:
+                logger.warning("LLM summarisation failed, using fallback: %s", e)
+
+        # Fallback: first line as title, rest as description
+        lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
+        title = lines[0][:80] if lines else "New Ticket"
+        desc = "\n".join(lines[1:]) if len(lines) > 1 else raw_text[:500]
+        return {"title": title, "description": desc}
+
+    def _call_llm_sync(self, prompt: str) -> Optional[str]:
+        """Synchronous LLM call for ticket summarisation."""
+        try:
+            import ollama
+            model = getattr(self.llm_service, '_model_name', 'qwen3:8b')
+            resp = ollama.chat(model=model, messages=[
+                {"role": "system", "content": "You are a concise project manager assistant."},
+                {"role": "user", "content": prompt},
+            ])
+            return resp.get("message", {}).get("content", "")
+        except Exception:
+            pass
+        try:
+            from openai import OpenAI
+            from distr.core.settings import load_settings_from_db
+            settings = load_settings_from_db()
+            api_key = settings.get("openai_key", "")
+            if api_key:
+                client = OpenAI(api_key=api_key)
+                resp = client.chat.completions.create(
+                    model="gpt-4o-mini",
+                    messages=[
+                        {"role": "system", "content": "You are a concise project manager assistant."},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=500,
+                )
+                return resp.choices[0].message.content
+        except Exception:
+            pass
+        return None
+
+    # ── Main dispatch ─────────────────────────────────────────────────────
+
+    def _run(
+        self,
+        text: str = "",
+        action: str = "create_ticket",
+        board_name: str = "",
+        board_id: int = 0,
+        lane_name: str = "",
+        title: str = "",
+        description: str = "",
+        priority: str = "medium",
+        ticket_id: int = 0,
+        file_path: str = "",
+        url: str = "",
+        todo_text: str = "",
+        **kwargs,
+    ) -> str:
+        try:
+            action = (action or "create_ticket").strip().lower().replace(" ", "_")
+
+            if action == "list_boards":
+                return self._action_list_boards()
+            elif action == "create_board":
+                return self._action_create_board(board_name or text)
+            elif action == "delete_board":
+                return self._action_delete_board(board_id or None, board_name or None)
+            elif action == "list_lanes":
+                return self._action_list_lanes(board_id or None, board_name or None)
+            elif action == "create_ticket":
+                return self._action_create_ticket(
+                    text=text, board_name=board_name, board_id=board_id or None,
+                    lane_name=lane_name, title=title, description=description,
+                    priority=priority,
+                )
+            elif action == "list_tickets":
+                return self._action_list_tickets(board_id or None, board_name or None, lane_name or None)
+            elif action == "get_ticket":
+                return self._action_get_ticket(ticket_id or self._last_ticket_id)
+            elif action == "update_ticket":
+                return self._action_update_ticket(
+                    ticket_id or self._last_ticket_id, title=title,
+                    description=description, priority=priority, lane_name=lane_name,
+                )
+            elif action == "move_ticket":
+                return self._action_move_ticket(ticket_id or self._last_ticket_id, lane_name)
+            elif action == "delete_ticket":
+                return self._action_delete_ticket(ticket_id or self._last_ticket_id)
+            elif action == "attach_file":
+                return self._action_attach_file(ticket_id or self._last_ticket_id, file_path)
+            elif action == "delete_file":
+                return self._action_delete_file(ticket_id or self._last_ticket_id, file_path)
+            elif action == "add_todo":
+                return self._action_add_todo(ticket_id or self._last_ticket_id, todo_text or text)
+            elif action == "toggle_todo":
+                return self._action_toggle_todo(ticket_id or self._last_ticket_id, todo_text or text)
+            elif action == "delete_todo":
+                return self._action_delete_todo(ticket_id or self._last_ticket_id, todo_text or text)
+            elif action == "add_link":
+                return self._action_add_link(ticket_id or self._last_ticket_id, title, url)
+            elif action == "delete_link":
+                return self._action_delete_link(ticket_id or self._last_ticket_id, url)
+            elif action == "send_to_project":
+                return self._action_send_to_project(ticket_id or self._last_ticket_id)
+            else:
+                return (
+                    f"Unknown action '{action}'. Valid actions: list_boards, create_board, delete_board, "
+                    "list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, move_ticket, "
+                    "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, delete_todo, "
+                    "add_link, delete_link, send_to_project"
+                )
+
+        except Exception as e:
+            logger.error("KanbanTicketTool error: %s", e, exc_info=True)
+            return f"Error: {e}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+    # ── Action implementations ────────────────────────────────────────────
+
+    def _action_list_boards(self) -> str:
+        boards = self._all_boards()
+        if not boards:
+            return "No Kanban boards found. You can create one in the Board UI."
+        lines = []
+        for b in boards:
+            lines.append(f"Board '{b['name']}' (ID {b['id']})")
+        return "Available boards: " + ", ".join(lines)
+
+    def _action_list_lanes(self, board_id=None, board_name=None) -> str:
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return "Board not found. Use action='list_boards' to see available boards."
+        lanes = self._get_lanes(board["id"])
+        names = [l["name"] for l in lanes]
+        return f"Lanes in '{board['name']}': {', '.join(names)}"
+
+    def _action_create_ticket(self, text="", board_name="", board_id=None,
+                               lane_name="", title="", description="",
+                               priority="medium") -> str:
+        # Resolve board
+        board = self._find_board(board_id, board_name)
+        if not board:
+            # Try to extract board name from text
+            boards = self._all_boards()
+            if boards:
+                text_lower = (text or "").lower()
+                for b in boards:
+                    if b["name"].lower() in text_lower:
+                        board = b
+                        break
+            if not board:
+                if len(boards) == 1:
+                    board = boards[0]
+                else:
+                    board_list = ", ".join(f"'{b['name']}'" for b in boards) if boards else "none"
+                    return f"Please specify which board. Available: {board_list}"
+
+        # Resolve lane
+        lane = self._find_lane(board["id"], lane_name)
+        if not lane:
+            return f"No lanes found in board '{board['name']}'."
+
+        # Gather conversation context for rich ticket content
+        conv_text, conv_files = self._get_conversation_context(max_messages=30)
+
+        # Build title and description
+        if not title and not description:
+            # Use conversation + text to build ticket via LLM
+            raw = text
+            if conv_text:
+                raw = f"User instruction: {text}\n\nConversation thread:\n{conv_text}"
+            summary = self._summarise_for_ticket(raw)
+            title = summary["title"]
+            description = summary["description"]
+        elif not title:
+            title = description[:80]
+        elif not description:
+            description = text or title
+
+        # Create the ticket in DB
+        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+        with self._get_session() as s:
+            lane_obj = s.query(KanbanLane).get(lane["id"])
+            max_pos = max([t.position for t in lane_obj.tickets], default=-1) if lane_obj else -1
+
+            # Check if board has a default project
+            board_obj = s.query(KB).get(board["id"])
+            linked_project_id = board_obj.default_project_id if board_obj else None
+
+            ticket = KanbanTicket(
+                lane_id=lane["id"],
+                title=title,
+                description=description,
+                priority=priority or "medium",
+                position=max_pos + 1,
+                linked_project_id=linked_project_id,
+            )
+            s.add(ticket)
+            s.flush()
+            ticket_id = ticket.id
+
+        self._last_ticket_id = ticket_id
+        self._last_board_id = board["id"]
+
+        # Auto-attach files found in conversation
+        attached = []
+        for fp in conv_files:
+            name = self._attach_file_to_ticket(ticket_id, fp)
+            if name:
+                attached.append(name)
+
+        result = f"Created ticket '{title}' in board '{board['name']}', lane '{lane['name']}' (ID {ticket_id})"
+        if attached:
+            result += f". Attached {len(attached)} file(s): {', '.join(attached)}"
+        return result
+
+    def _action_list_tickets(self, board_id=None, board_name=None, lane_name=None) -> str:
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return "Board not found."
+        from distr.core.db.kanban import KanbanTicket, KanbanLane
+        with self._get_session() as s:
+            query = s.query(KanbanTicket).join(KanbanLane).filter(KanbanLane.board_id == board["id"])
+            if lane_name:
+                query = query.filter(KanbanLane.name.ilike(f"%{lane_name}%"))
+            tickets = query.order_by(KanbanLane.position, KanbanTicket.position).all()
+            if not tickets:
+                return f"No tickets in board '{board['name']}'."
+            lines = []
+            for t in tickets:
+                lane_n = t.lane.name if t.lane else "?"
+                files_count = len(t.files) if t.files else 0
+                extra = f" ({files_count} files)" if files_count else ""
+                lines.append(f"[{lane_n}] #{t.id} {t.title} ({t.priority}){extra}")
+            return f"Tickets in '{board['name']}':\n" + "\n".join(lines)
+
+    def _action_get_ticket(self, ticket_id) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        from distr.core.db.kanban import KanbanTicket
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            files = [f.filename for f in t.files] if t.files else []
+            todos = [f"{'[x]' if td.done else '[ ]'} {td.text}" for td in t.todos] if t.todos else []
+            links = [f"{l.title}: {l.url}" for l in t.links] if t.links else []
+            parts = [
+                f"Ticket #{t.id}: {t.title}",
+                f"Lane: {t.lane.name if t.lane else '?'}",
+                f"Priority: {t.priority}",
+                f"Description: {t.description or '(none)'}",
+            ]
+            if files:
+                parts.append(f"Files: {', '.join(files)}")
+            if todos:
+                parts.append(f"Todos: {'; '.join(todos)}")
+            if links:
+                parts.append(f"Links: {'; '.join(links)}")
+            return "\n".join(parts)
+
+    def _action_update_ticket(self, ticket_id, title="", description="",
+                               priority="", lane_name="") -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        from distr.core.db.kanban import KanbanTicket, KanbanLane
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            if title:
+                t.title = title
+            if description:
+                t.description = description
+            if priority:
+                t.priority = priority
+            if lane_name:
+                # Move to different lane
+                board_id = t.lane.board_id if t.lane else None
+                if board_id:
+                    new_lane = s.query(KanbanLane).filter(
+                        KanbanLane.board_id == board_id,
+                        KanbanLane.name.ilike(f"%{lane_name}%")
+                    ).first()
+                    if new_lane:
+                        t.lane_id = new_lane.id
+            return f"Updated ticket #{ticket_id}"
+
+    def _action_attach_file(self, ticket_id, file_path) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not file_path or not os.path.isfile(file_path):
+            return f"File not found: {file_path}"
+        name = self._attach_file_to_ticket(ticket_id, file_path)
+        if name:
+            return f"Attached '{name}' to ticket #{ticket_id}"
+        return "Failed to attach file."
+
+    def _action_add_todo(self, ticket_id, text) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not text:
+            return "No todo text provided."
+        from distr.core.db.kanban import KanbanTicket, KanbanTicketTodo
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            max_pos = max([td.position for td in t.todos], default=-1) if t.todos else -1
+            todo = KanbanTicketTodo(ticket_id=ticket_id, text=text, position=max_pos + 1)
+            s.add(todo)
+        return f"Added todo to ticket #{ticket_id}"
+
+    def _action_add_link(self, ticket_id, title, url) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not url:
+            return "No URL provided."
+        from distr.core.db.kanban import KanbanTicket, KanbanTicketLink
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            link = KanbanTicketLink(ticket_id=ticket_id, title=title or url, url=url)
+            s.add(link)
+        return f"Added link to ticket #{ticket_id}"
+
+    # ── Board CRUD ────────────────────────────────────────────────────────
+
+    def _action_create_board(self, name: str) -> str:
+        if not name or not name.strip():
+            return "Board name is required."
+        from distr.core.db.kanban import KanbanBoard, KanbanLane
+        default_lanes = ["Backlog", "Current", "QA / Assess", "Done"]
+        with self._get_session() as s:
+            board = KanbanBoard(name=name.strip(), source="database")
+            s.add(board)
+            s.flush()
+            for i, lane_name in enumerate(default_lanes):
+                s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+            s.flush()
+            board_id = board.id
+        self._last_board_id = board_id
+        return f"Created board '{name.strip()}' (ID {board_id}) with lanes: {', '.join(default_lanes)}"
+
+    def _action_delete_board(self, board_id=None, board_name=None) -> str:
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return "Board not found."
+        from distr.core.db.kanban import KanbanBoard
+        with self._get_session() as s:
+            b = s.query(KanbanBoard).get(board["id"])
+            if not b:
+                return "Board not found."
+            name = b.name
+            s.delete(b)
+        return f"Deleted board '{name}' and all its tickets"
+
+    # ── Ticket delete & move ──────────────────────────────────────────────
+
+    def _action_delete_ticket(self, ticket_id) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        from distr.core.db.kanban import KanbanTicket
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            title = t.title
+            s.delete(t)
+        return f"Deleted ticket #{ticket_id} ('{title}')"
+
+    def _action_move_ticket(self, ticket_id, lane_name) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not lane_name:
+            return "No lane name provided."
+        from distr.core.db.kanban import KanbanTicket, KanbanLane
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+            board_id = t.lane.board_id if t.lane else None
+            if not board_id:
+                return "Cannot determine board for this ticket."
+            new_lane = s.query(KanbanLane).filter(
+                KanbanLane.board_id == board_id,
+                KanbanLane.name.ilike(f"%{lane_name}%")
+            ).first()
+            if not new_lane:
+                lanes = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position).all()
+                available = ", ".join(l.name for l in lanes)
+                return f"Lane '{lane_name}' not found. Available: {available}"
+            max_pos = max([tk.position for tk in new_lane.tickets], default=-1)
+            t.lane_id = new_lane.id
+            t.position = max_pos + 1
+        return f"Moved ticket #{ticket_id} to lane '{new_lane.name}'"
+
+    # ── Sub-resource deletes ──────────────────────────────────────────────
+
+    def _action_delete_file(self, ticket_id, filename) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not filename:
+            return "No filename provided."
+        from distr.core.db.kanban import KanbanTicketFile
+        with self._get_session() as s:
+            f = s.query(KanbanTicketFile).filter_by(ticket_id=ticket_id).filter(
+                KanbanTicketFile.filename.ilike(f"%{filename}%")
+            ).first()
+            if not f:
+                return f"File '{filename}' not found on ticket #{ticket_id}."
+            name = f.filename
+            # Remove physical file
+            try:
+                if os.path.exists(f.file_path):
+                    os.remove(f.file_path)
+            except Exception:
+                pass
+            s.delete(f)
+        return f"Removed file '{name}' from ticket #{ticket_id}"
+
+    def _action_toggle_todo(self, ticket_id, todo_text) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not todo_text:
+            return "No todo text provided."
+        from distr.core.db.kanban import KanbanTicketTodo
+        with self._get_session() as s:
+            todo = s.query(KanbanTicketTodo).filter_by(ticket_id=ticket_id).filter(
+                KanbanTicketTodo.text.ilike(f"%{todo_text}%")
+            ).first()
+            if not todo:
+                return f"Todo matching '{todo_text}' not found on ticket #{ticket_id}."
+            todo.done = not todo.done
+            status = "done" if todo.done else "not done"
+        return f"Toggled todo to {status} on ticket #{ticket_id}"
+
+    def _action_delete_todo(self, ticket_id, todo_text) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not todo_text:
+            return "No todo text provided."
+        from distr.core.db.kanban import KanbanTicketTodo
+        with self._get_session() as s:
+            todo = s.query(KanbanTicketTodo).filter_by(ticket_id=ticket_id).filter(
+                KanbanTicketTodo.text.ilike(f"%{todo_text}%")
+            ).first()
+            if not todo:
+                return f"Todo matching '{todo_text}' not found on ticket #{ticket_id}."
+            s.delete(todo)
+        return f"Removed todo from ticket #{ticket_id}"
+
+    def _action_delete_link(self, ticket_id, url) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        if not url:
+            return "No URL provided."
+        from distr.core.db.kanban import KanbanTicketLink
+        with self._get_session() as s:
+            link = s.query(KanbanTicketLink).filter_by(ticket_id=ticket_id).filter(
+                KanbanTicketLink.url.ilike(f"%{url}%")
+            ).first()
+            if not link:
+                return f"Link matching '{url}' not found on ticket #{ticket_id}."
+            s.delete(link)
+        return f"Removed link from ticket #{ticket_id}"
+
+    # ── Send to project ───────────────────────────────────────────────────
+
+    def _action_send_to_project(self, ticket_id) -> str:
+        if not ticket_id:
+            return "No ticket ID provided."
+        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+        from distr.core.db.projects import Project
+
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+
+            # Resolve project: ticket-level first, then board-level default
+            project_id = t.linked_project_id
+            if not project_id and t.lane:
+                board = s.query(KB).get(t.lane.board_id)
+                if board:
+                    project_id = board.default_project_id
+
+            if not project_id:
+                return "No project linked to this ticket or its board."
+
+            project = s.query(Project).get(project_id)
+            if not project:
+                return "Linked project not found."
+            if not project.folder_location:
+                return f"Project '{project.name}' has no folder location set."
+
+            tickets_folder = os.path.join(project.folder_location, ".tickets")
+            os.makedirs(tickets_folder, exist_ok=True)
+
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
+
+            # Build markdown
+            todos_md = ""
+            if t.todos:
+                todos_md = "\n## Checklist\n"
+                for td in t.todos:
+                    mark = "x" if td.done else " "
+                    todos_md += f"- [{mark}] {td.text}\n"
+
+            links_md = ""
+            if t.links:
+                links_md = "\n## Links\n"
+                for lk in t.links:
+                    links_md += f"- [{lk.title}]({lk.url})\n"
+
+            files_md = ""
+            if t.files:
+                files_md = "\n## Attached Files\n"
+                for fl in t.files:
+                    files_md += f"- {fl.filename} (`{fl.file_path}`)\n"
+
+            content = (
+                f"---\nid: ticket_{timestamp}\ntitle: {t.title}\n"
+                f"project: {project.name}\ncreated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"priority: {t.priority or 'medium'}\nstatus: open\n"
+                f"source: kanban_ticket_{t.id}\n---\n\n"
+                f"## Description\n{t.description or '(no description)'}\n"
+                f"{todos_md}{links_md}{files_md}\n"
+                f"---\n*Sent from Kanban board via DecisionsAI*\n"
+            )
+
+            with open(ticket_path, "w", encoding="utf-8") as f:
+                f.write(content)
+
+        return f"Sent ticket #{ticket_id} to project '{project.name}' → {ticket_path}"

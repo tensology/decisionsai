@@ -1,0 +1,100 @@
+<h1>✓ Authentication Successful</h1>
+<p>You have successfully authenticated with Google.</p>
+
+<div style="background-color: #1a2a3c; padding: 20px; border-radius: 5px; margin: 30px 0; max-width: 800px; margin-left: auto; margin-right: auto; width: 100%; box-sizing: border-box;">
+    <h3 style="color: #ffffff; font-size: 16px; margin-top: 0; margin-bottom: 15px;">⚠️ Important: Enable Required APIs</h3>
+    <p style="color: #cccccc; margin: 5px 0 15px 0;">To use all Google Workspace features, you must enable the following APIs in Google Cloud Console:</p>
+    <div style="display: flex; flex-direction: column; gap: 10px;">
+        <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" class="big-button" style="display: inline-block; text-align: center;">Enable Gmail API</a>
+        <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" class="big-button" style="display: inline-block; text-align: center;">Enable Google Drive API</a>
+        <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" class="big-button" style="display: inline-block; text-align: center;">Enable Google Calendar API</a>
+        <a href="https://console.cloud.google.com/apis/library/docs.googleapis.com" target="_blank" class="big-button" style="display: inline-block; text-align: center;">Enable Google Docs API</a>
+    </div>
+    <p style="color: #cccccc; margin-top: 15px; font-size: 12px;">Click each button above to enable the required APIs. After enabling, wait a few minutes for changes to propagate.</p>
+</div>
+
+<div style="background-color: #1a2a3c; padding: 20px; border-radius: 5px; margin: 30px 0; max-width: 800px; margin-left: auto; margin-right: auto; width: 100%; box-sizing: border-box;">
+    <h3 style="color: #ffffff; font-size: 16px; margin-top: 0; margin-bottom: 15px;">🧪 Connection Test</h3>
+    <div style="display: flex; gap: 10px; align-items: center; width: 100%; box-sizing: border-box;">
+        <div id="test-status" style="flex: 1; padding: 12px; border-radius: 5px; background-color: #2a3a4c; color: #cccccc; font-size: 14px; min-width: 0;">Running tests...</div>
+        <button id="toggle-log" onclick="toggleLog()" style="background-color: #000000; color: white; border: none; padding: 8px 12px; border-radius: 5px; cursor: pointer; font-size: 12px; white-space: nowrap; flex-shrink: 0;">Show Log</button>
+    </div>
+    <div id="test-output" style="display: none; background-color: #0f1a2c; padding: 15px; border-radius: 5px; font-family: 'Courier New', monospace; font-size: 13px; color: #cccccc; max-height: 400px; overflow-y: auto; white-space: pre-wrap; word-wrap: break-word; margin-top: 10px; width: 100%; box-sizing: border-box;"></div>
+</div>
+
+<p>You can close this window and return to the settings.</p>
+
+<script>
+    let logVisible = false;
+    let testPassed = false;
+    
+    function toggleLog() {{
+        const outputDiv = document.getElementById('test-output');
+        const toggleBtn = document.getElementById('toggle-log');
+        
+        logVisible = !logVisible;
+        outputDiv.style.display = logVisible ? 'block' : 'none';
+        toggleBtn.textContent = logVisible ? 'Hide Log' : 'Show Log';
+        
+        if (logVisible) {{
+            outputDiv.scrollTop = outputDiv.scrollHeight;
+        }}
+    }}
+    
+    (function() {{
+        const outputDiv = document.getElementById('test-output');
+        const statusDiv = document.getElementById('test-status');
+        const toggleBtn = document.getElementById('toggle-log');
+        
+        const eventSource = new EventSource('/oauth/test-connection-stream');
+        
+        eventSource.onmessage = function(event) {{
+            const data = JSON.parse(event.data);
+            
+            if (data.type === 'output') {{
+                outputDiv.textContent += data.content;
+                if (logVisible) {{
+                    outputDiv.scrollTop = outputDiv.scrollHeight;
+                }}
+            }} else if (data.type === 'status') {{
+                statusDiv.textContent = data.content;
+            }} else if (data.type === 'done') {{
+                testPassed = data.success;
+                statusDiv.textContent = data.content;
+                
+                if (data.success) {{
+                    statusDiv.style.backgroundColor = '#2d5a2d';
+                    statusDiv.style.color = '#90EE90';
+                }} else {{
+                    statusDiv.style.backgroundColor = '#5a2d2d';
+                    statusDiv.style.color = '#ff8888';
+                    // Auto-expand log on failure
+                    if (!logVisible) {{
+                        toggleLog();
+                    }}
+                }}
+                eventSource.close();
+            }} else if (data.type === 'error') {{
+                outputDiv.textContent += '\\nERROR: ' + data.content;
+                statusDiv.textContent = 'Test failed';
+                statusDiv.style.backgroundColor = '#5a2d2d';
+                statusDiv.style.color = '#ff8888';
+                // Auto-expand log on error
+                if (!logVisible) {{
+                    toggleLog();
+                }}
+                eventSource.close();
+            }}
+        }};
+        
+        eventSource.onerror = function(event) {{
+            statusDiv.textContent = 'Connection error. Test may have completed.';
+            statusDiv.style.backgroundColor = '#5a4a2d';
+            statusDiv.style.color = '#ffaa44';
+            eventSource.close();
+        }};
+    }})();
+    
+    autoCloseWindow();
+</script>
+

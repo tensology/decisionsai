@@ -1,0 +1,394 @@
+{% extends "base.html" %}
+
+{% block title %}Chat{% endblock %}
+
+{% block head_styles %}
+<link rel="stylesheet" href="{{ base_path }}/static/css/chat.css">
+{% endblock %}
+
+{% block content %}
+<div class="app-container">
+    <!-- Sidebar -->
+    <div class="sidebar" id="sidebar">
+        <div class="sidebar-header">
+            <button class="new-chat-btn" id="newChatBtn">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M12 5v14M5 12h14"></path>
+                </svg>
+                New chat
+            </button>
+        </div>
+        <div class="sidebar-content" id="chatList">
+            <!-- Chat list will be populated here -->
+        </div>
+        <!-- TTS Player card at bottom of chat list -->
+        <div class="tts-player-card" id="ttsPlayerCard" style="display: none;">
+            <div class="tts-player-header">
+                <span class="tts-player-title">TTS playback</span>
+                <button type="button" class="tts-player-close" id="ttsPlayerClose" title="Close">×</button>
+            </div>
+            <div class="tts-player-body">
+                <div class="tts-player-progress">
+                    <input type="range" class="tts-player-seek" id="ttsPlayerSeek" min="0" max="100" value="0" title="Seek">
+                    <div class="tts-player-time" id="ttsPlayerTime">0:00 / 0:00</div>
+                </div>
+                <div class="tts-player-controls">
+                    <button type="button" class="tts-player-btn tts-player-play" id="ttsPlayerPlay" title="Play"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg></button>
+                    <button type="button" class="tts-player-btn tts-player-pause" id="ttsPlayerPause" title="Pause" style="display: none;"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 19h4V5H6v14zm8-14v14h4V5h-4z"/></svg></button>
+                    <button type="button" class="tts-player-btn tts-player-stop" id="ttsPlayerStop" title="Stop"><svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor"><path d="M6 6h12v12H6z"/></svg></button>
+                    <div class="tts-player-speed-wrap">
+                        <label for="ttsPlayerSpeed" class="tts-player-speed-label">Speed</label>
+                        <select class="tts-player-speed" id="ttsPlayerSpeed" title="Playback speed">
+                            <option value="0.5">0.5×</option>
+                            <option value="0.75">0.75×</option>
+                            <option value="1" selected>1×</option>
+                            <option value="1.25">1.25×</option>
+                            <option value="1.5">1.5×</option>
+                            <option value="1.75">1.75×</option>
+                            <option value="2">2×</option>
+                        </select>
+                    </div>
+                    <button type="button" class="tts-player-btn tts-player-download" id="ttsPlayerDownload" title="Download"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg></button>
+                </div>
+            </div>
+            <audio id="ttsPlayerAudio" preload="metadata"></audio>
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="main-content" id="mainContent">
+        <!-- Chat Settings Header (shown when chat is active) -->
+        <div class="chat-settings-header" id="chatSettingsHeader" style="display: none;">
+            <div class="chat-settings-header-row">
+                <h1 class="chat-settings-title" id="chatTitle">New Chat</h1>
+                <div class="chat-settings-info">
+                    <span class="settings-label">Model:</span>
+                    <span class="settings-value" id="chatProvider">-</span>
+                    <span class="settings-separator">•</span>
+                    <span class="settings-value" id="chatModel">-</span>
+                    <span class="settings-separator" id="voiceSeparator" style="display: none;">•</span>
+                    <span class="settings-label" id="voiceLabel" style="display: none;">Voice:</span>
+                    <span class="settings-value" id="chatVoiceProvider" style="display: none;">-</span>
+                    <span class="settings-separator" id="voiceModelSeparator" style="display: none;">•</span>
+                    <span class="settings-value" id="chatVoiceModel" style="display: none;">-</span>
+                </div>
+                <button type="button" class="header-load-btn" id="headerLoadButton" style="display: none;" title="Load this chat to reply">Load</button>
+            </div>
+        </div>
+
+        <!-- Empty State: branding, setup title, same dropdowns as create-chat modal, prompt. -->
+        <div class="empty-state" id="emptyState">
+            <div class="empty-state-content" id="emptyStateSetup">
+                <h1 class="chat-brand"><span class="chat-brand-decisions">Decisions</span><span class="chat-brand-ai">AI</span></h1>
+                <h2 class="empty-state-setup-title">Setup your Agent</h2>
+                <div class="empty-state-form">
+                    <p class="empty-state-section-label">LLM</p>
+                    <div class="empty-state-row">
+                        <div class="form-group">
+                            <label for="emptyStateLlmProvider">Provider</label>
+                            <select id="emptyStateLlmProvider" class="form-control form-control-select">
+                                <option value="">Loading…</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label for="emptyStateLlmModel">Model</label>
+                            <select id="emptyStateLlmModel" class="form-control form-control-select">
+                                <option value="">Loading…</option>
+                            </select>
+                        </div>
+                    </div>
+                    <p class="empty-state-section-label">Voice</p>
+                    <div class="empty-state-row">
+                        <div class="form-group">
+                            <label for="emptyStateVoiceProvider">Provider</label>
+                            <select id="emptyStateVoiceProvider" class="form-control form-control-select">
+                                <option value="kokoro">Kokoro</option>
+                                <option value="openai">OpenAI TTS</option>
+                                <option value="elevenlabs">ElevenLabs</option>
+                                <option value="qwen3">Qwen3-TTS</option>
+                            </select>
+                        </div>
+                        <div class="form-group form-group-with-play">
+                            <label for="emptyStateVoiceModel">Voice</label>
+                            <div class="voice-select-row">
+                                <select id="emptyStateVoiceModel" class="form-control form-control-select">
+                                    <option value="">Loading…</option>
+                                </select>
+                                <button type="button" id="emptyStateCustomVoiceBtn" class="modal-play-voice-btn" title="Add custom voice" style="display: none;" onclick="openChatCustomVoiceModal('emptyState')">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/></svg>
+                                </button>
+                                <button type="button" id="emptyStateDeleteVoiceBtn" class="modal-play-voice-btn" title="Delete custom voice" style="display: none;" onclick="deleteChatCustomVoice('emptyState')">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                </button>
+                                <button type="button" id="emptyStateEditVoiceBtn" class="modal-play-voice-btn" title="Edit personality" style="display: none;" onclick="editChatCustomVoice('emptyState')">
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                                </button>
+                                <button type="button" id="emptyStatePlayVoiceBtn" class="modal-play-voice-btn" title="Play voice sample">
+                                    <svg id="emptyState_play_icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                                    <svg id="emptyState_stop_icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: none;"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                                    <svg id="emptyState_play_spinner" class="modal-play-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <p class="empty-state-prompt">How can I help you today?</p>
+            </div>
+            <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
+                <p class="empty-state-agent-loading-text">Agent is Loading</p>
+                <div class="empty-state-agent-loading-spinner" aria-hidden="true"></div>
+            </div>
+        </div>
+
+        <!-- Chat Messages -->
+        <div class="chat-messages" id="chatMessages" style="display: none;">
+            <!-- Messages will be populated here -->
+        </div>
+
+        <!-- Load bar (shown when viewing a chat that is not loaded) -->
+        <div class="load-chat-bar" id="loadChatBar" style="display: none;">
+            <span class="load-chat-bar-text">Viewing only. Load this chat to reply.</span>
+            <button type="button" class="load-chat-bar-btn" id="loadChatBarButton">Load</button>
+        </div>
+
+        <!-- Input Area -->
+        <div class="input-container" id="inputContainer">
+            <div class="input-wrapper">
+                <textarea 
+                    id="messageInput" 
+                    class="message-input" 
+                    placeholder="Send message..."
+                    rows="1"
+                ></textarea>
+                <button class="speaker-toggle" id="speakerToggle" type="button" title="Read response aloud (TTS)" aria-pressed="true">
+                    <svg class="speaker-on" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                        <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                    </svg>
+                    <svg class="speaker-off" width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" style="display: none;">
+                        <path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/>
+                    </svg>
+                </button>
+                <button class="send-button" id="sendButton" disabled>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"></path>
+                    </svg>
+                </button>
+            </div>
+            <div class="input-footer">
+                <p class="disclaimer">This is a conversational agent. Please understand that most of the responses are read out and created for Text to Speech output.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chat item context menu (View, Load, Rename, Delete) -->
+<div id="chatContextMenu" class="chat-context-menu" style="display: none;">
+    <button type="button" class="chat-context-menu-item" data-action="view">View</button>
+    <button type="button" class="chat-context-menu-item" data-action="load">Load</button>
+    <button type="button" class="chat-context-menu-item" data-action="rename">Rename</button>
+    <button type="button" class="chat-context-menu-item chat-context-menu-item-danger" data-action="delete">Delete</button>
+</div>
+
+<!-- New Chat Configuration Modal -->
+<div class="modal" id="newChatModal" style="display: none;">
+    <div class="modal-content">
+        <div class="modal-header">
+            <h2>Configure New Chat</h2>
+            <button class="modal-close" id="modalClose">&times;</button>
+        </div>
+        <div class="modal-body">
+            <p class="modal-section-label">LLM</p>
+            <div class="modal-row">
+                <div class="form-group">
+                    <label for="llmProvider">Provider</label>
+                    <select id="llmProvider" class="form-control form-control-select">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label for="llmModel">Model</label>
+                    <select id="llmModel" class="form-control form-control-select">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+            </div>
+            <p class="modal-section-label">Voice</p>
+            <div class="modal-row">
+                <div class="form-group">
+                    <label for="voiceProvider">Provider</label>
+                    <select id="voiceProvider" class="form-control form-control-select">
+                        <option value="kokoro">Kokoro</option>
+                        <option value="openai">OpenAI TTS</option>
+                        <option value="elevenlabs">ElevenLabs</option>
+                        <option value="qwen3">Qwen3-TTS</option>
+                    </select>
+                </div>
+                <div class="form-group form-group-with-play">
+                    <label for="voiceModel">Voice</label>
+                    <div class="voice-select-row">
+                        <select id="voiceModel" class="form-control form-control-select">
+                            <option value="">Loading…</option>
+                        </select>
+                        <button type="button" id="modalCustomVoiceBtn" class="modal-play-voice-btn" title="Add custom voice" style="display: none;" onclick="openChatCustomVoiceModal('modal')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M12 5v14m-7-7h14"/></svg>
+                        </button>
+                        <button type="button" id="modalDeleteVoiceBtn" class="modal-play-voice-btn" title="Delete custom voice" style="display: none;" onclick="deleteChatCustomVoice('modal')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                        </button>
+                        <button type="button" id="modalEditVoiceBtn" class="modal-play-voice-btn" title="Edit personality" style="display: none;" onclick="editChatCustomVoice('modal')">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+                        </button>
+                        <button type="button" id="modalPlayVoiceBtn" class="modal-play-voice-btn" title="Play voice sample">
+                            <svg id="modal_play_icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+                            <svg id="modal_stop_icon" width="16" height="16" viewBox="0 0 24 24" fill="currentColor" style="display: none;"><rect x="6" y="6" width="12" height="12" rx="1"/></svg>
+                            <svg id="modal_play_spinner" class="modal-play-spinner" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" style="display: none;"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+            <div class="form-group">
+                <label for="startingQuestion">Starting question</label>
+                <textarea id="startingQuestion" class="form-control form-control-textarea" rows="3" placeholder="Type your first question…"></textarea>
+            </div>
+        </div>
+        <div class="modal-footer">
+            <button class="btn btn-secondary" id="modalCancel">Cancel</button>
+            <button class="btn btn-primary" id="modalCreate">Create Chat</button>
+        </div>
+    </div>
+</div>
+
+<!-- Custom Voice Modal (shared with Settings) -->
+<div id="chatCustomVoiceModal" class="fixed inset-0 z-[1100] hidden items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-[#565869]">
+            <div>
+                <h3 class="text-lg font-semibold text-white">Add Custom Voice</h3>
+                <p id="chatCv_providerLabel" class="text-xs text-gray-400 mt-0.5"></p>
+            </div>
+            <button type="button" onclick="closeChatCustomVoiceModal()" class="text-gray-400 hover:text-white transition-colors text-xl leading-none">&times;</button>
+        </div>
+        <form id="chatCv_form" class="px-6 py-5 space-y-4" onsubmit="return submitChatCustomVoice(event)">
+            <input type="hidden" id="chatCv_provider" value="">
+            <input type="hidden" id="chatCv_context" value="">
+            <div>
+                <label for="chatCv_name" class="block text-sm font-medium text-[#ececf1] mb-1">Voice Name</label>
+                <input type="text" id="chatCv_name" required maxlength="60" placeholder="e.g. My Voice"
+                       class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500">
+            </div>
+            <!-- Audio Source Toggle -->
+            <div>
+                <label class="block text-sm font-medium text-[#ececf1] mb-2">Voice Sample</label>
+                <div class="flex items-center gap-1 bg-[#0d1117] border border-[#565869] rounded-md p-0.5 w-fit mb-3">
+                    <button type="button" id="chatCv_mode_upload" onclick="setChatCvAudioMode('upload')"
+                            class="px-4 py-1.5 text-sm rounded transition-colors bg-[#10a37f] text-white">Upload File</button>
+                    <button type="button" id="chatCv_mode_record" onclick="setChatCvAudioMode('record')"
+                            class="px-4 py-1.5 text-sm rounded transition-colors text-gray-400 hover:text-white">Record Voice</button>
+                </div>
+            </div>
+            <div id="chatCv_uploadPanel">
+                <input type="file" id="chatCv_audio" multiple accept=".wav,.mp3,.m4a,.ogg,.flac,.webm"
+                       class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md file:border file:border-[#565869] file:bg-[#454655] file:text-[#ececf1] file:text-xs file:cursor-pointer file:hover:bg-[#565869] file:transition-colors cursor-pointer">
+                <p class="text-xs text-gray-500 mt-1">Upload audio clips of the voice to clone</p>
+            </div>
+            <div id="chatCv_recordPanel" class="hidden">
+                <div class="bg-[#0d1117] border border-[#565869] rounded-lg p-4">
+                    <div id="chatCv_recReady">
+                        <p class="text-sm text-[#ececf1] mb-2">Read the following passage aloud in your natural voice:</p>
+                        <div class="bg-[#161b33] border border-[#2a2f4a] rounded-md p-3 mb-3">
+                            <p class="text-sm text-gray-300 italic leading-relaxed">"The sun slowly set behind the mountains, painting the sky in shades of orange and purple. A gentle breeze carried the scent of wildflowers across the valley, while birds sang their evening songs from the treetops. It was the kind of moment that made everything feel peaceful."</p>
+                        </div>
+                        <button type="button" onclick="startChatCvRecording()" class="flex items-center gap-2 px-4 py-2 text-sm text-white bg-red-600 rounded-md hover:bg-red-700 transition-colors">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><circle cx="12" cy="12" r="8"/></svg> Start Recording
+                        </button>
+                    </div>
+                    <div id="chatCv_recActive" class="hidden">
+                        <p class="text-sm text-[#ececf1] mb-2">Recording... read the passage now:</p>
+                        <div class="bg-[#161b33] border border-[#2a2f4a] rounded-md p-3 mb-3">
+                            <p class="text-sm text-gray-300 italic leading-relaxed">"The sun slowly set behind the mountains, painting the sky in shades of orange and purple. A gentle breeze carried the scent of wildflowers across the valley, while birds sang their evening songs from the treetops. It was the kind of moment that made everything feel peaceful."</p>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <div class="flex items-center gap-2">
+                                <span class="inline-block w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+                                <span class="text-sm text-red-400 font-mono" id="chatCv_recTimer">0:00</span>
+                                <span class="text-xs text-gray-500">/ 0:12</span>
+                            </div>
+                            <div class="flex-1 h-2 bg-[#161b33] rounded-full overflow-hidden">
+                                <div id="chatCv_recLevel" class="h-full bg-[#10a37f] rounded-full transition-all duration-75" style="width: 0%"></div>
+                            </div>
+                            <button type="button" onclick="stopChatCvRecording()" class="px-3 py-1.5 text-xs text-white bg-[#454655] border border-[#565869] rounded-md hover:bg-[#565869] transition-colors">Stop</button>
+                        </div>
+                    </div>
+                    <div id="chatCv_recDone" class="hidden">
+                        <div class="flex items-center justify-between">
+                            <div class="flex items-center gap-2">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10a37f" stroke-width="2.5"><path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                                <span class="text-sm text-[#ececf1]">Recording captured</span>
+                                <span class="text-xs text-gray-500" id="chatCv_recDuration"></span>
+                            </div>
+                            <div class="flex items-center gap-2">
+                                <button type="button" onclick="playChatCvRecording()" id="chatCv_recPlayBtn" class="px-3 py-1.5 text-xs text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md hover:bg-[#565869] transition-colors">▶ Play</button>
+                                <button type="button" onclick="retakeChatCvRecording()" class="px-3 py-1.5 text-xs text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md hover:bg-[#565869] transition-colors">↻ Retake</button>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div>
+                <label for="chatCv_personality" class="block text-sm font-medium text-[#ececf1] mb-1">Personality <span class="text-gray-500 font-normal">(optional)</span></label>
+                <textarea id="chatCv_personality" rows="2" maxlength="1000" placeholder="e.g. You speak with a warm Australian accent."
+                          class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500 resize-none"></textarea>
+            </div>
+            <div id="chatCv_genderRow">
+                <label class="block text-sm font-medium text-[#ececf1] mb-2">Voice Gender</label>
+                <div class="flex items-center gap-1 bg-[#0d1117] border border-[#565869] rounded-md p-0.5 w-fit">
+                    <button type="button" id="chatCv_genderFemale" onclick="setChatCvGender('female')" class="px-4 py-1.5 text-sm rounded transition-colors bg-[#10a37f] text-white">Female</button>
+                    <button type="button" id="chatCv_genderMale" onclick="setChatCvGender('male')" class="px-4 py-1.5 text-sm rounded transition-colors text-gray-400 hover:text-white">Male</button>
+                </div>
+                <input type="hidden" id="chatCv_gender" value="female">
+            </div>
+            <p id="chatCv_error" class="text-xs text-red-400 hidden"></p>
+            <div class="flex justify-end gap-3 pt-2">
+                <button type="button" onclick="closeChatCustomVoiceModal()" class="px-4 py-2 text-sm text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md hover:bg-[#565869] transition-colors">Cancel</button>
+                <button type="submit" id="chatCv_submitBtn" disabled class="px-4 py-2 text-sm text-white bg-[#10a37f] rounded-md hover:bg-[#0d8c6d] transition-colors disabled:opacity-50 disabled:cursor-not-allowed">Create Voice</button>
+            </div>
+        </form>
+        <div id="chatCv_processing" class="hidden px-6 py-8 text-center">
+            <svg class="animate-spin mx-auto mb-3" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#10a37f" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.3"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+            <p id="chatCv_processingText" class="text-sm text-[#ececf1]">Processing voice clone...</p>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Custom Voice Modal (chat) -->
+<div id="chatEditVoiceModal" class="fixed inset-0 z-[1100] hidden items-center justify-center bg-black/60 backdrop-blur-sm">
+    <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;">
+        <div class="flex items-center justify-between px-6 py-4 border-b border-[#565869]">
+            <div>
+                <h3 class="text-lg font-semibold text-white">Edit Voice</h3>
+                <p id="chatEditVoiceName" class="text-xs text-gray-400 mt-0.5"></p>
+            </div>
+            <button type="button" onclick="closeChatEditVoiceModal()" class="text-gray-400 hover:text-white transition-colors text-xl leading-none">&times;</button>
+        </div>
+        <form id="chatEditVoiceForm" class="px-6 py-5 space-y-4" onsubmit="return submitChatEditVoice(event)">
+            <input type="hidden" id="chatEditVoiceId" value="">
+            <div>
+                <label for="chatEditVoicePersonality" class="block text-sm font-medium text-[#ececf1] mb-1">Personality <span class="text-gray-500 font-normal">(optional)</span></label>
+                <textarea id="chatEditVoicePersonality" rows="4" maxlength="1000" placeholder="e.g. You speak with a warm Australian accent."
+                          class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500 resize-none"></textarea>
+                <p class="text-xs text-gray-500 mt-1">Appended to the agent's system prompt when this voice is active.</p>
+            </div>
+            <p id="chatEditVoiceError" class="text-xs text-red-400 hidden"></p>
+            <div class="flex justify-end gap-3 pt-2">
+                <button type="button" onclick="closeChatEditVoiceModal()" class="px-4 py-2 text-sm text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md hover:bg-[#565869] transition-colors">Cancel</button>
+                <button type="submit" id="chatEditVoiceSubmitBtn" class="px-4 py-2 text-sm text-white bg-[#10a37f] rounded-md hover:bg-[#0d8c6d] transition-colors">Save</button>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block body_scripts %}
+<script src="{{ base_path }}/static/js/chat.js"></script>
+<script src="/static/shared/js/provider_model_info.js"></script>
+{% endblock %}

@@ -1,0 +1,46 @@
+{
+  "name": "decisionsai",
+  "displayName": "DecisionsAI",
+  "description": "Cursor Ticket Connector into DecisionsAI",
+  "version": "0.0.1",
+  "publisher": "decisionsai",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/tensology/decisionsai.git"
+  },
+  "engines": {
+    "vscode": "^1.105.1"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./extension.js",
+  "contributes": {
+    "commands": [{
+      "command": "decisionsai.activateTicketWatcher",
+      "title": "Activate DecisionsAI Tickets Watcher"
+    }],
+    "configuration": {
+      "title": "DecisionsAI",
+      "properties": {}
+    }
+  },
+  "scripts": {
+    "lint": "eslint .",
+    "pretest": "npm run lint",
+    "test": "vscode-test",
+    "package": "vsce package"
+  },
+  "devDependencies": {
+    "@types/vscode": "^1.105.1",
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "eslint": "^9.39.2",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "@vscode/vsce": "^2.26.0"
+  }
+}

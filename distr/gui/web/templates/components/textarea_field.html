@@ -1,0 +1,24 @@
+{# Reusable textarea field component
+   Usage: {% include 'components/textarea_field.html' with {
+       label: "Description",
+       id: "textarea_id",
+       placeholder: "Enter description",
+       value: "",
+       rows: 4
+   } %}
+#}
+<div class="mb-4">
+    <label for="{{ id }}" class="block text-sm font-medium text-gray-300 mb-2">
+        {{ label }}
+    </label>
+    <textarea
+        id="{{ id }}"
+        name="{{ id }}"
+        rows="{{ rows|default(4) }}"
+        placeholder="{{ placeholder|default('') }}"
+        class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+               focus:outline-none focus:border-[#10a37f] transition-colors
+               hover:border-[#7a7c8c] resize-vertical"
+        {{ 'disabled' if disabled else '' }}
+    >{{ value|default('') }}</textarea>
+</div>

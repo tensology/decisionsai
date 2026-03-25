@@ -1,0 +1,30 @@
+{# Reusable select field component
+   Usage: {% include 'components/select_field.html' with {
+       label: "Select Option",
+       id: "select_id",
+       options: [
+           {value: "opt1", label: "Option 1"},
+           {value: "opt2", label: "Option 2"}
+       ],
+       selected: "opt1"
+   } %}
+#}
+<div class="mb-4">
+    <label for="{{ id }}" class="block text-sm font-medium text-gray-300 mb-2">
+        {{ label }}
+    </label>
+    <select
+        id="{{ id }}"
+        name="{{ id }}"
+        class="w-full bg-[#0e1638] border border-[#565869] rounded-md px-4 py-2 text-white
+               focus:outline-none focus:border-[#10a37f] transition-colors
+               hover:border-[#7a7c8c] cursor-pointer"
+        {{ 'disabled' if disabled else '' }}
+    >
+        {% for option in options %}
+        <option value="{{ option.value }}" {% if option.value == selected %}selected{% endif %}>
+            {{ option.label }}
+        </option>
+        {% endfor %}
+    </select>
+</div>

@@ -1,0 +1,205 @@
+
+<!-- Google OAuth Setup Modal -->
+<div id="google_setup_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 google_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-semibold text-white">Google OAuth Setup</h2>
+                <button type="button" class="google_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5 space-y-4 text-sm text-[#ececf1]">
+                <div class="bg-[#f97316]/20 border border-[#f97316]/40 rounded-md p-3">
+                    <p class="font-semibold text-[#f97316]">⚠️ Use the exact URLs shown below</p>
+                    <p class="text-xs text-[#ececf1] mt-1">The port may differ. These URLs reflect your actual server.</p>
+                </div>
+
+                <div class="text-center">
+                    <a href="https://console.cloud.google.com/auth/clients" target="_blank" rel="noopener"
+                       class="inline-block px-6 py-2.5 bg-[#4285F4] hover:bg-[#3367D6] text-white rounded-md font-medium transition-colors">
+                        Open Google Cloud Console
+                    </a>
+                </div>
+
+                <div class="space-y-3">
+                    <div class="bg-[#0f1a2c] rounded-md p-4">
+                        <p class="font-semibold text-white mb-1">1. Create OAuth 2.0 Client ID</p>
+                        <p class="text-[#9ca3af]">Create Credentials → OAuth client ID → select "Web application"</p>
+                    </div>
+                    <div class="bg-[#0f1a2c] rounded-md p-4">
+                        <p class="font-semibold text-white mb-1">2. Authorized JavaScript origins</p>
+                        <div class="flex items-center gap-2 mt-2 bg-[#1a1f3a] border border-[#565869] rounded px-3 py-2">
+                            <code id="google_js_origin" class="text-[#4a9eff] flex-1 break-all"></code>
+                            <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('google_js_origin').textContent)" class="px-2 py-1 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded text-xs">Copy</button>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f1a2c] rounded-md p-4">
+                        <p class="font-semibold text-white mb-1">3. Authorized redirect URIs</p>
+                        <div class="flex items-center gap-2 mt-2 bg-[#1a1f3a] border border-[#565869] rounded px-3 py-2">
+                            <code id="google_redirect_uri" class="text-[#4a9eff] flex-1 break-all"></code>
+                            <button type="button" onclick="navigator.clipboard.writeText(document.getElementById('google_redirect_uri').textContent)" class="px-2 py-1 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded text-xs">Copy</button>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f1a2c] rounded-md p-4">
+                        <p class="font-semibold text-white mb-1">4. Enable Required APIs</p>
+                        <p class="text-[#9ca3af] mb-2">Enable these in Google Cloud Console:</p>
+                        <div class="flex flex-wrap gap-2">
+                            <a href="https://console.cloud.google.com/apis/library/gmail.googleapis.com" target="_blank" rel="noopener" class="px-3 py-1.5 bg-[#4285F4] hover:bg-[#3367D6] text-white rounded text-xs font-medium transition-colors">Gmail API</a>
+                            <a href="https://console.cloud.google.com/apis/library/drive.googleapis.com" target="_blank" rel="noopener" class="px-3 py-1.5 bg-[#4285F4] hover:bg-[#3367D6] text-white rounded text-xs font-medium transition-colors">Drive API</a>
+                            <a href="https://console.cloud.google.com/apis/library/calendar-json.googleapis.com" target="_blank" rel="noopener" class="px-3 py-1.5 bg-[#4285F4] hover:bg-[#3367D6] text-white rounded text-xs font-medium transition-colors">Calendar API</a>
+                            <a href="https://console.cloud.google.com/apis/library/docs.googleapis.com" target="_blank" rel="noopener" class="px-3 py-1.5 bg-[#4285F4] hover:bg-[#3367D6] text-white rounded text-xs font-medium transition-colors">Docs API</a>
+                        </div>
+                    </div>
+                    <div class="bg-[#0f1a2c] rounded-md p-4">
+                        <p class="font-semibold text-white mb-1">5. Download &amp; upload your JSON file</p>
+                        <p class="text-[#9ca3af] mb-3">Download the OAuth client JSON from Google, then drop it here:</p>
+                        <div id="google_drop_zone" class="border-2 border-dashed border-[#565869] rounded-lg p-6 text-center cursor-pointer hover:border-[#4a9eff] transition-colors">
+                            <p class="text-[#9ca3af]">Drag &amp; drop <code>google_oauth_client_secret.json</code> here</p>
+                            <p class="text-[#565869] text-xs mt-1">or click to browse</p>
+                            <input type="file" id="google_file_input" accept=".json" class="hidden">
+                        </div>
+                        <p id="google_upload_status" class="text-sm mt-2 hidden"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ollama Model Browser Modal (download button opens this) -->
+<div id="ollama_browser_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60" id="ollama_browser_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col pointer-events-auto" id="ollama_browser_modal_content">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 id="ollama_browser_modal_title" class="text-lg font-semibold text-white">Download Ollama models</h2>
+                <button type="button" id="ollama_browser_modal_close" class="p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="p-5 flex-shrink-0 flex gap-2">
+                <input type="text" id="ollama_browser_search" placeholder="Search models..." class="flex-1 bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f]">
+                <button type="button" id="ollama_browser_refresh" class="px-4 py-2 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded-md text-sm font-medium transition-colors">Refresh library</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5 pt-0">
+                <div id="ollama_browser_list" class="ollama-browser-list-container">
+                    <p class="text-[#9ca3af] text-sm">Loading...</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ollama Download in progress modal (focused download experience) -->
+<div id="ollama_download_modal" class="fixed inset-0 z-[55] hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/70 ollama_download_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-md w-full p-6 pointer-events-auto" id="ollama_download_modal_content">
+            <h3 class="text-lg font-semibold text-white mb-1" id="ollama_download_modal_title">Downloading model</h3>
+            <p class="text-[#9ca3af] text-sm mb-4" id="ollama_download_modal_model"></p>
+            <div class="flex items-center gap-3 py-4" id="ollama_download_modal_progress">
+                <div class="ollama-download-spinner w-8 h-8 border-2 border-[#565869] border-t-[#10a37f] rounded-full animate-spin flex-shrink-0"></div>
+                <p class="text-[#ececf1] text-sm" id="ollama_download_modal_status">Starting download...</p>
+            </div>
+            <div id="ollama_download_modal_done" class="hidden py-2">
+                <p class="text-sm" id="ollama_download_modal_result"></p>
+            </div>
+            <div class="flex justify-end gap-2 pt-4">
+                <button type="button" id="ollama_download_modal_close" class="px-4 py-2 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded-md text-sm font-medium transition-colors hidden">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Jira List Modal (manage accounts: list only) -->
+<div id="jira_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 jira_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-semibold text-white">Jira Accounts</h2>
+                <button type="button" class="jira_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5">
+                <div id="jira_accounts_list" class="mb-4 text-sm text-[#ececf1]"></div>
+                <button type="button" id="jira_add_btn" class="px-4 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium">Add Jira Account</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Jira Add/Edit Modal (form only) -->
+<div id="jira_form_modal" class="fixed inset-0 z-[60] hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 jira_form_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-semibold text-white" id="jira_form_title">Add Jira Account</h2>
+                <button type="button" class="jira_form_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5 space-y-3">
+                <div><label class="block text-[#9ca3af] text-sm mb-1">Account Name</label><input type="text" id="jira_account_name" placeholder="e.g. Work Jira" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"></div>
+                <div><label class="block text-[#9ca3af] text-sm mb-1">Server URL</label><input type="text" id="jira_server_url" placeholder="e.g. https://your-domain.atlassian.net" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"><div class="api-key-info mt-1">Your Jira instance URL (e.g. <a href="https://www.atlassian.com/software/jira" target="_blank" rel="noopener">Atlassian Cloud</a> or your self-hosted URL).</div></div>
+                <div><label class="block text-[#9ca3af] text-sm mb-1">Email</label><input type="text" id="jira_email" placeholder="your.email@example.com" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"></div>
+                <div><label class="block text-[#9ca3af] text-sm mb-1">API Token</label><input type="password" id="jira_api_token" placeholder="Your API token" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"><div class="api-key-info mt-1">Create an API token at <a href="https://id.atlassian.com/manage-profile/security/api-tokens" target="_blank" rel="noopener">id.atlassian.com</a> → Manage account → Security → API tokens.</div></div>
+                <p id="jira_form_status" class="text-sm"></p>
+                <div class="flex gap-2 pt-2"><button type="button" id="jira_validate_save_btn" class="px-4 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium">Validate &amp; Save</button><button type="button" id="jira_form_cancel" class="px-4 py-2 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded-md text-sm">Cancel</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Trello List Modal (manage accounts: list only) -->
+<div id="trello_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 trello_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-2xl w-full max-h-[90vh] flex flex-col pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-semibold text-white">Trello Accounts</h2>
+                <button type="button" class="trello_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5">
+                <div id="trello_accounts_list" class="mb-4 text-sm text-[#ececf1]"></div>
+                <button type="button" id="trello_add_btn" class="px-4 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium">Add Trello Account</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Trello Add/Edit Modal (form only) -->
+<div id="trello_form_modal" class="fixed inset-0 z-[60] hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 trello_form_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-xl w-full max-h-[90vh] flex flex-col overflow-hidden pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 class="text-lg font-semibold text-white" id="trello_form_title">Add Trello Account</h2>
+                <button type="button" class="trello_form_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5 space-y-3">
+                <div><label class="block text-[#9ca3af] text-sm mb-1">Account Name</label><input type="text" id="trello_account_name" placeholder="e.g. Work Trello" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"></div>
+                <div><label class="block text-[#9ca3af] text-sm mb-1">API Key</label><input type="text" id="trello_api_key" placeholder="Your API key" class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"><div class="api-key-info mt-1">Get your API key from <a href="https://trello.com/app-key" target="_blank" rel="noopener">trello.com/app-key</a>.</div></div>
+                <div><label class="block text-[#9ca3af] text-sm mb-1">API Token</label><div class="flex gap-2"><input type="password" id="trello_api_token" placeholder="Paste token after generating" class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm"><button type="button" id="trello_generate_token_btn" class="px-3 py-2 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm whitespace-nowrap">Generate Token</button></div><div class="api-key-info mt-1">Click &quot;Generate Token&quot; to open Trello authorization; after approving, paste the token here.</div></div>
+                <p id="trello_form_status" class="text-sm"></p>
+                <div class="flex gap-2 pt-2"><button type="button" id="trello_validate_save_btn" class="px-4 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium">Validate &amp; Save</button><button type="button" id="trello_form_cancel" class="px-4 py-2 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded-md text-sm">Cancel</button></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Telegram Connect Modal -->
+<div id="telegram_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 telegram_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-md w-full pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-white">Connect Telegram</h2>
+                <button type="button" class="telegram_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="p-5 space-y-4">
+                <p class="text-sm text-[#ececf1]">Scan the QR code with your Telegram app: Settings → Devices → Link Desktop Device</p>
+                <div id="telegram_qr_container" class="flex justify-center bg-white rounded-lg p-4 min-h-[200px] items-center"><p class="text-[#565869]">Loading QR...</p></div>
+                <p id="telegram_status" class="text-sm text-[#9ca3af] text-center"></p>
+                <a id="telegram_link" href="#" target="_blank" rel="noopener" class="hidden text-center text-[#0088cc] text-sm block">Or open link in Telegram</a>
+            </div>
+        </div>
+    </div>
+</div>
+

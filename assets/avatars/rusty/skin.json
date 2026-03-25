@@ -1,0 +1,215 @@
+{
+  "type": "avatar",
+  "name": "Rusty",
+  "rendering": {
+    "shape": "square",
+    "border": false,
+    "shadow": false,
+    "glow_on_hold": false,
+    "image_scale": 1,
+    "image_offset_x": 0,
+    "image_offset_y": 0,
+    "chroma_key": [
+      214,
+      216,
+      215
+    ],
+    "chroma_threshold": 35
+  },
+  "events": {
+    "idle": {
+      "animation": "idle.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "hands_free_listening": {
+      "animation": "idle-thinking.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "ptt_active": {
+      "animation": "needs-attention.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "dictation": {
+      "animation": "working.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "recording_action": {
+      "animation": "working.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "recording",
+      "playback": "pingpong"
+    },
+    "file_drop_success": {
+      "animation": "needs-attention.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "tts_response": {
+      "animation": "thinking.webm",
+      "show_player": false,
+      "show_chat_bubble": true,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "running_action": {
+      "animation": "working.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "running_step_runner": {
+      "animation": "working.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "snippet_copied": {
+      "animation": "needs-attention.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "thinking": {
+      "animation": "thinking.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "needs_attention": {
+      "animation": "needs-attention.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    }
+  },
+  "transitions": {
+    "idle-thinking": "idle-thinking.webm",
+    "thinking-idle": "thinking-idle.webm",
+    "idle-working": "idle-working.webm",
+    "working-idle": "working-idle.webm",
+    "idle-needs-attention": "idle-needs-attention.webm",
+    "needs-attention-idle": "needs-attention-idle.webm",
+    "thinking-working": "thinking-working.webm",
+    "working-thinking": "working-thinking.webm",
+    "thinking-needs-attention": "thinking-needs-attention.webm",
+    "needs-attention-thinking": "needs-attention-thinking.webm",
+    "working-needs-attention": "working-needs-attention.webm",
+    "needs-attention-working": "needs-attention-working.webm"
+  }
+}

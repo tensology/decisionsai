@@ -1,0 +1,145 @@
+"""
+Automation Workflow database models.
+
+Replaces the old Step Runner. An AutoWorkflow is a reusable, schedulable
+sequence of steps. Each step IS a single action with validation and routing.
+
+Named "Auto" to avoid conflict with the existing Workflow model (template/job card system).
+"""
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy.orm import relationship
+from . import Base
+from datetime import datetime
+
+
+class AutoWorkflow(Base):
+    """A workflow definition — a named, reusable sequence of steps."""
+    __tablename__ = 'auto_workflows'
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False, default='Untitled Workflow')
+    description = Column(Text, nullable=True)
+    status = Column(String, default='draft')  # draft, active, paused, archived
+
+    # Scheduling
+    schedule_enabled = Column(Boolean, default=False)
+    schedule_preset = Column(String, nullable=True)  # hourly, daily, weekly, custom
+    schedule_cron = Column(String, nullable=True)
+    schedule_time = Column(String, nullable=True)  # HH:MM
+    schedule_days = Column(String, nullable=True)  # comma-separated weekday numbers
+    schedule_timezone = Column(String, nullable=True)
+    next_run_at = Column(DateTime, nullable=True)
+    last_run_at = Column(DateTime, nullable=True)
+
+    created_date = Column(DateTime, default=datetime.utcnow)
+    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    start_step_position = Column(Integer, default=0)
+
+    steps = relationship(
+        "AutoWorkflowStep", back_populates="workflow",
+        cascade="all, delete-orphan", order_by="AutoWorkflowStep.position"
+    )
+    variables = relationship(
+        "AutoWorkflowVariable", back_populates="workflow",
+        cascade="all, delete-orphan",
+    )
+    runs = relationship(
+        "AutoWorkflowRun", back_populates="workflow",
+        cascade="all, delete-orphan", order_by="AutoWorkflowRun.started_at.desc()"
+    )
+
+
+class AutoWorkflowStep(Base):
+    """A step within a workflow — one action with validation and routing."""
+    __tablename__ = 'auto_workflow_steps'
+
+    id = Column(Integer, primary_key=True)
+    workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
+    position = Column(Integer, default=0)
+    name = Column(String, nullable=False, default='New Step')
+    description = Column(Text, nullable=True)
+
+    # The action itself (one action per step)
+    action_type = Column(String, default='agent_instruction')  # agent_instruction, run_command, set_variable, http_request
+    instruction = Column(Text, nullable=True)  # The main instruction / action config
+
+    # Validation
+    validation_type = Column(String, default='none')  # none, text_match, screenshot_compare, llm_judgment, rule_based
+    validation_prompt = Column(Text, nullable=True)  # What passes validation (instruction for the validator)
+    screenshot_path = Column(String, nullable=True)  # Path to reference screenshot for screenshot_compare
+
+    # Recording (shared with Actions infrastructure)
+    recording_filename = Column(String, nullable=True)
+    action_id = Column(Integer, ForeignKey('actions.id'), nullable=True)  # Linked Action entity
+
+    linked_action = relationship("Action", foreign_keys=[action_id])
+
+    # Routing: null=end (default), -1=end (explicit), N=go to step id N
+    routing_mode = Column(String, default='static')  # static | agent_decision
+    routing_prompt = Column(Text, nullable=True)  # Instructions for agent when routing_mode=agent_decision
+    on_pass_goto = Column(Integer, nullable=True)
+    on_fail_goto = Column(Integer, nullable=True)
+    wait_before_next = Column(Integer, default=0)  # seconds to wait before moving to next step
+
+    # Code storage for execute_code/playwright steps
+    code = Column(Text, nullable=True)  # Generated/edited code for execute_code/playwright
+    validation_code = Column(Text, nullable=True)  # Playwright validation script
+    linked_project_id = Column(Integer, nullable=True)  # Optional project link for context
+    wait_for_continue = Column(Boolean, default=False)  # When True, step enters 'waiting' after action completes
+
+    # Execution controls
+    max_retries = Column(Integer, default=0)
+    timeout_seconds = Column(Integer, default=300)
+    require_approval = Column(Boolean, default=False)
+
+    # Runtime state
+    status = Column(String, default='pending')  # pending, running, passed, failed, cancelled, skipped, waiting
+    result = Column(Text, nullable=True)  # LLM response / execution result
+    created_date = Column(DateTime, default=datetime.utcnow)
+    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    workflow = relationship("AutoWorkflow", back_populates="steps")
+
+
+class AutoWorkflowVariable(Base):
+    """A variable scoped to a workflow, persists across steps within a run."""
+    __tablename__ = 'auto_workflow_variables'
+
+    id = Column(Integer, primary_key=True)
+    workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
+    name = Column(String, nullable=False)
+    default_value = Column(Text, nullable=True, default='')
+    description = Column(Text, nullable=True)
+
+    workflow = relationship("AutoWorkflow", back_populates="variables")
+
+
+class AutoWorkflowStepResult(Base):
+    """History of step execution results — one row per step execution."""
+    __tablename__ = 'auto_workflow_step_results'
+
+    id = Column(Integer, primary_key=True)
+    step_id = Column(Integer, ForeignKey('auto_workflow_steps.id'), nullable=False)
+    run_id = Column(Integer, ForeignKey('auto_workflow_runs.id'), nullable=True)
+    agent_response = Column(Text, nullable=True)
+    status = Column(String, default='pending')  # pending, passed, failed, cancelled
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    step = relationship("AutoWorkflowStep", backref="results")
+    run = relationship("AutoWorkflowRun", backref="step_results")
+
+
+class AutoWorkflowRun(Base):
+    """Record of a workflow execution."""
+    __tablename__ = 'auto_workflow_runs'
+
+    id = Column(Integer, primary_key=True)
+    workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
+    started_at = Column(DateTime, default=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+    status = Column(String, default='running')  # running, completed, failed, cancelled, waiting
+    current_step_id = Column(Integer, nullable=True)  # Which step is currently executing
+    run_data = Column(Text, nullable=True)  # JSON: step results
+    variable_values = Column(Text, nullable=True)  # JSON: variable values at end
+
+    workflow = relationship("AutoWorkflow", back_populates="runs")

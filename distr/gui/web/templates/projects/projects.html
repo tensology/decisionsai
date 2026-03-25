@@ -1,0 +1,159 @@
+{% extends "base.html" %}
+
+{% block title %}Projects{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-6 py-8 max-w-7xl flex gap-6">
+    <!-- Left panel: search + project list + Add -->
+    <div class="w-80 flex-shrink-0 flex flex-col gap-4">
+        <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
+            <input type="text" id="projects-search" placeholder="Search projects..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+            </div>
+        <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
+            <div id="projects-list" class="flex-1 overflow-y-auto space-y-2">
+                <p class="text-sm text-gray-400">Loading projects...</p>
+            </div>
+            <button type="button" id="project-add" class="mt-4 w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Project</button>
+        </div>
+    </div>
+
+    <!-- Project list context menu (right-click) -->
+    <div id="project-context-menu" class="fixed hidden z-50 min-w-[140px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+        <button type="button" class="project-ctx-use w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Use</button>
+        <button type="button" class="project-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Edit</button>
+        <button type="button" class="project-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">Delete</button>
+    </div>
+
+    <!-- Right panel: empty state or detail form -->
+    <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+        <!-- Empty state -->
+        <div id="projects-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
+            <p class="text-gray-400 text-sm max-w-md mb-6">Projects help you organize context and files for your work. Each project can have multiple context items (text blocks) and linked files. Use trigger words to quickly reference projects in conversations.</p>
+            <button type="button" id="project-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Project</button>
+        </div>
+
+        <!-- Detail form (hidden until project selected) -->
+        <div id="projects-detail" class="hidden flex-1 flex flex-col min-h-0">
+            <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between">
+                <h2 id="project-detail-title" class="text-lg font-semibold text-white">Project</h2>
+                <div class="flex gap-2">
+                    <button type="button" id="project-use" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm">Use</button>
+                    <button type="button" id="project-update" class="px-4 py-2 rounded-lg bg-[#f97316] text-white hover:bg-[#ea580c] active:scale-[0.98] transition-colors text-sm font-medium shadow-sm border border-[#ea580c]/30">Update</button>
+                    <button type="button" id="project-remove" class="px-4 py-2 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 text-sm">Remove</button>
+                </div>
+            </div>
+            <div class="flex-1 overflow-hidden flex flex-col">
+                <div class="projects-tabs border-b border-white/20 px-6 flex gap-1">
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="details">Details</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="board">Board</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="startup">Startup Instructions</button>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                    <!-- Details tab -->
+                    <div id="tab-details" class="project-tab-pane space-y-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Name</label>
+                            <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Description</label>
+                            <input type="text" id="detail-description" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Folder location</label>
+                            <div class="flex gap-2">
+                                <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
+                                <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
+                            </div>
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
+                            <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300">
+                                <!-- Badges rendered by JS; add input below -->
+                            </div>
+                            <input type="text" id="detail-triggers-input" class="mt-2 w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="Type a word, then Enter or comma to add">
+                        </div>
+                        <div>
+                            <div class="flex items-center justify-between mb-2">
+                                <label class="block text-sm text-gray-400">Context items &amp; files</label>
+                                <div class="flex gap-2">
+                                    <button type="button" id="context-item-add" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Add Context Item</button>
+                                    <button type="button" id="file-upload-btn" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Upload file</button>
+                                    <input type="file" id="file-upload-input" class="hidden" multiple>
+                                </div>
+                            </div>
+                            <p class="text-xs text-gray-500 mb-2">Context items: text chunks. Files: upload PDFs, docs, etc. as project context.</p>
+                            <div id="detail-items-table" class="border border-white/20 rounded overflow-hidden">
+                                <table class="w-full text-sm">
+                                    <thead class="bg-[#152054] text-left">
+                                        <tr><th class="px-3 py-2 text-gray-400 font-medium">Type</th><th class="px-3 py-2 text-gray-400 font-medium">Title / Name</th><th class="px-3 py-2 text-gray-400 font-medium">Description / Preview</th><th class="px-3 py-2 text-gray-400 font-medium">Path</th><th class="px-3 py-2 text-gray-400 font-medium w-28">Actions</th></tr>
+                                    </thead>
+                                    <tbody id="detail-items-body" class="text-gray-300"></tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+                    <!-- Board tab -->
+                    <div id="tab-board" class="project-tab-pane hidden space-y-4">
+                        <div class="flex gap-4 flex-wrap">
+                            <div class="flex-1 min-w-[180px]">
+                                <label class="block text-sm text-gray-400 mb-1">Provider</label>
+                                <select id="detail-provider" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                    <option value="">None</option>
+                                    <!-- Trello/Jira options added by JS when available -->
+                                </select>
+                            </div>
+                            <div class="flex-1 min-w-[180px]">
+                                <label class="block text-sm text-gray-400 mb-1">Board</label>
+                                <select id="detail-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                    <option value="">None</option>
+                                    <!-- Options populated by JS when provider is selected -->
+                                </select>
+                            </div>
+                        </div>
+                        <p id="board-hint" class="text-xs text-gray-500">Connect Trello or Jira in Settings → Advanced to see boards.</p>
+                        <div class="pt-4 border-t border-white/20">
+                            <a id="project-open-board" href="#" target="_blank" rel="noopener" class="inline-block px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium hidden">Open Board</a>
+                        </div>
+                    </div>
+                    <!-- Startup Instructions tab -->
+                    <div id="tab-startup" class="project-tab-pane hidden space-y-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Startup instructions</label>
+                            <p class="text-xs text-gray-500 mb-1">One command per line. When you say &quot;start the project&quot;, each runs in a new terminal.</p>
+                            <textarea id="detail-startup" rows="6" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="npm run dev&#10;python manage.py runserver"></textarea>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Context item modal (Add / Edit) -->
+<div id="context-item-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" role="dialog" aria-modal="true">
+    <div class="bg-[#1a1f3a] border border-white/20 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl" id="context-item-dialog">
+        <h3 id="context-item-modal-title" class="text-lg font-semibold text-white mb-4">Add Context Item</h3>
+        <input type="hidden" id="context-item-id" value="">
+        <div class="space-y-3 flex-1 min-h-0 flex flex-col">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Title</label>
+                <input type="text" id="context-item-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Enter context item title...">
+            </div>
+            <div class="flex-1 min-h-0 flex flex-col">
+                <label class="block text-sm text-gray-400 mb-1">Content</label>
+                <textarea id="context-item-content" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y flex-1 min-h-[200px]" placeholder="Enter content..."></textarea>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-white/20">
+            <button type="button" id="context-item-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10">Cancel</button>
+            <button type="button" id="context-item-save" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">Save</button>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/shared/js/api.js"></script>
+<script src="/projects/static/js/projects.js"></script>
+{% endblock %}

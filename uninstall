@@ -1,0 +1,6 @@
+#!/bin/bash
+# Wrapper script for DecisionsAI uninstaller
+# Calls the main script from bin/
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+exec "$SCRIPT_DIR/bin/uninstall.sh" "$@"

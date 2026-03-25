@@ -1,0 +1,116 @@
+"""System resource detection for adaptive model selection.
+
+Detects available RAM and recommends appropriate Ollama model sizes
+so low-memory machines (8 GB) don't choke on the default 8B model.
+"""
+
+import logging
+import os
+import platform
+import subprocess
+
+logger = logging.getLogger(__name__)
+
+# Model tiers ordered by RAM requirement (ascending).
+# Each entry: (min_ram_gb, model_name, approx_vram_gb, label)
+OLLAMA_MODEL_TIERS = [
+    (0,   "qwen3:1.7b",  1.5,  "ultra-light — fits ≤8 GB RAM"),
+    (10,  "qwen3:4b",    3.5,  "light — fits 10-11 GB RAM"),
+    (12,  "qwen3:8b",    6.0,  "default — needs 12+ GB RAM"),
+]
+
+# Vision model tiers
+OLLAMA_VISION_TIERS = [
+    (0,   "qwen3-vl:2b",  1.5, "vision — light"),
+    (16,  "qwen3-vl:8b",  5.0, "vision — default"),
+]
+
+# Coding model tiers
+OLLAMA_CODING_TIERS = [
+    (0,   "qwen2.5-coder:1.5b", 1.2, "coding — ultra-light"),
+    (10,  "qwen2.5-coder:3b",   2.5, "coding — light"),
+    (12,  "qwen2.5-coder:7b",   5.0, "coding — default"),
+]
+
+
+def get_total_ram_gb() -> float:
+    """Return total physical RAM in GB. Falls back to 16 if detection fails."""
+    try:
+        system = platform.system()
+        if system == "Darwin":
+            out = subprocess.check_output(["sysctl", "-n", "hw.memsize"], text=True).strip()
+            return int(out) / (1024 ** 3)
+        elif system == "Linux":
+            with open("/proc/meminfo") as f:
+                for line in f:
+                    if line.startswith("MemTotal:"):
+                        kb = int(line.split()[1])
+                        return kb / (1024 ** 2)
+        elif system == "Windows":
+            import ctypes
+            class MEMORYSTATUSEX(ctypes.Structure):
+                _fields_ = [
+                    ("dwLength", ctypes.c_ulong),
+                    ("dwMemoryLoad", ctypes.c_ulong),
+                    ("ullTotalPhys", ctypes.c_ulonglong),
+                    ("ullAvailPhys", ctypes.c_ulonglong),
+                    ("ullTotalPageFile", ctypes.c_ulonglong),
+                    ("ullAvailPageFile", ctypes.c_ulonglong),
+                    ("ullTotalVirtual", ctypes.c_ulonglong),
+                    ("ullAvailVirtual", ctypes.c_ulonglong),
+                    ("ullAvailExtendedVirtual", ctypes.c_ulonglong),
+                ]
+            stat = MEMORYSTATUSEX()
+            stat.dwLength = ctypes.sizeof(stat)
+            ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat))
+            return stat.ullTotalPhys / (1024 ** 3)
+    except Exception as e:
+        logger.warning("Could not detect system RAM: %s — assuming 16 GB", e)
+    return 16.0
+
+
+def recommend_model(ram_gb: float = None, tiers: list = None) -> str:
+    """Pick the best model for the available RAM.
+
+    Walks the tier list in reverse (largest first) and returns the first
+    model whose min_ram_gb ≤ ram_gb.
+    """
+    if ram_gb is None:
+        ram_gb = get_total_ram_gb()
+    if tiers is None:
+        tiers = OLLAMA_MODEL_TIERS
+
+    # Walk from largest to smallest, pick the biggest that fits
+    for min_ram, model, _, _ in reversed(tiers):
+        if ram_gb >= min_ram:
+            return model
+
+    # Absolute fallback
+    return tiers[0][1]
+
+
+def recommend_ollama_defaults(ram_gb: float = None) -> dict:
+    """Return a dict of recommended Ollama models keyed by role.
+
+    >>> recommend_ollama_defaults(8)
+    {'conversational': 'qwen3:4b', 'coding': 'qwen2.5-coder:3b', 'vision': 'qwen3-vl:2b'}
+    """
+    if ram_gb is None:
+        ram_gb = get_total_ram_gb()
+
+    return {
+        "conversational": recommend_model(ram_gb, OLLAMA_MODEL_TIERS),
+        "coding":         recommend_model(ram_gb, OLLAMA_CODING_TIERS),
+        "vision":         recommend_model(ram_gb, OLLAMA_VISION_TIERS),
+    }
+
+
+def log_system_resources():
+    """Log detected RAM and recommended models (called once at startup)."""
+    ram = get_total_ram_gb()
+    defaults = recommend_ollama_defaults(ram)
+    logger.info(
+        "System RAM: %.1f GB → recommended Ollama models: %s",
+        ram, ", ".join(f"{k}={v}" for k, v in defaults.items()),
+    )
+    return ram, defaults

@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="decisionsai-internal-api-token" content="{{ internal_api_token or '' }}">
+    <link rel="icon" href="/assets/icons/favicon.png" type="image/png">
+    <title>{% block title %}Settings{% endblock %} - Decisions AI</title>
+    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        :root { --color-primary: #f97316; --color-secondary: #dc2626; --color-accent: #fb923c; --color-primary-rgb: 249, 115, 22; --color-secondary-rgb: 220, 38, 38; }
+    </style>
+    {% block head_styles %}
+    <link rel="stylesheet" href="/static/shared/css/base.css">
+    {% endblock %}
+    {% block extra_head %}{% endblock %}
+</head>
+<body class="bg-[#0d1642] text-[#ececf1] min-h-screen font-['Quicksand',sans-serif]">
+    <!-- Navigation Header -->
+    <nav class="bg-[#1a237e] border-b border-white/10 sticky top-0 z-50">
+        <div class="max-w-7xl mx-auto px-6">
+            <div class="flex items-center justify-between h-16">
+                <!-- Left: Brand (website logo) -->
+                <div class="flex items-center space-x-8">
+                    <a href="/chat" class="flex items-center space-x-2 cursor-pointer group relative">
+                        <span class="text-2xl font-bold text-white tracking-tight mr-2">Decisions</span>
+                        <div class="relative inline-flex items-center justify-center ml-1">
+                            <span class="absolute z-0 text-6xl md:text-7xl opacity-100 pointer-events-none" style="left: 50%; top: 50%; transform: translate(-50%, -50%) rotate(15deg);">⚡</span>
+                            <div class="relative z-10 w-8 h-8 rounded-full flex items-center justify-center shadow-lg" style="background: linear-gradient(135deg, var(--color-primary) 0%, var(--color-secondary) 50%, var(--color-accent) 100%); box-shadow: 0 10px 15px -3px rgba(var(--color-primary-rgb), 0.2);">
+                                <span class="text-white text-sm font-bold">AI</span>
+                            </div>
+                        </div>
+                    </a>
+
+                    <!-- Navigation Tabs -->
+                    <div class="flex flex-wrap items-center gap-1">
+                        <a href="/chat/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Chat
+                        </a>
+                        <a href="/kanban/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Kanban
+                        </a>
+                        <a href="/actions/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Actions
+                        </a>
+                        <a href="/workflows/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Step Runner
+                        </a>
+                        <a href="/snippets/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Snippets
+                        </a>
+                        <a href="/projects/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
+                            Projects
+                        </a>
+                    </div>
+                </div>
+
+                <!-- Right: Website, Docs, Settings -->
+                <div class="flex items-center space-x-4">
+                    <a href="https://decisionsai.net" target="_blank"
+                       class="p-2 rounded-md text-[var(--color-primary)] hover:text-[var(--color-accent)] hover:bg-white/10 transition-colors"
+                       title="Website">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 01-9 9m9-9a9 9 0 00-9-9m9 9H3m9 9a9 9 0 01-9-9m9 9c1.657 0 3-4.03 3-9s-1.343-9-3-9m0 18c-1.657 0-3-4.03-3-9s1.343-9 3-9m-9 9a9 9 0 019-9"/>
+                        </svg>
+                    </a>
+                    <a href="/docs/"
+                       class="nav-tab p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
+                       title="API Docs">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
+                        </svg>
+                    </a>
+                    <a href="/settings" id="nav-settings-icon"
+                       class="p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
+                       title="Settings">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z"/>
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                  d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/>
+                        </svg>
+                    </a>
+                </div>
+            </div>
+        </div>
+    </nav>
+
+    {% block content %}{% endblock %}
+    <script>
+    (function() {
+      var meta = document.querySelector('meta[name="decisionsai-internal-api-token"]');
+      var token = meta ? (meta.getAttribute('content') || '') : '';
+      window.DECISIONSAI_INTERNAL_API_TOKEN = token;
+      var originalFetch = window.fetch.bind(window);
+      window.fetch = function(input, init) {
+        var nextInit = init ? Object.assign({}, init) : {};
+        var headers = new Headers(nextInit.headers || {});
+        var requestUrl = typeof input === 'string' ? input : ((input && input.url) ? input.url : '');
+        var sameOrigin = true;
+        try {
+          sameOrigin = new URL(requestUrl, window.location.origin).origin === window.location.origin;
+        } catch (_) {}
+        if (token && sameOrigin) headers.set('X-DecisionsAI-Internal-Token', token);
+        nextInit.headers = headers;
+        return originalFetch(input, nextInit);
+      };
+    })();
+    </script>
+    {% block body_scripts %}{% endblock %}
+    {% block extra_scripts %}{% endblock %}
+    <script>
+    (function() {
+      function setActiveNavTab() {
+        var path = window.location.pathname.replace(/\/$/, '') || '';
+        document.querySelectorAll('.nav-tab').forEach(function(tab) {
+          var href = tab.getAttribute('href');
+          if (!href) return;
+          var tabPath = href.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/';
+          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/kanban' && (path === '/kanban' || path.startsWith('/kanban/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
+          tab.classList.toggle('active', isActive);
+        });
+        // Highlight settings gear icon when on /settings
+        var settingsIcon = document.getElementById('nav-settings-icon');
+        if (settingsIcon) {
+          var onSettings = path === '/settings' || path.startsWith('/settings/');
+          settingsIcon.classList.toggle('nav-settings-active', onSettings);
+        }
+      }
+      if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', setActiveNavTab);
+      } else {
+        setActiveNavTab();
+      }
+    })();
+    </script>
+</body>
+</html>

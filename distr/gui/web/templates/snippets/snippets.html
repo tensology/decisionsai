@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+
+{% block title %}Snippets{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-6 py-8 max-w-7xl">
+    <div class="flex gap-6">
+        <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-8">
+            <div class="mb-6 pb-4 border-b border-white/20">
+                <h2 class="text-xl font-semibold text-white mb-1">Snippets</h2>
+                <p class="text-sm text-gray-400">Code and text snippets you can trigger by voice or name</p>
+            </div>
+            <div id="snippets-list" class="space-y-3">
+                <p class="text-sm text-gray-400">Loading snippets...</p>
+            </div>
+            <p class="text-sm text-gray-400 mt-6">Edit title, description and trigger words here. Snippet content is edited in the desktop app.</p>
+        </div>
+    </div>
+</div>
+
+<!-- Edit modal -->
+<div id="snippet-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" role="dialog" aria-modal="true" aria-labelledby="snippet-modal-title-label">
+    <div class="bg-[#1a1f3a] border border-white/20 rounded-lg p-6 w-full max-w-md shadow-xl" id="snippet-modal-dialog">
+        <h3 class="text-lg font-semibold text-white mb-4" id="snippet-modal-title-label">Edit snippet</h3>
+        <input type="hidden" id="snippet-modal-id" value="">
+        <div class="space-y-3">
+            <label class="block text-sm text-gray-400">Title</label>
+            <input type="text" id="snippet-modal-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
+            <label class="block text-sm text-gray-400">Description</label>
+            <textarea id="snippet-modal-description" rows="2" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none"></textarea>
+            <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
+            <div id="snippet-modal-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300"></div>
+            <input type="text" id="snippet-modal-triggers-input" class="mt-2 w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="Type a word, then Enter or comma to add">
+        </div>
+        <div class="flex justify-end gap-2 mt-6">
+            <button type="button" id="snippet-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10">Cancel</button>
+            <button type="button" id="snippet-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">Save</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/snippets/static/js/snippets.js"></script>
+{% endblock %}

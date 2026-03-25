@@ -1,0 +1,121 @@
+pywhispercpp @ git+https://github.com/absadiki/pywhispercpp
+PyQt6
+PyQt6-WebEngine
+vosk
+pyautogui
+pyaudio
+# sentence-transformers
+fuzzywuzzy
+setuptools-rust
+sqlalchemy
+python-Levenshtein
+beautifulsoup4
+transformers>=4.45.0,<5.0.0
+lxml
+langchain>=1.0.0,<2.0.0
+langchain_community>=0.4.0,<1.0.0
+ollama
+# LlamaIndex for RAG (optional but recommended for better performance)
+# Note: For Python 3.13+, set PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 before installing
+# Example: PYO3_USE_ABI3_FORWARD_COMPATIBILITY=1 pip install llama-index llama-index-embeddings-ollama llama-index-llms-ollama
+# LlamaIndex packages - pin versions to reduce resolver complexity
+llama-index>=0.14.0,<0.15.0
+llama-index-embeddings-ollama>=0.8.0,<0.9.0
+llama-index-llms-ollama>=0.9.0,<0.10.0
+# OpenAI support for LlamaIndex RAG
+llama-index-llms-openai>=0.2.0
+llama-index-embeddings-openai>=0.2.0
+# Open-interpreter (optional)
+# NOTE: This package causes "resolution-too-deep" errors due to complex dependencies
+# INSTALL SEPARATELY: pip install open-interpreter>=0.2.0
+# Or use legacy resolver: pip install --use-deprecated=legacy-resolver -r requirements.txt
+# open-interpreter>=0.2.0
+# Pin Google API dependencies to reduce resolver backtracking
+google-api-core>=2.11.0,<3.0.0
+googleapis-common-protos>=1.60.0,<2.0.0
+grpcio-status>=1.60.0,<2.0.0
+# Pin protobuf to 5.29.x to satisfy pipecat-ai requirements
+# WARNING: This conflicts with open-interpreter's dependency (google-ai-generativelanguage)
+# which requires protobuf<5.0.0. Since pipecat-ai is a core dependency, we prioritize it.
+# If you need open-interpreter, it may have issues with protobuf 5.x - test carefully
+# or consider installing it in a separate environment.
+protobuf>=5.29.3,<5.30.0
+# PyTorch 2.5+ compiled for NumPy 2.x
+# Pin torch <2.10.0 — 2.10.0 ships libc10.dylib that conflicts with Homebrew's
+# PyTorch on macOS, causing _PyDict_GetItemRef symbol errors at import time.
+torch>=2.5.0,<2.10.0
+torchaudio>=2.5.0,<2.10.0
+spacy
+scipy
+litellm>=1.80.0,<2.0.0
+PyQt6-QScintilla
+elevenlabs
+anthropic>=0.25.0
+pyAudioDspTools
+resampy>=0.4.3
+# NumPy 2.x - requires torch 2.5+ which is compiled for numpy 2.x
+numpy>=2.0.0,<2.3.0
+sounddevice
+soundfile
+pydub
+tqdm
+# kokoro-onnx 0.4.x+ works with v1.0 model files
+kokoro-onnx>=0.4.0
+# Kanade voice conversion model for Kokoro voice cloning (KokoClone)
+kanade-tokenizer @ git+https://github.com/frothywater/kanade-tokenizer
+colorama
+pynput
+
+
+## requires installation manually:
+# pip install git+https://github.com/aarnphm/whispercpp.git -vv
+# brew install portaudio
+# brew install ffmpeg  # Required for pydub MP3 conversion support
+
+syntok>=1.4.4
+# spaCy dependencies
+spacy>=3.5.0
+regex>=2023.0.0
+# spaCy model (will be installed by setup.py)
+# python -m spacy download en_core_web_lg
+# Pin pipecat-ai to specific version to reduce resolver backtracking
+pipecat-ai[silero]>=0.0.95,<0.0.101
+# Document extraction dependencies
+pdfplumber>=0.10.0
+PyPDF2>=3.0.0
+python-docx>=1.1.0
+pandas>=2.0.0
+openpyxl>=3.1.0
+rarfile>=4.1
+# Audio transcription
+assemblyai>=0.28.0
+# Groq SDK for Groq API integration
+groq>=1.0.0
+# MCP SDK for Rube integration
+# NOTE: mcp requires starlette>=0.50.0, which conflicts with open-interpreter (requires starlette<0.38.0)
+# If you need open-interpreter, install it separately in a different environment
+# or use: pip install 'starlette>=0.37.2,<0.38.0' after installing mcp to downgrade
+mcp>=0.1.0
+httpx>=0.24.0
+# requests is already available via other dependencies
+# Web search (DuckDuckGo — no API key required)
+ddgs>=1.0.0
+# FastAPI and uvicorn for Flow Logic web server
+fastapi>=0.100.0
+uvicorn[standard]>=0.23.0
+# pathspec for .gitignore parsing in project indexing
+pathspec>=0.11.0
+pytest>=8.0.0
+# OCR for text-based "where is X" locate — needs Tesseract system binary installed separately.
+# Used to cross-reference text labels with detected UI elements for accurate targeting.
+pytesseract>=0.3.10
+# OpenCV for UI element detection (contour-based button/icon/input detection)
+opencv-python>=4.8.0
+# Cron parsing for Step Runner scheduled sessions
+croniter>=2.0.0
+# Qwen3-TTS (local, optional - alternative to Kokoro)
+qwen-tts>=0.1.0
+# Coqui TTS (local, optional - VCTK multi-speaker model)
+# NOTE: TTS package only supports Python <3.12, install manually if using 3.11:
+#   pip install TTS>=0.22.0
+playwright

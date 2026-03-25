@@ -1,0 +1,128 @@
+<!-- LLMs Tab -->
+    <div class="mb-6 pb-4 border-b border-[#565869]">
+        <h2 class="text-xl font-semibold text-white mb-1">Language Models</h2>
+        <p class="text-sm text-gray-400">Configure LLM providers and models</p>
+    </div>
+
+    <div class="space-y-4">
+        <!-- Speech to Text (STT) -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-3">Speech to Text (STT)</h3>
+            <div class="flex items-center gap-4">
+                <label for="stt_model" class="text-sm font-medium text-[#ececf1] w-16 text-right">Model:</label>
+                <select id="stt_model" name="stt_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="vosk">Vosk (Local & Offline)</option>
+                    <option value="whisper">Whisper.cpp (Local & Offline)</option>
+                    <option value="assemblyai">AssemblyAI (Online)</option>
+                    <option value="openai_whisper">OpenAI Whisper (Online)</option>
+                </select>
+            </div>
+        </div>
+
+        <!-- Conversational LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-3">Conversational LLM</h3>
+            <div class="flex items-center gap-4">
+                <label for="conversational_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="w-36">
+                    <select id="conversational_provider" name="conversational_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <label for="conversational_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="conversational_model" name="conversational_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="conversational_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
+        <!-- Coding LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-3">Coding LLM</h3>
+            <div class="flex items-center gap-4">
+                <label for="coding_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="w-36">
+                    <select id="coding_provider" name="coding_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <label for="coding_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="coding_model" name="coding_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="coding_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
+        <!-- Vision LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-3">Vision LLM</h3>
+            <div class="flex items-center gap-4">
+                <label for="vision_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="w-36">
+                    <select id="vision_provider" name="vision_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <label for="vision_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="vision_model" name="vision_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="vision_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
+        <!-- Image LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-3">Image LLM</h3>
+            <div class="flex items-center gap-4">
+                <label for="image_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="w-36">
+                    <select id="image_provider" name="image_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Loading…</option>
+                    </select>
+                </div>
+                <label for="image_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="image_model" name="image_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="image_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+    </div>

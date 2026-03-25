@@ -1,0 +1,116 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Project Board</title>
+    <link rel="stylesheet" href="/css/board.css">
+    <!-- SortableJS for smooth drag-and-drop - load with fallback -->
+    <script>
+        // Try to load SortableJS, provide fallback if CDN fails
+        window.Sortable = window.Sortable || {
+            create: function(el, options) {
+                console.log('SortableJS not loaded, drag-drop disabled');
+                return {};
+            }
+        };
+    </script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js" 
+            onerror="console.warn('Failed to load SortableJS from CDN')"></script>
+</head>
+<body>
+    <div class="board-container">
+        <div class="board-header">
+            <h1 class="board-title">Project Board</h1>
+            <div class="board-actions">
+                <button id="syncBtn" class="btn btn-secondary" style="display: none;">
+                    🔄 Sync from Trello
+                </button>
+                <button id="addColumnBtn" class="btn btn-primary" style="display: none;">
+                    + Add Column
+                </button>
+                <button id="refreshBtn" class="btn btn-secondary">
+                    🔄 Refresh
+                </button>
+            </div>
+        </div>
+
+        <div class="board-content" id="boardContent">
+            <div class="loading">Loading board...</div>
+        </div>
+    </div>
+
+    <!-- Ticket Modal -->
+    <div id="ticketModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h2 id="modalTitle">Create Ticket</h2>
+                <span class="close">&times;</span>
+            </div>
+            <div class="modal-body">
+                <form id="ticketForm">
+                    <input type="hidden" id="ticketId" value="">
+                    <input type="hidden" id="columnId" value="">
+
+                    <div class="form-group">
+                        <label for="ticketTitle">Title *</label>
+                        <input type="text" id="ticketTitle" class="form-control" required>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ticketDescription">Description</label>
+                        <textarea id="ticketDescription" class="form-control" rows="4"></textarea>
+                    </div>
+
+                    <div class="form-row">
+                        <div class="form-group">
+                            <label for="ticketAssignee">Assignee</label>
+                            <input type="text" id="ticketAssignee" class="form-control" list="assigneeList" autocomplete="off">
+                            <datalist id="assigneeList">
+                            </datalist>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ticketPriority">Priority</label>
+                            <select id="ticketPriority" class="form-control">
+                                <option value="">None</option>
+                                <option value="low">Low</option>
+                                <option value="medium">Medium</option>
+                                <option value="high">High</option>
+                            </select>
+                        </div>
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ticketDueDate">Due Date</label>
+                        <input type="date" id="ticketDueDate" class="form-control">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ticketTags">Tags (comma-separated)</label>
+                        <input type="text" id="ticketTags" class="form-control" placeholder="e.g., bug, feature, urgent">
+                    </div>
+
+                    <div class="form-group">
+                        <label for="ticketTimeEstimate">Time Estimate</label>
+                        <input type="text" id="ticketTimeEstimate" class="form-control" placeholder="e.g., 2h, 1d, 3h 30m">
+                    </div>
+
+                    <div class="modal-actions">
+                        <button type="button" id="deleteTicketBtn" class="btn btn-danger" style="display: none;">Delete</button>
+                        <div class="spacer"></div>
+                        <button type="button" class="btn btn-secondary cancel-btn">Cancel</button>
+                        <button type="submit" class="btn btn-primary">Save</button>
+                    </div>
+                </form>
+            </div>
+        </div>
+    </div>
+
+    <!-- Snackbar for notifications -->
+    <div id="snackbar" class="snackbar"></div>
+
+    <script src="/static/shared/js/api.js"></script>
+    <script src="/js/board.js"></script>
+</body>
+</html>

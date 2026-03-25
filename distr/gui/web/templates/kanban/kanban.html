@@ -1,0 +1,402 @@
+{% extends "base.html" %}
+
+{% block title %}Kanban{% endblock %}
+
+{% block head_styles %}
+{{ super() }}
+<style>
+/* Kanban lanes */
+.kb-lane { min-width: 260px; max-width: 300px; flex: 1 1 260px; }
+.kb-lane-body { min-height: 80px; }
+/* Drag states */
+.kb-card.dragging { opacity: 0.4; }
+.kb-lane-body.drag-over { background: rgba(249,115,22,0.08); border: 1px dashed #f97316; border-radius: 0.5rem; }
+/* Priority badges */
+.kb-pri-critical { background: #dc2626; }
+.kb-pri-high { background: #ea580c; }
+.kb-pri-medium { background: #ca8a04; }
+.kb-pri-low { background: #16a34a; }
+/* Modal overlay */
+.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; display: flex; align-items: center; justify-content: center; }
+.kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
+/* Source icons in sidebar */
+.kb-src-icon { width: 16px; height: 16px; display: inline-block; border-radius: 3px; margin-right: 6px; flex-shrink: 0; }
+.kb-src-db { background: #f97316; }
+.kb-src-trello { background: #0079bf; }
+.kb-src-jira { background: #0052cc; }
+/* Copy button on external cards */
+.kb-copy-btn { opacity: 0; transition: opacity 0.15s; }
+.kb-card:hover .kb-copy-btn { opacity: 1; }
+/* Board item in sidebar */
+.kb-board-item { cursor: pointer; padding: 8px 12px; border-radius: 6px; display: flex; align-items: center; font-size: 0.875rem; }
+.kb-board-item:hover { background: rgba(255,255,255,0.07); }
+.kb-board-item.active { background: rgba(249,115,22,0.2); color: #f97316; }
+/* Disabled copy button */
+.kb-copy-btn.disabled { opacity: 0.3 !important; cursor: not-allowed; }
+/* Scrollbar for lanes container */
+.kb-lanes-wrap::-webkit-scrollbar { height: 8px; }
+.kb-lanes-wrap::-webkit-scrollbar-track { background: transparent; }
+.kb-lanes-wrap::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 4px; }
+/* Agent freq / day buttons active state */
+.kb-agent-freq[data-active="1"], .kb-agent-day[data-selected="1"] {
+    background-color: #f97316; border-color: #f97316; color: #fff;
+}
+/* Board modal tab active */
+.kb-bm-tab.active { color: #fff; border-color: #f97316; }
+/* Ticket modal tab active */
+.kb-tm-tab { cursor: pointer; }
+.kb-tm-tab.active { color: #fff; border-color: #f97316; }
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-6 py-8 max-w-7xl">
+    <div class="flex gap-6" style="height: calc(100vh - 130px);">
+        <!-- Left panel: board sources -->
+        <div class="w-72 flex-shrink-0 flex flex-col gap-4">
+            <!-- Search -->
+            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
+                <input type="text" id="kb-search" placeholder="Search boards..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+            </div>
+            <!-- Board list -->
+            <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
+                <!-- Database boards -->
+                <div class="mb-3">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Database Boards</span>
+                        <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
+                    </div>
+                    <div id="kb-db-boards" class="space-y-1"></div>
+                </div>
+                <!-- Trello boards -->
+                <div class="mb-3">
+                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
+                    <div id="kb-trello-boards" class="space-y-1 mt-2">
+                        <p class="text-xs text-gray-500 italic">No Trello account connected</p>
+                    </div>
+                </div>
+                <!-- Jira boards -->
+                <div>
+                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
+                    <div id="kb-jira-boards" class="space-y-1 mt-2">
+                        <p class="text-xs text-gray-500 italic">No Jira account connected</p>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right panel: kanban display -->
+        <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+            <!-- Empty state -->
+            <div id="kb-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                <p class="text-gray-400 text-sm max-w-md mb-6">Select a board from the left panel, or create a new database board to get started with your Kanban workflow.</p>
+                <button type="button" id="kb-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Board</button>
+            </div>
+            <!-- Board view -->
+            <div id="kb-board-view" class="hidden flex-1 flex flex-col min-h-0">
+                <!-- Board header -->
+                <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <h2 id="kb-board-title" class="text-lg font-semibold text-white"></h2>
+                        <span id="kb-board-source-badge" class="text-xs px-2 py-0.5 rounded"></span>
+                    </div>
+                    <div class="flex items-center gap-2" id="kb-board-actions">
+                        <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
+                        <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
+                        <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Edit</button>
+                        <button type="button" id="kb-delete-board" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
+                    </div>
+                </div>
+                <!-- Lanes -->
+                <div class="flex-1 overflow-x-auto overflow-y-auto p-4 kb-lanes-wrap">
+                    <div id="kb-lanes" class="flex gap-4 h-full"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ticket detail modal -->
+<div id="kb-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: 700px;">
+        <div class="flex items-center justify-between px-6 pt-5 pb-0">
+            <h3 id="kb-modal-title" class="text-lg font-semibold text-white">Ticket</h3>
+            <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <!-- Ticket tabs -->
+        <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
+        </div>
+        <!-- Tab content area with fixed min-height -->
+        <div style="min-height: 320px;">
+            <!-- Details tab -->
+            <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Title</label>
+                    <input type="text" id="kb-modal-ticket-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Description</label>
+                    <textarea id="kb-modal-ticket-desc" rows="4" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                    <div class="flex gap-2" id="kb-modal-priority-btns">
+                        <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                        <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                        <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                        <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                    </div>
+                </div>
+            </div>
+            <!-- Links tab -->
+            <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Links</label>
+                    <div id="kb-modal-links" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="kb-modal-link-title" placeholder="Title" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <input type="text" id="kb-modal-link-url" placeholder="https://..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="kb-modal-add-link" class="px-2 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+</button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Files</label>
+                    <div id="kb-modal-files" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="file" id="kb-modal-file-input" multiple class="hidden">
+                        <button type="button" id="kb-modal-upload-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Upload Files</button>
+                    </div>
+                </div>
+            </div>
+            <!-- To-do tab -->
+            <div id="kb-tm-tab-todo" class="kb-tm-pane hidden p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">To-do List</label>
+                    <div id="kb-modal-todos" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="kb-modal-todo-input" placeholder="Add a to-do item..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="kb-modal-add-todo" class="px-2 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+</button>
+                    </div>
+                </div>
+            </div>
+            <!-- Advanced tab -->
+            <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Link to</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="text-xs text-gray-500">Workflow</label>
+                            <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">Project</label>
+                            <select id="kb-modal-link-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">Snippet</label>
+                            <select id="kb-modal-link-snippet" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">Action</label>
+                            <select id="kb-modal-link-action" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                <option value="">None</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Modal footer -->
+        <div class="flex justify-between px-6 pb-5 pt-2 border-t border-white/20">
+            <div>
+                <button type="button" id="kb-modal-send-project" class="hidden px-4 py-2 rounded border border-[#f97316]/50 text-[#f97316] text-sm hover:bg-[#f97316]/20" title="Create a .tickets file in the linked project folder">Send to project</button>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete Ticket</button>
+                <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Copy to board modal -->
+<div id="kb-copy-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-6" style="width: 400px;">
+        <h3 class="text-lg font-semibold text-white mb-4">Copy to Board</h3>
+        <p class="text-sm text-gray-400 mb-3">Select a database board to copy this ticket into:</p>
+        <select id="kb-copy-board-select" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none mb-4">
+            <option value="">No boards available</option>
+        </select>
+        <div class="flex justify-end gap-2">
+            <button type="button" id="kb-copy-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-copy-confirm" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Copy</button>
+        </div>
+    </div>
+</div>
+
+<!-- Board context menu (right-click on sidebar) -->
+<div id="kb-board-ctx-menu" class="fixed hidden z-50 min-w-[140px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Edit</button>
+    <button type="button" class="kb-ctx-rename w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Rename</button>
+    <button type="button" class="kb-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">Delete</button>
+</div>
+
+<!-- Board create/edit modal (tabbed) -->
+<div id="kb-board-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: 600px;">
+        <div class="flex items-center justify-between px-6 pt-5 pb-0">
+            <h3 id="kb-board-modal-title" class="text-lg font-semibold text-white">New Board</h3>
+            <button type="button" id="kb-board-modal-x" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <!-- Tabs -->
+        <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
+            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-tab="details">Details</button>
+            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="agent">Agent</button>
+            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="advanced">Advanced</button>
+        </div>
+        <!-- Details tab -->
+        <div id="kb-bm-tab-details" class="kb-bm-pane p-6 space-y-3">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                <input type="text" id="kb-board-modal-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="My Board">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <input type="text" id="kb-board-modal-desc" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Optional description">
+            </div>
+        </div>
+        <!-- Agent tab -->
+        <div id="kb-bm-tab-agent" class="kb-bm-pane hidden p-6 space-y-4">
+            <div class="flex items-center gap-3">
+                <label class="text-sm text-gray-300">Enable agent check-in</label>
+                <input type="checkbox" id="kb-agent-enabled" class="accent-[#f97316]">
+            </div>
+            <!-- Schedule -->
+            <div id="kb-agent-schedule-wrap">
+                <label class="block text-sm text-gray-400 mb-2">Check-in frequency</label>
+                <div class="flex gap-1 mb-3">
+                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="daily">Daily</button>
+                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="weekly">Weekly</button>
+                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="fortnightly">Fortnightly</button>
+                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="monthly">Monthly</button>
+                </div>
+                <div class="flex gap-2 items-center mb-3">
+                    <label class="text-xs text-gray-500">Time</label>
+                    <input type="time" id="kb-agent-time" value="09:00" class="px-3 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" style="color-scheme:dark;">
+                </div>
+                <!-- Weekly day picker -->
+                <div id="kb-agent-days-wrap" class="hidden mb-3">
+                    <label class="block text-xs text-gray-500 mb-1">Which days?</label>
+                    <div class="flex gap-1">
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="0">Sun</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="1">Mon</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="2">Tue</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="3">Wed</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="4">Thu</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="5">Fri</button>
+                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="6">Sat</button>
+                    </div>
+                </div>
+                <!-- Monthly day picker -->
+                <div id="kb-agent-monthly-wrap" class="hidden mb-3">
+                    <label class="block text-xs text-gray-500 mb-1">Day of month</label>
+                    <input type="number" id="kb-agent-monthly-day" min="1" max="28" value="1" class="w-20 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                </div>
+            </div>
+            <!-- Agent models (provider/model dropdowns like Chat LLMs) -->
+            <div class="border-t border-white/10 pt-4 space-y-3">
+                <p class="text-xs text-gray-500">Leave blank to use the global chat settings.</p>
+                <!-- Orchestrator -->
+                <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Orchestrator</label>
+                    <select id="kb-agent-orch-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                    <select id="kb-agent-orch-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                </div>
+                <!-- Coder -->
+                <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
+                    <select id="kb-agent-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                    <select id="kb-agent-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                </div>
+                <!-- Sub-agent -->
+                <div class="flex items-center gap-2">
+                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Sub-agent</label>
+                    <select id="kb-agent-sub-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                    <select id="kb-agent-sub-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">(chat default)</option>
+                    </select>
+                </div>
+            </div>
+            <!-- Lane routing -->
+            <div class="border-t border-white/10 pt-4 space-y-3">
+                <label class="block text-sm text-gray-400">Ticket lane routing</label>
+                <p class="text-xs text-gray-500">The agent picks tickets from the source lane and moves them to the done lane when complete.</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-gray-500">Source lane (work from)</label>
+                        <select id="kb-agent-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">Select lane</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">Done lane (move to)</label>
+                        <select id="kb-agent-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">Select lane</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <!-- Advanced tab (board defaults for new tickets) -->
+        <div id="kb-bm-tab-advanced" class="kb-bm-pane hidden p-6 space-y-4">
+            <p class="text-xs text-gray-500">New tickets created on this board will inherit these defaults.</p>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="text-xs text-gray-500">Default Workflow</label>
+                    <select id="kb-board-def-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">None</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="text-xs text-gray-500">Default Project</label>
+                    <select id="kb-board-def-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <option value="">None</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+        <!-- Footer -->
+        <div class="flex justify-end gap-2 px-6 pb-5 pt-2 border-t border-white/20">
+            <button type="button" id="kb-board-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-board-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Create</button>
+        </div>
+    </div>
+</div>
+
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/shared/js/api.js"></script>
+<script src="/kanban/static/js/kanban.js"></script>
+<script src="/static/shared/js/provider_model_info.js"></script>
+{% endblock %}

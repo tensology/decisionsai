@@ -1,0 +1,133 @@
+    <div class="mb-6 pb-4 border-b border-white/20">
+        <h2 class="text-xl font-semibold text-white mb-1">Audio Settings</h2>
+        <p class="text-sm text-gray-400">Configure audio input and output devices</p>
+    </div>
+
+    <div class="space-y-6">
+        <!-- Input and Output Group -->
+        <div class="border border-white/20 rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">Input and Output</h3>
+
+            <div class="grid grid-cols-2 gap-6">
+                <!-- Input Device -->
+                <div>
+                    <label for="input_device" class="block text-sm font-medium text-[#ececf1] mb-2">Input:</label>
+                    <select id="input_device" name="input_device"
+                            class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white
+                                    focus:outline-none focus:border-[#f97316] transition-colors
+                                    hover:border-white/40 cursor-pointer">
+                        <option value="System Default" selected>System Default</option>
+                    </select>
+                </div>
+
+                <!-- Output Device -->
+                <div>
+                    <label for="output_device" class="block text-sm font-medium text-[#ececf1] mb-2">Output:</label>
+                    <select id="output_device" name="output_device"
+                            class="w-full bg-[#1a1f3a] border border-white/20 rounded-md px-4 py-2 text-white
+                                    focus:outline-none focus:border-[#f97316] transition-colors
+                                    hover:border-white/40 cursor-pointer">
+                        <option value="System Default" selected>System Default</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
+        <!-- Bonus Audio Setup Helper Group -->
+        <div class="border border-white/20 rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">Bonus Audio Setup Helper</h3>
+
+            <!-- Remember checkbox and explanation -->
+            <label class="flex items-start cursor-pointer group mb-3">
+                <input type="checkbox" id="remember_audio_settings" name="remember_audio_settings"
+                        class="mt-1 w-4 h-4 bg-[#1a1f3a] border border-white/20 rounded
+                                checked:bg-[#f97316] checked:border-[#f97316]
+                                focus:outline-none focus:ring-2 focus:ring-[#f97316] focus:ring-offset-0
+                                transition-colors cursor-pointer">
+                <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                    Remember my Audio Settings
+                </span>
+            </label>
+
+            <p class="text-sm text-white italic mb-4 pl-7">
+                When your audio devices reconnect (e.g., Bluetooth, USB), we'll automatically restore your previously saved input and output settings.
+            </p>
+
+            <!-- Tabs and Buttons Layout -->
+            <div class="flex gap-4">
+                <!-- Device Tables (Left Side) -->
+                <div class="flex-1">
+                    <!-- Tab Navigation -->
+                    <div class="flex border-b border-white/20 mb-3">
+                        <button type="button" id="audio_output_tab"
+                                onclick="switchAudioTab('output')"
+                                class="px-4 py-2 text-sm font-medium text-[#ececf1] border-b-2 border-[#f97316]
+                                        hover:text-white transition-colors">
+                            Output
+                        </button>
+                        <button type="button" id="audio_input_tab"
+                                onclick="switchAudioTab('input')"
+                                class="px-4 py-2 text-sm font-medium text-[#ececf1] border-b-2 border-transparent
+                                        hover:text-white transition-colors">
+                            Input
+                        </button>
+                    </div>
+
+                    <!-- Output Devices Table -->
+                    <div id="audio_output_table_container" class="audio-table-container">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="bg-[#152054]">
+                                    <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Name</th>
+                                    <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audio_output_tbody" class="bg-[#1a1f3a]">
+                                <tr class="hover:bg-white/10 cursor-pointer border-b border-white/10">
+                                    <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in Speakers</td>
+                                    <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+
+                    <!-- Input Devices Table (Hidden by default) -->
+                    <div id="audio_input_table_container" class="audio-table-container hidden">
+                        <table class="w-full">
+                            <thead>
+                                <tr class="bg-[#152054]">
+                                    <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Name</th>
+                                    <th class="text-left px-3 py-2 text-sm font-semibold text-[#ececf1] border-b border-white/20">Type</th>
+                                </tr>
+                            </thead>
+                            <tbody id="audio_input_tbody" class="bg-[#1a1f3a]">
+                                <tr class="hover:bg-white/10 cursor-pointer border-b border-white/10">
+                                    <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in Microphone</td>
+                                    <td class="px-3 py-2 text-sm text-[#ececf1]">Built-in</td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+
+                <!-- Buttons (Right Side) -->
+                <div class="flex flex-col gap-3 w-24">
+                    <button type="button" id="audio_save_button"
+                            class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                    hover:bg-white/10 transition-colors">
+                        Set/Save
+                    </button>
+                    <button type="button" id="audio_detect_button"
+                            class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                    hover:bg-white/10 transition-colors">
+                        Detect
+                    </button>
+                    <button type="button" id="audio_reset_button"
+                            class="px-4 py-2 bg-[#152054] border border-white/20 text-white text-sm rounded
+                                    hover:bg-white/10 transition-colors">
+                        Reset
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>

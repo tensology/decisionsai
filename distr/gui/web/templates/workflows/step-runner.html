@@ -1,0 +1,199 @@
+{% extends "base.html" %}
+
+{% block title %}Step Runner{% endblock %}
+
+{% block head_styles %}
+{{ super() }}
+<style>
+/* Fix native time picker text + icon color */
+.sr-time-input::-webkit-datetime-edit,
+.sr-time-input::-webkit-datetime-edit-fields-wrapper,
+.sr-time-input::-webkit-datetime-edit-hour-field,
+.sr-time-input::-webkit-datetime-edit-minute-field,
+.sr-time-input::-webkit-datetime-edit-ampm-field,
+.sr-time-input::-webkit-datetime-edit-text { color: #fff !important; }
+.sr-time-input::-webkit-calendar-picker-indicator {
+    filter: brightness(0) invert(1);
+    cursor: pointer;
+}
+/* Selected pill buttons */
+.sr-freq-btn[data-active="1"],
+.sr-detail-freq-btn[data-active="1"] {
+    background-color: #f97316;
+    border-color: #f97316;
+    color: #fff;
+}
+.sr-day-btn[data-selected="1"],
+.sr-detail-day-btn[data-selected="1"] {
+    background-color: #f97316;
+    border-color: #f97316;
+    color: #fff;
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container mx-auto px-6 py-8 max-w-7xl">
+    <div class="flex gap-6">
+        <!-- Left: instruction input + session list -->
+        <div class="w-96 flex-shrink-0 flex flex-col gap-4">
+            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
+                <div class="flex gap-1 border-b border-white/20 mb-3">
+                    <button type="button" id="step-runner-tab-once" class="step-runner-tab px-3 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px">One-time</button>
+                    <button type="button" id="step-runner-tab-scheduled" class="step-runner-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px">Scheduled actions</button>
+                </div>
+                <label class="block text-sm text-gray-400 mb-2">Instruction</label>
+                <textarea id="step-runner-instruction" rows="4" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y text-sm" placeholder="e.g., Check my calendar... or Set up a new project: create folder, add README..."></textarea>
+                <div id="step-runner-once-actions" class="mt-3">
+                    <button type="button" id="step-runner-plan" class="w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">Plan Steps</button>
+                </div>
+                <div id="step-runner-scheduled-actions" class="mt-3 hidden">
+                    <!-- Frequency pill buttons -->
+                    <div class="flex gap-1 mb-3">
+                        <button type="button" class="sr-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:text-white hover:border-[#f97316] transition-colors" data-freq="hourly">Every hour</button>
+                        <button type="button" class="sr-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:text-white hover:border-[#f97316] transition-colors" data-freq="daily">Daily</button>
+                        <button type="button" class="sr-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:text-white hover:border-[#f97316] transition-colors" data-freq="weekly">Weekly</button>
+                    </div>
+                    <input type="hidden" id="step-runner-schedule-preset" value="daily">
+                    <!-- Time picker (daily + weekly) -->
+                    <div id="step-runner-option-time" class="mb-3">
+                        <label class="block text-xs text-gray-500 mb-1">What time?</label>
+                        <div class="flex gap-2 items-center">
+                            <input type="time" id="step-runner-time" value="09:00" class="sr-time-input flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">
+                            <button type="button" id="step-runner-time-now" class="px-2 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 whitespace-nowrap">Now</button>
+                        </div>
+                    </div>
+                    <!-- Day picker (weekly only) -->
+                    <div id="step-runner-option-days" class="hidden mb-3">
+                        <label class="block text-xs text-gray-500 mb-2">Which days?</label>
+                        <div class="flex gap-1">
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="0">Sun</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="1">Mon</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="2">Tue</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="3">Wed</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="4">Thu</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="5">Fri</button>
+                            <button type="button" class="sr-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="6">Sat</button>
+                        </div>
+                    </div>
+                    <!-- Custom: plain English time description -->
+                    <div id="step-runner-option-custom" class="hidden mb-3"></div>
+                    <!-- Summary line -->
+                    <p id="step-runner-schedule-summary" class="text-xs text-[#f97316] mb-3"></p>
+                    <button type="button" id="step-runner-create-scheduled" class="w-full px-4 py-2 rounded bg-[#1a237e] text-white hover:bg-[#2338a0] text-sm font-medium border border-white/20">Schedule it</button>
+                </div>
+            </div>
+            <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
+                <div class="flex gap-2 mb-2">
+                    <input type="text" id="step-runner-search" placeholder="Search..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500">
+                    <select id="step-runner-filter" class="px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm">
+                        <option value="">All</option>
+                        <option value="instruction">One-time</option>
+                        <option value="scheduled">Scheduled actions</option>
+                        <option value="audit">Audit log</option>
+                    </select>
+                </div>
+                <div id="step-runner-sessions" class="flex-1 overflow-y-auto space-y-2">
+                    <p class="text-sm text-gray-500">No sessions yet.</p>
+                </div>
+            </div>
+        </div>
+
+        <!-- Right: session detail + steps -->
+        <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+            <div id="step-runner-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
+                <p class="text-gray-400 text-sm max-w-md mb-6">Enter a big instruction above and click Plan Steps. The assistant will break it into ordered sub-steps. You can approve, edit, or execute each step individually.</p>
+                <p class="text-xs text-gray-500">Desktop app must be running to execute steps.</p>
+            </div>
+            <div id="step-runner-detail" class="hidden flex-1 flex flex-col min-h-0">
+                <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between gap-2">
+                    <h2 id="step-runner-session-title" class="text-lg font-semibold text-white truncate max-w-md">Session</h2>
+                    <div class="flex items-center gap-2 flex-shrink-0">
+                        <span id="step-runner-session-schedule" class="text-xs px-2 py-1 rounded bg-blue-600/30 text-blue-300 hidden"></span>
+                        <span id="step-runner-session-status" class="text-xs px-2 py-1 rounded bg-white/10 text-gray-400">planned</span>
+                        <label id="step-runner-enabled-wrap" class="hidden items-center gap-1 cursor-pointer">
+                            <input type="checkbox" id="step-runner-enabled" checked>
+                            <span class="text-xs text-gray-400">Enabled</span>
+                        </label>
+                        <button type="button" id="step-runner-skip-step" class="hidden px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Skip step</button>
+                        <button type="button" id="step-runner-cancel" class="hidden px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Cancel</button>
+                        <button type="button" id="step-runner-run-all" class="px-2 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Run all</button>
+                        <button type="button" id="step-runner-duplicate" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Duplicate</button>
+                        <button type="button" id="step-runner-delete" class="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
+                    </div>
+                </div>
+                <div class="flex-1 overflow-y-auto p-6">
+                    <div id="step-runner-schedule-edit-wrap" class="hidden mb-4 p-3 rounded bg-[#152054]/50 border border-white/10">
+                        <h4 class="text-xs font-medium text-gray-400 mb-3">Edit schedule</h4>
+                        <!-- Frequency pills -->
+                        <div class="flex gap-1 mb-3">
+                            <button type="button" class="sr-detail-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="hourly">Every hour</button>
+                            <button type="button" class="sr-detail-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="daily">Daily</button>
+                            <button type="button" class="sr-detail-freq-btn flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="weekly">Weekly</button>
+                        </div>
+                        <input type="hidden" id="step-runner-detail-preset" value="daily">
+                        <!-- Time -->
+                        <div id="step-runner-detail-time-wrap">
+                            <label class="block text-xs text-gray-500 mb-1">What time?</label>
+                            <div class="flex gap-2 items-center mb-2">
+                                <input type="time" id="step-runner-detail-time" value="09:00" class="sr-time-input flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">
+                                <button type="button" id="step-runner-detail-time-now" class="px-2 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 whitespace-nowrap">Now</button>
+                            </div>
+                        </div>
+                        <!-- Days (weekly) -->
+                        <div id="step-runner-detail-days-wrap" class="hidden mb-2">
+                            <label class="block text-xs text-gray-500 mb-1">Which days?</label>
+                            <div class="flex gap-1">
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="0">Sun</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="1">Mon</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="2">Tue</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="3">Wed</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="4">Thu</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="5">Fri</button>
+                                <button type="button" class="sr-detail-day-btn flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="6">Sat</button>
+                            </div>
+                        </div>
+                        <!-- Custom description -->
+                        <div id="step-runner-detail-cron-wrap" class="hidden"></div>
+                        <p id="step-runner-detail-summary" class="text-xs text-[#f97316] mb-2"></p>
+                        <button type="button" id="step-runner-save-schedule" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs">Save schedule</button>
+                    </div>
+                    <!-- Detail tabs -->
+                    <div class="flex gap-1 border-b border-white/10 mb-4" id="step-runner-detail-tabs">
+                        <button type="button" class="step-detail-tab px-3 py-1.5 text-xs border-b-2 border-[#f97316] text-white" data-tab="steps">Steps</button>
+                        <button type="button" class="step-detail-tab px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-400" data-tab="history">Results History</button>
+                        <button type="button" class="step-detail-tab px-3 py-1.5 text-xs border-b-2 border-transparent text-gray-400" data-tab="context">Context &amp; Rules</button>
+                    </div>
+                    <!-- Steps panel (default) -->
+                    <div id="step-runner-detail-panel-steps">
+                        <div id="step-runner-runs" class="hidden mb-4 p-3 rounded bg-[#152054]/50 border border-white/10">
+                            <h4 class="text-xs font-medium text-gray-400 mb-2">Last runs</h4>
+                            <div id="step-runner-runs-list" class="space-y-1 text-xs text-gray-500"></div>
+                        </div>
+                        <div id="step-runner-steps" class="space-y-4">
+                            <!-- Steps rendered by JS -->
+                        </div>
+                    </div>
+                    <!-- Results History panel -->
+                    <div id="step-runner-detail-panel-history" class="hidden">
+                        <div id="step-runner-history-list" class="space-y-2 text-sm text-gray-400">
+                            <p class="text-xs text-gray-500">Loading run history...</p>
+                        </div>
+                    </div>
+                    <!-- Context & Rules panel -->
+                    <div id="step-runner-detail-panel-context" class="hidden">
+                        <label class="block text-xs text-gray-400 mb-2">Pre-context knowledge for the AI agent. This text is included as background information for every step in this workflow.</label>
+                        <textarea id="step-runner-context-rules" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/10 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="Enter context, rules, or background information for the AI agent..."></textarea>
+                        <p id="step-runner-context-save-status" class="text-xs text-gray-500 mt-1"></p>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/shared/js/api.js"></script>
+<script src="/workflows/static/js/step-runner.js"></script>
+{% endblock %}

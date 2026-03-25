@@ -1,0 +1,524 @@
+    <div class="mb-6 pb-4 border-b border-[#565869]">
+        <h2 class="text-xl font-semibold text-white mb-1">General Settings</h2>
+        <p class="text-sm text-gray-400">Basic application preferences</p>
+    </div>
+
+    <div class="space-y-6">
+        <!-- On Startup Group -->
+        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">On Startup</h3>
+
+            <!-- Startup Checkboxes Row -->
+            <div class="grid grid-cols-2 gap-6 mb-6">
+                <!-- Load Splash Sound -->
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="load_splash_sound" name="load_splash_sound"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                        Load Splash Sound
+                    </span>
+                </label>
+
+                <!-- Show About -->
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="show_about" name="show_about"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                        Show About
+                    </span>
+                </label>
+
+                <!-- Welcome/Greet Me -->
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="welcome_greet_me" name="welcome_greet_me"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                        Welcome/Greet Me
+                    </span>
+                </label>
+
+                <!-- Always Confirm File Operations -->
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="always_confirm_file_operations" name="always_confirm_file_operations"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                        Always Confirm File Operations
+                    </span>
+                </label>
+            </div>
+
+            <!-- Listening State on Startup Sub-Group -->
+            <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                <h4 class="text-base font-semibold text-white mb-4">Listening State on Startup</h4>
+                <div class="flex gap-8">
+                    <label class="flex items-center cursor-pointer group">
+                        <input type="radio" id="remember_listening" name="listening_state" value="remember"
+                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
+                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                        cursor-pointer">
+                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Remember Last Listening State
+                        </span>
+                    </label>
+
+                    <label class="flex items-center cursor-pointer group">
+                        <input type="radio" id="always_stop" name="listening_state" value="stop"
+                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
+                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                        cursor-pointer">
+                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Always Stop Listening
+                        </span>
+                    </label>
+
+                    <label class="flex items-center cursor-pointer group">
+                        <input type="radio" id="always_start" name="listening_state" value="start"
+                                class="w-4 h-4 border border-[#565869] text-[#10a37f]
+                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                        cursor-pointer">
+                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Always Start Listening
+                        </span>
+                    </label>
+                </div>
+            </div>
+        </div>
+
+        <!-- Voice Setup Group -->
+        <div id="voice_setup_wrapper" class="w-full">
+            <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+                <!-- Row: Voice Setup title (left) + VAD (right) -->
+                <div class="flex flex-wrap items-end justify-between gap-6 mb-4">
+                    <h3 class="text-lg font-semibold text-white">Voice Setup</h3>
+                    <div class="max-w-xs w-full min-w-[12rem] ml-auto">
+                        <label for="vad_level" class="block text-sm font-semibold text-[#ececf1] mb-2">VAD Level:</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="vad_level" name="vad_level"
+                                    min="0" max="100" value="50" step="1"
+                                    class="flex-1 min-w-0 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="vad_level_value" class="text-sm text-[#ececf1] w-12 text-right shrink-0">50%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Provider and Voice Selection Row -->
+                <div class="flex gap-4 mb-6 items-end">
+                    <div class="w-1/3">
+                    <label for="tts_provider" class="block text-sm font-medium text-[#ececf1] mb-2">Provider:</label>
+                    <select id="tts_provider" name="tts_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <!-- Populated dynamically from /api/tts/providers -->
+                    </select>
+                </div>
+
+                <div class="w-1/3">
+                    <label for="tts_voice" class="block text-sm font-medium text-[#ececf1] mb-2">Voice:</label>
+                    <select id="tts_voice" name="tts_voice"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 text-white
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="af" selected>af (Female, American)</option>
+                    </select>
+                </div>
+
+                <div class="flex gap-2 items-center">
+                        <button type="button" id="add_custom_voice_btn"
+                                class="h-[38px] px-3 bg-[#454655] border border-[#565869] rounded-md
+                                        hover:bg-[#565869] transition-colors text-xs text-[#ececf1] whitespace-nowrap hidden"
+                                title="Add a custom cloned voice">
+                            + Custom
+                        </button>
+                        <button type="button" id="delete_custom_voice_btn"
+                                class="h-[38px] w-[38px] bg-[#454655] border border-[#565869] rounded-md
+                                        hover:bg-red-900/50 hover:border-red-500/50 transition-colors flex items-center justify-center flex-shrink-0 hidden"
+                                title="Delete this custom voice"
+                                onclick="deleteSelectedCustomVoice()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/>
+                            </svg>
+                        </button>
+                        <button type="button" id="edit_custom_voice_btn"
+                                class="h-[38px] w-[38px] bg-[#454655] border border-[#565869] rounded-md
+                                        hover:bg-[#565869] transition-colors flex items-center justify-center flex-shrink-0 hidden"
+                                title="Edit personality"
+                                onclick="openEditCustomVoiceModal()">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ececf1" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/>
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/>
+                            </svg>
+                        </button>
+                        <button type="button" id="play_voice_button"
+                                class="h-[38px] w-[38px] bg-[#454655] border border-[#565869] rounded-md
+                                        hover:bg-[#565869] transition-colors flex items-center justify-center flex-shrink-0"
+                                onclick="toggleVoicePlayback()">
+                            <svg id="play_icon" width="14" height="14" viewBox="0 0 24 24" fill="white">
+                                <path d="M8 5v14l11-7z"/>
+                            </svg>
+                            <svg id="stop_icon" width="14" height="14" viewBox="0 0 24 24" fill="white" class="hidden">
+                                <rect x="6" y="6" width="12" height="12" rx="1"/>
+                            </svg>
+                            <svg id="play_spinner" class="hidden animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2.5">
+                                <circle cx="12" cy="12" r="10" stroke-opacity="0.3"/>
+                                <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+
+                <!-- Two Sliders Row (VAD is in header row above) -->
+                <div class="grid grid-cols-2 gap-6 mb-4">
+                    <!-- Playback Speed -->
+                    <div>
+                        <label for="playback_speed" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                            Playback Speed:
+                        </label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="playback_speed" name="playback_speed"
+                                    min="0.5" max="2.0" value="1.0" step="0.1"
+                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="playback_speed_value" class="text-sm text-[#ececf1] w-12 text-right">1.0x</span>
+                        </div>
+                    </div>
+
+                    <!-- Speech Volume -->
+                    <div>
+                        <label for="speech_volume" class="block text-sm font-semibold text-[#ececf1] mb-2">
+                            Speech Volume:
+                        </label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="speech_volume" name="speech_volume"
+                                    min="0" max="100" value="100" step="1"
+                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="speech_volume_value" class="text-sm text-[#ececf1] w-12 text-right">100%</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- ElevenLabs voice options (only when provider is ElevenLabs), before Audio Input Monitor -->
+                <div id="elevenlabs_voice_options" class="hidden grid grid-cols-2 md:grid-cols-4 gap-6 mb-4">
+                    <div>
+                        <label for="elevenlabs_stability" class="block text-sm font-semibold text-[#ececf1] mb-2">Stability:</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="elevenlabs_stability" name="elevenlabs_stability"
+                                    min="0" max="100" value="50" step="1"
+                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="elevenlabs_stability_value" class="text-sm text-[#ececf1] w-12 text-right">50%</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="elevenlabs_similarity" class="block text-sm font-semibold text-[#ececf1] mb-2">Similarity:</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="elevenlabs_similarity" name="elevenlabs_similarity"
+                                    min="0" max="100" value="60" step="1"
+                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="elevenlabs_similarity_value" class="text-sm text-[#ececf1] w-12 text-right">60%</span>
+                        </div>
+                    </div>
+                    <div>
+                        <label for="elevenlabs_style" class="block text-sm font-semibold text-[#ececf1] mb-2">Style:</label>
+                        <div class="flex items-center gap-3">
+                            <input type="range" id="elevenlabs_style" name="elevenlabs_style"
+                                    min="0" max="100" value="25" step="1"
+                                    class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="elevenlabs_style_value" class="text-sm text-[#ececf1] w-12 text-right">25%</span>
+                        </div>
+                    </div>
+                    <div class="flex items-end pb-1">
+                        <label class="flex items-center cursor-pointer group">
+                            <input type="checkbox" id="elevenlabs_speaker_boost" name="elevenlabs_speaker_boost" checked
+                                    class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                            checked:bg-[#10a37f] checked:border-[#10a37f]
+                                            focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                            transition-colors cursor-pointer">
+                            <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">Speaker boost</span>
+                        </label>
+                    </div>
+                </div>
+                <!-- VAD bar: below voice card, same width, floating right (fill grows from right) -->
+                <div class="mt-2 w-full flex justify-end">
+                    <div id="audio_monitor_container" class="w-full max-w-full cursor-pointer flex flex-col items-end" title="Click to enable or disable microphone level">
+                        <p id="audio_monitor_status" class="text-xs text-[#7a7c8c] mb-1 order-first">Mic off — click bar to enable</p>
+                        <div class="w-full h-2 bg-[#40414f] border border-[#565869] rounded-full overflow-hidden flex justify-end">
+                            <div id="audio_level_bar" class="h-full bg-[#10a37f] transition-all duration-75 ease-out" style="width: 0%"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Oracle Settings Group -->
+        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">Oracle Settings</h3>
+
+            <div class="grid grid-cols-2 gap-6">
+                <!-- Restore Position -->
+                <div>
+                    <label class="flex items-center cursor-pointer group">
+                        <input type="checkbox" id="restore_position" name="restore_position" checked
+                                class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                        checked:bg-[#10a37f] checked:border-[#10a37f]
+                                        focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                        transition-colors cursor-pointer">
+                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Restore Position
+                        </span>
+                    </label>
+                </div>
+
+                <!-- Position -->
+                <div>
+                    <label for="oracle_position" class="block text-sm font-medium text-[#ececf1] mb-2">Position:</label>
+                    <select id="oracle_position" name="oracle_position"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="custom">Custom</option>
+                        <option value="top_left">Top Left</option>
+                        <option value="top_right">Top Right</option>
+                        <option value="middle_left">Middle Left</option>
+                        <option value="middle_right">Middle Right</option>
+                        <option value="bottom_left">Bottom Left</option>
+                        <option value="bottom_right">Bottom Right</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Custom Voice Modal -->
+    <div id="custom_voice_modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-[#565869]">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Add Custom Voice</h3>
+                    <p id="cv_modal_provider_label" class="text-xs text-gray-400 mt-0.5"></p>
+                </div>
+                <button type="button" onclick="closeCustomVoiceModal()"
+                        class="text-gray-400 hover:text-white transition-colors text-xl leading-none">&times;</button>
+            </div>
+            <!-- Body -->
+            <form id="cv_form" class="px-6 py-5 space-y-4" onsubmit="return submitCustomVoice(event)">
+                <input type="hidden" id="cv_provider" name="provider" value="">
+                <!-- Name -->
+                <div>
+                    <label for="cv_name" class="block text-sm font-medium text-[#ececf1] mb-1">Voice Name</label>
+                    <input type="text" id="cv_name" name="name" required maxlength="60" placeholder="e.g. My Voice"
+                           class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                  focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500">
+                </div>
+                <!-- Audio Source Toggle -->
+                <div>
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Voice Sample</label>
+                    <div class="flex items-center gap-1 bg-[#0d1117] border border-[#565869] rounded-md p-0.5 w-fit mb-3">
+                        <button type="button" id="cv_mode_upload"
+                                onclick="setCvAudioMode('upload')"
+                                class="px-4 py-1.5 text-sm rounded transition-colors bg-[#10a37f] text-white">
+                            Upload File
+                        </button>
+                        <button type="button" id="cv_mode_record"
+                                onclick="setCvAudioMode('record')"
+                                class="px-4 py-1.5 text-sm rounded transition-colors text-gray-400 hover:text-white">
+                            Record Voice
+                        </button>
+                    </div>
+                </div>
+                <!-- Upload panel -->
+                <div id="cv_upload_panel">
+                    <input type="file" id="cv_audio" name="audio" multiple
+                           accept=".wav,.mp3,.m4a,.ogg,.flac,.webm"
+                           class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md
+                                  file:border file:border-[#565869] file:bg-[#454655] file:text-[#ececf1] file:text-xs
+                                  file:cursor-pointer file:hover:bg-[#565869] file:transition-colors cursor-pointer">
+                    <p class="text-xs text-gray-500 mt-1">Upload 1 or more audio clips of the voice to clone (.wav, .mp3, .m4a, .ogg, .flac)</p>
+                </div>
+                <!-- Record panel (wizard) -->
+                <div id="cv_record_panel" class="hidden">
+                    <div class="bg-[#0d1117] border border-[#565869] rounded-lg p-4">
+                        <!-- Step 1: Ready to record -->
+                        <div id="cv_rec_ready">
+                            <p class="text-sm text-[#ececf1] mb-2">Read the following passage aloud in your natural voice:</p>
+                            <div class="bg-[#161b33] border border-[#2a2f4a] rounded-md p-3 mb-3">
+                                <p class="text-sm text-gray-300 italic leading-relaxed" id="cv_rec_script">
+                                    "The sun slowly set behind the mountains, painting the sky in shades of orange and purple.
+                                    A gentle breeze carried the scent of wildflowers across the valley, while birds sang their
+                                    evening songs from the treetops. It was the kind of moment that made everything feel peaceful."
+                                </p>
+                            </div>
+                            <button type="button" onclick="startCvRecording()"
+                                    class="flex items-center gap-2 px-4 py-2 text-sm text-white bg-red-600 rounded-md
+                                           hover:bg-red-700 transition-colors">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                                    <circle cx="12" cy="12" r="8"/>
+                                </svg>
+                                Start Recording
+                            </button>
+                        </div>
+                        <!-- Step 2: Recording in progress -->
+                        <div id="cv_rec_active" class="hidden">
+                            <p class="text-sm text-[#ececf1] mb-2">Recording... read the passage now:</p>
+                            <div class="bg-[#161b33] border border-[#2a2f4a] rounded-md p-3 mb-3">
+                                <p class="text-sm text-gray-300 italic leading-relaxed" id="cv_rec_script_active">
+                                    "The sun slowly set behind the mountains, painting the sky in shades of orange and purple.
+                                    A gentle breeze carried the scent of wildflowers across the valley, while birds sang their
+                                    evening songs from the treetops. It was the kind of moment that made everything feel peaceful."
+                                </p>
+                            </div>
+                            <div class="flex items-center gap-3">
+                                <div class="flex items-center gap-2">
+                                    <span class="inline-block w-3 h-3 bg-red-500 rounded-full animate-pulse"></span>
+                                    <span class="text-sm text-red-400 font-mono" id="cv_rec_timer">0:00</span>
+                                    <span class="text-xs text-gray-500">/ 0:12</span>
+                                </div>
+                                <!-- Level meter -->
+                                <div class="flex-1 h-2 bg-[#161b33] rounded-full overflow-hidden">
+                                    <div id="cv_rec_level" class="h-full bg-[#10a37f] rounded-full transition-all duration-75" style="width: 0%"></div>
+                                </div>
+                                <button type="button" onclick="stopCvRecording()"
+                                        class="px-3 py-1.5 text-xs text-white bg-[#454655] border border-[#565869] rounded-md
+                                               hover:bg-[#565869] transition-colors">
+                                    Stop
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Step 3: Recording done -->
+                        <div id="cv_rec_done" class="hidden">
+                            <div class="flex items-center justify-between">
+                                <div class="flex items-center gap-2">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#10a37f" stroke-width="2.5">
+                                        <path d="M20 6L9 17l-5-5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    <span class="text-sm text-[#ececf1]">Recording captured</span>
+                                    <span class="text-xs text-gray-500" id="cv_rec_duration"></span>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" onclick="playCvRecording()"
+                                            class="px-3 py-1.5 text-xs text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md
+                                                   hover:bg-[#565869] transition-colors" id="cv_rec_play_btn">
+                                        ▶ Play
+                                    </button>
+                                    <button type="button" onclick="retakeCvRecording()"
+                                            class="px-3 py-1.5 text-xs text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md
+                                                   hover:bg-[#565869] transition-colors">
+                                        ↻ Retake
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <!-- Hidden transcription field (auto-filled, not shown to user) -->
+                <textarea id="cv_prompt" name="system_prompt" class="hidden"></textarea>
+                <p id="cv_transcribing" class="text-xs text-amber-400 hidden">
+                    <span class="inline-block animate-pulse">⏳</span> Transcribing audio...
+                </p>
+                <!-- Personality (optional — appended to agent system prompt when this voice is active) -->
+                <div>
+                    <label for="cv_personality" class="block text-sm font-medium text-[#ececf1] mb-1">
+                        Personality <span class="text-gray-500 font-normal">(optional)</span>
+                    </label>
+                    <textarea id="cv_personality" name="personality" rows="2" maxlength="1000"
+                              placeholder="e.g. You speak with a warm Australian accent. You're witty and laid-back."
+                              class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                     focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500 resize-none"></textarea>
+                </div>
+                <!-- Gender toggle (picks base voice for Kokoro voice cloning) -->
+                <div id="cv_gender_row">
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Voice Gender</label>
+                    <div class="flex items-center gap-1 bg-[#0d1117] border border-[#565869] rounded-md p-0.5 w-fit">
+                        <button type="button" id="cv_gender_female"
+                                onclick="setCvGender('female')"
+                                class="px-4 py-1.5 text-sm rounded transition-colors bg-[#10a37f] text-white">
+                            Female
+                        </button>
+                        <button type="button" id="cv_gender_male"
+                                onclick="setCvGender('male')"
+                                class="px-4 py-1.5 text-sm rounded transition-colors text-gray-400 hover:text-white">
+                            Male
+                        </button>
+                    </div>
+                    <input type="hidden" id="cv_gender" name="gender" value="female">
+                </div>
+                <!-- Limit info (ElevenLabs only) -->
+                <p id="cv_limit_info" class="text-xs text-amber-400 hidden"></p>
+                <!-- Error -->
+                <p id="cv_error" class="text-xs text-red-400 hidden"></p>
+                <!-- Actions -->
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeCustomVoiceModal()"
+                            class="px-4 py-2 text-sm text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md
+                                   hover:bg-[#565869] transition-colors">Cancel</button>
+                    <button type="submit" id="cv_submit_btn"
+                            class="px-4 py-2 text-sm text-white bg-[#10a37f] rounded-md hover:bg-[#0d8c6d] transition-colors
+                                   disabled:opacity-50 disabled:cursor-not-allowed">
+                        Create Voice
+                    </button>
+                </div>
+            </form>
+            <!-- Processing overlay (shown after submit) -->
+            <div id="cv_processing" class="hidden px-6 py-8 text-center">
+                <svg class="animate-spin mx-auto mb-3" width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="#10a37f" stroke-width="2.5">
+                    <circle cx="12" cy="12" r="10" stroke-opacity="0.3"/>
+                    <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
+                </svg>
+                <p id="cv_processing_text" class="text-sm text-[#ececf1]">Processing voice clone...</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Edit Custom Voice Modal (personality only) -->
+    <div id="edit_voice_modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60 backdrop-blur-sm">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-2xl w-full max-w-md mx-4 overflow-hidden">
+            <!-- Header -->
+            <div class="flex items-center justify-between px-6 py-4 border-b border-[#565869]">
+                <div>
+                    <h3 class="text-lg font-semibold text-white">Edit Voice</h3>
+                    <p id="edit_voice_name" class="text-xs text-gray-400 mt-0.5"></p>
+                </div>
+                <button type="button" onclick="closeEditVoiceModal()"
+                        class="text-gray-400 hover:text-white transition-colors text-xl leading-none">&times;</button>
+            </div>
+            <!-- Body -->
+            <form id="edit_voice_form" class="px-6 py-5 space-y-4" onsubmit="return submitEditVoice(event)">
+                <input type="hidden" id="edit_voice_id" value="">
+                <!-- Personality -->
+                <div>
+                    <label for="edit_voice_personality" class="block text-sm font-medium text-[#ececf1] mb-1">
+                        Personality <span class="text-gray-500 font-normal">(optional)</span>
+                    </label>
+                    <textarea id="edit_voice_personality" name="personality" rows="4" maxlength="1000"
+                              placeholder="e.g. You speak with a warm Australian accent. You're witty and laid-back."
+                              class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                     focus:outline-none focus:border-[#10a37f] transition-colors placeholder-gray-500 resize-none"></textarea>
+                    <p class="text-xs text-gray-500 mt-1">This is appended to the agent's system prompt when this voice is active.</p>
+                </div>
+                <!-- Error -->
+                <p id="edit_voice_error" class="text-xs text-red-400 hidden"></p>
+                <!-- Actions -->
+                <div class="flex justify-end gap-3 pt-2">
+                    <button type="button" onclick="closeEditVoiceModal()"
+                            class="px-4 py-2 text-sm text-[#ececf1] bg-[#454655] border border-[#565869] rounded-md
+                                   hover:bg-[#565869] transition-colors">Cancel</button>
+                    <button type="submit" id="edit_voice_submit_btn"
+                            class="px-4 py-2 text-sm text-white bg-[#10a37f] rounded-md hover:bg-[#0d8c6d] transition-colors
+                                   disabled:opacity-50 disabled:cursor-not-allowed">
+                        Save
+                    </button>
+                </div>
+            </form>
+        </div>
+    </div>

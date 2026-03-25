@@ -1,0 +1,81 @@
+<!-- Skins Tab -->
+    <div class="mb-6 pb-4 border-b border-[#565869]">
+        <h2 class="text-xl font-semibold text-white mb-1">Skins</h2>
+        <p class="text-sm text-gray-400">Select and customize your oracle skin</p>
+    </div>
+
+    <div class="space-y-6">
+        <!-- Size slider (universal) -->
+        <div class="flex items-center justify-center gap-3 max-w-sm mx-auto">
+            <label class="text-sm font-medium text-[#ececf1] whitespace-nowrap">Size</label>
+            <input type="range" id="skins_oracle_size" min="4" max="10" value="9" step="1"
+                   class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+            <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
+        </div>
+
+        <!-- Skin Grid — 4 per row, big preview cards -->
+        <div id="skins_grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
+            <!-- Dynamically populated -->
+        </div>
+
+        <!-- Skin Detail Panel (shown when a skin is clicked) -->
+        <div id="skin_detail_panel" class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a] hidden">
+            <!-- Oracle detail: GIF picker -->
+            <div id="oracle_detail" class="hidden">
+                <div class="flex items-center gap-4 mb-4">
+                    <h3 class="text-lg font-semibold text-white" id="oracle_detail_name">Oracle</h3>
+                </div>
+                <div class="flex gap-6 items-start">
+                    <div class="flex-1">
+                        <label class="block text-sm font-medium text-[#ececf1] mb-2">Background</label>
+                        <select id="oracle_gif_select"
+                                class="bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                       focus:outline-none focus:border-[#10a37f] transition-colors w-full max-w-sm">
+                        </select>
+                    </div>
+                    <div class="flex-shrink-0">
+                        <div id="oracle_preview_container" class="w-48 h-48 rounded-full bg-[#0d1117] border-2 border-[#565869] flex items-center justify-center overflow-hidden">
+                            <span id="oracle_preview_placeholder" class="text-xs text-gray-500">Preview</span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Avatar detail: Event hooks editor -->
+            <div id="avatar_detail" class="hidden">
+                <div class="flex items-center gap-4 mb-4">
+                    <h3 class="text-lg font-semibold text-white"><span id="avatar_editor_name"></span> — Event Hooks</h3>
+                </div>
+                <div class="flex gap-6">
+                    <div class="flex-1 overflow-x-auto">
+                        <table class="w-full text-sm text-left">
+                            <thead>
+                                <tr class="border-b border-[#565869] text-[#ececf1]">
+                                    <th class="py-2 px-2 font-medium">Hook</th>
+                                    <th class="py-2 px-2 font-medium">Animation</th>
+                                    <th class="py-2 px-2 font-medium">Playback</th>
+                                </tr>
+                            </thead>
+                            <tbody id="avatar_hooks_tbody"></tbody>
+                        </table>
+                    </div>
+                    <div class="w-48 flex-shrink-0">
+                        <div class="border border-[#565869] rounded-lg p-3 bg-[#0d1117]">
+                            <h4 class="text-sm font-medium text-[#ececf1] mb-2">Live Preview</h4>
+                            <div id="skin_preview_container" class="w-full aspect-square bg-transparent rounded flex items-center justify-center overflow-hidden">
+                                <video id="skin_preview_video" class="w-full h-full object-contain" loop muted playsinline style="display:none"></video>
+                                <span id="skin_preview_placeholder" class="text-xs text-gray-500">Select a hook</span>
+                            </div>
+                            <p id="skin_preview_filename" class="text-xs text-gray-500 mt-1 truncate text-center"></p>
+                        </div>
+                    </div>
+                </div>
+                <div class="mt-4 flex justify-end">
+                    <button type="button" id="skin_editor_save"
+                            class="px-5 py-2 rounded-md text-sm font-medium bg-[#10a37f] text-white hover:bg-[#0d8c6d] transition-colors">
+                        Save
+                    </button>
+                </div>
+            </div>
+        </div>
+    </div>

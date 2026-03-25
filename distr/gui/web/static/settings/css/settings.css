@@ -1,0 +1,471 @@
+/* Custom styles for settings page - website styling (#0d1642, #1a237e, orange accent) */
+
+/* Navigation */
+#settings-nav .tab-button.active {
+    background-color: #f97316 !important;
+    color: #ffffff !important;
+}
+.nav-tab.active {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #f97316;
+}
+.nav-settings-active {
+    background-color: rgba(255, 255, 255, 0.1);
+    color: #f97316 !important;
+}
+
+/* Smooth scroll behavior */
+html {
+    scroll-behavior: smooth;
+}
+
+/* Reload / Save buttons: floated to the right, section content starts at top */
+.settings-actions-float {
+    position: absolute;
+    top: 2rem;
+    right: 2rem;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    z-index: 10;
+}
+/* Hide Save/Reload on Activity Log tab */
+.logs-tab-active .settings-actions-float {
+    display: none !important;
+}
+
+/* ── Activity Log colorized output ── */
+#logs_content .log-ts       { color: #555d6e; }
+#logs_content .log-sep      { color: #333a4a; }
+#logs_content .log-mod      { color: #5a7a9e; font-size: 0.9em; }
+#logs_content .log-plain    { color: #6b737e; }
+
+/* Level badges — single letter (I, W, E) */
+#logs_content .log-lvl-debug    { color: #555d6e; }
+#logs_content .log-lvl-info     { color: #3d6fa0; font-weight: 600; }
+#logs_content .log-lvl-warning  { color: #c49020; font-weight: 600; }
+#logs_content .log-lvl-error    { color: #e04840; font-weight: 600; }
+#logs_content .log-lvl-critical { color: #ff4040; font-weight: 700; text-decoration: underline; }
+
+/* Message text inherits level color lightly */
+#logs_content .log-msg-debug    { color: #6b737e; }
+#logs_content .log-msg-info     { color: #b0b8c4; }
+#logs_content .log-msg-warning  { color: #d4a850; }
+#logs_content .log-msg-error    { color: #f09088; }
+#logs_content .log-msg-critical { color: #ff6b6b; }
+
+/* Highlight key events */
+#logs_content .log-highlight-user    { color: #7ee787; }
+#logs_content .log-highlight-tts     { color: #a5b4fc; }
+#logs_content .log-highlight-interrupt { color: #fbbf24; }
+.settings-tab-inner {
+    padding-top: 0;
+}
+
+/* Settings sidebar: ensure all section links are always visible */
+.container.mx-auto .flex.gap-6 {
+    overflow: visible;
+}
+#settings-sidebar,
+.settings-sidebar {
+    min-width: 14rem;
+    overflow: visible;
+    flex-shrink: 0;
+}
+#settings-nav {
+    overflow: visible;
+}
+#settings-nav .tab-button {
+    display: block !important;
+    visibility: visible !important;
+    opacity: 1 !important;
+}
+
+/* Tab buttons (also used as links for #hash URLs) */
+.tab-button {
+    background-color: transparent;
+    color: #ececf1;
+    border: none;
+    text-decoration: none;
+}
+
+.tab-button:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.tab-button.active {
+    background-color: #f97316;
+    color: #ffffff;
+}
+
+/* Tab panels: only the active one is visible (does not rely on Tailwind hidden/block) */
+.tab-content {
+    display: none;
+}
+/* Default: show General so content is visible before JS runs; JS will then show correct tab from hash */
+#tab-general.tab-content {
+    display: block;
+}
+.tab-content.active-tab-panel {
+    display: block !important;
+}
+
+/* Range slider styling */
+input[type="range"] {
+    -webkit-appearance: none;
+    appearance: none;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #f97316;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-moz-range-thumb {
+    width: 18px;
+    height: 18px;
+    border-radius: 50%;
+    background: #f97316;
+    cursor: pointer;
+    border: 2px solid #ffffff;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+}
+
+input[type="range"]::-webkit-slider-thumb:hover {
+    background: #fb923c;
+}
+
+input[type="range"]::-moz-range-thumb:hover {
+    background: #fb923c;
+}
+
+/* Checkbox custom styling */
+input[type="checkbox"]:checked {
+    background-color: #f97316;
+    border-color: #f97316;
+    background-image: url("data:image/svg+xml,%3csvg viewBox='0 0 16 16' fill='white' xmlns='http://www.w3.org/2000/svg'%3e%3cpath d='M12.207 4.793a1 1 0 010 1.414l-5 5a1 1 0 01-1.414 0l-2-2a1 1 0 011.414-1.414L6.5 9.086l4.293-4.293a1 1 0 011.414 0z'/%3e%3c/svg%3e");
+    background-size: 100% 100%;
+    background-position: center;
+    background-repeat: no-repeat;
+}
+
+/* Select dropdown arrow */
+select {
+    appearance: none;
+    -webkit-appearance: none;
+    -moz-appearance: none;
+    background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%23ececf1' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+    background-position: right 0.5rem center;
+    background-repeat: no-repeat;
+    background-size: 1.5em 1.5em;
+    padding-right: 2.5rem;
+}
+
+/* Scrollbar styling */
+::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+}
+
+::-webkit-scrollbar-track {
+    background: #0d1642;
+}
+
+::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+}
+
+/* Smooth transitions */
+* {
+    transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+/* Focus visible for accessibility */
+button:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+    outline: 2px solid #f97316;
+    outline-offset: 2px;
+}
+
+/* Validation indicators */
+.validation-indicator {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    text-align: center;
+    line-height: 20px;
+    font-size: 16px;
+    font-weight: bold;
+    background: transparent;
+}
+
+.validation-indicator.valid {
+    color: #f97316;
+}
+
+.validation-indicator.invalid {
+    color: #ef4444;
+}
+
+.validation-indicator.validating {
+    color: #f59e0b;
+    animation: spin 1s linear infinite;
+}
+
+@keyframes spin {
+    from {
+        transform: rotate(0deg);
+    }
+    to {
+        transform: rotate(360deg);
+    }
+}
+
+/* Provider row styling */
+.provider-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 12px 0;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.provider-row:last-child {
+    border-bottom: none;
+}
+
+.provider-checkbox {
+    flex-shrink: 0;
+}
+
+.provider-label {
+    flex-shrink: 0;
+    width: 120px;
+    color: #ececf1;
+    font-size: 14px;
+}
+
+.provider-input-wrapper {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.validate-btn {
+    flex-shrink: 0;
+    padding: 6px 12px;
+    background-color: #152054;
+    color: #ececf1;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 4px;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.validate-btn:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.validate-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Password toggle button */
+.toggle-password-btn {
+    position: absolute;
+    right: 8px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    padding: 4px;
+    line-height: 1;
+    color: #ececf1;
+    opacity: 0.5;
+    transition: opacity 0.2s;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.toggle-password-btn:hover {
+    opacity: 0.8;
+}
+
+.toggle-password-btn:focus {
+    outline: none;
+}
+
+.toggle-password-btn .eye-icon {
+    width: 18px;
+    height: 18px;
+}
+
+.toggle-password-btn .eye-icon.hidden {
+    display: none;
+}
+
+/* Relative positioning for input wrapper */
+.relative {
+    position: relative;
+}
+
+/* API key info callouts */
+.api-key-info {
+    margin-top: 8px;
+    padding: 10px 12px;
+    background-color: rgba(249, 115, 22, 0.1);
+    border-left: 3px solid #f97316;
+    border-radius: 4px;
+    font-size: 13px;
+    color: #b4b4b4;
+    line-height: 1.5;
+}
+
+.api-key-info a {
+    color: #f97316;
+    text-decoration: none;
+    font-weight: 500;
+}
+
+.api-key-info a:hover {
+    color: #fb923c;
+    text-decoration: underline;
+}
+
+/* Audio table styling */
+.audio-table-container {
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 6px;
+    overflow: hidden;
+    max-height: 300px;
+    overflow-y: auto;
+}
+
+.audio-table-container table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+.audio-table-container th {
+    position: sticky;
+    top: 0;
+    background-color: #152054;
+    z-index: 10;
+}
+
+.audio-table-container tbody tr:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+}
+
+.audio-table-container tbody tr.selected {
+    background-color: #007bff;
+}
+
+/* Ollama model browser modal: table layout */
+.ollama-browser-list-container {
+    min-height: 120px;
+}
+.ollama-browser-table-wrap {
+    border: 1px solid #565869;
+    border-radius: 6px;
+    overflow: hidden;
+    background-color: #1a1f3a;
+}
+.ollama-browser-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.875rem;
+}
+.ollama-browser-table thead th {
+    position: sticky;
+    top: 0;
+    background-color: #40414f;
+    color: #9ca3af;
+    font-weight: 500;
+    text-align: left;
+    padding: 10px 12px;
+    border-bottom: 1px solid #565869;
+    z-index: 1;
+}
+.ollama-browser-table tbody td {
+    padding: 10px 12px;
+    border-bottom: 1px solid #565869;
+    color: #ececf1;
+    vertical-align: middle;
+}
+.ollama-browser-table tbody tr:last-child td {
+    border-bottom: none;
+}
+.ollama-browser-table tbody tr:hover {
+    background-color: rgba(86, 88, 105, 0.4);
+}
+.ollama-browser-table .ollama-model-name {
+    font-weight: 500;
+    color: #ffffff;
+}
+.ollama-browser-table .ollama-model-sizes {
+    white-space: normal;
+}
+
+/* Ollama download modal: spinner while downloading */
+.ollama-download-spinner {
+    border: 2px solid #565869;
+    border-top-color: #10a37f;
+    border-radius: 50%;
+    animation: ollama-download-spin 0.8s linear infinite;
+}
+@keyframes ollama-download-spin {
+    to { transform: rotate(360deg); }
+}
+
+/* Directory tree (advanced): row line + children block below, same arrow rotated on expand */
+.dir-node {
+    display: block;
+}
+.dir-row-line {
+    display: flex;
+    align-items: center;
+}
+.dir-children {
+    display: block;
+    margin-left: 0;
+}
+.dir-children.hidden {
+    display: none;
+}
+.dir-toggle {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    transition: transform 0.15s ease;
+}
+.dir-toggle.dir-expanded {
+    transform: rotate(90deg);
+}
+
+/* Parent folder checkbox when some (but not all) descendants are checked */
+.dir-tree-cb:indeterminate,
+.dir-tree-cb[indeterminate] {
+    opacity: 0.7;
+    background-color: #565869 !important;
+    border-color: #565869 !important;
+}

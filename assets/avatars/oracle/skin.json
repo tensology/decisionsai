@@ -1,0 +1,198 @@
+{
+  "type": "oracle",
+  "name": "Oracle",
+  "rendering": {
+    "shape": "round",
+    "border": true,
+    "shadow": true,
+    "glow_on_hold": true,
+    "image_scale": 1.55,
+    "image_offset_x": 0,
+    "image_offset_y": 0,
+    "chroma_key": null,
+    "chroma_threshold": 30
+  },
+  "events": {
+    "idle": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "pingpong"
+    },
+    "hands_free_listening": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": true,
+      "glow_color": [
+        0,
+        170,
+        255
+      ],
+      "glow_speed": 875,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "ptt_active": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": true,
+      "glow_color": [
+        0,
+        170,
+        255
+      ],
+      "glow_speed": 875,
+      "glow_style": "pulse",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "dictation": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": true,
+      "glow_color": [
+        255,
+        193,
+        7
+      ],
+      "glow_speed": 1000,
+      "glow_style": "fade",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "recording_action": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "recording",
+      "playback": "loop"
+    },
+    "file_drop_success": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": true,
+      "glow_color": [
+        0,
+        255,
+        0
+      ],
+      "glow_speed": 500,
+      "glow_style": "flash",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "tts_response": {
+      "animation": "4.webm",
+      "show_player": true,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "running_action": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "running_step_runner": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "snippet_copied": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "thinking": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    },
+    "needs_attention": {
+      "animation": "4.webm",
+      "show_player": false,
+      "show_chat_bubble": false,
+      "glow": false,
+      "glow_color": [
+        0,
+        0,
+        0
+      ],
+      "glow_speed": 1000,
+      "glow_style": "breathing",
+      "tray_icon": "default",
+      "playback": "loop"
+    }
+  },
+  "transitions": {}
+}

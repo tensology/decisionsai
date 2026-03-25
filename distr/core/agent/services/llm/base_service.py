@@ -1,0 +1,177 @@
+"""
+Base LLM Service
+
+Shared logic for all LLM providers (OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Ollama).
+Provider subclasses only need to implement client initialization and _generate_response().
+
+BaseLLMService inherits from LLMSharedMixin which provides:
+- process_frame (voice commands, dictation, fast actions, etc.)
+- process_chat_input (vision, provider verification)
+- send_welcome_message (with conversation summaries)
+- on_chat_changed / on_chat_deleted / on_chat_cleared
+- set_hands_free / set_speaker_enabled / set_agent_name / set_listening
+- set_tts_service (with tool reload)
+- _setup_system_prompt / _build_system_message
+- _execute_fast_action (full implementation)
+- _ensure_user_message_persisted (no auto-create)
+- Dictation, voice commands, Telegram helpers
+"""
+
+import asyncio
+import json
+import logging
+
+from distr.core.agent.libs import (
+    PIPECAT_AVAILABLE, LLMService,
+)
+from distr.core.agent.services.llm.prompt import load_system_prompt_template
+from distr.core.agent.tools import load_tools
+from distr.core.signals import signal_manager
+from .core_mixin import LLMSharedMixin
+
+logger = logging.getLogger(__name__)
+
+
+class BaseLLMService(LLMSharedMixin, LLMService):
+    """
+    Base class for all LLM service providers.
+
+    Subclasses must:
+    1. Set SERVICE_NAME and DEFAULT_MODEL class attributes
+    2. Initialize self.client in their __init__ before calling super().__init__()
+    3. Override _generate_response() with provider-specific API call logic
+    """
+
+    SERVICE_NAME = "BaseLLM"
+    DEFAULT_MODEL = "unknown"
+
+    def __init__(self, api_key: str, model_name: str = None, system_prompt: str = None,
+                 event_queue=None, is_listening=True, chat_manager=None, tts_service=None,
+                 agent_name: str = "Heart", command_queue=None, confirmation_results_dict=None, **kwargs):
+        if not PIPECAT_AVAILABLE:
+            raise ImportError(f"Pipecat is required for {self.SERVICE_NAME}")
+
+        super().__init__(**kwargs)
+
+        self._api_key = api_key
+        self._model_name = model_name or self.DEFAULT_MODEL
+        self._is_hands_free = False
+        self._is_listening = is_listening
+        self._is_dictating = False
+        self._hands_free_before_dictation = False
+        self.event_queue = event_queue
+        self.chat_manager = chat_manager
+        self._tts_service = tts_service
+        self._agent_name = agent_name
+        self._speaker_enabled = True
+        self.command_queue = command_queue
+        self.confirmation_results_dict = confirmation_results_dict
+
+        from pipecat.processors.frame_processor import FrameDirection
+        self._pipeline_direction = FrameDirection.DOWNSTREAM
+
+        self._load_tools(chat_manager, tts_service, model_name, event_queue, command_queue, confirmation_results_dict)
+
+        if self.chat_manager:
+            self.chat_manager.on("chat_deleted", self.on_chat_deleted)
+            signal_manager.chat_cleared.connect(self.on_chat_cleared)
+        try:
+            signal_manager.files_indexed.connect(self._on_files_indexed)
+        except Exception:
+            pass
+
+        self._username = self._get_username()
+        self._setup_system_prompt(system_prompt)
+
+        self._generation_task = None
+        self._cancelled = False
+        self._processed_fast_actions = set()
+        self._generation_requested_at = 0.0
+
+        logger.info("%s initialized with model: %s", self.SERVICE_NAME, self._model_name)
+
+    def _load_tools(self, chat_manager, tts_service, model_name, event_queue, command_queue, confirmation_results_dict):
+        """Load tools for the LLM service."""
+        try:
+            self._tools = load_tools(
+                chat_manager=chat_manager,
+                use_navigation_tools=True,
+                llm_service=self,
+                tts_service=tts_service,
+                llm_model=model_name,
+                event_queue=event_queue,
+                command_queue=command_queue,
+                confirmation_results_dict=confirmation_results_dict
+            )
+            self._tools_dict = {tool.name: tool for tool in self._tools}
+            logger.debug("%s: Loaded %d tools", self.SERVICE_NAME, len(self._tools))
+            self._build_tool_router_async()
+        except Exception as e:
+            logger.error("Error loading tools for %s: %s", self.SERVICE_NAME, e)
+            self._tools = []
+            self._tools_dict = {}
+
+    async def _generate_response(self):
+        """Generate LLM response. Override in subclass for provider-specific API calls."""
+        raise NotImplementedError(f"{self.SERVICE_NAME} must implement _generate_response()")
+
+    async def _execute_tool_calls(self, tool_calls: list) -> list:
+        """Execute tool calls and return results. Works for OpenAI-compatible format."""
+        results = []
+        for tool_call in tool_calls:
+            tool_name = tool_call["function"]["name"]
+            try:
+                tool_args = json.loads(tool_call["function"]["arguments"])
+            except json.JSONDecodeError:
+                logger.error("Invalid JSON in tool arguments: %s", tool_call['function']['arguments'])
+                tool_args = {}
+
+            tool = self._tools_dict.get(tool_name) or next((t for t in self._tools if t.name == tool_name), None)
+            if tool:
+                try:
+                    loop = asyncio.get_running_loop()
+                    result = await loop.run_in_executor(
+                        None, lambda t=tool, a=tool_args: t._run(**a)
+                    )
+                    results.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_name,
+                        "content": str(result)
+                    })
+                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                    from distr.core.agent.tool_audit import record_tool_execution
+                    record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
+                except Exception as e:
+                    logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
+                    err_content = f"Error: {str(e)}"
+                    results.append({
+                        "role": "tool",
+                        "tool_call_id": tool_call["id"],
+                        "name": tool_name,
+                        "content": err_content
+                    })
+                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                    from distr.core.agent.tool_audit import record_tool_execution
+                    record_tool_execution(chat_id, tool_name, err_content, "failed", event_queue=self.event_queue)
+            else:
+                logger.warning("Tool not found: %s", tool_name)
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "name": tool_name,
+                    "content": f"Error: Tool '{tool_name}' not found"
+                })
+        return results
+
+    def _save_assistant_message(self, content: str):
+        """Save assistant message to history and chat manager."""
+        self._messages.append({"role": "assistant", "content": content})
+        if self.chat_manager:
+            current_chat = self.chat_manager.get_current_chat()
+            if current_chat:
+                self.chat_manager.add_assistant_message(current_chat, content)
+
+    def _get_provider_name(self) -> str:
+        """Return the provider name. Override in subclass."""
+        return self.SERVICE_NAME.replace("LLMService", "")
