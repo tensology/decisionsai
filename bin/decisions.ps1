@@ -98,6 +98,56 @@ if (-not (Get-Command ffmpeg -ErrorAction SilentlyContinue)) {
     }
 } else { Write-Status "ffmpeg found" }
 
+# --- C++ Build Tools (needed for pywhispercpp / whisper.cpp) ---
+$hasCppTools = $false
+# Check for cl.exe (MSVC compiler) in common VS Build Tools locations
+$vsWhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path $vsWhere) {
+    $vsPath = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+    if ($vsPath) { $hasCppTools = $true }
+}
+# Also check if cl.exe is already on PATH
+if (-not $hasCppTools -and (Get-Command cl -ErrorAction SilentlyContinue)) {
+    $hasCppTools = $true
+}
+
+if (-not $hasCppTools) {
+    Write-Warn "C++ Build Tools not found. Installing Visual Studio Build Tools..."
+    Write-Warn "(This is needed for local Whisper transcription. ~2-4 GB download)"
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" 2>$null
+        if ($LASTEXITCODE -eq 0) {
+            Write-Status "Visual Studio Build Tools installed"
+            $hasCppTools = $true
+        } else {
+            Write-Warn "Could not auto-install Build Tools (may need admin privileges)."
+            Write-Warn "Install manually: https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+            Write-Warn "Select 'Desktop development with C++' workload."
+        }
+    } else {
+        Write-Warn "winget not available. Install Visual Studio Build Tools manually:"
+        Write-Warn "  https://visualstudio.microsoft.com/visual-cpp-build-tools/"
+        Write-Warn "  Select 'Desktop development with C++' workload."
+    }
+} else { Write-Status "C++ Build Tools found" }
+
+# --- CMake (needed for pywhispercpp build) ---
+if (-not (Get-Command cmake -ErrorAction SilentlyContinue)) {
+    Write-Warn "CMake not found. Attempting to install..."
+    if (Get-Command winget -ErrorAction SilentlyContinue) {
+        winget install Kitware.CMake --accept-package-agreements --accept-source-agreements 2>$null
+        # Add CMake to current session PATH
+        $cmakePath = "${env:ProgramFiles}\CMake\bin"
+        if (Test-Path $cmakePath) { $env:PATH = "$cmakePath;$env:PATH" }
+        Write-Status "CMake installed"
+    } elseif (Get-Command choco -ErrorAction SilentlyContinue) {
+        choco install cmake -y 2>$null
+        Write-Status "CMake installed via chocolatey"
+    } else {
+        Write-Warn "CMake not found. Install from https://cmake.org/download/"
+    }
+} else { Write-Status "CMake found" }
+
 # --- Virtual environment ---
 $VenvDir = "$env:USERPROFILE\.virtualenvs\decisions"
 
@@ -150,14 +200,34 @@ if (-not $depsOk) {
         Pop-Location; exit 1
     }
 
-    # Try to install pywhispercpp separately (optional — needs Visual Studio Build Tools)
-    Write-Warn "Attempting to install pywhispercpp (optional, needs C++ build tools)..."
-    Invoke-Pip @("install", "pywhispercpp@git+https://github.com/absadiki/pywhispercpp")
-    if ($LASTEXITCODE -ne 0) {
-        Write-Warn "pywhispercpp could not be installed (requires Visual Studio Build Tools with C++ workload)."
+    # Try to install pywhispercpp separately (needs C++ build tools + CMake)
+    Write-Warn "Attempting to install pywhispercpp (local Whisper transcription)..."
+
+    # Set up VS developer environment if available so CMake finds the MSVC compiler
+    $vsDevCmd = $null
+    if (Test-Path $vsWhere) {
+        $vsInstall = & $vsWhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2>$null
+        if ($vsInstall) {
+            $vsDevCmd = Join-Path $vsInstall "Common7\Tools\VsDevCmd.bat"
+        }
+    }
+
+    if ($vsDevCmd -and (Test-Path $vsDevCmd)) {
+        # Build inside a VS developer command prompt so cl.exe and CMake generators work
+        Write-Warn "  Using Visual Studio developer environment..."
+        $pipExe = "$VenvDir\Scripts\pip.exe"
+        cmd /c "`"$vsDevCmd`" -arch=amd64 && `"$pipExe`" install `"pywhispercpp@git+https://github.com/absadiki/pywhispercpp`""
+        $whisperResult = $LASTEXITCODE
+    } else {
+        # Try without dev env — might work if cl.exe is already on PATH
+        Invoke-Pip @("install", "pywhispercpp@git+https://github.com/absadiki/pywhispercpp")
+        $whisperResult = $LASTEXITCODE
+    }
+
+    if ($whisperResult -ne 0) {
+        Write-Warn "pywhispercpp could not be installed."
         Write-Warn "Local Whisper transcription will be unavailable. Other STT backends (AssemblyAI, OpenAI) still work."
-        Write-Warn "To install later: Install Visual Studio Build Tools, then run:"
-        Write-Warn "  pip install pywhispercpp@git+https://github.com/absadiki/pywhispercpp"
+        Write-Warn "To fix: Install Visual Studio Build Tools with 'Desktop development with C++', then re-run this script."
     } else {
         Write-Status "pywhispercpp installed"
     }
