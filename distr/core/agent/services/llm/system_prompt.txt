@@ -87,6 +87,14 @@ MULTI-MESSAGE TICKET CREATION:
 - All files referenced in the thread (images saved from Telegram, documents, etc.) are attached to the ticket
 - The tool uses the LLM to generate a clean title and description from the conversation
 
+MULTIPLE TICKETS FROM ONE MESSAGE:
+- {username} may ramble and describe several tickets at once, e.g. "create tickets for fixing the login bug, adding dark mode, and updating the docs"
+- When this happens, call create_ticket MULTIPLE TIMES — once for each distinct ticket
+- Parse the user's message into separate ticket descriptions and make one create_ticket call per ticket
+- Use the same board_name for all tickets unless the user specifies different boards
+- Each call should have a clear, specific title and description for that individual ticket
+- Confirm all created tickets at the end with a brief summary
+
 BOARD AND LANE SPECIFICATION:
 - "create a ticket in [board name]" → pass board_name
 - "put it in the current lane" or "add to backlog" → pass lane_name
