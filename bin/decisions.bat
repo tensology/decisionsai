@@ -442,6 +442,18 @@ for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
 del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
+:: Verify onnxruntime loads (needed for Pipecat/Kokoro TTS)
+"%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [33monnxruntime DLL issue detected. Reinstalling...[0m
+    "%VENV_DIR%\Scripts\pip.exe" install --force-reinstall onnxruntime --quiet
+    "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime" >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo [33mWarning: onnxruntime still failing. Trying onnxruntime-directml...[0m
+        "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
+    )
+)
+
 :: Run the application
 echo.
 echo [32mStarting DecisionsAI...[0m
