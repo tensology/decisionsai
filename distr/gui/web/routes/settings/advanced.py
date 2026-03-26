@@ -394,6 +394,18 @@ def register_routes(router, templates):
                 return JSONResponse(status_code=400, content={"success": False, "error": "Invalid JSON"})
             if "web" not in json_data and "installed" not in json_data:
                 return JSONResponse(status_code=400, content={"success": False, "error": "Not a valid Google OAuth client secret file"})
+            # Auto-inject the correct redirect URI and JS origin for this server
+            base = str(request.base_url).rstrip("/")
+            redirect_uri = base + "/api/advanced/google/callback"
+            config_key = "web" if "web" in json_data else "installed"
+            uris = json_data[config_key].get("redirect_uris", [])
+            if redirect_uri not in uris:
+                uris.append(redirect_uri)
+                json_data[config_key]["redirect_uris"] = uris
+            origins = json_data[config_key].get("javascript_origins", [])
+            if base not in origins:
+                origins.append(base)
+                json_data[config_key]["javascript_origins"] = origins
             project_root = Path(__file__).parent.parent.parent.parent
             secrets_dir = project_root / "secrets"
             secrets_dir.mkdir(exist_ok=True)
@@ -414,20 +426,29 @@ def register_routes(router, templates):
             from urllib.parse import urlencode
             from distr.gui.web.oauth import load_google_oauth_config
             oauth_config = load_google_oauth_config()
+            base = str(request.base_url).rstrip("/")
+            redirect_uri = base + "/api/advanced/google/callback"
             if not oauth_config:
-                base = str(request.base_url).rstrip("/")
                 return JSONResponse({
                     "url": None,
                     "needs_config": True,
                     "javascript_origin": base,
-                    "redirect_uri": base + "/api/advanced/google/callback",
+                    "redirect_uri": redirect_uri,
                 })
             web_config = oauth_config.get("web", {})
             client_id = web_config.get("client_id")
             if not client_id:
                 return JSONResponse({"url": None, "error": "Client ID not found in OAuth config."})
-            base = str(request.base_url).rstrip("/")
-            redirect_uri = base + "/api/advanced/google/callback"
+            # Check if our redirect URI is registered in the config
+            registered_uris = web_config.get("redirect_uris", [])
+            if redirect_uri not in registered_uris:
+                return JSONResponse({
+                    "url": None,
+                    "needs_config": True,
+                    "javascript_origin": base,
+                    "redirect_uri": redirect_uri,
+                    "hint": f"Add this redirect URI to your Google Cloud Console: {redirect_uri}",
+                })
             state = str(uuid.uuid4())
             _oauth_states[state] = __import__("time").time()
             scopes = [
