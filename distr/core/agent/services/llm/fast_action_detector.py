@@ -391,10 +391,12 @@ class FastActionDetector:
             # Broad catch-all: "move mouse to [something]" that isn't a directional command
             # This catches any "move mouse to X" where X is a visual element/position needing screenshot analysis
             # MUST come AFTER all specific mouse_movement directional patterns (center, top, left, etc.)
-            # Strategy: exclude when the ENTIRE remaining text after "to" is ONLY directional words (with optional "the")
-            # "center of the picture" → has non-directional words → MATCH (visual target)
+            # Strategy: exclude when the remaining text after "to" is directional words optionally followed
+            # by filler like "of my screen", "of the screen", "please", etc.
+            # "center of my screen" → directional + filler → NO MATCH (mouse_movement handles it)
+            # "center of the picture" → has non-directional target → MATCH (visual target)
             # "center" / "top right" / "the left" → only directional words → NO MATCH
-            (re.compile(r'\b(?:move|put)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\s+(?!(?:the\s+)?(?:(?:center|top|bottom|left|right|middle|far|up|down|screen)(?:\s+(?:center|top|bottom|left|right|middle|far|up|down|screen|\d+))*)\s*[\.\,\?\!]?\s*$).{3,}', re.IGNORECASE), 
+            (re.compile(r'\b(?:move|put)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\s+(?!(?:the\s+)?(?:(?:center|top|bottom|left|right|middle|far|up|down|screen)(?:\s+(?:center|top|bottom|left|right|middle|far|up|down|screen|\d+))*)(?:\s+(?:of\s+)?(?:the\s+|my\s+)?(?:screen|display|monitor|desktop))?(?:\s*(?:please|now))?\s*[\.\,\?\!]?\s*$).{3,}', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "double-click the file", "double click the icon"
             (re.compile(r'\bdouble[- ]?click\s+(on\s+)?(the\s+)?(.+?)\s*(button|link|icon|file|folder)?\b', re.IGNORECASE), 
@@ -536,10 +538,11 @@ class FastActionDetector:
             (re.compile(r'\b(move\s+)?(mouse\s+)?(to\s+)?screen\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse center", "move mouse to center", "center mouse"
-            # "move mouse to center" - REQUIRE "move" or "mouse"
-            (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?center\b', re.IGNORECASE), 
+            # "move mouse to the center of my screen", "can you move the mouse to the center"
+            # Also handles STT artifacts like "move, move my mouse to the center"
+            (re.compile(r'\b(?:can\s+you\s+)?move[\s,]+(?:the\s+|my\s+)?(?:mouse\s+)?(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_center", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?center\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_center", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Corner positions - REQUIRE "move" or "mouse" to be present (no accidental matches)
             # Handles STT errors (e.g., "mass" for "mouse", "miles" for "mouse")
