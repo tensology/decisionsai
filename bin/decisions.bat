@@ -162,6 +162,56 @@ if !errorlevel! neq 0 (
     echo [32m√[0m ffmpeg found
 )
 
+:: Check for C++ Build Tools (needed for pywhispercpp / whisper.cpp)
+echo [33mChecking C++ build tools...[0m
+set "HAS_CPP_TOOLS=0"
+set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
+if exist "%VSWHERE%" (
+    for /f "tokens=*" %%p in ('"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul') do (
+        if not "%%p"=="" set "HAS_CPP_TOOLS=1"
+    )
+)
+if !HAS_CPP_TOOLS! equ 0 (
+    where cl >nul 2>&1
+    if !errorlevel! equ 0 set "HAS_CPP_TOOLS=1"
+)
+if !HAS_CPP_TOOLS! equ 0 (
+    echo [33mC++ Build Tools not found. Installing Visual Studio Build Tools...[0m
+    echo [33m  ^(Required for local Whisper transcription. ~2-4 GB download^)[0m
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        winget install Microsoft.VisualStudio.2022.BuildTools --accept-package-agreements --accept-source-agreements --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended" 2>nul
+        if !errorlevel! equ 0 (
+            echo [32m√[0m Visual Studio Build Tools installed
+        ) else (
+            echo [33mWarning: Could not auto-install Build Tools ^(may need admin privileges^).[0m
+            echo [33m  Run as Administrator: winget install Microsoft.VisualStudio.2022.BuildTools --override "--quiet --wait --add Microsoft.VisualStudio.Workload.VCTools --includeRecommended"[0m
+        )
+    ) else (
+        echo [33mWarning: winget not available. Install Visual Studio Build Tools manually:[0m
+        echo [33m  https://visualstudio.microsoft.com/visual-cpp-build-tools/[0m
+        echo [33m  Select 'Desktop development with C++' workload.[0m
+    )
+) else (
+    echo [32m√[0m C++ Build Tools found
+)
+
+:: Check for CMake (needed for pywhispercpp build)
+where cmake >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [33mCMake not found. Installing...[0m
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        winget install Kitware.CMake --accept-package-agreements --accept-source-agreements >nul 2>&1
+        set "PATH=%ProgramFiles%\CMake\bin;%PATH%"
+        echo [32m√[0m CMake installed
+    ) else (
+        echo [33mWarning: CMake not found. Install from https://cmake.org/download/[0m
+    )
+) else (
+    echo [32m√[0m CMake found
+)
+
 :: Virtual environment — always use %USERPROFILE%\.virtualenvs\decisions
 set "VENV_DIR=%USERPROFILE%\.virtualenvs\decisions"
 
@@ -219,19 +269,42 @@ if !DEPS_OK! equ 0 (
 
     "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt
     if !errorlevel! neq 0 (
-        :: If full install failed, try without pywhispercpp (needs C++ build tools)
-        echo [33mRetrying without pywhispercpp ^(needs C++ build tools^)...[0m
-        "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
-        "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
-        if !errorlevel! neq 0 (
-            echo [31mError: pip install failed. Please check the output above.[0m
-            exit /b 1
+        :: Check if pywhispercpp was the problem — retry with VS dev environment
+        echo [33mRetrying pip install with VS developer environment...[0m
+        set "VSDEVCMD="
+        if exist "%VSWHERE%" (
+            for /f "tokens=*" %%p in ('"%VSWHERE%" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath 2^>nul') do (
+                if exist "%%p\Common7\Tools\VsDevCmd.bat" set "VSDEVCMD=%%p\Common7\Tools\VsDevCmd.bat"
+            )
         )
-        del /f requirements_win.txt 2>nul
-        echo [33mNote: pywhispercpp skipped ^(local Whisper transcription unavailable^).[0m
-        echo [33m  Other STT backends ^(AssemblyAI, OpenAI^) still work.[0m
-        echo [33m  To enable Whisper: install Visual Studio Build Tools with C++ workload, then run:[0m
-        echo [33m  pip install pywhispercpp@git+https://github.com/absadiki/pywhispercpp[0m
+        if defined VSDEVCMD (
+            echo [33mUsing VS developer environment: !VSDEVCMD![0m
+            cmd /c "call "!VSDEVCMD!" -arch=amd64 >nul 2>&1 && "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt"
+            if !errorlevel! neq 0 (
+                :: Final fallback: skip pywhispercpp
+                echo [33mRetrying without pywhispercpp...[0m
+                "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
+                "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
+                if !errorlevel! neq 0 (
+                    echo [31mError: pip install failed. Please check the output above.[0m
+                    exit /b 1
+                )
+                del /f requirements_win.txt 2>nul
+                echo [33mNote: pywhispercpp skipped. Local Whisper transcription unavailable.[0m
+                echo [33m  Install VS Build Tools with C++ workload, then re-run this script.[0m
+            )
+        ) else (
+            :: No VS dev env — skip pywhispercpp
+            echo [33mNo VS developer environment found. Retrying without pywhispercpp...[0m
+            "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
+            "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
+            if !errorlevel! neq 0 (
+                echo [31mError: pip install failed. Please check the output above.[0m
+                exit /b 1
+            )
+            del /f requirements_win.txt 2>nul
+            echo [33mNote: pywhispercpp skipped. Install VS Build Tools with C++ workload to enable.[0m
+        )
     )
 
     :: Ensure installer directory exists and create marker

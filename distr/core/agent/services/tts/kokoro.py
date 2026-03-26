@@ -1004,13 +1004,15 @@ class KokoroTTSService(TTSService):
                     is_welcome_message = (
                         'hello' in text_lower_for_welcome and 
                         ('welcome' in text_lower_for_welcome or 
+                         'welcome back' in text_lower_for_welcome or
                          "i'm your ai assistant" in text_lower_for_welcome or
                          "i'm ready to help" in text_lower_for_welcome or
-                         "here to help" in text_lower_for_welcome)
+                         "here to help" in text_lower_for_welcome or
+                         "what would you like" in text_lower_for_welcome)
                     ) or (
                         not has_telegram_request and  # Not a user request
-                        'hello' in text_lower_for_welcome and
-                        len(session_text_normalized) < 200  # Short message (typical welcome)
+                        ('welcome back' in text_lower_for_welcome or
+                         ('hello' in text_lower_for_welcome and 'welcome' in text_lower_for_welcome))
                     )
                     
                     # CRITICAL: Send to Telegram if:
@@ -1020,8 +1022,7 @@ class KokoroTTSService(TTSService):
                     # BUT: Skip Telegram send if file was already sent (file is the response, but we still want TTS audio)
                     should_send_to_telegram = (has_telegram_request or is_welcome_message) and not file_already_sent
                     
-                    logger.debug(f"TTS: should_send_to_telegram={should_send_to_telegram} (has_telegram_request={has_telegram_request}, is_welcome_message={is_welcome_message}, file_already_sent={file_already_sent})")
-                    logger.debug(f"[Telegram TTS] 🔍 should_send_to_telegram={should_send_to_telegram} (telegram={has_telegram_request}, welcome={is_welcome_message}, file_sent={file_already_sent})")
+                    logger.info(f"[Telegram TTS] Decision: send={should_send_to_telegram} (telegram_req={has_telegram_request}, welcome={is_welcome_message}, file_sent={file_already_sent}, text='{session_text_normalized[:80]}...')")
                     
                     if should_send_to_telegram:
                         if is_welcome_message and not has_telegram_request:
