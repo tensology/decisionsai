@@ -134,7 +134,20 @@ class TestWorkflowInvocation:
             session.close()
             return {"run_id": run_id}
 
+        mock_settings = {
+            'kanban_agent_enabled': True,
+            'kanban_agent_source_lane': 'Source',
+            'kanban_agent_done_lane': 'Done',
+            'kanban_agent_orchestrator_provider': '',
+            'kanban_agent_orchestrator_model': '',
+            'kanban_agent_coder_provider': '',
+            'kanban_agent_coder_model': '',
+            'kanban_agent_sub_provider': '',
+            'kanban_agent_sub_model': '',
+        }
+
         with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
              patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
              patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
              patch("distr.core.kanban.agent.clear_llm_override"):
@@ -182,7 +195,20 @@ class TestFailedRunLeavesTicket:
             session.close()
             return {"run_id": run_id}
 
+        mock_settings = {
+            'kanban_agent_enabled': True,
+            'kanban_agent_source_lane': 'Source',
+            'kanban_agent_done_lane': 'Done',
+            'kanban_agent_orchestrator_provider': '',
+            'kanban_agent_orchestrator_model': '',
+            'kanban_agent_coder_provider': '',
+            'kanban_agent_coder_model': '',
+            'kanban_agent_sub_provider': '',
+            'kanban_agent_sub_model': '',
+        }
+
         with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
              patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
              patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
              patch("distr.core.kanban.agent.clear_llm_override"):
@@ -231,7 +257,20 @@ class TestSuccessfulRunMovesTicket:
             session.close()
             return {"run_id": run_id}
 
+        mock_settings = {
+            'kanban_agent_enabled': True,
+            'kanban_agent_source_lane': 'Source',
+            'kanban_agent_done_lane': 'Done',
+            'kanban_agent_orchestrator_provider': '',
+            'kanban_agent_orchestrator_model': '',
+            'kanban_agent_coder_provider': '',
+            'kanban_agent_coder_model': '',
+            'kanban_agent_sub_provider': '',
+            'kanban_agent_sub_model': '',
+        }
+
         with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
              patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
              patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
              patch("distr.core.kanban.agent.clear_llm_override"):
@@ -286,7 +325,20 @@ class TestMovedTicketPosition:
             session.close()
             return {"run_id": run_id}
 
+        mock_settings = {
+            'kanban_agent_enabled': True,
+            'kanban_agent_source_lane': 'Source',
+            'kanban_agent_done_lane': 'Done',
+            'kanban_agent_orchestrator_provider': '',
+            'kanban_agent_orchestrator_model': '',
+            'kanban_agent_coder_provider': '',
+            'kanban_agent_coder_model': '',
+            'kanban_agent_sub_provider': '',
+            'kanban_agent_sub_model': '',
+        }
+
         with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
              patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
              patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
              patch("distr.core.kanban.agent.clear_llm_override"):
@@ -338,7 +390,20 @@ class TestAllTicketsProcessed:
             session.close()
             return {"run_id": run_id}
 
+        mock_settings = {
+            'kanban_agent_enabled': True,
+            'kanban_agent_source_lane': 'Source',
+            'kanban_agent_done_lane': 'Done',
+            'kanban_agent_orchestrator_provider': '',
+            'kanban_agent_orchestrator_model': '',
+            'kanban_agent_coder_provider': '',
+            'kanban_agent_coder_model': '',
+            'kanban_agent_sub_provider': '',
+            'kanban_agent_sub_model': '',
+        }
+
         with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
              patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
              patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
              patch("distr.core.kanban.agent.clear_llm_override"):

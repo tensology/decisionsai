@@ -832,50 +832,99 @@ class EventHandlerMixin:
             logger.warning(f"Failed to draw cursor marker: {e}")
             return image_path
 
+    def _telegram_resolve_voice_settings(self, settings: dict):
+        """Resolve TTS provider and voice model from the current chat, falling back to global settings.
+
+        Returns (tts_provider, voice_id) where tts_provider is the canonical
+        settings-style string (e.g. 'Kokoro (Offline)') and voice_id is the
+        voice/speaker identifier for that provider.
+        """
+        chat_voice_provider = ""
+        chat_voice_model = ""
+
+        try:
+            from distr.core.db import get_session, Chat
+            chat_id = settings.get('agent_current_chat_id')
+            if chat_id:
+                with get_session() as session:
+                    chat = session.query(Chat).filter(Chat.id == int(chat_id)).first()
+                    if chat:
+                        # Walk to root chat to get the thread-level voice settings
+                        root = chat
+                        while root.parent_id:
+                            parent = session.query(Chat).filter(Chat.id == root.parent_id).first()
+                            if not parent:
+                                break
+                            root = parent
+                        chat_voice_provider = (root.voice_provider or "").strip()
+                        chat_voice_model = (root.voice_model or "").strip()
+        except Exception as e:
+            logger.debug(f"Could not load chat voice settings: {e}")
+
+        # Resolve provider: chat → global settings
+        tts_provider = chat_voice_provider or settings.get('tts_provider', 'Kokoro (Offline)')
+
+        # Resolve voice model: chat → provider-specific global setting
+        vp_lower = tts_provider.lower()
+        if chat_voice_model:
+            voice_id = chat_voice_model
+        elif "kokoro" in vp_lower:
+            voice_id = settings.get('kokoro_voice', 'af_heart')
+        elif "openai" in vp_lower:
+            voice_id = settings.get('openai_voice', 'alloy')
+        elif "elevenlabs" in vp_lower:
+            voice_id = settings.get('elevenlabs_voice', '')
+        elif "qwen3" in vp_lower:
+            voice_id = settings.get('qwen3_voice', '')
+        else:
+            voice_id = ''
+
+        return tts_provider, voice_id
+
     def _telegram_generate_tts(self, text: str):
         """Generate TTS audio file for Telegram voice note."""
         try:
             settings = load_settings_from_db()
-            tts_provider = settings.get('tts_provider', 'Kokoro (Offline)')
+            tts_provider, voice_id = self._telegram_resolve_voice_settings(settings)
             temp_dir = Path(tempfile.gettempdir()) / "decisions_ai_telegram"
             temp_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-            if tts_provider == 'Kokoro (Offline)':
+            tts_lower = tts_provider.lower()
+
+            if 'kokoro' in tts_lower:
                 from distr.core.audio.tts_handler import _generate_kokoro
-                voice_id = settings.get('kokoro_voice', 'af_heart')
                 audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
                 try:
-                    _generate_kokoro(text, voice_id, 1.0, str(audio_file))
-                    logger.info(f"Generated Kokoro TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes)")
+                    _generate_kokoro(text, voice_id or 'af_heart', 1.0, str(audio_file))
+                    logger.info(f"Generated Kokoro TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
                     return audio_file
                 except Exception as e:
                     logger.warning(f"Kokoro TTS failed: {e}")
 
-            elif tts_provider == 'OpenAI (Online)':
+            elif 'openai' in tts_lower:
                 from openai import OpenAI
                 openai_key = settings.get('openai_key', '')
                 if openai_key:
                     client = OpenAI(api_key=openai_key)
                     response = client.audio.speech.create(
                         model="tts-1",
-                        voice=settings.get('openai_voice', 'alloy'),
+                        voice=voice_id or 'alloy',
                         input=text,
                     )
                     audio_file = temp_dir / f"telegram_tts_{timestamp}.mp3"
                     response.stream_to_file(str(audio_file))
-                    logger.info(f"Generated OpenAI TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes)")
+                    logger.info(f"Generated OpenAI TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
                     return audio_file
 
-            elif tts_provider == 'ElevenLabs (Online)':
+            elif 'elevenlabs' in tts_lower:
                 try:
                     from elevenlabs import ElevenLabs
                     key = settings.get('elevenlabs_key', '')
-                    voice = settings.get('elevenlabs_voice', '')
-                    if key and voice:
+                    if key and voice_id:
                         client = ElevenLabs(api_key=key)
                         audio_stream = client.text_to_speech.convert(
-                            text=text, voice_id=voice,
+                            text=text, voice_id=voice_id,
                             model_id="eleven_multilingual_v2",
                             output_format="mp3_44100_128",
                             voice_settings={
@@ -887,7 +936,7 @@ class EventHandlerMixin:
                         audio_file = temp_dir / f"telegram_tts_{timestamp}.mp3"
                         with open(audio_file, 'wb') as f:
                             f.write(audio_bytes)
-                        logger.info(f"Generated ElevenLabs TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes)")
+                        logger.info(f"Generated ElevenLabs TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
                         return audio_file
                 except ImportError:
                     logger.warning("ElevenLabs library not available")

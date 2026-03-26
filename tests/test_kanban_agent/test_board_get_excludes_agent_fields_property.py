@@ -10,7 +10,9 @@ agent_source_lane, agent_done_lane.
 
 **Validates: Requirements 7.3, 10.4**
 """
+import asyncio
 import contextlib
+import json
 from unittest.mock import patch
 
 from hypothesis import given, settings
@@ -18,17 +20,12 @@ from hypothesis import strategies as st
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-
-from fastapi import FastAPI
-from fastapi.testclient import TestClient
+from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
 from distr.core.db.kanban import KanbanBoard, KanbanLane
-
 from distr.gui.web.routes.kanban import create_routes
 
-
-# Agent fields that must NOT appear in the board GET response
 EXCLUDED_AGENT_KEYS = {
     "agent_orchestrator_provider",
     "agent_orchestrator_model",
@@ -45,21 +42,11 @@ EXCLUDED_AGENT_KEYS = {
     "agent_done_lane",
 }
 
-
-def _make_session_factory():
-    """Create a fresh in-memory SQLite DB with all tables."""
-    engine = create_engine(
-        "sqlite:///:memory:",
-        connect_args={"check_same_thread": False},
-    )
-    Base.metadata.create_all(engine)
-    return sessionmaker(bind=engine)
-
-
-# ── Strategies ──
-
+# Strategies
 agent_bool_st = st.booleans()
-agent_frequency_st = st.sampled_from(["hourly", "daily", "weekly", "fortnightly", "monthly"])
+agent_frequency_st = st.sampled_from(
+    ["hourly", "daily", "weekly", "fortnightly", "monthly"]
+)
 agent_time_st = st.sampled_from(["00:00", "09:00", "12:30", "18:45", "23:59"])
 agent_days_st = st.sampled_from(["[]", "[0]", "[1,3,5]", "[0,1,2,3,4,5,6]"])
 agent_monthly_day_st = st.integers(min_value=1, max_value=28)
@@ -106,10 +93,16 @@ class TestBoardGetExcludesAgentFieldsProperty:
         """
         **Validates: Requirements 7.3, 10.4**
 
-        For any board with arbitrary agent column values, the GET response
-        should not contain any agent configuration keys.
+        For any board with arbitrary agent column values, the GET
+        response should not contain any agent configuration keys.
         """
-        factory = _make_session_factory()
+        engine = create_engine(
+            "sqlite://",
+            connect_args={"check_same_thread": False},
+            poolclass=StaticPool,
+        )
+        Base.metadata.create_all(engine)
+        factory = sessionmaker(bind=engine)
 
         @contextlib.contextmanager
         def patched_get_session():
@@ -123,7 +116,6 @@ class TestBoardGetExcludesAgentFieldsProperty:
             finally:
                 session.close()
 
-        # Create a board with agent columns populated
         with patched_get_session() as session:
             board = KanbanBoard(
                 name="Test Board",
@@ -145,26 +137,39 @@ class TestBoardGetExcludesAgentFieldsProperty:
             )
             session.add(board)
             session.flush()
-            session.add(KanbanLane(board_id=board.id, name="Backlog", position=0))
+            session.add(
+                KanbanLane(board_id=board.id, name="Backlog", position=0)
+            )
             session.flush()
             board_id = board.id
 
-        # Build app with patched get_session
-        app = FastAPI()
-        with patch("distr.gui.web.routes.kanban.get_session", patched_get_session):
+        with patch(
+            "distr.gui.web.routes.kanban.get_session",
+            patched_get_session,
+        ):
             router = create_routes()
-        app.include_router(router, prefix="/api")
+            get_board_fn = None
+            for route in router.routes:
+                if hasattr(route, "endpoint"):
+                    name = getattr(route.endpoint, "__name__", "")
+                    if name == "get_board":
+                        get_board_fn = route.endpoint
+                        break
 
-        with patch("distr.gui.web.routes.kanban.get_session", patched_get_session):
-            client = TestClient(app)
-            resp = client.get(f"/api/kanban/boards/{board_id}")
+            assert get_board_fn is not None, "get_board not found"
 
-        assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+            loop = asyncio.new_event_loop()
+            try:
+                response = loop.run_until_complete(get_board_fn(board_id))
+            finally:
+                loop.close()
 
-        data = resp.json()
+        data = json.loads(response.body.decode())
 
-        # Verify no agent keys are present in the response
         found_keys = EXCLUDED_AGENT_KEYS & set(data.keys())
         assert not found_keys, (
-            f"Board GET response should not contain agent keys, but found: {found_keys}"
+            f"Board GET response should not contain agent keys, "
+            f"but found: {found_keys}"
         )
+
+        engine.dispose()

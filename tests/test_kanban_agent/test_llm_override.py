@@ -172,7 +172,17 @@ class TestLLMOverrideResolution:
         """When no override is active, resolve_settings_keys uses global settings."""
         from distr.core.llm_factory import resolve_settings_keys
 
-        # Ensure no override is active
+        # Clear any stale override from previous tests
+        current = get_llm_override()
+        if current is not None:
+            # Force-reset to None by setting and immediately resetting
+            token = set_llm_override(LLMOverride())
+            clear_llm_override(token)
+            # If still set, directly set to None
+            if get_llm_override() is not None:
+                from distr.core.llm_override import _llm_override_var
+                _llm_override_var.set(None)
+
         assert get_llm_override() is None
 
         settings = {

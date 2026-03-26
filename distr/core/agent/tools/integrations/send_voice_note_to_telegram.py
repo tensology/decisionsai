@@ -29,13 +29,50 @@ class SendVoiceNoteToTelegramTool(BaseTool):
             # Load settings to get TTS provider and voice
             from distr.core.settings import load_settings_from_db
             settings = load_settings_from_db()
-            tts_provider = settings.get('tts_provider', 'Kokoro (Offline)')
+
+            # Resolve voice from current chat first, then fall back to global settings
+            chat_voice_provider = ""
+            chat_voice_model = ""
+            try:
+                from distr.core.db import get_session, Chat
+                chat_id = settings.get('agent_current_chat_id')
+                if chat_id:
+                    with get_session() as session:
+                        chat = session.query(Chat).filter(Chat.id == int(chat_id)).first()
+                        if chat:
+                            root = chat
+                            while root.parent_id:
+                                parent = session.query(Chat).filter(Chat.id == root.parent_id).first()
+                                if not parent:
+                                    break
+                                root = parent
+                            chat_voice_provider = (root.voice_provider or "").strip()
+                            chat_voice_model = (root.voice_model or "").strip()
+            except Exception:
+                pass
+
+            tts_provider = chat_voice_provider or settings.get('tts_provider', 'Kokoro (Offline)')
+            tts_lower = tts_provider.lower()
+
+            # Resolve voice model from chat → provider-specific global setting
+            if chat_voice_model:
+                resolved_voice = chat_voice_model
+            elif 'kokoro' in tts_lower:
+                resolved_voice = settings.get('kokoro_voice', 'af_heart')
+            elif 'openai' in tts_lower:
+                resolved_voice = settings.get('openai_voice', 'alloy')
+            elif 'elevenlabs' in tts_lower:
+                resolved_voice = settings.get('elevenlabs_voice', '')
+            elif 'qwen3' in tts_lower:
+                resolved_voice = settings.get('qwen3_voice', 'aiden')
+            else:
+                resolved_voice = ''
             
             temp_file_path = None
             
-            if tts_provider == 'Kokoro (Offline)':
-                # Use Kokoro TTS with the configured voice
-                kokoro_voice = settings.get('kokoro_voice', 'af_heart')
+            if 'kokoro' in tts_lower:
+                # Use Kokoro TTS with the resolved voice
+                kokoro_voice = resolved_voice or 'af_heart'
                 
                 try:
                     from distr.core.agent.libs import Kokoro, KOKORO_AVAILABLE
@@ -122,13 +159,13 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                 except Exception as e:
                     return f"Error generating voice note with Kokoro: {str(e)}"
                     
-            elif tts_provider == 'OpenAI (Online)':
-                # Use OpenAI TTS with the configured voice
+            elif 'openai' in tts_lower:
+                # Use OpenAI TTS with the resolved voice
                 openai_key = settings.get('openai_key', '')
                 if not openai_key:
                     return f"Error sending voice note: OpenAI API key not configured in settings"
                 
-                openai_voice = settings.get('openai_voice', 'alloy')
+                openai_voice = resolved_voice or 'alloy'
                 
                 client = OpenAI(api_key=openai_key)
                 
@@ -144,10 +181,10 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                     temp_file_path = temp_file.name
                     response.stream_to_file(temp_file_path)
                     
-            elif tts_provider == 'ElevenLabs (Online)':
-                # Use ElevenLabs TTS with the configured voice
+            elif 'elevenlabs' in tts_lower:
+                # Use ElevenLabs TTS with the resolved voice
                 elevenlabs_key = settings.get('elevenlabs_key', '')
-                elevenlabs_voice = settings.get('elevenlabs_voice', '')
+                elevenlabs_voice = resolved_voice or settings.get('elevenlabs_voice', '')
                 
                 if not elevenlabs_key or not elevenlabs_voice:
                     return f"Error sending voice note: ElevenLabs API key or voice not configured in settings"
@@ -183,10 +220,10 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                         
                 except Exception as e:
                     return f"Error generating voice note with ElevenLabs: {str(e)}"
-            elif tts_provider == 'Qwen3-TTS (Offline)':
+            elif 'qwen3' in tts_lower:
                 try:
                     from distr.core.audio.tts_handler import generate_tts_audio
-                    qwen3_voice = settings.get('qwen3_voice', 'aiden')
+                    qwen3_voice = resolved_voice or 'aiden'
                     temp_file_path = generate_tts_audio(
                         text=message,
                         provider='qwen3',

@@ -474,26 +474,28 @@
         });
     }
 
-    // ── Board modal (tabbed: Details + Agent + Advanced) ──
+    // ── Board modal (tabbed: Details + Advanced) ──
 
-    var agentFreq = "daily";
-    var agentDays = [];
     var _agentProviders = [];  // cached provider list
+
+    function _populateProviderDropdowns(selectIds) {
+        selectIds.forEach(function(selId) {
+            var sel = document.getElementById(selId);
+            if (!sel) return;
+            var cur = sel.value;
+            sel.innerHTML = '<option value="">(chat default)</option>';
+            _agentProviders.forEach(function(p) {
+                var opt = document.createElement("option");
+                opt.value = p.id; opt.textContent = p.name;
+                sel.appendChild(opt);
+            });
+            if (cur) sel.value = cur;
+        });
+    }
 
     function loadAgentProviders() {
         return apiFetch("/api/llms/available-providers").then(function(data) {
             _agentProviders = data.providers || [{ id: "ollama", name: "Ollama" }];
-            ["kb-agent-orch-provider", "kb-agent-coder-provider", "kb-agent-sub-provider"].forEach(function(selId) {
-                var sel = document.getElementById(selId);
-                var cur = sel.value;
-                sel.innerHTML = '<option value="">(chat default)</option>';
-                _agentProviders.forEach(function(p) {
-                    var opt = document.createElement("option");
-                    opt.value = p.id; opt.textContent = p.name;
-                    sel.appendChild(opt);
-                });
-                if (cur) sel.value = cur;
-            });
         }).catch(function() {
             _agentProviders = [{ id: "ollama", name: "Ollama" }];
         });
@@ -544,32 +546,17 @@
         // Reset to Details tab
         switchBoardModalTab("details");
 
-        loadAgentProviders().then(function() {
-            if (boardId && currentBoardData && currentBoardData.id === boardId) {
-                populateBoardModal(currentBoardData);
-            } else if (boardId) {
-                apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
-                    populateBoardModal(data);
-                }).catch(function() {});
-            } else {
-                document.getElementById("kb-board-modal-name").value = "";
-                document.getElementById("kb-board-modal-desc").value = "";
-                document.getElementById("kb-agent-enabled").checked = false;
-                setAgentFreq("daily");
-                agentDays = [];
-                renderAgentDays();
-                document.getElementById("kb-agent-time").value = "09:00";
-                document.getElementById("kb-agent-monthly-day").value = "1";
-                document.getElementById("kb-agent-orch-provider").value = "";
-                document.getElementById("kb-agent-orch-model").innerHTML = '<option value="">(chat default)</option>';
-                document.getElementById("kb-agent-coder-provider").value = "";
-                document.getElementById("kb-agent-coder-model").innerHTML = '<option value="">(chat default)</option>';
-                document.getElementById("kb-agent-sub-provider").value = "";
-                document.getElementById("kb-agent-sub-model").innerHTML = '<option value="">(chat default)</option>';
-                populateAgentLaneSelects([], "", "");
-                loadBoardDefaults(null);
-            }
-        });
+        if (boardId && currentBoardData && currentBoardData.id === boardId) {
+            populateBoardModal(currentBoardData);
+        } else if (boardId) {
+            apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
+                populateBoardModal(data);
+            }).catch(function() {});
+        } else {
+            document.getElementById("kb-board-modal-name").value = "";
+            document.getElementById("kb-board-modal-desc").value = "";
+            loadBoardDefaults(null);
+        }
         document.getElementById("kb-board-modal").classList.remove("hidden");
         if (typeof injectInfoIcons === 'function') injectInfoIcons();
     }
@@ -577,41 +564,7 @@
     function populateBoardModal(data) {
         document.getElementById("kb-board-modal-name").value = data.name || "";
         document.getElementById("kb-board-modal-desc").value = data.description || "";
-        document.getElementById("kb-agent-enabled").checked = !!data.agent_enabled;
-        setAgentFreq(data.agent_frequency || "daily");
-        agentDays = data.agent_days || [];
-        renderAgentDays();
-        document.getElementById("kb-agent-time").value = data.agent_time || "09:00";
-        document.getElementById("kb-agent-monthly-day").value = String(data.agent_monthly_day || 1);
-
-        // Set provider selects then load models with saved values
-        var orchProv = data.agent_orchestrator_provider || "";
-        var coderProv = data.agent_coder_provider || "";
-        var subProv = data.agent_sub_provider || "";
-        document.getElementById("kb-agent-orch-provider").value = orchProv;
-        document.getElementById("kb-agent-coder-provider").value = coderProv;
-        document.getElementById("kb-agent-sub-provider").value = subProv;
-        loadAgentModels("kb-agent-orch", orchProv, data.agent_orchestrator_model || "");
-        loadAgentModels("kb-agent-coder", coderProv, data.agent_coder_model || "");
-        loadAgentModels("kb-agent-sub", subProv, data.agent_sub_model || "");
-
-        var laneNames = (data.lanes || []).map(function(l) { return l.name; });
-        populateAgentLaneSelects(laneNames, data.agent_source_lane || "", data.agent_done_lane || "");
         loadBoardDefaults(data);
-    }
-
-    function populateAgentLaneSelects(laneNames, sourceLane, doneLane) {
-        ["kb-agent-source-lane", "kb-agent-done-lane"].forEach(function(selId) {
-            var sel = document.getElementById(selId);
-            var val = selId.indexOf("source") >= 0 ? sourceLane : doneLane;
-            sel.innerHTML = '<option value="">Select lane</option>';
-            laneNames.forEach(function(name) {
-                var opt = document.createElement("option");
-                opt.value = name; opt.textContent = name;
-                if (name === val) opt.selected = true;
-                sel.appendChild(opt);
-            });
-        });
     }
 
     function switchBoardModalTab(tab) {
@@ -640,31 +593,6 @@
         if (pane) pane.classList.remove("hidden");
     }
 
-    function setAgentFreq(freq) {
-        agentFreq = freq;
-        document.querySelectorAll(".kb-agent-freq").forEach(function(btn) {
-            var isActive = btn.dataset.freq === freq;
-            btn.setAttribute("data-active", isActive ? "1" : "0");
-        });
-        document.getElementById("kb-agent-days-wrap").classList.toggle("hidden", freq !== "weekly");
-        document.getElementById("kb-agent-monthly-wrap").classList.toggle("hidden", freq !== "monthly");
-    }
-
-    function renderAgentDays() {
-        document.querySelectorAll(".kb-agent-day").forEach(function(btn) {
-            var day = parseInt(btn.dataset.day);
-            var sel = agentDays.indexOf(day) >= 0;
-            btn.setAttribute("data-selected", sel ? "1" : "0");
-        });
-    }
-
-    function toggleAgentDay(day) {
-        var idx = agentDays.indexOf(day);
-        if (idx >= 0) agentDays.splice(idx, 1);
-        else agentDays.push(day);
-        renderAgentDays();
-    }
-
     function closeBoardModal() {
         document.getElementById("kb-board-modal").classList.add("hidden");
         editingBoardId = null;
@@ -676,22 +604,8 @@
         var payload = {
             name: name,
             description: document.getElementById("kb-board-modal-desc").value.trim(),
-            agent_enabled: document.getElementById("kb-agent-enabled").checked,
-            agent_frequency: agentFreq,
-            agent_time: document.getElementById("kb-agent-time").value || "09:00",
-            agent_days: agentDays,
-            agent_monthly_day: parseInt(document.getElementById("kb-agent-monthly-day").value) || 1,
-            agent_orchestrator_provider: document.getElementById("kb-agent-orch-provider").value,
-            agent_orchestrator_model: document.getElementById("kb-agent-orch-model").value,
-            agent_coder_provider: document.getElementById("kb-agent-coder-provider").value,
-            agent_coder_model: document.getElementById("kb-agent-coder-model").value,
-            agent_sub_provider: document.getElementById("kb-agent-sub-provider").value,
-            agent_sub_model: document.getElementById("kb-agent-sub-model").value,
-            agent_source_lane: document.getElementById("kb-agent-source-lane").value,
-            agent_done_lane: document.getElementById("kb-agent-done-lane").value,
             default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value) || 0,
             default_project_id: parseInt(document.getElementById("kb-board-def-project").value) || 0,
-
         };
         if (editingBoardId) {
             apiFetch("/api/kanban/boards/" + editingBoardId, {
@@ -706,11 +620,13 @@
                 method: "POST", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ name: payload.name, description: payload.description })
             }).then(function(data) {
-                // After create, save agent settings
-                payload.name = undefined; payload.description = undefined;
+                // After create, save board defaults
                 return apiFetch("/api/kanban/boards/" + data.id, {
                     method: "PUT", headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
+                    body: JSON.stringify({
+                        default_workflow_id: payload.default_workflow_id,
+                        default_project_id: payload.default_project_id
+                    })
                 }).then(function() { return data; });
             }).then(function(data) {
                 showSnackbar("Board created"); closeBoardModal(); loadBoards();
@@ -783,6 +699,214 @@
         }).catch(function(e) { showSnackbar("Copy failed: " + e.message, "error"); });
     }
 
+    // ── Global Settings Modal ──
+
+    var gsFreq = "daily";
+    var gsHours = [];
+    var gsDays = [];
+
+    function loadGlobalKanbanSettings() {
+        apiFetch("/api/kanban/settings").then(function(s) {
+            // CLI Tool
+            document.getElementById("kb-gs-cli-tool").value = s.kanban_cli_tool || "";
+
+            // Store real auth value and apply mask
+            _cliAuthRealValue = s.kanban_cli_auth || "";
+            applyAuthMask();
+
+            // Update CLI tool visibility (auth wrap, install status)
+            handleCliToolChange();
+
+            // LLM Configuration — populate provider dropdowns then load models
+            _populateProviderDropdowns(["kb-gs-orch-provider", "kb-gs-coder-provider", "kb-gs-sub-provider"]);
+
+            var orchProv = s.kanban_agent_orchestrator_provider || "";
+            var coderProv = s.kanban_agent_coder_provider || "";
+            var subProv = s.kanban_agent_sub_provider || "";
+            document.getElementById("kb-gs-orch-provider").value = orchProv;
+            document.getElementById("kb-gs-coder-provider").value = coderProv;
+            document.getElementById("kb-gs-sub-provider").value = subProv;
+            loadAgentModels("kb-gs-orch", orchProv, s.kanban_agent_orchestrator_model || "");
+            loadAgentModels("kb-gs-coder", coderProv, s.kanban_agent_coder_model || "");
+            loadAgentModels("kb-gs-sub", subProv, s.kanban_agent_sub_model || "");
+
+            // Advanced — agent toggle
+            document.getElementById("kb-gs-agent-enabled").checked = !!s.kanban_agent_enabled;
+
+            // Frequency
+            gsFreq = s.kanban_agent_frequency || "daily";
+            document.getElementById("kb-gs-frequency").value = gsFreq;
+            updateGsFrequencyUI(gsFreq);
+
+            // Hour picker
+            gsHours = [];
+            try { gsHours = typeof s.kanban_agent_hours === "string" ? JSON.parse(s.kanban_agent_hours) : (s.kanban_agent_hours || []); } catch (e) { gsHours = []; }
+            document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
+                var h = parseInt(btn.dataset.hour);
+                btn.setAttribute("data-selected", gsHours.indexOf(h) >= 0 ? "1" : "0");
+            });
+
+            // Day picker
+            gsDays = [];
+            try { gsDays = typeof s.kanban_agent_days === "string" ? JSON.parse(s.kanban_agent_days) : (s.kanban_agent_days || []); } catch (e) { gsDays = []; }
+            document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
+                var d = parseInt(btn.dataset.day);
+                btn.setAttribute("data-selected", gsDays.indexOf(d) >= 0 ? "1" : "0");
+            });
+
+            // Monthly day
+            document.getElementById("kb-gs-monthly-day-input").value = String(s.kanban_agent_monthly_day || 1);
+
+            // Time
+            document.getElementById("kb-gs-time-input").value = s.kanban_agent_time || "09:00";
+
+            // Lane routing
+            document.getElementById("kb-gs-source-lane").value = s.kanban_agent_source_lane || "";
+            document.getElementById("kb-gs-done-lane").value = s.kanban_agent_done_lane || "";
+        }).catch(function(e) { showSnackbar("Failed to load settings: " + e.message, "error"); });
+    }
+
+    function saveGlobalKanbanSettings() {
+        // Collect selected hours
+        var hours = [];
+        document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
+            if (btn.getAttribute("data-selected") === "1") hours.push(parseInt(btn.dataset.hour));
+        });
+        // Deduplicate hours
+        hours = hours.filter(function(v, i, a) { return a.indexOf(v) === i; });
+
+        // Collect selected days
+        var days = [];
+        document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
+            if (btn.getAttribute("data-selected") === "1") days.push(parseInt(btn.dataset.day));
+        });
+
+        var payload = {
+            kanban_cli_tool: document.getElementById("kb-gs-cli-tool").value,
+            kanban_cli_auth: _cliAuthRealValue,
+            kanban_agent_orchestrator_provider: document.getElementById("kb-gs-orch-provider").value,
+            kanban_agent_orchestrator_model: document.getElementById("kb-gs-orch-model").value,
+            kanban_agent_coder_provider: document.getElementById("kb-gs-coder-provider").value,
+            kanban_agent_coder_model: document.getElementById("kb-gs-coder-model").value,
+            kanban_agent_sub_provider: document.getElementById("kb-gs-sub-provider").value,
+            kanban_agent_sub_model: document.getElementById("kb-gs-sub-model").value,
+            kanban_agent_enabled: document.getElementById("kb-gs-agent-enabled").checked,
+            kanban_agent_frequency: document.getElementById("kb-gs-frequency").value,
+            kanban_agent_time: document.getElementById("kb-gs-time-input").value || "09:00",
+            kanban_agent_hours: hours,
+            kanban_agent_days: days,
+            kanban_agent_monthly_day: parseInt(document.getElementById("kb-gs-monthly-day-input").value) || 1,
+            kanban_agent_source_lane: document.getElementById("kb-gs-source-lane").value,
+            kanban_agent_done_lane: document.getElementById("kb-gs-done-lane").value
+        };
+
+        apiFetch("/api/kanban/settings", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        }).then(function() {
+            showSnackbar("Settings saved");
+            closeGlobalSettingsModal();
+        }).catch(function(e) { showSnackbar("Save failed: " + e.message, "error"); });
+    }
+
+    function openGlobalSettingsModal() {
+        // Ensure providers are loaded, then load settings
+        apiFetch("/api/llms/available-providers").then(function(data) {
+            _agentProviders = data.providers || [{ id: "ollama", name: "Ollama" }];
+        }).catch(function() {
+            _agentProviders = [{ id: "ollama", name: "Ollama" }];
+        }).then(function() {
+            loadGlobalKanbanSettings();
+        });
+        document.getElementById("kb-global-settings-modal").classList.remove("hidden");
+    }
+
+    function closeGlobalSettingsModal() {
+        document.getElementById("kb-global-settings-modal").classList.add("hidden");
+    }
+
+    function updateGsFrequencyUI(freq) {
+        var hourPicker = document.getElementById("kb-gs-hour-picker");
+        var dayPicker = document.getElementById("kb-gs-day-picker");
+        var monthlyDay = document.getElementById("kb-gs-monthly-day");
+        var timePicker = document.getElementById("kb-gs-time");
+
+        hourPicker.classList.toggle("hidden", freq !== "hourly");
+        dayPicker.classList.toggle("hidden", freq !== "weekly" && freq !== "fortnightly");
+        monthlyDay.classList.toggle("hidden", freq !== "monthly");
+        timePicker.classList.toggle("hidden", freq === "hourly");
+    }
+
+    // ── CLI Tool Selection & Auth Masking ──
+
+    var _cliAuthRealValue = "";  // stores the actual unmasked auth value
+
+    function maskApiKey(value) {
+        if (!value) return "";
+        var v = value.replace(/^\s+|\s+$/g, "");
+        if (!v) return "";
+        if (v.length <= 4) return Array(v.length + 1).join("\u2022");
+        return Array(v.length - 3).join("\u2022") + v.slice(-4);
+    }
+
+    function handleCliToolChange() {
+        var tool = document.getElementById("kb-gs-cli-tool").value;
+        var authWrap = document.getElementById("kb-gs-cli-auth-wrap");
+        var statusEl = document.getElementById("kb-gs-cli-install-status");
+
+        if (!tool) {
+            authWrap.classList.add("hidden");
+            statusEl.textContent = "";
+            return;
+        }
+
+        // Show auth fields when a tool is selected
+        authWrap.classList.remove("hidden");
+
+        // Show install status check
+        statusEl.textContent = "Checking\u2026";
+        statusEl.className = "text-xs text-gray-500 flex-shrink-0";
+
+        apiFetch("/api/kanban/cli-tool-status?tool=" + encodeURIComponent(tool)).then(function(data) {
+            if (data && data.installed) {
+                statusEl.textContent = "\u2713 Installed";
+                statusEl.className = "text-xs text-green-400 flex-shrink-0";
+            } else {
+                statusEl.textContent = "\u2717 Not found";
+                statusEl.className = "text-xs text-red-400 flex-shrink-0";
+            }
+        }).catch(function() {
+            // If the endpoint doesn't exist yet, show a neutral status
+            statusEl.textContent = "\u2014";
+            statusEl.className = "text-xs text-gray-500 flex-shrink-0";
+        });
+    }
+
+    function applyAuthMask() {
+        var authInput = document.getElementById("kb-gs-cli-auth");
+        if (_cliAuthRealValue) {
+            authInput.value = maskApiKey(_cliAuthRealValue);
+            authInput.type = "text";
+        } else {
+            authInput.value = "";
+            authInput.type = "password";
+        }
+    }
+
+    function onAuthFocus() {
+        var authInput = document.getElementById("kb-gs-cli-auth");
+        authInput.type = "password";
+        authInput.value = _cliAuthRealValue;
+    }
+
+    function onAuthBlur() {
+        var authInput = document.getElementById("kb-gs-cli-auth");
+        // Capture whatever the user typed as the real value
+        _cliAuthRealValue = authInput.value;
+        applyAuthMask();
+    }
+
     // ── Event bindings ──
 
     function init() {
@@ -790,6 +914,51 @@
         document.getElementById("kb-add-board").addEventListener("click", function() { openBoardModal(null); });
         document.getElementById("kb-create-big").addEventListener("click", function() { openBoardModal(null); });
         document.getElementById("kb-search").addEventListener("input", function() { loadBoards(); });
+
+        // Global settings modal
+        document.getElementById("kb-settings-cog").addEventListener("click", openGlobalSettingsModal);
+        document.getElementById("kb-gs-close").addEventListener("click", closeGlobalSettingsModal);
+        document.getElementById("kb-gs-cancel").addEventListener("click", closeGlobalSettingsModal);
+        document.getElementById("kb-gs-save").addEventListener("click", saveGlobalKanbanSettings);
+        document.getElementById("kb-global-settings-modal").addEventListener("click", function(e) {
+            if (e.target === this) closeGlobalSettingsModal();
+        });
+
+        // Global settings frequency change
+        document.getElementById("kb-gs-frequency").addEventListener("change", function() {
+            gsFreq = this.value;
+            updateGsFrequencyUI(gsFreq);
+        });
+
+        // CLI tool selection change
+        document.getElementById("kb-gs-cli-tool").addEventListener("change", handleCliToolChange);
+
+        // Auth input masking — focus shows real value, blur re-masks
+        document.getElementById("kb-gs-cli-auth").addEventListener("focus", onAuthFocus);
+        document.getElementById("kb-gs-cli-auth").addEventListener("blur", onAuthBlur);
+
+        // Global settings hour picker toggles
+        document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                var cur = btn.getAttribute("data-selected") === "1";
+                btn.setAttribute("data-selected", cur ? "0" : "1");
+            });
+        });
+
+        // Global settings day picker toggles
+        document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                var cur = btn.getAttribute("data-selected") === "1";
+                btn.setAttribute("data-selected", cur ? "0" : "1");
+            });
+        });
+
+        // Global settings LLM provider change → reload models
+        ["kb-gs-orch", "kb-gs-coder", "kb-gs-sub"].forEach(function(prefix) {
+            document.getElementById(prefix + "-provider").addEventListener("change", function() {
+                loadAgentModels(prefix, this.value, "");
+            });
+        });
 
         // Board actions
         document.getElementById("kb-add-ticket").addEventListener("click", addTicket);
@@ -814,23 +983,6 @@
         document.getElementById("kb-board-modal-save").addEventListener("click", saveBoardModal);
         document.getElementById("kb-board-modal").addEventListener("click", function(e) {
             if (e.target === this) closeBoardModal();
-        });
-
-        // Agent frequency buttons
-        document.querySelectorAll(".kb-agent-freq").forEach(function(btn) {
-            btn.addEventListener("click", function() { setAgentFreq(btn.dataset.freq); });
-        });
-
-        // Agent day buttons
-        document.querySelectorAll(".kb-agent-day").forEach(function(btn) {
-            btn.addEventListener("click", function() { toggleAgentDay(parseInt(btn.dataset.day)); });
-        });
-
-        // Agent provider change → reload models
-        ["kb-agent-orch", "kb-agent-coder", "kb-agent-sub"].forEach(function(prefix) {
-            document.getElementById(prefix + "-provider").addEventListener("change", function() {
-                loadAgentModels(prefix, this.value, "");
-            });
         });
 
         // Ticket modal

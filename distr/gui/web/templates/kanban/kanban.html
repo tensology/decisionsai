@@ -43,6 +43,10 @@
 }
 /* Board modal tab active */
 .kb-bm-tab.active { color: #fff; border-color: #f97316; }
+/* Global settings hour/day toggle active */
+.kb-gs-hour[data-selected="1"], .kb-gs-day[data-selected="1"] {
+    background-color: #f97316; border-color: #f97316; color: #fff;
+}
 /* Ticket modal tab active */
 .kb-tm-tab { cursor: pointer; }
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
@@ -56,7 +60,15 @@
         <div class="w-72 flex-shrink-0 flex flex-col gap-4">
             <!-- Search -->
             <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
-                <input type="text" id="kb-search" placeholder="Search boards..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                <div class="flex items-center gap-2">
+                    <input type="text" id="kb-search" placeholder="Search boards..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                    <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0" title="KanBan Settings">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+                </div>
             </div>
             <!-- Board list -->
             <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
@@ -261,7 +273,6 @@
         <!-- Tabs -->
         <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-tab="details">Details</button>
-            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="agent">Agent</button>
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="advanced">Advanced</button>
         </div>
         <!-- Details tab -->
@@ -273,98 +284,6 @@
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Description</label>
                 <input type="text" id="kb-board-modal-desc" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Optional description">
-            </div>
-        </div>
-        <!-- Agent tab -->
-        <div id="kb-bm-tab-agent" class="kb-bm-pane hidden p-6 space-y-4">
-            <div class="flex items-center gap-3">
-                <label class="text-sm text-gray-300">Enable agent check-in</label>
-                <input type="checkbox" id="kb-agent-enabled" class="accent-[#f97316]">
-            </div>
-            <!-- Schedule -->
-            <div id="kb-agent-schedule-wrap">
-                <label class="block text-sm text-gray-400 mb-2">Check-in frequency</label>
-                <div class="flex gap-1 mb-3">
-                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="daily">Daily</button>
-                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="weekly">Weekly</button>
-                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="fortnightly">Fortnightly</button>
-                    <button type="button" class="kb-agent-freq flex-1 px-2 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-freq="monthly">Monthly</button>
-                </div>
-                <div class="flex gap-2 items-center mb-3">
-                    <label class="text-xs text-gray-500">Time</label>
-                    <input type="time" id="kb-agent-time" value="09:00" class="px-3 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" style="color-scheme:dark;">
-                </div>
-                <!-- Weekly day picker -->
-                <div id="kb-agent-days-wrap" class="hidden mb-3">
-                    <label class="block text-xs text-gray-500 mb-1">Which days?</label>
-                    <div class="flex gap-1">
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="0">Sun</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="1">Mon</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="2">Tue</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="3">Wed</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="4">Thu</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="5">Fri</button>
-                        <button type="button" class="kb-agent-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400" data-day="6">Sat</button>
-                    </div>
-                </div>
-                <!-- Monthly day picker -->
-                <div id="kb-agent-monthly-wrap" class="hidden mb-3">
-                    <label class="block text-xs text-gray-500 mb-1">Day of month</label>
-                    <input type="number" id="kb-agent-monthly-day" min="1" max="28" value="1" class="w-20 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
-                </div>
-            </div>
-            <!-- Agent models (provider/model dropdowns like Chat LLMs) -->
-            <div class="border-t border-white/10 pt-4 space-y-3">
-                <p class="text-xs text-gray-500">Leave blank to use the global chat settings.</p>
-                <!-- Orchestrator -->
-                <div class="flex items-center gap-2">
-                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Orchestrator</label>
-                    <select id="kb-agent-orch-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                    <select id="kb-agent-orch-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                </div>
-                <!-- Coder -->
-                <div class="flex items-center gap-2">
-                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
-                    <select id="kb-agent-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                    <select id="kb-agent-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                </div>
-                <!-- Sub-agent -->
-                <div class="flex items-center gap-2">
-                    <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Sub-agent</label>
-                    <select id="kb-agent-sub-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                    <select id="kb-agent-sub-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">(chat default)</option>
-                    </select>
-                </div>
-            </div>
-            <!-- Lane routing -->
-            <div class="border-t border-white/10 pt-4 space-y-3">
-                <label class="block text-sm text-gray-400">Ticket lane routing</label>
-                <p class="text-xs text-gray-500">The agent picks tickets from the source lane and moves them to the done lane when complete.</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label class="text-xs text-gray-500">Source lane (work from)</label>
-                        <select id="kb-agent-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">Select lane</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label class="text-xs text-gray-500">Done lane (move to)</label>
-                        <select id="kb-agent-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">Select lane</option>
-                        </select>
-                    </div>
-                </div>
             </div>
         </div>
         <!-- Advanced tab (board defaults for new tickets) -->
@@ -389,6 +308,187 @@
         <div class="flex justify-end gap-2 px-6 pb-5 pt-2 border-t border-white/20">
             <button type="button" id="kb-board-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
             <button type="button" id="kb-board-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Create</button>
+        </div>
+    </div>
+</div>
+
+<!-- Global Settings Modal -->
+<div id="kb-global-settings-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: 640px;">
+        <!-- Header -->
+        <div class="flex items-center justify-between px-6 pt-5 pb-0">
+            <h3 class="text-lg font-semibold text-white">KanBan Settings</h3>
+            <button type="button" id="kb-gs-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+
+        <!-- Sections -->
+        <div class="p-6 space-y-6">
+
+            <!-- CLI Tool Section -->
+            <div>
+                <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">CLI Tool</h4>
+                <div class="space-y-3">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Tool</label>
+                        <div class="flex items-center gap-3">
+                            <select id="kb-gs-cli-tool" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                                <option value="">Select a CLI tool</option>
+                                <option value="cursor">Cursor CLI</option>
+                                <option value="gemini">Gemini CLI</option>
+                                <option value="claude">Claude Code</option>
+                                <option value="kiro">Kiro.dev CLI</option>
+                            </select>
+                            <span id="kb-gs-cli-install-status" class="text-xs text-gray-500 flex-shrink-0"></span>
+                        </div>
+                    </div>
+                    <div id="kb-gs-cli-auth-wrap" class="hidden">
+                        <label class="block text-sm text-gray-400 mb-1">API Key / Auth</label>
+                        <input type="password" id="kb-gs-cli-auth" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Enter API key or credentials">
+                    </div>
+                </div>
+            </div>
+
+            <!-- LLM Configuration Section -->
+            <div class="border-t border-white/10 pt-4">
+                <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">LLM Configuration</h4>
+                <p class="text-xs text-gray-500 mb-3">Leave blank to use the global chat settings.</p>
+                <div class="space-y-3">
+                    <!-- Orchestrator -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Orchestrator</label>
+                        <select id="kb-gs-orch-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                        <select id="kb-gs-orch-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                    </div>
+                    <!-- Coder -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
+                        <select id="kb-gs-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                        <select id="kb-gs-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                    </div>
+                    <!-- Sub-agent -->
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Sub-agent</label>
+                        <select id="kb-gs-sub-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                        <select id="kb-gs-sub-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Advanced Section -->
+            <div class="border-t border-white/10 pt-4">
+                <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Advanced</h4>
+                <div class="space-y-4">
+                    <!-- Agent enabled toggle -->
+                    <div class="flex items-center gap-3">
+                        <label class="text-sm text-gray-300">Enable agent check-in</label>
+                        <input type="checkbox" id="kb-gs-agent-enabled" class="accent-[#f97316]">
+                    </div>
+
+                    <!-- Frequency selector -->
+                    <div>
+                        <label class="block text-xs text-gray-500 mb-2">Check-in frequency</label>
+                        <select id="kb-gs-frequency" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                            <option value="hourly">Hourly</option>
+                            <option value="daily" selected>Daily</option>
+                            <option value="weekly">Weekly</option>
+                            <option value="fortnightly">Fortnightly</option>
+                            <option value="monthly">Monthly</option>
+                        </select>
+                    </div>
+
+                    <!-- Hour picker grid (hidden unless frequency is hourly) -->
+                    <div id="kb-gs-hour-picker" class="hidden">
+                        <label class="block text-xs text-gray-500 mb-2">Which hours?</label>
+                        <div class="grid grid-cols-8 gap-1">
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="0">0</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="1">1</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="2">2</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="3">3</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="4">4</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="5">5</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="6">6</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="7">7</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="8">8</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="9">9</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="10">10</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="11">11</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="12">12</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="13">13</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="14">14</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="15">15</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="16">16</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="17">17</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="18">18</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="19">19</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="20">20</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="21">21</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="22">22</button>
+                            <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="23">23</button>
+                        </div>
+                    </div>
+
+                    <!-- Day-of-week picker (hidden unless frequency is weekly/fortnightly) -->
+                    <div id="kb-gs-day-picker" class="hidden">
+                        <label class="block text-xs text-gray-500 mb-2">Which days?</label>
+                        <div class="flex gap-1">
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="0">Sun</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="1">Mon</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="2">Tue</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="3">Wed</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="4">Thu</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="5">Fri</button>
+                            <button type="button" class="kb-gs-day flex-1 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-day="6">Sat</button>
+                        </div>
+                    </div>
+
+                    <!-- Day-of-month input (hidden unless frequency is monthly) -->
+                    <div id="kb-gs-monthly-day" class="hidden">
+                        <label class="block text-xs text-gray-500 mb-1">Day of month</label>
+                        <input type="number" id="kb-gs-monthly-day-input" min="1" max="28" value="1" class="w-20 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                    </div>
+
+                    <!-- Time picker (hidden when frequency is hourly) -->
+                    <div id="kb-gs-time" class="flex gap-2 items-center">
+                        <label class="text-xs text-gray-500">Time</label>
+                        <input type="time" id="kb-gs-time-input" value="09:00" class="px-3 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" style="color-scheme:dark;">
+                    </div>
+
+                    <!-- Lane routing -->
+                    <div class="border-t border-white/10 pt-4">
+                        <label class="block text-sm text-gray-400 mb-2">Ticket lane routing</label>
+                        <p class="text-xs text-gray-500 mb-3">The agent picks tickets from the source lane and moves them to the done lane when complete.</p>
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="text-xs text-gray-500">Source lane (work from)</label>
+                                <input type="text" id="kb-gs-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. To Do">
+                            </div>
+                            <div>
+                                <label class="text-xs text-gray-500">Done lane (move to)</label>
+                                <input type="text" id="kb-gs-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. Done">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+        </div>
+
+        <!-- Footer -->
+        <div class="flex justify-end gap-2 px-6 pb-5 pt-2 border-t border-white/20">
+            <button type="button" id="kb-gs-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-gs-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
         </div>
     </div>
 </div>
