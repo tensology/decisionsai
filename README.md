@@ -42,7 +42,7 @@
 |---|---|---|
 | 📱 | **Control from your phone** | Connect Telegram — send voice or text, get replies and screenshots back, stream your screen live, transfer files |
 | 📧 | **Google Workspace** | Gmail, Calendar, Drive, Docs, Sheets — direct API access, no third-party routing |
-| 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline), ElevenLabs, or Qwen3-TTS |
+| 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
 | 🔄 | **Recorded macros** | Capture keyboard and mouse sequences, replay them by voice — perfect for repetitive tasks |
 | 👁️ | **Vision** | Share screenshots, photos, or diagrams — the assistant reasons about what it sees |
 | 🔀 | **Step Runner** | Multi-step workflows with validation, agent routing, recording, presets, and scheduling |
@@ -108,7 +108,6 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [OpenAI](https://openai.com/) | GPT-5.4, GPT-4 Turbo, GPT-4o |
 | [Anthropic](https://www.anthropic.com/) | Claude 3.7 Sonnet, Claude 3.5 Opus, Claude 3 Haiku |
 | [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning (up to 5 custom voices) |
-| [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) | Local TTS with strong cloning quality and unlimited custom voices |
 | [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
 | [Rube/Composio](https://composio.dev/) | Connect to 500+ apps for workflow automation |
 
@@ -197,8 +196,7 @@ python bin/start.py
 | Component | Install | Notes |
 |---|---|---|
 | **Vosk** (alt STT) | `python bin/setup_vosk.py` | ~1.8 GB English model |
-| **Qwen3-TTS** (alt TTS) | Included in requirements | Downloads models on first use; slower than Kokoro |
-| **Voice cloning** | Built-in for Kokoro, ElevenLabs, Qwen3-TTS | Click **+ Custom** next to voice dropdown in Preferences |
+| **Voice cloning** | Built-in for Kokoro and ElevenLabs | Click **+ Custom** next to voice dropdown in Preferences |
 
 ---
 

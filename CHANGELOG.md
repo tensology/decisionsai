@@ -2,6 +2,26 @@
 
 ---
 
+## [2.6.7] - 2026-03-27
+
+### Windows Installer, Qwen3-TTS Removal, Bug Fixes
+
+**Windows Installer Overhaul** – The Windows `.bat` installer now auto-installs Git via winget if missing, installs Visual Studio C++ Build Tools and CMake for pywhispercpp compilation, adds the project root to the user PATH so `decisions.bat` works from anywhere, enables long paths in the registry and git (`core.longpaths`) to fix the MAX_PATH 260 character limit, and uses `C:\tmp` as TEMP during pip install to avoid path length failures. If pywhispercpp can't be built, it's skipped gracefully and the app falls back to Vosk for speech recognition.
+
+**Qwen3-TTS Removed** – Dropped Qwen3-TTS as a TTS provider. In our experience, the 600M parameter model wasn't practical for real-time streaming — latency was too high for a conversational voice assistant. Deleted the service, voice presets, cloning logic, sample rate config, and the `qwen-tts` pip dependency. Cleaned up references across the service factory, session loader, command handler, constants, settings UI, chat JS, API docs, and README. Kokoro (offline) and ElevenLabs (cloud) remain as the recommended TTS and voice cloning options.
+
+**Telegram Improvements** – Telegram voice notes now use the chat's voice settings instead of a hardcoded default. The welcome voice message is forwarded to Telegram on connect. The system prevents macOS sleep while Telegram is connected so the bot stays responsive.
+
+**Google OAuth** – Added a disconnect button with confirmation dialog that removes tokens and the secret file. Connected services now show a checkmark (✓ Google, ✓ Telegram) on their buttons. Improved the OAuth setup modal with copy button feedback (green flash + snackbar).
+
+**Voice & Mouse Fixes** – Fixed "move mouse to center of my screen" being misrouted to the screenshot tool. Added "mask" as a mouse synonym and support for ordinal screen numbers ("move to screen two"). Filtered `[BLANK_AUDIO]` and bracket-wrapped artifacts from push-to-talk transcription. Disabled the Pipecat idle timeout that was killing the agent every 5 minutes.
+
+**Multi-Ticket Creation** – You can now create multiple tickets from a single voice command.
+
+**Config & Startup** – Unified the config directory to `~/.decisionsai/` (was inconsistently `.decisions/` and `.decisions_ai/` in some places). `setup.py` no longer crashes when Ollama isn't installed. The app now shows the git commit hash and date at startup. Fixed duplicate log lines from the distr logger propagating to root. Replaced the emoji lightning bolt with a PNG in the web UI logo. Fixed LLM provider select widths in the UI.
+
+---
+
 ## [2.6.6] - 2026-03-25
 
 ### Oracle Skins System — Your Assistant, Your Way
