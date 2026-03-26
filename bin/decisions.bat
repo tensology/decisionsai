@@ -92,6 +92,13 @@ if exist ".git" (
 ) else (
     echo [33mNot a git repository. Skipping update check.[0m
 )
+
+:: Show version
+for /f "tokens=*" %%h in ('git rev-parse --short HEAD 2^>nul') do set "GIT_HASH=%%h"
+for /f "tokens=*" %%d in ('git log -1 --format^=%%ci 2^>nul') do set "GIT_DATE=%%d"
+if defined GIT_HASH (
+    echo [36mVersion: !GIT_HASH! ^(!GIT_DATE!^)[0m
+)
 echo.
 
 :: Require python 3.12

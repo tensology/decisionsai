@@ -52,6 +52,13 @@ if [ -d ".git" ]; then
 else
     echo -e "${YELLOW}Not a git repository. Skipping update check.${NC}"
 fi
+
+# Show version
+GIT_HASH=$(git rev-parse --short HEAD 2>/dev/null)
+GIT_DATE=$(git log -1 --format=%ci 2>/dev/null)
+if [ -n "$GIT_HASH" ]; then
+    echo -e "\033[36mVersion: ${GIT_HASH} (${GIT_DATE})\033[0m"
+fi
 echo ""
 
 # Require python3.12 - PyTorch and PyQt6 need 3.12 (3.13+ not supported)
