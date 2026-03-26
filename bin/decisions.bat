@@ -189,6 +189,21 @@ if !errorlevel! neq 0 (
 
 :: Check for C++ Build Tools (needed for pywhispercpp / whisper.cpp)
 echo [33mChecking C++ build tools...[0m
+
+:: Ensure Visual C++ Redistributable is installed (needed for onnxruntime DLLs)
+if not exist "%SystemRoot%\System32\msvcp140.dll" (
+    echo [33mInstalling Visual C++ Redistributable...[0m
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        winget install Microsoft.VCRedist.2015+.x64 --accept-package-agreements --accept-source-agreements >nul 2>&1
+        echo [32m√[0m Visual C++ Redistributable installed
+    ) else (
+        echo [33mWarning: Install Visual C++ Redistributable from https://aka.ms/vs/17/release/vc_redist.x64.exe[0m
+    )
+) else (
+    echo [32m√[0m Visual C++ Redistributable found
+)
+
 set "HAS_CPP_TOOLS=0"
 set "VSWHERE=%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe"
 if exist "%VSWHERE%" (
