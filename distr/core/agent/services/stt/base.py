@@ -148,10 +148,17 @@ class BaseSTTService(STTService):
         text_lower = text.strip().lower()
         if text_lower in self._audio_artifacts:
             return False
+        # Also check after stripping trailing punctuation (e.g. "[BLANK_AUDIO].")
+        text_stripped = text_lower.rstrip(string.punctuation).strip()
+        if text_stripped in self._audio_artifacts:
+            return False
         text_no_punct = text_lower.translate(
             str.maketrans("", "", string.punctuation)
         ).strip()
         if text_no_punct in self._filler_words:
+            return False
+        # Catch bracket-wrapped artifacts not in the list (e.g. "[inaudible]", "(noise)")
+        if text_stripped.startswith(('[', '(')) and text_stripped.endswith((']', ')')):
             return False
         return True
 
