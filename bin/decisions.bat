@@ -219,8 +219,19 @@ if !DEPS_OK! equ 0 (
 
     "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt
     if !errorlevel! neq 0 (
-        echo [31mError: pip install failed. Please check the output above.[0m
-        exit /b 1
+        :: If full install failed, try without pywhispercpp (needs C++ build tools)
+        echo [33mRetrying without pywhispercpp ^(needs C++ build tools^)...[0m
+        "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
+        "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
+        if !errorlevel! neq 0 (
+            echo [31mError: pip install failed. Please check the output above.[0m
+            exit /b 1
+        )
+        del /f requirements_win.txt 2>nul
+        echo [33mNote: pywhispercpp skipped ^(local Whisper transcription unavailable^).[0m
+        echo [33m  Other STT backends ^(AssemblyAI, OpenAI^) still work.[0m
+        echo [33m  To enable Whisper: install Visual Studio Build Tools with C++ workload, then run:[0m
+        echo [33m  pip install pywhispercpp@git+https://github.com/absadiki/pywhispercpp[0m
     )
 
     :: Ensure installer directory exists and create marker

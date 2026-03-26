@@ -168,6 +168,9 @@ class TelegramWebSocketManager(
         # receives a single combined message instead of responding to each one
         # individually.  After BATCH_DELAY_MS of silence the buffer is flushed.
         self._telegram_batch_buffer: list = []  # list of (text, is_media, image_path)
+
+        # Sleep prevention — keep the machine awake while Telegram is connected
+        self._sleep_inhibit_proc = None  # subprocess handle (macOS caffeinate) or ctypes ref (Windows)
         self._telegram_batch_timer = QTimer()
         self._telegram_batch_timer.setSingleShot(True)
         self._telegram_batch_timer.timeout.connect(self._flush_telegram_batch)
@@ -644,8 +647,14 @@ class TelegramWebSocketManager(
         # Process any queued messages that accumulated during disconnection
         QTimer.singleShot(500, self._process_message_queue)
 
+        # Prevent system sleep while Telegram is connected
+        self._inhibit_sleep()
+
     def _on_disconnected(self):
         """Called when socket disconnects."""
+        # Release sleep prevention
+        self._release_sleep()
+
         if not self._active_disconnect:
             logger.warning(
                 "[Telegram] ⚠️ WebSocket disconnected unexpectedly (will auto-reconnect, attempt #%d)",
@@ -679,6 +688,57 @@ class TelegramWebSocketManager(
             err_str, error_code, self.is_connected(), self._reconnect_attempts,
         )
         self._log_detailed(f"ERROR: {err_str} (code={error_code})")
+
+    # ── Sleep prevention ──
+
+    def _inhibit_sleep(self):
+        """Prevent the system from sleeping while Telegram is connected."""
+        if self._sleep_inhibit_proc is not None:
+            return  # already inhibited
+
+        try:
+            if platform.system() == "Darwin":
+                # macOS: caffeinate -di (prevent display sleep + idle sleep)
+                self._sleep_inhibit_proc = subprocess.Popen(
+                    ["caffeinate", "-di"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                )
+                logger.info("[Telegram] ☕ Sleep prevention enabled (caffeinate pid=%d)", self._sleep_inhibit_proc.pid)
+            elif platform.system() == "Windows":
+                import ctypes
+                # ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                ES_CONTINUOUS = 0x80000000
+                ES_SYSTEM_REQUIRED = 0x00000001
+                ES_DISPLAY_REQUIRED = 0x00000002
+                ctypes.windll.kernel32.SetThreadExecutionState(
+                    ES_CONTINUOUS | ES_SYSTEM_REQUIRED | ES_DISPLAY_REQUIRED
+                )
+                self._sleep_inhibit_proc = True  # sentinel
+                logger.info("[Telegram] ☕ Sleep prevention enabled (SetThreadExecutionState)")
+        except Exception as e:
+            logger.warning("[Telegram] Could not inhibit sleep: %s", e)
+
+    def _release_sleep(self):
+        """Allow the system to sleep again."""
+        if self._sleep_inhibit_proc is None:
+            return
+
+        try:
+            if platform.system() == "Darwin":
+                if hasattr(self._sleep_inhibit_proc, 'terminate'):
+                    self._sleep_inhibit_proc.terminate()
+                    self._sleep_inhibit_proc.wait(timeout=5)
+                    logger.info("[Telegram] 😴 Sleep prevention released (caffeinate terminated)")
+            elif platform.system() == "Windows":
+                import ctypes
+                ES_CONTINUOUS = 0x80000000
+                ctypes.windll.kernel32.SetThreadExecutionState(ES_CONTINUOUS)
+                logger.info("[Telegram] 😴 Sleep prevention released (SetThreadExecutionState reset)")
+        except Exception as e:
+            logger.warning("[Telegram] Could not release sleep inhibit: %s", e)
+        finally:
+            self._sleep_inhibit_proc = None
 
     def _on_binary_message(self, data):
         """Handle incoming binary WebSocket message (file upload chunks from server)."""
