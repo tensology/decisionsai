@@ -18,6 +18,7 @@ from distr.core.db.kanban import (
     KanbanTicketFile, KanbanTicketLink, KanbanTicketTodo,
 )
 from distr.core.kanban.agent import _active_agents, KanbanAgentCheckIn
+from distr.core.settings import load_settings_from_db, save_settings_to_db
 
 logger = logging.getLogger(__name__)
 
@@ -36,19 +37,6 @@ class BoardUpdate(BaseModel):
     default_project_id: Optional[int] = None
     default_snippet_id: Optional[int] = None
     default_action_id: Optional[int] = None
-    agent_enabled: Optional[bool] = None
-    agent_frequency: Optional[str] = None
-    agent_time: Optional[str] = None
-    agent_days: Optional[List[int]] = None
-    agent_monthly_day: Optional[int] = None
-    agent_orchestrator_provider: Optional[str] = None
-    agent_orchestrator_model: Optional[str] = None
-    agent_coder_provider: Optional[str] = None
-    agent_coder_model: Optional[str] = None
-    agent_sub_provider: Optional[str] = None
-    agent_sub_model: Optional[str] = None
-    agent_source_lane: Optional[str] = None
-    agent_done_lane: Optional[str] = None
 
 class TicketCreate(BaseModel):
     lane_id: int
@@ -89,8 +77,94 @@ class CopyToBoard(BaseModel):
     priority: Optional[str] = "medium"
 
 
+ALLOWED_FREQUENCIES = {"hourly", "daily", "weekly", "fortnightly", "monthly"}
+
+
+class KanbanSettingsUpdate(BaseModel):
+    kanban_agent_enabled: Optional[bool] = None
+    kanban_agent_frequency: Optional[str] = None
+    kanban_agent_time: Optional[str] = None
+    kanban_agent_hours: Optional[List[int]] = None
+    kanban_agent_days: Optional[List[int]] = None
+    kanban_agent_monthly_day: Optional[int] = None
+    kanban_agent_source_lane: Optional[str] = None
+    kanban_agent_done_lane: Optional[str] = None
+    kanban_agent_orchestrator_provider: Optional[str] = None
+    kanban_agent_orchestrator_model: Optional[str] = None
+    kanban_agent_coder_provider: Optional[str] = None
+    kanban_agent_coder_model: Optional[str] = None
+    kanban_agent_sub_provider: Optional[str] = None
+    kanban_agent_sub_model: Optional[str] = None
+    kanban_cli_tool: Optional[str] = None
+    kanban_cli_auth: Optional[str] = None
+
+
 def create_routes():
     router = APIRouter()
+
+    # ── Global Kanban Settings ──
+
+    @router.get("/kanban/settings")
+    async def get_kanban_settings():
+        """Return all kanban-prefixed global settings."""
+        settings = load_settings_from_db()
+        kanban_settings = {k: v for k, v in settings.items() if k.startswith("kanban_")}
+        # Parse JSON-encoded list fields for the response
+        for list_key in ("kanban_agent_hours", "kanban_agent_days"):
+            val = kanban_settings.get(list_key)
+            if isinstance(val, str):
+                try:
+                    kanban_settings[list_key] = json.loads(val)
+                except (json.JSONDecodeError, ValueError):
+                    kanban_settings[list_key] = []
+        return JSONResponse(kanban_settings)
+
+    @router.put("/kanban/settings")
+    async def update_kanban_settings(payload: KanbanSettingsUpdate):
+        """Update global kanban settings with validation."""
+        data = payload.model_dump(exclude_none=True)
+
+        # Determine effective frequency: use provided value or fall back to current
+        effective_frequency = data.get("kanban_agent_frequency")
+        if effective_frequency is None:
+            current = load_settings_from_db()
+            effective_frequency = current.get("kanban_agent_frequency", "daily")
+
+        # Validate frequency
+        if "kanban_agent_frequency" in data:
+            if data["kanban_agent_frequency"] not in ALLOWED_FREQUENCIES:
+                raise HTTPException(422, f"Invalid frequency: must be one of {sorted(ALLOWED_FREQUENCIES)}")
+
+        # Validate hours
+        if "kanban_agent_hours" in data:
+            hours = data["kanban_agent_hours"]
+            if not all(isinstance(h, int) and 0 <= h <= 23 for h in hours):
+                raise HTTPException(422, "Invalid kanban_agent_hours: all values must be integers in [0, 23]")
+            # Deduplicate
+            data["kanban_agent_hours"] = sorted(set(hours))
+
+        # Validate days
+        if "kanban_agent_days" in data:
+            days = data["kanban_agent_days"]
+            if not all(isinstance(d, int) and 0 <= d <= 6 for d in days):
+                raise HTTPException(422, "Invalid kanban_agent_days: all values must be integers in [0, 6]")
+
+        # Validate monthly_day
+        if "kanban_agent_monthly_day" in data:
+            md = data["kanban_agent_monthly_day"]
+            if not (isinstance(md, int) and 1 <= md <= 28):
+                raise HTTPException(422, "Invalid kanban_agent_monthly_day: must be an integer in [1, 28]")
+
+        # Load current settings, apply updates, save
+        settings = load_settings_from_db()
+        for key, value in data.items():
+            # Convert list fields to JSON strings for storage
+            if key in ("kanban_agent_hours", "kanban_agent_days"):
+                settings[key] = json.dumps(value)
+            else:
+                settings[key] = value
+        save_settings_to_db(settings)
+        return JSONResponse({"success": True})
 
     # ── Boards ──
 
@@ -136,32 +210,6 @@ def create_routes():
                 board.default_snippet_id = payload.default_snippet_id if payload.default_snippet_id else None
             if payload.default_action_id is not None:
                 board.default_action_id = payload.default_action_id if payload.default_action_id else None
-            if payload.agent_enabled is not None:
-                board.agent_enabled = payload.agent_enabled
-            if payload.agent_frequency is not None:
-                board.agent_frequency = payload.agent_frequency
-            if payload.agent_time is not None:
-                board.agent_time = payload.agent_time
-            if payload.agent_days is not None:
-                board.agent_days = json.dumps(payload.agent_days)
-            if payload.agent_monthly_day is not None:
-                board.agent_monthly_day = payload.agent_monthly_day
-            if payload.agent_orchestrator_provider is not None:
-                board.agent_orchestrator_provider = payload.agent_orchestrator_provider
-            if payload.agent_orchestrator_model is not None:
-                board.agent_orchestrator_model = payload.agent_orchestrator_model
-            if payload.agent_coder_provider is not None:
-                board.agent_coder_provider = payload.agent_coder_provider
-            if payload.agent_coder_model is not None:
-                board.agent_coder_model = payload.agent_coder_model
-            if payload.agent_sub_provider is not None:
-                board.agent_sub_provider = payload.agent_sub_provider
-            if payload.agent_sub_model is not None:
-                board.agent_sub_model = payload.agent_sub_model
-            if payload.agent_source_lane is not None:
-                board.agent_source_lane = payload.agent_source_lane
-            if payload.agent_done_lane is not None:
-                board.agent_done_lane = payload.agent_done_lane
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -201,19 +249,6 @@ def create_routes():
                 "id": board.id, "name": board.name, "description": board.description or "",
                 "source": board.source, "external_board_id": board.external_board_id,
                 "external_url": board.external_url, "lanes": lanes,
-                "agent_enabled": board.agent_enabled or False,
-                "agent_frequency": board.agent_frequency or "daily",
-                "agent_time": board.agent_time or "09:00",
-                "agent_days": json.loads(board.agent_days or "[]"),
-                "agent_monthly_day": board.agent_monthly_day or 1,
-                "agent_orchestrator_provider": board.agent_orchestrator_provider or "",
-                "agent_orchestrator_model": board.agent_orchestrator_model or "",
-                "agent_coder_provider": board.agent_coder_provider or "",
-                "agent_coder_model": board.agent_coder_model or "",
-                "agent_sub_provider": board.agent_sub_provider or "",
-                "agent_sub_model": board.agent_sub_model or "",
-                "agent_source_lane": board.agent_source_lane or "",
-                "agent_done_lane": board.agent_done_lane or "",
                 "default_workflow_id": board.default_workflow_id,
                 "default_project_id": board.default_project_id,
                 "default_snippet_id": board.default_snippet_id,

@@ -74,7 +74,7 @@
       "playback": "loop"
     },
     "recording_action": {
-      "animation": "processing.webp",
+      "animation": "music.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -119,7 +119,7 @@
       "playback": "loop"
     },
     "running_action": {
-      "animation": "music.webp",
+      "animation": "baloon.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -134,7 +134,7 @@
       "playback": "loop"
     },
     "running_step_runner": {
-      "animation": "music.webp",
+      "animation": "baloon.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -149,7 +149,7 @@
       "playback": "loop"
     },
     "snippet_copied": {
-      "animation": "thinking.webp",
+      "animation": "idle.webp",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

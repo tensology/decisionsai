@@ -20,7 +20,7 @@ if pgrep -f "bin/start.py" > /dev/null 2>&1; then
 fi
 
 # Create log directory if it doesn't exist
-LOG_DIR="$HOME/.decisions/logs"
+LOG_DIR="$HOME/.decisionsai/logs"
 mkdir -p "$LOG_DIR"
 
 # Log file with timestamp

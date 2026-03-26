@@ -33,7 +33,7 @@ class AgentLifecycleMixin:
             exitcode = getattr(self.agent_process, 'exitcode', None)
             logger.warning("Agent process found dead (exitcode=%s): reloading session", exitcode)
             try:
-                crash_dir = os.path.expanduser("~/.decisions/logs")
+                crash_dir = os.path.expanduser("~/.decisionsai/logs")
                 crash_file = os.path.join(crash_dir, "agent_death.log")
                 os.makedirs(crash_dir, exist_ok=True)
                 with open(crash_file, "a") as f:

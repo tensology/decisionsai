@@ -55,8 +55,25 @@ DEFAULT_SETTINGS = {
     'ollama_url': 'http://localhost:11434/',
     'accepted_eula': False,
     'locked_input': 'System Default',
-    'locked_output': 'System Default'
+    'locked_output': 'System Default',
     # Note: Jira and Trello accounts are now stored in connected_accounts JSON field
+    # Kanban agent global settings
+    'kanban_agent_enabled': False,
+    'kanban_agent_frequency': 'daily',
+    'kanban_agent_time': '09:00',
+    'kanban_agent_hours': '[]',
+    'kanban_agent_days': '[]',
+    'kanban_agent_monthly_day': 1,
+    'kanban_agent_source_lane': '',
+    'kanban_agent_done_lane': '',
+    'kanban_agent_orchestrator_provider': '',
+    'kanban_agent_orchestrator_model': '',
+    'kanban_agent_coder_provider': '',
+    'kanban_agent_coder_model': '',
+    'kanban_agent_sub_provider': '',
+    'kanban_agent_sub_model': '',
+    'kanban_cli_tool': '',
+    'kanban_cli_auth': '',
 }
 
 def load_settings_from_db() -> Dict[str, Any]:

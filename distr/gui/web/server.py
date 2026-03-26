@@ -312,6 +312,15 @@ def create_app() -> FastAPI:
     async def health_check():
         return {"status": "ok", "services": ["flow", "board", "settings", "chat"]}
     
+    # Run one-time kanban settings migration on startup
+    @app.on_event("startup")
+    async def _run_kanban_migration():
+        try:
+            from distr.core.kanban.migration import migrate_board_agent_settings_to_global
+            migrate_board_agent_settings_to_global()
+        except Exception as e:
+            logger.warning("Kanban settings migration could not run: %s", e)
+
     # Check model recommendations staleness on startup
     @app.on_event("startup")
     async def _check_model_recommendations():

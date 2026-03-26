@@ -174,7 +174,7 @@ def _setup_crash_logging():
     global _crash_log_file
     try:
         import faulthandler
-        crash_dir = os.path.expanduser("~/.decisions/logs")
+        crash_dir = os.path.expanduser("~/.decisionsai/logs")
         os.makedirs(crash_dir, exist_ok=True)
         crash_file = os.path.join(crash_dir, f"crash_{os.getpid()}.log")
         _crash_log_file = open(crash_file, "a")

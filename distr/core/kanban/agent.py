@@ -14,6 +14,7 @@ from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.workflow import AutoWorkflowRun
 from distr.core.llm_override import LLMOverride, set_llm_override, clear_llm_override
+from distr.core.settings import load_settings_from_db
 from distr.core.workflow.service import start_workflow_run, cancel_run
 
 logger = logging.getLogger(__name__)
@@ -106,43 +107,55 @@ class KanbanAgentCheckIn:
     # Core methods
     # ------------------------------------------------------------------
 
-    def _load_board(self) -> Optional[KanbanBoard]:
+    def _load_board(self) -> Optional[_BoardInfo]:
         """Fetch the board and validate required agent fields.
 
-        Returns the board dict-like info or None if validation fails.
+        Agent configuration (enabled, lanes, LLM provider/model) is read from
+        global settings.  Only ``default_workflow_id`` comes from the board record.
+
+        Returns a ``_BoardInfo`` or ``None`` if validation fails.
         """
+        settings = load_settings_from_db()
+
+        if not settings.get('kanban_agent_enabled', False):
+            logger.info("Agent check-in: agent not enabled in global settings")
+            return None
+
+        agent_source_lane = settings.get('kanban_agent_source_lane', '')
+        agent_done_lane = settings.get('kanban_agent_done_lane', '')
+
+        if not agent_source_lane:
+            logger.error("Agent check-in: no source lane configured in global settings")
+            return None
+        if not agent_done_lane:
+            logger.error("Agent check-in: no done lane configured in global settings")
+            return None
+
         with get_session() as db:
             board = db.query(KanbanBoard).filter(KanbanBoard.id == self.board_id).first()
             if not board:
                 logger.error("Agent check-in: board %s not found", self.board_id)
                 return None
-            if not board.agent_enabled:
-                logger.info("Agent check-in: agent not enabled on board %s", self.board_id)
-                return None
-            if not board.agent_source_lane:
-                logger.error("Agent check-in: no source lane configured on board %s", self.board_id)
-                return None
-            if not board.agent_done_lane:
-                logger.error("Agent check-in: no done lane configured on board %s", self.board_id)
-                return None
             if not board.default_workflow_id:
                 logger.error("Agent check-in: no default_workflow_id on board %s", self.board_id)
                 return None
 
-            # Capture all needed attributes before session closes
-            info = _BoardInfo(
-                id=board.id,
-                agent_enabled=board.agent_enabled,
-                agent_source_lane=board.agent_source_lane,
-                agent_done_lane=board.agent_done_lane,
-                default_workflow_id=board.default_workflow_id,
-                agent_orchestrator_provider=board.agent_orchestrator_provider or "",
-                agent_orchestrator_model=board.agent_orchestrator_model or "",
-                agent_coder_provider=board.agent_coder_provider or "",
-                agent_coder_model=board.agent_coder_model or "",
-                agent_sub_provider=board.agent_sub_provider or "",
-                agent_sub_model=board.agent_sub_model or "",
-            )
+            default_workflow_id = board.default_workflow_id
+            board_id = board.id
+
+        info = _BoardInfo(
+            id=board_id,
+            agent_enabled=True,
+            agent_source_lane=agent_source_lane,
+            agent_done_lane=agent_done_lane,
+            default_workflow_id=default_workflow_id,
+            agent_orchestrator_provider=settings.get('kanban_agent_orchestrator_provider', ''),
+            agent_orchestrator_model=settings.get('kanban_agent_orchestrator_model', ''),
+            agent_coder_provider=settings.get('kanban_agent_coder_provider', ''),
+            agent_coder_model=settings.get('kanban_agent_coder_model', ''),
+            agent_sub_provider=settings.get('kanban_agent_sub_provider', ''),
+            agent_sub_model=settings.get('kanban_agent_sub_model', ''),
+        )
         return info
 
     def _collect_tickets(self, board) -> List[dict]:
