@@ -439,16 +439,6 @@ def register_routes(router, templates):
             client_id = web_config.get("client_id")
             if not client_id:
                 return JSONResponse({"url": None, "error": "Client ID not found in OAuth config."})
-            # Check if our redirect URI is registered in the config
-            registered_uris = web_config.get("redirect_uris", [])
-            if redirect_uri not in registered_uris:
-                return JSONResponse({
-                    "url": None,
-                    "needs_config": True,
-                    "javascript_origin": base,
-                    "redirect_uri": redirect_uri,
-                    "hint": f"Add this redirect URI to your Google Cloud Console: {redirect_uri}",
-                })
             state = str(uuid.uuid4())
             _oauth_states[state] = __import__("time").time()
             scopes = [
