@@ -260,17 +260,22 @@ function updateConnectionStatus() {
         var telegramBtn = document.getElementById('telegram_connect_btn');
         var trelloBtn = document.getElementById('trello_connect_btn');
         var jiraBtn = document.getElementById('jira_connect_btn');
+        var connectedClass = 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors';
         if (googleBtn) {
-            googleBtn.className = data.google_connected ? 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors' : 'px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors';
+            googleBtn.className = data.google_connected ? connectedClass : 'px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors';
+            googleBtn.innerHTML = data.google_connected ? '✓ Google' : 'Google';
         }
         if (telegramBtn) {
-            telegramBtn.className = data.telegram_connected ? 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors' : 'px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors';
+            telegramBtn.className = data.telegram_connected ? connectedClass : 'px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors';
+            telegramBtn.innerHTML = data.telegram_connected ? '✓ Telegram' : 'Telegram';
         }
         if (trelloBtn) {
-            trelloBtn.className = data.trello_has_valid ? 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors' : 'px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors';
+            trelloBtn.className = data.trello_has_valid ? connectedClass : 'px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors';
+            trelloBtn.innerHTML = data.trello_has_valid ? '✓ Trello' : 'Trello';
         }
         if (jiraBtn) {
-            jiraBtn.className = data.jira_has_valid ? 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors' : 'px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors';
+            jiraBtn.className = data.jira_has_valid ? connectedClass : 'px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors';
+            jiraBtn.innerHTML = data.jira_has_valid ? '✓ Jira' : 'Jira';
         }
     }).catch(function () {});
 }
