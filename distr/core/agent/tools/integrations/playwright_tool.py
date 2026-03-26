@@ -36,7 +36,7 @@ class PlaywrightInput(BaseModel):
             "Must include all imports (from playwright.sync_api import sync_playwright). "
             "Use headless=True by default. Print results or assertions to stdout. "
             "IMPORTANT: Always save a full-page screenshot at the end with "
-            "page.screenshot(path='/tmp/pw_screenshots/result.png', full_page=True) "
+            "page.screenshot(path=os.path.join(tempfile.gettempdir(), 'pw_screenshots', 'result.png'), full_page=True) "
             "so the vision LLM can verify the entire page visually.\n"
             "NOTE: Browser console logs (errors, warnings, failed requests) are "
             "captured automatically — no extra code needed.\n"
@@ -80,7 +80,7 @@ class PlaywrightTool(BaseTool):
         "4. REPEAT: If the visual analysis or console logs show issues, fix and re-run\n"
         "\n"
         "AUTO-CAPTURED DATA:\n"
-        "- Screenshot: Always end with page.screenshot(path='/tmp/pw_screenshots/result.png', full_page=True)\n"
+        "- Screenshot: Always end with page.screenshot(path=os.path.join(tempfile.gettempdir(), 'pw_screenshots', 'result.png'), full_page=True)\n"
         "- Console logs: Automatically captured (errors, warnings, info, failed network requests)\n"
         "- Both are sent to the vision LLM for combined analysis\n"
         "- Viewport is 1920x1080 by default; use full_page=True to capture the entire scrollable page\n"
@@ -95,15 +95,16 @@ class PlaywrightTool(BaseTool):
         "- Console log capture is injected automatically — no extra code needed\n"
         "\n"
         "EXAMPLE:\n"
+        "import os, tempfile\n"
         "from playwright.sync_api import sync_playwright\n"
-        "import os\n"
-        "os.makedirs('/tmp/pw_screenshots', exist_ok=True)\n"
+        "pw_dir = os.path.join(tempfile.gettempdir(), 'pw_screenshots')\n"
+        "os.makedirs(pw_dir, exist_ok=True)\n"
         "with sync_playwright() as p:\n"
         "    browser = p.chromium.launch(headless=True)\n"
         "    page = browser.new_page(viewport={'width': 1920, 'height': 1080})\n"
         "    page.goto('https://example.com')\n"
         "    print(page.title())\n"
-        "    page.screenshot(path='/tmp/pw_screenshots/result.png', full_page=True)\n"
+        "    page.screenshot(path=os.path.join(pw_dir, 'result.png'), full_page=True)\n"
         "    browser.close()\n"
     )
     args_schema: type[BaseModel] = PlaywrightInput
@@ -554,7 +555,8 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                     response += "\n\n(Screenshot found but vision analysis was unavailable)"
             else:
                 response += (
-                    "\n\n(No screenshot found. Add page.screenshot(path='/tmp/pw_screenshots/result.png') "
+                    "\n\n(No screenshot found. Add "
+                    "page.screenshot(path=os.path.join(tempfile.gettempdir(), 'pw_screenshots', 'result.png')) "
                     "to your script for visual validation.)"
                 )
 

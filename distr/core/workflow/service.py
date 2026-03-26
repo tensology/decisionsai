@@ -833,10 +833,21 @@ def _verify_screenshot(step: AutoWorkflowStep, result: str, validation_prompt: s
     # Take a current screenshot for comparison
     try:
         import subprocess
+        import platform
         from distr.core.paths import DB_DIR
         current_path = os.path.join(DB_DIR, "workflow_screenshots", f"step_{step.id}_current.png")
         os.makedirs(os.path.dirname(current_path), exist_ok=True)
-        subprocess.run(["screencapture", "-x", current_path], timeout=5, check=True)
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["screencapture", "-x", current_path], timeout=5, check=True)
+        elif system == "Windows":
+            from PIL import ImageGrab
+            img = ImageGrab.grab()
+            img.save(current_path)
+        else:
+            from PIL import ImageGrab
+            img = ImageGrab.grab()
+            img.save(current_path)
         # If we have both screenshots, try LLM vision comparison
         # For now, fall back to validation_prompt text match
         logger.info("Screenshots captured for step %s. Using validation prompt for judgment.", step.id)
