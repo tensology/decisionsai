@@ -281,6 +281,25 @@ function updateConnectionStatus() {
 }
 
 function connectGoogle() {
+    // Check if already connected — offer disconnect instead
+    var btn = document.getElementById('google_connect_btn');
+    if (btn && btn.textContent.indexOf('✓') !== -1) {
+        if (!confirm('Disconnect Google? This will remove your tokens and OAuth config.')) return;
+        fetch(settingsBase + '/api/advanced/google/disconnect', { method: 'POST' })
+            .then(function (r) { return r.json(); })
+            .then(function (data) {
+                if (data.success) {
+                    if (typeof window.showNotification === 'function') window.showNotification('Google disconnected', 'success');
+                    updateConnectionStatus();
+                } else {
+                    if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
+                }
+            })
+            .catch(function () {
+                if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error');
+            });
+        return;
+    }
     fetch(settingsBase + '/api/advanced/google/oauth-url').then(function (r) { return r.json(); }).then(function (data) {
         if (data.needs_config) {
             openGoogleSetupModal(data.javascript_origin, data.redirect_uri);

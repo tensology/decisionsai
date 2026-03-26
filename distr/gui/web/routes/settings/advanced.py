@@ -326,6 +326,30 @@ def register_routes(router, templates):
             "trello_has_valid": trello_has_valid,
         })
 
+    @router.post("/advanced/google/disconnect")
+    async def disconnect_google():
+        """Remove Google OAuth tokens and delete the client secret file."""
+        try:
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+            # Remove Google account from connected_accounts in DB
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            connected_accounts = [a for a in connected_accounts if not (isinstance(a, dict) and a.get("provider") == "google")]
+            save_settings_to_db({"connected_accounts": json.dumps(connected_accounts)})
+            # Delete the client secret file
+            project_root = Path(__file__).parent.parent.parent.parent
+            secrets_path = project_root / "secrets" / "google_oauth_client_secret.json"
+            if secrets_path.exists():
+                secrets_path.unlink()
+            home_secrets = Path.home() / ".decisionsai" / "google_oauth_client_secret.json"
+            if home_secrets.exists():
+                home_secrets.unlink()
+            logger.info("Google disconnected: tokens removed, secret file deleted")
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"Google disconnect: {e}", exc_info=True)
+            return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
     @router.post("/advanced/validate/jira")
     async def validate_jira(body: dict):
         """Validate Jira credentials (same logic as native CredentialValidationThread._validate_jira)."""
