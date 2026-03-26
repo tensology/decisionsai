@@ -14,6 +14,36 @@ echo.
 echo [32mDecisionsAI Setup ^& Run[0m
 echo ================================
 
+:: Check for Git
+where git >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [33mGit not found. Attempting to install...[0m
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo Installing Git via winget...
+        winget install Git.Git --accept-package-agreements --accept-source-agreements
+        :: Refresh PATH to pick up newly installed git
+        set "PATH=%LOCALAPPDATA%\Programs\Git\cmd;%ProgramFiles%\Git\cmd;%PATH%"
+        where git >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo [32m√[0m Git installed successfully
+        ) else (
+            echo [31mError: Git installation failed. Install manually from https://git-scm.com/download/win[0m
+            echo   Or run: winget install Git.Git
+            pause
+            exit /b 1
+        )
+    ) else (
+        echo [31mError: Git not found and winget not available.[0m
+        echo   Install Git from: https://git-scm.com/download/win
+        echo   Or install winget from: https://aka.ms/getwinget
+        pause
+        exit /b 1
+    )
+) else (
+    echo [32m√[0m Git found
+)
+
 :: Check for repository updates
 echo [33mChecking for updates...[0m
 if exist ".git" (
