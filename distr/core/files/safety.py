@@ -11,6 +11,7 @@ This module provides:
 
 import logging
 import os
+import platform
 import re
 import json
 from typing import List, Tuple, Dict, Optional, Set
@@ -45,13 +46,22 @@ class FileOperationSafety:
         os.path.expanduser("~/Documents"),
     ]
     
-    # Blocked roots
-    BLOCKED_ROOTS = [
-        "/System",
-        "/Library",
-        "/Applications",
-        os.path.expanduser("~/.ssh"),
-    ]
+    # Blocked roots (platform-aware)
+    if platform.system() == "Windows":
+        BLOCKED_ROOTS = [
+            os.environ.get("SystemRoot", r"C:\Windows"),
+            os.path.join(os.environ.get("SystemRoot", r"C:\Windows"), "System32"),
+            os.environ.get("ProgramFiles", r"C:\Program Files"),
+            os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"),
+            os.path.expanduser("~/.ssh"),
+        ]
+    else:
+        BLOCKED_ROOTS = [
+            "/System",
+            "/Library",
+            "/Applications",
+            os.path.expanduser("~/.ssh"),
+        ]
     
     def __init__(self, log_dir: Optional[str] = None):
         """
