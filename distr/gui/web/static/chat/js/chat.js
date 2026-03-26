@@ -101,7 +101,7 @@ async function createDefaultChat() {
             const general = await generalRes.json();
             const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
             if (vp) voiceProvider = vp;
-            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'qwen3' ? 'qwen3_voice' : 'elevenlabs_voice';
+            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
             const v = (general[key] || '').trim();
             if (v && v !== '—') voiceModel = v;
         }
@@ -885,7 +885,7 @@ async function loadEmptyStateDropdowns() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderEl.value = voiceProvider;
         await loadEmptyStateVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'qwen3' ? 'qwen3_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelEl.options.length) {
             const opt = Array.from(voiceModelEl.options).find(o => o.value === defaultVoice);
@@ -1938,7 +1938,7 @@ async function loadDefaultSettings() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderSelect.value = voiceProvider;
         await loadVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'qwen3' ? 'qwen3_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelSelect.options.length) {
             const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);
@@ -2122,7 +2122,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'qwen3']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;
@@ -2213,8 +2213,8 @@ function openChatCustomVoiceModal(context) {
     setChatCvAudioMode('upload');
     _chatCvRecordedBlob = null;
 
-    // Show/hide gender row (only for kokoro/qwen3)
-    document.getElementById('chatCv_genderRow').style.display = (provider === 'kokoro' || provider === 'qwen3') ? '' : 'none';
+    // Show/hide gender row (only for kokoro)
+    document.getElementById('chatCv_genderRow').style.display = (provider === 'kokoro') ? '' : 'none';
 
     const modal = document.getElementById('chatCustomVoiceModal');
     modal.classList.remove('hidden');

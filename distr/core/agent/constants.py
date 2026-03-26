@@ -41,7 +41,6 @@ DEFAULT_ELEVENLABS_AGENT = "Heart"
 TTS_KOKORO = "Kokoro (Offline)"
 TTS_ELEVENLABS = "ElevenLabs (Online)"
 TTS_OPENAI = "OpenAI (Online)"
-TTS_QWEN3 = "Qwen3-TTS (Offline)"
 TTS_COQUI = "Coqui TTS (Offline)"
 TTS_SYSTEM = "System Default"
 
@@ -86,16 +85,6 @@ TTS_PROVIDERS = [
         "supports_custom_voices": False,
     },
     {
-        "id": "qwen3",
-        "name": TTS_QWEN3,
-        "type": "offline",
-        "enabled": True,
-        "default_voice": "Aiden",
-        "settings_key": "qwen3_voice",
-        "supports_custom_voices": True,
-        "custom_voice_limit": 0,
-    },
-    {
         "id": "coqui",
         "name": TTS_COQUI,
         "type": "offline",
@@ -109,23 +98,6 @@ TTS_PROVIDERS = [
 # Quick lookups derived from the registry
 TTS_PROVIDER_BY_ID = {p["id"]: p for p in TTS_PROVIDERS}
 TTS_ENABLED_IDS = [p["id"] for p in TTS_PROVIDERS if p["enabled"]]
-
-# --- Qwen3-TTS preset voices (official 9 built-in speakers from qwen-tts package) ---
-# Speaker IDs are case-sensitive and must match exactly what the model expects.
-# Native language is the best quality; all speakers can speak any supported language.
-QWEN3_PRESETS = [
-    {"id": "Aiden",     "name": "Aiden (sunny American male)"},
-    {"id": "Ryan",      "name": "Ryan (dynamic English male)"},
-    {"id": "Vivian",    "name": "Vivian (bright young female, Chinese)"},
-    {"id": "Serena",    "name": "Serena (warm gentle female, Chinese)"},
-    {"id": "Dylan",     "name": "Dylan (clear Beijing male, Chinese)"},
-    {"id": "Eric",      "name": "Eric (lively Sichuan male, Chinese)"},
-    {"id": "Uncle_Fu",  "name": "Uncle Fu (seasoned deep male, Chinese)"},
-    {"id": "Ono_Anna",  "name": "Ono Anna (playful Japanese female)"},
-    {"id": "Sohee",     "name": "Sohee (warm Korean female)"},
-]
-DEFAULT_QWEN3_VOICE = "Aiden"
-DEFAULT_QWEN3_AGENT = "Aiden"
 
 DEFAULT_COQUI_VOICE = "p225"
 DEFAULT_COQUI_AGENT = "Sarah"
@@ -196,7 +168,6 @@ SAMPLE_RATE_INPUT = 16000
 SAMPLE_RATE_KOKORO = 24000
 SAMPLE_RATE_OPENAI_TTS = 24000
 SAMPLE_RATE_ELEVENLABS = 44100
-SAMPLE_RATE_QWEN3 = 24000
 SAMPLE_RATE_COQUI = 22050
 
 # Engine -> output sample rate (used by _load_config and transport setup)
@@ -204,7 +175,6 @@ TTS_SAMPLE_RATES = {
     'kokoro': SAMPLE_RATE_KOKORO,
     'openai': SAMPLE_RATE_OPENAI_TTS,
     'elevenlabs': SAMPLE_RATE_ELEVENLABS,
-    'qwen3': SAMPLE_RATE_QWEN3,
     'coqui': SAMPLE_RATE_COQUI,
 }
 
@@ -213,7 +183,6 @@ SPEED_BOUNDS = {
     "kokoro": (0.5, 2.0),
     "elevenlabs": (0.7, 1.2),
     "openai": (0.25, 4.0),
-    "qwen3": (0.5, 2.0),
     "coqui": (0.5, 2.0),
 }
 
@@ -278,8 +247,6 @@ def normalize_voice_provider(raw: str) -> str:
         return 'elevenlabs'
     if 'openai' in v:
         return 'openai'
-    if 'qwen3' in v:
-        return 'qwen3'
     if 'coqui' in v:
         return 'coqui'
     return v or 'kokoro'

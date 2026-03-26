@@ -34,11 +34,6 @@ except ImportError:
     OpenAITTSService = None
 
 try:
-    from .tts.qwen3 import Qwen3TTSService
-except ImportError:
-    Qwen3TTSService = None
-
-try:
     from .tts.coqui import CoquiTTSService
 except ImportError:
     CoquiTTSService = None
@@ -79,8 +74,6 @@ except ImportError as e:
 __all__ = ["WhisperSTTService", "OllamaLLMService", "KokoroTTSService", "ElevenLabsTTSService"]
 if OpenAITTSService:
     __all__.append("OpenAITTSService")
-if Qwen3TTSService:
-    __all__.append("Qwen3TTSService")
 if CoquiTTSService:
     __all__.append("CoquiTTSService")
 if OpenAILLMService:

@@ -874,8 +874,6 @@ class EventHandlerMixin:
             voice_id = settings.get('openai_voice', 'alloy')
         elif "elevenlabs" in vp_lower:
             voice_id = settings.get('elevenlabs_voice', '')
-        elif "qwen3" in vp_lower:
-            voice_id = settings.get('qwen3_voice', '')
         else:
             voice_id = ''
 

@@ -48,9 +48,6 @@ def register_routes(router, templates):
                             voices.append({"id": v.voice_id, "name": v.name})
             elif provider_id == "openai":
                 voices = list(OPENAI_TTS_VOICES)
-            elif provider_id == "qwen3":
-                from distr.core.agent.constants import QWEN3_PRESETS
-                voices = list(QWEN3_PRESETS)
             elif provider_id == "coqui":
                 from distr.core.agent.constants import COQUI_VOICES
                 voices = [{"id": vid, "name": name} for vid, name in COQUI_VOICES.items()]
@@ -60,7 +57,7 @@ def register_routes(router, templates):
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "qwen3", "elevenlabs"):
+        if provider_id in ("kokoro", "elevenlabs"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text
@@ -182,16 +179,6 @@ def register_routes(router, templates):
         """Return OpenAI TTS voice list (backend-defined)."""
         return OPENAI_TTS_VOICES
 
-    @router.get("/voices/qwen3")
-    async def get_qwen3_voices():
-        """Return Qwen3-TTS preset voice list (backend-defined)."""
-        try:
-            from distr.core.agent.constants import QWEN3_PRESETS
-            return list(QWEN3_PRESETS)
-        except Exception as e:
-            logger.warning("Could not load QWEN3_PRESETS: %s", e)
-            return [{"id": "Aiden", "name": "Aiden (sunny American male)"}]
-
     @router.get("/voices/coqui")
     async def get_coqui_voices():
         """Return Coqui VCTK voice list (from coqui-ai-voices.json via constants)."""
@@ -245,8 +232,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("qwen3", "elevenlabs", "kokoro"):
-            return JSONResponse({"error": "Provider must be qwen3 or elevenlabs"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro"):
+            return JSONResponse({"error": "Provider must be elevenlabs or kokoro"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()

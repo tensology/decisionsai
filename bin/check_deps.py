@@ -49,10 +49,8 @@ OPTIONAL = [
 ]
 
 # Packages checked via pip metadata rather than import (heavy deps that may
-# fail to import at check time even when correctly installed, e.g. qwen-tts
-# requires torch which needs code-signing on macOS).
+# fail to import at check time even when correctly installed).
 METADATA_ONLY = [
-    "qwen-tts",
 ]
 
 def main():

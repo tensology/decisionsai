@@ -423,8 +423,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("openai_voice") or "")
                 elif "elevenlabs" in vp_lower:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("elevenlabs_voice") or "")
-                elif "qwen3" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("qwen3_voice") or "")
                 else:
                     voice_model_raw = (root_chat.voice_model or "").strip() or ""
                 # Persist to chat row when we used fallback so this thread has its own LLM/voice stored (normal chat behaviour)
@@ -500,7 +498,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 settings.get("kokoro_voice", None)
                 or settings.get("openai_voice", None)
                 or settings.get("elevenlabs_voice", None)
-                or settings.get("qwen3_voice", None)
                 or ""
             )
 
@@ -529,7 +526,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 voice_provider = voice_provider.strip().lower()
 
             # Validate voice provider
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "qwen3", ""]
+            valid_voice_providers = ["kokoro", "openai", "elevenlabs", ""]
             if voice_provider and voice_provider not in valid_voice_providers:
                 raise HTTPException(
                     status_code=400,
@@ -786,7 +783,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
 
             # Validate voice provider if provided
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "qwen3", "", None]
+            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "", None]
             vp_normalized = voice_provider.strip().lower() if voice_provider else voice_provider
             if (
                 vp_normalized is not None

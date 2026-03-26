@@ -192,7 +192,6 @@ class TelegramWebSocketManager(
                 "kokoro": "kokoro_voice",
                 "elevenlabs": "elevenlabs_voice",
                 "openai": "openai_voice",
-                "qwen3": "qwen3_voice",
                 "coqui": "coqui_voice",
             }
             voice_id = settings.get(voice_keys.get(provider, "kokoro_voice"), "")
@@ -216,8 +215,6 @@ class TelegramWebSocketManager(
                 return KOKORO_VOICES.get(voice_id, voice_id.replace("af_", "").replace("am_", "").title())
             elif provider == "openai":
                 return (voice_id or "Alloy").title()
-            elif provider == "qwen3":
-                return voice_id or "Aiden"
             elif provider == "coqui":
                 from distr.core.agent.constants import COQUI_VOICES
                 return COQUI_VOICES.get(voice_id, voice_id)

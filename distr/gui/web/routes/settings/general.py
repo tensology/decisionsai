@@ -44,7 +44,6 @@ def register_routes(router, templates):
             "kokoro_voice": settings.get("kokoro_voice", "af_heart"),
             "elevenlabs_voice": settings.get("elevenlabs_voice", "default"),
             "openai_voice": settings.get("openai_voice", "alloy"),
-            "qwen3_voice": settings.get("qwen3_voice", "Aiden"),
             "coqui_voice": settings.get("coqui_voice", "p225"),
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
@@ -134,8 +133,6 @@ def register_routes(router, templates):
             "kokoro (offline)": "kokoro",
             "elevenlabs (online)": "elevenlabs",
             "openai (online)": "openai",
-            "qwen3 (online)": "qwen3",
-            "qwen3-tts (online)": "qwen3",
         }.get(provider_raw, provider_raw)
         voice = (request.voice or "").strip()
         voice_name = (request.voice_name or "").strip() or voice

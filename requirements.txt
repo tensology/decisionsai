@@ -113,8 +113,6 @@ pytesseract>=0.3.10
 opencv-python>=4.8.0
 # Cron parsing for Step Runner scheduled sessions
 croniter>=2.0.0
-# Qwen3-TTS (local, optional - alternative to Kokoro)
-qwen-tts>=0.1.0
 # Coqui TTS (local, optional - VCTK multi-speaker model)
 # NOTE: TTS package only supports Python <3.12, install manually if using 3.11:
 #   pip install TTS>=0.22.0

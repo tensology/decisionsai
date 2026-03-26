@@ -662,7 +662,7 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
     Handles cases where a chat has e.g. voice_provider='kokoro' but voice_model='some ElevenLabs voice'
     (an ElevenLabs voice). Returns the corrected provider (lowercase).
     """
-    from .constants import KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME, QWEN3_PRESETS
+    from .constants import KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME
 
     vp = (voice_provider or '').strip().lower()
     vm = (voice_model or '').strip()
@@ -687,16 +687,11 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
     # Check if voice_model is a known OpenAI voice
     openai_voices = {'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'}
     is_openai = vm.lower() in openai_voices
-    # Check if voice_model is a known Qwen3 preset
-    qwen3_ids = {p['id'].lower() for p in QWEN3_PRESETS}
-    is_qwen3 = vm.lower() in qwen3_ids
 
     # If the voice matches the claimed provider, no correction needed
     if 'kokoro' in vp and is_kokoro:
         return vp
     if 'openai' in vp and is_openai:
-        return vp
-    if 'qwen3' in vp and is_qwen3:
         return vp
     if 'elevenlabs' in vp:
         return vp  # ElevenLabs voices are dynamic (API IDs or names), trust the provider
@@ -706,14 +701,12 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
         return 'kokoro'
     if is_openai:
         return 'openai'
-    if is_qwen3:
-        return 'qwen3'
 
     # Not a known built-in voice — likely ElevenLabs (custom name or API voice ID)
-    if not is_kokoro and not is_openai and not is_qwen3:
+    if not is_kokoro and not is_openai:
         # If the voice_model looks like a human name (not a Kokoro ID like af_heart),
         # it's probably an ElevenLabs voice
-        if vp in ('kokoro', 'openai', 'qwen3') and not any(c in vm for c in ('_', ':')):
+        if vp in ('kokoro', 'openai') and not any(c in vm for c in ('_', ':')):
             return 'elevenlabs'
 
     return vp
@@ -864,8 +857,6 @@ def _cmd_current_chat_changed(session, params):
                         chat_voice_model = (getattr(settings_row, 'openai_voice', None) or "").strip() or "alloy"
                     elif "elevenlabs" in vp:
                         chat_voice_model = (getattr(settings_row, 'elevenlabs_voice', None) or "").strip() or ""
-                    elif "qwen3" in vp:
-                        chat_voice_model = (getattr(settings_row, 'qwen3_voice', None) or "").strip() or ""
                     else:
                         chat_voice_model = "af_heart"
     except Exception as e:

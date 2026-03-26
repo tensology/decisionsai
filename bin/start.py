@@ -46,16 +46,6 @@ if sys.platform == 'darwin' and not os.environ.get('_DECISIONS_DYLD_FIXED'):
         # Re-exec with the same Python and args so dyld picks up the new env
         os.execv(sys.executable, [sys.executable] + sys.argv)
 
-# Suppress "flash-attn is not installed" banner from qwen_tts (raw print to stderr).
-# Flash attention is CUDA-only; irrelevant on Apple Silicon (MPS) or CPU.
-import builtins as _bi
-_orig_print = _bi.print
-def _filtered_print(*args, **kwargs):
-    if args and 'flash-attn' in str(args[0]):
-        return
-    return _orig_print(*args, **kwargs)
-_bi.print = _filtered_print
-
 # Suppress huggingface_hub "Fetching N files" tqdm progress bars (cache validation noise)
 os.environ.setdefault('HF_HUB_DISABLE_PROGRESS_BARS', '1')
 

@@ -12,12 +12,12 @@ from .constants import (
     DEFAULT_MODELS, API_KEY_NAMES,
     KOKORO_MODEL_FILE, KOKORO_VOICES_FILE,
     SPEED_BOUNDS, ELEVENLABS_DEFAULTS,
-    DEFAULT_OPENAI_VOICE, DEFAULT_QWEN3_VOICE, DEFAULT_QWEN3_AGENT,
+    DEFAULT_OPENAI_VOICE,
     DEFAULT_COQUI_VOICE, DEFAULT_COQUI_AGENT,
     KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME,
     DEFAULT_KOKORO_AGENT, DEFAULT_KOKORO_VOICE,
     DEFAULT_OPENAI_AGENT, DEFAULT_ELEVENLABS_AGENT,
-    QWEN3_PRESETS, TTS_COQUI,
+    TTS_COQUI,
 )
 
 logger = logging.getLogger(__name__)
@@ -38,11 +38,6 @@ except ImportError:
     AnthropicLLMService = None
     GroqLLMService = None
     KiloCodeLLMService = None
-try:
-    from .services import Qwen3TTSService
-except ImportError:
-    Qwen3TTSService = None
-
 try:
     from .services import CoquiTTSService
 except ImportError:
@@ -209,25 +204,6 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
             event_queue=settings.get('_event_queue'),
             speech_volume=100,
         )
-    elif engine == 'qwen3':
-        if not Qwen3TTSService:
-            raise ImportError("Qwen3TTSService is not available. Install with: pip install qwen-tts")
-        voice_id = tts_config.get('voice_id', DEFAULT_QWEN3_VOICE)
-        voice_name = tts_config.get('voice_name') or voice_id
-        model_name = tts_config.get('model_name') or settings.get('qwen3_model_name') or None
-        device = tts_config.get('device') or settings.get('qwen3_device') or None
-        lo, hi = SPEED_BOUNDS['qwen3']
-        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-        service = Qwen3TTSService(
-            voice_id=voice_id,
-            voice_name=voice_name,
-            model_name=model_name,
-            device=device,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-        )
     elif engine == 'coqui':
         if not CoquiTTSService:
             raise ImportError("CoquiTTSService is not available. Install with: pip install TTS")
@@ -331,26 +307,6 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
             return (v or DEFAULT_OPENAI_AGENT).capitalize()
         if 'elevenlabs' in vp:
             return (settings or {}).get('elevenlabs_voice', '') or DEFAULT_ELEVENLABS_AGENT
-        if 'qwen3' in vp:
-            v = (settings or {}).get('qwen3_voice', DEFAULT_QWEN3_VOICE)
-            if v and v.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session, CustomVoice
-                    db_id = int(v.split('_', 1)[1])
-                    session = get_session()
-                    try:
-                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                        if cv:
-                            return cv.name
-                    finally:
-                        session.close()
-                except Exception:
-                    pass
-                return DEFAULT_QWEN3_AGENT
-            for pr in QWEN3_PRESETS:
-                if pr.get('id') == v:
-                    return (pr.get('name') or v).split(' ')[0] if pr.get('name') else v.capitalize()
-            return (v or DEFAULT_QWEN3_AGENT).capitalize()
         if 'coqui' in vp:
             v = (settings or {}).get('coqui_voice', DEFAULT_COQUI_VOICE)
             try:
@@ -378,27 +334,6 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
             vm = KOKORO_VOICE_BY_DISPLAY_NAME[vm]
         return KOKORO_VOICES.get(vm, vm)
     if 'openai' in vp:
-        return vm.capitalize()
-    if 'qwen3' in vp:
-        if vm.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(vm.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return DEFAULT_QWEN3_AGENT
-        vm_lower = vm.lower()
-        for pr in QWEN3_PRESETS:
-            if pr.get('id') == vm_lower:
-                name = pr.get('name') or vm
-                return name.split(' ')[0] if ' ' in name else name
         return vm.capitalize()
     if 'coqui' in vp:
         try:
@@ -451,9 +386,6 @@ def resolve_agent_name_from_tts_config(tts_config: dict, settings: dict) -> str:
     if engine == 'openai':
         vm = tts_config.get('voice_id', DEFAULT_OPENAI_VOICE)
         return resolve_voice_to_display_name('openai', vm, settings)
-    if engine == 'qwen3':
-        vm = tts_config.get('voice_id', '') or (settings or {}).get('qwen3_voice', '')
-        return resolve_voice_to_display_name('qwen3', vm, settings)
     if engine == 'coqui':
         vm = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
         return resolve_voice_to_display_name('coqui', vm, settings)

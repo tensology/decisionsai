@@ -20,8 +20,6 @@ def _tts_provider_to_internal(provider: str) -> str:
         return "elevenlabs"
     if p in ("openai", "openai (online)"):
         return "openai"
-    if p in ("qwen3", "qwen3-tts (offline)", "qwen3-tts (online)", "qwen3 (online)"):
-        return "qwen3"
     if p in ("coqui", "coqui tts (offline)", "coqui tts"):
         return "coqui"
     return p or "kokoro"
@@ -69,28 +67,6 @@ def _normalize_voice_for_provider(provider: str, voice: str, settings: dict) -> 
             return configured
         return "af_heart"
 
-    if prov == "qwen3":
-        # Custom cloned voices pass through directly
-        if raw.startswith("custom_"):
-            return raw
-        try:
-            from distr.core.agent.constants import QWEN3_PRESETS, DEFAULT_QWEN3_VOICE
-            valid_ids = {pr["id"] for pr in QWEN3_PRESETS}
-        except Exception:
-            valid_ids = {"Aiden"}
-        # IDs are now capitalised (e.g. "Aiden", "Ryan") — match case-insensitively
-        raw_lower = raw.lower()
-        for vid in valid_ids:
-            if vid.lower() == raw_lower:
-                return vid
-        configured = (settings.get("qwen3_voice") or "").strip()
-        if configured.startswith("custom_"):
-            return configured
-        for vid in valid_ids:
-            if vid.lower() == configured.lower():
-                return vid
-        return DEFAULT_QWEN3_VOICE
-
     # ElevenLabs is resolved again inside _generate_elevenlabs; keep raw here.
     # Coqui: validate speaker ID against known voices
     if prov == "coqui":
@@ -128,8 +104,6 @@ def generate_tts_audio(
             voice = (settings.get("elevenlabs_voice") or "default").strip()
         elif prov == "openai":
             voice = (settings.get("openai_voice") or "alloy").strip()
-        elif prov == "qwen3":
-            voice = (settings.get("qwen3_voice") or "Aiden").strip()
         elif prov == "coqui":
             voice = (settings.get("coqui_voice") or "p225").strip()
         else:
@@ -144,7 +118,7 @@ def generate_tts_audio(
     os.makedirs(TMP_DIR, exist_ok=True)
     cache_key = hashlib.md5(f"{text}:{prov}:{voice}:{speed}".encode()).hexdigest()[:12]
     out_file = os.path.join(TMP_DIR, f"tts_chat_{prov}_{cache_key}.wav")
-    if prov not in ("elevenlabs", "qwen3", "coqui") and os.path.exists(out_file):
+    if prov not in ("elevenlabs", "coqui") and os.path.exists(out_file):
         logger.debug("Using cached TTS: %s", out_file)
         return out_file
     logger.info("Generating TTS: provider=%s, voice=%s, speed=%s", prov, voice, speed)
@@ -154,8 +128,6 @@ def generate_tts_audio(
         _generate_elevenlabs(text, voice, speed, out_file)
     elif prov == "openai":
         _generate_openai(text, voice, speed, out_file)
-    elif prov == "qwen3":
-        _generate_qwen3(text, voice, speed, out_file)
     elif prov == "coqui":
         _generate_coqui(text, voice, speed, out_file)
     else:
@@ -206,7 +178,7 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
     text_hash = hashlib.md5(f"{test_text}:{speed}".encode()).hexdigest()[:8]
     out_file = os.path.join(TMP_DIR, f"tts_{provider}_{voice}_{text_hash}_web.wav")
 
-    if provider not in ("elevenlabs", "qwen3", "coqui") and not voice.startswith("custom_") and os.path.exists(out_file):
+    if provider not in ("elevenlabs", "coqui") and not voice.startswith("custom_") and os.path.exists(out_file):
         logger.info("Using cached voice sample: %s", out_file)
         return out_file
 
@@ -218,8 +190,6 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
         _generate_elevenlabs(test_text, voice, speed, out_file)
     elif provider == 'openai':
         _generate_openai(test_text, voice, speed, out_file)
-    elif provider == 'qwen3':
-        _generate_qwen3(test_text, voice, speed, out_file)
     elif provider == 'coqui':
         _generate_coqui(test_text, voice, speed, out_file)
     else:
@@ -262,30 +232,6 @@ def _resolve_display_name(provider: str, voice: str, voice_name: str = None) -> 
 
     if provider == 'openai':
         return voice.capitalize() if voice else "Alloy"
-
-    if provider == 'qwen3':
-        if voice and voice.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(voice.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return "Custom Voice"
-        try:
-            from distr.core.agent.constants import QWEN3_PRESETS
-            for pr in QWEN3_PRESETS:
-                if pr.get("id") == voice:
-                    return (pr.get("name") or voice).split(" ")[0]
-        except Exception:
-            pass
-        return voice.capitalize() if voice else "Aiden"
 
     if provider == 'coqui':
         try:
@@ -541,290 +487,6 @@ def _generate_openai(text: str, voice: str, speed: float, out_file: str):
             os.remove(tmp_mp3)
 
     logger.info("Wrote OpenAI sample to %s", out_file)
-
-
-# Module-level cache for Qwen3 model (loading takes 10-30s, reuse across calls)
-_qwen3_model_cache = {"model": None, "model_name": None, "device": None}
-# Separate cache for the Base model (needed for voice cloning — CustomVoice model can't clone)
-_qwen3_base_model_cache = {"model": None, "device": None}
-
-
-def _get_qwen3_model():
-    """Return a cached Qwen3TTSModel, loading it only on first call or config change."""
-    from qwen_tts import Qwen3TTSModel
-
-    settings = load_settings_from_db()
-    model_name = (settings.get("qwen3_model_name") or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice").strip()
-    device = (settings.get("qwen3_device") or "").strip() or None
-
-    # Prefer local model in distr/core/agent/models/qwen3-tts/ (no HF cache validation)
-    _local_model_dir = os.path.join(
-        os.path.dirname(__file__), '..', '..', '..', 'distr', 'core', 'agent', 'models', 'qwen3-tts'
-    )
-    _local_model_dir = os.path.abspath(_local_model_dir)
-    if os.path.isfile(os.path.join(_local_model_dir, 'config.json')):
-        model_name = _local_model_dir
-
-    if device is None:
-        try:
-            import torch
-            if torch.cuda.is_available():
-                device = "cuda:0"
-            else:
-                # MPS crashes on Qwen3-TTS grouped-query attention (16 Q heads vs 8 KV heads)
-                # — MPSGraph matmul can't handle mismatched head counts. Force CPU.
-                device = "cpu"
-        except ImportError:
-            device = "cpu"
-
-    # Return cached model if config hasn't changed
-    if (_qwen3_model_cache["model"] is not None
-            and _qwen3_model_cache["model_name"] == model_name
-            and _qwen3_model_cache["device"] == device):
-        return _qwen3_model_cache["model"]
-
-    try:
-        import torch
-        # MPS (Apple Silicon) matmul crashes with bfloat16 on grouped-query attention
-        # (different num_heads vs num_kv_heads triggers "incompatible dimensions" in MPSGraph).
-        # Use bfloat16 only on CUDA; float32 everywhere else.
-        dtype = torch.bfloat16 if device is not None and device.startswith("cuda") else torch.float32
-    except ImportError:
-        dtype = None
-
-    load_kwargs = {"device_map": device}
-    if dtype is not None:
-        load_kwargs["dtype"] = dtype
-
-    logger.info("Loading Qwen3-TTS model %s on %s (first call or config change)...", model_name, device)
-    model = Qwen3TTSModel.from_pretrained(model_name, **load_kwargs)
-    _qwen3_model_cache.update({"model": model, "model_name": model_name, "device": device})
-    logger.info("Qwen3-TTS model loaded and cached.")
-    return model
-
-
-def _get_qwen3_base_model():
-    """Return a cached Qwen3-TTS Base model for voice cloning.
-
-    The CustomVoice model (used for preset speakers) does NOT support
-    generate_voice_clone(). The Base model is required for that.
-    Loaded lazily on first clone request and cached for reuse.
-    """
-    from qwen_tts import Qwen3TTSModel
-
-    settings = load_settings_from_db()
-    device = (settings.get("qwen3_device") or "").strip() or None
-
-    if device is None:
-        try:
-            import torch
-            device = "cuda:0" if torch.cuda.is_available() else "cpu"
-        except ImportError:
-            device = "cpu"
-
-    if (_qwen3_base_model_cache["model"] is not None
-            and _qwen3_base_model_cache["device"] == device):
-        return _qwen3_base_model_cache["model"]
-
-    try:
-        import torch
-        dtype = torch.bfloat16 if device is not None and device.startswith("cuda") else torch.float32
-    except ImportError:
-        dtype = None
-
-    load_kwargs = {"device_map": device}
-    if dtype is not None:
-        load_kwargs["dtype"] = dtype
-
-    # Prefer local base model in distr/core/agent/models/qwen3-tts-base/
-    _local_base_dir = os.path.join(
-        os.path.dirname(__file__), '..', '..', '..', 'distr', 'core', 'agent', 'models', 'qwen3-tts-base'
-    )
-    _local_base_dir = os.path.abspath(_local_base_dir)
-    if os.path.isfile(os.path.join(_local_base_dir, 'config.json')):
-        base_model_name = _local_base_dir
-    else:
-        base_model_name = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-    logger.info("Loading Qwen3-TTS Base model %s on %s for voice cloning...", base_model_name, device)
-    model = Qwen3TTSModel.from_pretrained(base_model_name, **load_kwargs)
-    _qwen3_base_model_cache.update({"model": model, "device": device})
-    logger.info("Qwen3-TTS Base model loaded and cached.")
-    return model
-
-
-def _generate_qwen3(text: str, voice: str, speed: float, out_file: str):
-    """Generate Qwen3-TTS voice sample locally via the qwen-tts package and write WAV file.
-    Supports custom cloned voices when voice starts with 'custom_'."""
-    import numpy as np
-
-    try:
-        from qwen_tts import Qwen3TTSModel  # noqa: F401 — validates package is installed
-    except ImportError:
-        raise ImportError("qwen-tts package is required. Install with: pip install qwen-tts")
-
-    model = _get_qwen3_model()
-
-    # Custom voice cloning: voice ID is "custom_<db_id>"
-    if voice.startswith("custom_"):
-        wavs, sr = _generate_qwen3_clone(model, text, voice)
-    else:
-        wavs, sr = model.generate_custom_voice(
-            text=text,
-            language="Auto",
-            speaker=voice,
-        )
-
-    audio = wavs[0]
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-    if audio.dtype != np.float32:
-        audio = audio.astype(np.float32)
-
-    # Resample to 24000 Hz (matches SAMPLE_RATE_QWEN3 and what pydub/ffmpeg handle well)
-    audio, sr = _resample_audio(audio, sr, 24000)
-    sf.write(out_file, audio, sr)
-    logger.info("Wrote Qwen3-TTS sample to %s", out_file)
-
-
-def _get_cached_voice_prompt(audio_dir: str, base_model):
-    """Load a cached VoiceClonePromptItem from disk, or return None if not cached."""
-    cache_path = os.path.join(audio_dir, "voice_prompt.pt")
-    if not os.path.isfile(cache_path):
-        return None
-    try:
-        import torch
-        data = torch.load(cache_path, map_location=base_model.device, weights_only=True)
-        from qwen_tts import VoiceClonePromptItem
-        item = VoiceClonePromptItem(
-            ref_code=data["ref_code"],
-            ref_spk_embedding=data["ref_spk_embedding"].to(base_model.device),
-            x_vector_only_mode=bool(data.get("x_vector_only_mode", False)),
-            icl_mode=bool(data.get("icl_mode", True)),
-            ref_text=data.get("ref_text"),
-        )
-        logger.info("Loaded cached voice prompt from %s", cache_path)
-        return item
-    except Exception as e:
-        logger.warning("Failed to load cached voice prompt %s: %s", cache_path, e)
-        return None
-
-
-def bake_voice_prompt(voice_id: int):
-    """Pre-compute and cache the VoiceClonePromptItem for a Qwen3 custom voice.
-
-    Call this once after voice creation so subsequent TTS calls skip the
-    expensive audio-processing step. Saves a .pt file in the voice's audio_dir.
-    """
-    import torch
-    from distr.core.db import get_session, CustomVoice
-
-    session = get_session()
-    try:
-        cv = session.query(CustomVoice).filter(CustomVoice.id == voice_id).first()
-        if not cv or cv.provider != "qwen3" or cv.status != "ready":
-            return
-        audio_dir = cv.audio_dir
-        ref_text = cv.system_prompt or ""
-    finally:
-        session.close()
-
-    if not audio_dir or not os.path.isdir(audio_dir):
-        return
-
-    ref_files = [
-        os.path.join(audio_dir, f)
-        for f in sorted(os.listdir(audio_dir))
-        if f.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm'))
-    ]
-    if not ref_files:
-        return
-
-    base_model = _get_qwen3_base_model()
-    logger.info("Baking voice prompt for custom voice %d from %s", voice_id, ref_files[0])
-
-    items = base_model.create_voice_clone_prompt(
-        ref_audio=ref_files[0],
-        ref_text=ref_text if ref_text else None,
-        x_vector_only_mode=not bool(ref_text),
-    )
-    item = items[0]
-
-    cache_path = os.path.join(audio_dir, "voice_prompt.pt")
-    torch.save({
-        "ref_code": item.ref_code,
-        "ref_spk_embedding": item.ref_spk_embedding.cpu(),
-        "x_vector_only_mode": item.x_vector_only_mode,
-        "icl_mode": item.icl_mode,
-        "ref_text": item.ref_text,
-    }, cache_path)
-    logger.info("Cached voice prompt to %s", cache_path)
-
-
-def _generate_qwen3_clone(model, text: str, voice_id: str):
-    """Generate speech using a custom cloned voice. Loads reference audio from DB.
-
-    Uses the Base model (not the CustomVoice model) because only the Base
-    variant supports generate_voice_clone().
-    Uses a cached voice prompt (.pt) when available to skip re-processing audio.
-    """
-    import os
-
-    # Extract DB id from "custom_<id>"
-    db_id_str = voice_id.split("_", 1)[1]
-    try:
-        db_id = int(db_id_str)
-    except ValueError:
-        raise ValueError(f"Invalid custom voice ID: {voice_id}")
-
-    from distr.core.db import get_session, CustomVoice
-    session = get_session()
-    try:
-        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-        if not cv:
-            raise ValueError(f"Custom voice {db_id} not found")
-        if cv.status != "ready":
-            raise ValueError(f"Custom voice {cv.name} is not ready (status: {cv.status})")
-        audio_dir = cv.audio_dir
-        system_prompt = cv.system_prompt or ""
-    finally:
-        session.close()
-
-    if not audio_dir or not os.path.isdir(audio_dir):
-        raise ValueError(f"Audio directory not found for custom voice {db_id}")
-
-    # Load the Base model (CustomVoice model doesn't support generate_voice_clone)
-    base_model = _get_qwen3_base_model()
-
-    # Try cached voice prompt first (instant) — falls back to raw audio (slow)
-    cached_prompt = _get_cached_voice_prompt(audio_dir, base_model)
-    if cached_prompt is not None:
-        logger.info("Using cached voice prompt for custom voice %d", db_id)
-        wavs, sr = base_model.generate_voice_clone(
-            text=text,
-            language="Auto",
-            voice_clone_prompt=[cached_prompt],
-        )
-        return wavs, sr
-
-    # Fallback: process from raw audio
-    ref_files = [
-        os.path.join(audio_dir, f)
-        for f in sorted(os.listdir(audio_dir))
-        if f.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm'))
-    ]
-    if not ref_files:
-        raise ValueError(f"No reference audio files found for custom voice {db_id}")
-
-    ref_audio = ref_files[0]
-    logger.info("Generating Qwen3-TTS clone with ref=%s prompt=%s (no cache)", ref_audio, system_prompt[:50])
-
-    wavs, sr = base_model.generate_voice_clone(
-        text=text,
-        language="Auto",
-        ref_audio=ref_audio,
-        ref_text=system_prompt if system_prompt else None,
-    )
-    return wavs, sr
 
 
 def _generate_coqui(text: str, voice: str, speed: float, out_file: str):

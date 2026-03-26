@@ -7,7 +7,7 @@ Uses the VCTK multi-speaker model (tts_models/en/vctk/vits) which provides
 Install: pip install TTS
 Model downloads automatically from HuggingFace on first use.
 
-Same pipeline contract as KokoroTTSService / Qwen3TTSService.
+Same pipeline contract as KokoroTTSService.
 """
 
 import asyncio

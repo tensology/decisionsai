@@ -84,13 +84,13 @@ logger = logging.getLogger(__name__)
 from distr.core.agent.constants import (
     KOKORO_VOICES,
     DEFAULT_KOKORO_VOICE, DEFAULT_KOKORO_AGENT,
-    DEFAULT_OPENAI_VOICE, DEFAULT_OPENAI_AGENT, DEFAULT_QWEN3_VOICE, DEFAULT_QWEN3_AGENT,
+    DEFAULT_OPENAI_VOICE, DEFAULT_OPENAI_AGENT,
     DEFAULT_COQUI_VOICE, DEFAULT_COQUI_AGENT,
     DEFAULT_ELEVENLABS_AGENT,
-    TTS_KOKORO, TTS_ELEVENLABS, TTS_OPENAI, TTS_QWEN3, TTS_COQUI,
+    TTS_KOKORO, TTS_ELEVENLABS, TTS_OPENAI, TTS_COQUI,
     DEFAULT_MODELS, PROVIDER_TO_ENGINE, API_KEY_NAMES,
     KOKORO_MODEL_FILE, KOKORO_VOICES_FILE,
-    SAMPLE_RATE_KOKORO, SAMPLE_RATE_ELEVENLABS, SAMPLE_RATE_OPENAI_TTS, SAMPLE_RATE_QWEN3,
+    SAMPLE_RATE_KOKORO, SAMPLE_RATE_ELEVENLABS, SAMPLE_RATE_OPENAI_TTS,
     SPEED_BOUNDS, ELEVENLABS_DEFAULTS,
     VAD_DEFAULT_THRESHOLD, VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX, VAD_START_SECS,
     DEFAULT_OPENAI_WHISPER_MODEL, DEFAULT_ASSEMBLYAI_MODEL,
@@ -426,7 +426,6 @@ class AgentSession:
             'kokoro':     ('kokoro',     'kokoro_voice',     DEFAULT_KOKORO_VOICE, {}),
             'elevenlabs': ('elevenlabs', 'elevenlabs_voice', '',                   {'api_key': 'elevenlabs_key'}),
             'openai':     ('openai',     'openai_voice',     DEFAULT_OPENAI_VOICE, {'api_key': 'openai_key'}),
-            'qwen3':      ('qwen3',      'qwen3_voice',      DEFAULT_QWEN3_VOICE,  {'model_name': 'qwen3_model_name', 'device': 'qwen3_device'}),
             'coqui':      ('coqui',      'coqui_voice',      DEFAULT_COQUI_VOICE,  {'device': 'coqui_device'}),
         }
         vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
@@ -1158,21 +1157,6 @@ class AgentSession:
                     self._apply_agent_name(new_agent_name)
                     self.logger.debug("HOT-SWAP TTS: complete (in-place voice=%s)", resolved)
                     return
-
-        # --- Qwen3: in-place voice swap when already running Qwen3 ---
-        elif vp == 'qwen3':
-            self.config['tts']['engine'] = 'qwen3'
-            self.config['tts']['voice_id'] = voice_model or DEFAULT_QWEN3_VOICE
-            self.config['tts']['voice_name'] = self.config['tts']['voice_id']
-            try:
-                from .services import Qwen3TTSService as _Q3
-                if isinstance(old_service, _Q3):
-                    old_service.set_voice(voice_model or DEFAULT_QWEN3_VOICE)
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug("HOT-SWAP TTS: complete (in-place qwen3 voice=%s)", voice_model)
-                    return
-            except ImportError:
-                pass
 
         # --- OpenAI ---
         elif vp == 'openai':

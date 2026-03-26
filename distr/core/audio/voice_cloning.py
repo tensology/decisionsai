@@ -1,7 +1,7 @@
 """
 Voice cloning business logic — extracted from route handlers.
 
-Handles ElevenLabs IVC, Qwen3 voice prompt baking, and Kokoro/Kanade cloning.
+Handles ElevenLabs IVC and Kokoro/Kanade cloning.
 """
 import logging
 import os
@@ -37,8 +37,6 @@ def process_custom_voice(voice_id: int) -> None:
 
         if voice.provider == "elevenlabs":
             _clone_elevenlabs(voice, audio_files, session)
-        elif voice.provider == "qwen3":
-            _clone_qwen3(voice, audio_files, session)
         elif voice.provider == "kokoro":
             _clone_kokoro(voice, audio_files, session)
         else:
@@ -90,20 +88,6 @@ def _clone_elevenlabs(voice, audio_files, session) -> None:
     finally:
         for fh in file_handles:
             fh.close()
-
-
-def _clone_qwen3(voice, audio_files, session) -> None:
-    """Register Qwen3 custom voice and bake a cached voice prompt."""
-    voice.provider_voice_id = f"custom_{voice.id}"
-    voice.status = "ready"
-    session.commit()
-    logger.info("Qwen3 custom voice registered: %s -> %s", voice.name, voice.provider_voice_id)
-
-    try:
-        from distr.core.audio.tts_handler import bake_voice_prompt
-        bake_voice_prompt(voice.id)
-    except Exception as e:
-        logger.warning("Failed to bake voice prompt for %s (will process at inference time): %s", voice.name, e)
 
 
 def _clone_kokoro(voice, audio_files, session) -> None:

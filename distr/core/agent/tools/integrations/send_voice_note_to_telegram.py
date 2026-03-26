@@ -63,8 +63,6 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                 resolved_voice = settings.get('openai_voice', 'alloy')
             elif 'elevenlabs' in tts_lower:
                 resolved_voice = settings.get('elevenlabs_voice', '')
-            elif 'qwen3' in tts_lower:
-                resolved_voice = settings.get('qwen3_voice', 'aiden')
             else:
                 resolved_voice = ''
             
@@ -220,18 +218,6 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                         
                 except Exception as e:
                     return f"Error generating voice note with ElevenLabs: {str(e)}"
-            elif 'qwen3' in tts_lower:
-                try:
-                    from distr.core.audio.tts_handler import generate_tts_audio
-                    qwen3_voice = resolved_voice or 'aiden'
-                    temp_file_path = generate_tts_audio(
-                        text=message,
-                        provider='qwen3',
-                        voice=qwen3_voice,
-                        speed=1.0,
-                    )
-                except Exception as e:
-                    return f"Error generating voice note with Qwen3-TTS: {str(e)}"
             else:
                 return f"Error sending voice note: Unknown TTS provider: {tts_provider}"
             

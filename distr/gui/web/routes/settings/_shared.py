@@ -140,7 +140,6 @@ class GeneralSettings(BaseModel):
     kokoro_voice: str = "af_heart"
     elevenlabs_voice: str = "default"
     openai_voice: str = "alloy"
-    qwen3_voice: str = "Aiden"
     coqui_voice: str = "p225"
     playback_speed: float = 1.0
     speech_volume: int = 100
