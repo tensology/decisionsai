@@ -258,6 +258,23 @@ if !errorlevel! equ 0 (
     )
 )
 
+:: Add project root to user PATH (so 'decisions.bat' works from anywhere)
+echo [33mChecking system PATH...[0m
+echo %PATH% | findstr /i /c:"%SCRIPT_DIR%" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [33mAdding DecisionsAI to user PATH...[0m
+    for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USER_PATH=%%b"
+    if not defined USER_PATH set "USER_PATH="
+    setx PATH "!USER_PATH!;%SCRIPT_DIR%" >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [32m√[0m Added to PATH. Restart your terminal to use 'decisions.bat' from anywhere.
+    ) else (
+        echo [33mWarning: Could not update PATH automatically.[0m
+    )
+) else (
+    echo [32m√[0m Already on PATH
+)
+
 :: Clean Python cache
 echo [33mCleaning Python cache...[0m
 for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
