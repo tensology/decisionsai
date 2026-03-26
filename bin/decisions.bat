@@ -394,8 +394,20 @@ if !errorlevel! equ 0 (
         echo [32m√[0m Ollama model llama3.1:8b is available
     )
 ) else (
-    echo [33mNote: Ollama not found. For local LLM support, install from https://ollama.com/download[0m
-    echo   Then run: ollama pull llama3.1:8b
+    echo [33mOllama not found. Installing...[0m
+    where winget >nul 2>&1
+    if !errorlevel! equ 0 (
+        winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements >nul 2>&1
+        if !errorlevel! equ 0 (
+            echo [32m√[0m Ollama installed. It will be available after restarting your terminal.
+            echo [33m  Then run: ollama pull llama3.1:8b[0m
+        ) else (
+            echo [33mCould not auto-install Ollama. Download from https://ollama.com/download[0m
+        )
+    ) else (
+        echo [33mNote: Install Ollama from https://ollama.com/download for local LLM support[0m
+        echo   Then run: ollama pull llama3.1:8b
+    )
 )
 
 :: Check NumPy/PyTorch compatibility
