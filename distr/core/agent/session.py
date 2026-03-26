@@ -1440,8 +1440,12 @@ class AgentSession:
             ]
         )
         
-        # Create task
-        self.task = PipelineTask(self.pipeline)
+        # Create task — disable idle timeout since this is a persistent desktop assistant,
+        # not a temporary call session. Pipecat's default (300s) kills the pipeline.
+        self.task = PipelineTask(
+            self.pipeline,
+            idle_timeout_secs=None,
+        )
         
         # Create runner (will use current running event loop)
         self.runner = PipelineRunner()
