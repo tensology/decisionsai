@@ -392,11 +392,12 @@ class FastActionDetector:
             # This catches any "move mouse to X" where X is a visual element/position needing screenshot analysis
             # MUST come AFTER all specific mouse_movement directional patterns (center, top, left, etc.)
             # Strategy: exclude when the remaining text after "to" is directional words optionally followed
-            # by filler like "of my screen", "of the screen", "please", etc.
+            # by filler like "of my screen", "of the screen", "of the third screen", "please", etc.
             # "center of my screen" → directional + filler → NO MATCH (mouse_movement handles it)
+            # "center of the third screen" → directional + ordinal screen → NO MATCH
             # "center of the picture" → has non-directional target → MATCH (visual target)
             # "center" / "top right" / "the left" → only directional words → NO MATCH
-            (re.compile(r'\b(?:move|put)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\s+(?!(?:the\s+)?(?:(?:center|top|bottom|left|right|middle|far|up|down|screen)(?:\s+(?:center|top|bottom|left|right|middle|far|up|down|screen|\d+))*)(?:\s+(?:of\s+)?(?:the\s+|my\s+)?(?:screen|display|monitor|desktop))?(?:\s*(?:please|now))?\s*[\.\,\?\!]?\s*$).{3,}', re.IGNORECASE), 
+            (re.compile(r'\b(?:move|put)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\s+(?!(?:the\s+)?(?:(?:center|top|bottom|left|right|middle|far|up|down|screen)(?:\s+(?:center|top|bottom|left|right|middle|far|up|down|screen|\d+))*)(?:\s+(?:of\s+)?(?:the\s+|my\s+)?(?:(?:first|second|third|fourth|fifth)\s+)?(?:screen|display|monitor|desktop))?(?:\s*(?:please|now))?\s*[\.\,\?\!]?\s*$).{3,}', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "double-click the file", "double click the icon"
             (re.compile(r'\bdouble[- ]?click\s+(on\s+)?(the\s+)?(.+?)\s*(button|link|icon|file|folder)?\b', re.IGNORECASE), 
@@ -537,36 +538,41 @@ class FastActionDetector:
             # "move mouse to screen X", "move to screen 1/2/3", "screen 1/2/3" - MUST come before "center" pattern
             (re.compile(r'\b(move\s+)?(mouse\s+)?(to\s+)?screen\s+(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # "move to the third screen", "the second screen", "first monitor" - ordinal patterns
+            (re.compile(r'\b(?:move\s+)?(?:(?:the|my)\s+)?(?:mouse|mask|mass|miles|mice|moss)\s+(?:to\s+)?(?:the\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:screen|monitor|display)\b', re.IGNORECASE), 
+             ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(?:move|go)\s+(?:to\s+)?(?:the\s+)?(?:first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth)\s+(?:screen|monitor|display)\b', re.IGNORECASE), 
+             ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_to_screen", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse center", "move mouse to center", "center mouse"
             # "move mouse to the center of my screen", "can you move the mouse to the center"
             # Also handles STT artifacts like "move, move my mouse to the center"
-            (re.compile(r'\b(?:can\s+you\s+)?move[\s,]+(?:the\s+|my\s+)?(?:mouse\s+)?(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
+            (re.compile(r'\b(?:can\s+you\s+)?move[\s,]+(?:the\s+|my\s+)?(?:mouse|mask\s+)?(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_center", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(?:to\s+)?(?:the\s+)?center\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_center", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Corner positions - REQUIRE "move" or "mouse" to be present (no accidental matches)
             # Handles STT errors (e.g., "mass" for "mouse", "miles" for "mouse")
             # "move mouse top right", "move to top right", "move the mouse to the top right"
             # EXPLICIT: Must have "move" or "mouse/mass/miles/mice/moss" 
             # FIXED: Made space after mouse optional and separate from the alternation
-            (re.compile(r'\bmove\s+(the\s+)?(mouse|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?top\s+right\b', re.IGNORECASE), 
+            (re.compile(r'\bmove\s+(the\s+)?(mouse|mask|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?top\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top\s+right\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse top left", "move to top left", "move the mouse to the top left"
-            (re.compile(r'\bmove\s+(the\s+)?(mouse|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?top\s+left\b', re.IGNORECASE), 
+            (re.compile(r'\bmove\s+(the\s+)?(mouse|mask|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?top\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top\s+left\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse bottom right", "move to bottom right", "move the mouse to the bottom right"
-            (re.compile(r'\bmove\s+(the\s+)?(mouse|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?bottom\s+right\b', re.IGNORECASE), 
+            (re.compile(r'\bmove\s+(the\s+)?(mouse|mask|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?bottom\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom\s+right\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse bottom left", "move to bottom left", "move the mouse to the bottom left"
-            (re.compile(r'\bmove\s+(the\s+)?(mouse|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?bottom\s+left\b', re.IGNORECASE), 
+            (re.compile(r'\bmove\s+(the\s+)?(mouse|mask|mass|miles|mice|moss)(\s+)?(to\s+)?(the\s+)?bottom\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom\s+left\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Center-aligned positions - REQUIRE "move" or "mouse"
             # "move mouse top center", "move mouse to top center"
@@ -584,24 +590,24 @@ class FastActionDetector:
             # "move mouse middle left", "move mouse to middle left" - REQUIRE "move" or "mouse"
             (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?middle\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_middle_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?middle\s+left\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?middle\s+left\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_middle_left", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse middle right", "move mouse to middle right" - REQUIRE "move" or "mouse"
             (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?middle\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_middle_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?middle\s+right\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?middle\s+right\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_middle_right", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse top", "move mouse to top" - REQUIRE "move" or "mouse"
             # Use negative lookahead (?!\s+(left|right|center)) to avoid matching "top left", "top right"
             (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?top(?!\s+(left|right|center))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top(?!\s+(left|right|center))\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?top(?!\s+(left|right|center))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_top", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse bottom", "move mouse to bottom" - REQUIRE "move" or "mouse"
             # Use negative lookahead (?!\s+(left|right|center)) to avoid matching "bottom left", "bottom right"
             (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?bottom(?!\s+(left|right|center))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom(?!\s+(left|right|center))\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?bottom(?!\s+(left|right|center))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move_bottom", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse far right", "move mouse to far right" - REQUIRE "move" or "mouse"
             (re.compile(r'\bmove\s+(the\s+)?(mouse\s+)?(to\s+)?(the\s+)?far\s+right\b', re.IGNORECASE), 
@@ -616,14 +622,14 @@ class FastActionDetector:
             # Use negative lookahead to prevent matching when followed by other direction words
             (re.compile(r'\bmove\s+(the\s+)?mouse\s+(up|down)(?!\s+(left|right|center|top|bottom|middle))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(up|down)(?!\s+(left|right|center|top|bottom|middle))\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(up|down)(?!\s+(left|right|center|top|bottom|middle))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "move mouse left", "move mouse right" - REQUIRE "move" or "mouse", NOT followed by "click" or other direction words
             # CRITICAL: This must come LAST (after all corner patterns) to avoid matching "left" in "top left" or "right" in "top right"
             # The negative lookahead only checks what comes AFTER, not BEFORE, so we rely on pattern order and a safeguard check
             (re.compile(r'\bmove\s+(the\s+)?mouse\s+(to\s+)?(the\s+)?(left|right)(?!\s*(click|center|edge|side|top|bottom|middle))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move", "text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(mouse|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?(left|right)(?!\s*(click|center|edge|side|top|bottom|middle))\b', re.IGNORECASE), 
+            (re.compile(r'\b(mouse|mask|mass|miles|mice|moss)\s+(to\s+)?(the\s+)?(left|right)(?!\s*(click|center|edge|side|top|bottom|middle))\b', re.IGNORECASE), 
              ActionType.MOUSE_MOVEMENT, "mouse_movement", {"action": "move", "text": "__ORIGINAL_TEXT__"}, False, "done"),
             
             # === KEYBOARD SHORTCUTS ===

@@ -316,16 +316,16 @@ class MouseMovementTool(BaseTool):
                     
                     # Map word numbers to digits
                     word_to_number = {
-                        'one': 1, 'won': 1,  # STT might transcribe "one" as "won"
-                        'two': 2, 'too': 2, 'to': 2,  # "too" and "to" can be "two" in this context
-                        'three': 3, 'tree': 3,  # STT might transcribe "three" as "tree"
-                        'four': 4, 'for': 4, 'fore': 4,
-                        'five': 5, 'fife': 5,
-                        'six': 6, 'sicks': 6,
-                        'seven': 7,
-                        'eight': 8, 'ate': 8,
-                        'nine': 9,
-                        'ten': 10
+                        'one': 1, 'won': 1, 'first': 1,
+                        'two': 2, 'too': 2, 'to': 2, 'second': 2,
+                        'three': 3, 'tree': 3, 'third': 3,
+                        'four': 4, 'for': 4, 'fore': 4, 'fourth': 4,
+                        'five': 5, 'fife': 5, 'fifth': 5,
+                        'six': 6, 'sicks': 6, 'sixth': 6,
+                        'seven': 7, 'seventh': 7,
+                        'eight': 8, 'ate': 8, 'eighth': 8,
+                        'nine': 9, 'ninth': 9,
+                        'ten': 10, 'tenth': 10
                     }
                     
                     # Try numeric pattern first (e.g., "screen 1", "screen 2", "move to screen 3")
@@ -357,6 +357,20 @@ class MouseMovementTool(BaseTool):
                                     screen_number = num
                                     logger.info(f"✓ Extracted screen number from word '{word}': {screen_number}")
                                     break
+                    
+                    # Try ordinal patterns: "the third screen", "first screen", "second monitor"
+                    if not screen_number:
+                        ordinal_map = {
+                            'first': 1, 'second': 2, 'third': 3, 'fourth': 4,
+                            'fifth': 5, 'sixth': 6, 'seventh': 7, 'eighth': 8,
+                            'ninth': 9, 'tenth': 10,
+                        }
+                        for word, num in ordinal_map.items():
+                            pattern = rf'\b{word}\s+(?:screen|monitor|display)\b'
+                            if re.search(pattern, text_normalized, re.IGNORECASE):
+                                screen_number = num
+                                logger.info(f"✓ Extracted screen number from ordinal '{word} screen': {screen_number}")
+                                break
                     
                     if screen_number:
                         logger.info(f"✓ FINAL: Extracted screen_number={screen_number} from text: '{text_lower}'")
