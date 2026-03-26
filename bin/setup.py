@@ -299,7 +299,9 @@ def setup(skip_model_pull=False, install_optional=False, setup_qwen3=False, qwen
         print("  1. Install Ollama from https://ollama.ai")
         print("  2. Start Ollama service")
         print("  3. Run this setup script again")
-        raise
+        print("")
+        print("Skipping Ollama model setup. Everything else is ready.")
+        return
 
     def check_model_status(model_name):
         try:
