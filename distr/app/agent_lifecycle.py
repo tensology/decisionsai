@@ -338,7 +338,10 @@ class AgentLifecycleMixin:
 
                     if self.agent_process.is_alive():
                         logger.warning("Agent process still not terminated, using SIGKILL")
-                        os.kill(self.agent_process.pid, sig.SIGKILL)
+                        if hasattr(sig, 'SIGKILL'):
+                            os.kill(self.agent_process.pid, sig.SIGKILL)
+                        else:
+                            self.agent_process.kill()
                         self.agent_process.join(timeout=1.0)
             except Exception as e:
                 logger.error(f"Error stopping agent process: {e}")

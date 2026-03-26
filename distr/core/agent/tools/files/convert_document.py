@@ -341,9 +341,24 @@ class ConvertDocumentTool(BaseTool):
                 get_clipboard_content,
             )
             # The Google Doc tool reads from clipboard, so we need to put content there
+            import platform
             import subprocess
-            proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
-            proc.communicate(md_text.encode("utf-8"))
+            system = platform.system()
+            if system == "Darwin":
+                proc = subprocess.Popen(["pbcopy"], stdin=subprocess.PIPE)
+                proc.communicate(md_text.encode("utf-8"))
+            elif system == "Windows":
+                proc = subprocess.run(
+                    ["powershell", "-command", "Set-Clipboard -Value $input"],
+                    input=md_text, text=True, timeout=5
+                )
+            else:
+                try:
+                    proc = subprocess.Popen(["xclip", "-selection", "clipboard"], stdin=subprocess.PIPE)
+                    proc.communicate(md_text.encode("utf-8"))
+                except FileNotFoundError:
+                    proc = subprocess.Popen(["xsel", "--clipboard", "--input"], stdin=subprocess.PIPE)
+                    proc.communicate(md_text.encode("utf-8"))
 
             tool = MarkdownToGoogleDocTool()
             return tool._run(open_in_brave=True)
