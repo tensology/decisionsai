@@ -14,6 +14,21 @@ echo.
 echo [32mDecisionsAI Setup ^& Run[0m
 echo ================================
 
+:: Enable long paths (fixes MAX_PATH 260 char limit for pip/cmake builds)
+reg query "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled 2>nul | findstr "0x1" >nul 2>&1
+if !errorlevel! neq 0 (
+    echo [33mEnabling Windows long path support...[0m
+    reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [32m√[0m Long paths enabled
+    ) else (
+        echo [33mWarning: Could not enable long paths. Run as Administrator if builds fail.[0m
+        echo   Or manually: reg add "HKLM\SYSTEM\CurrentControlSet\Control\FileSystem" /v LongPathsEnabled /t REG_DWORD /d 1 /f
+    )
+) else (
+    echo [32m√[0m Long paths already enabled
+)
+
 :: Check for Git
 where git >nul 2>&1
 if !errorlevel! neq 0 (
@@ -43,6 +58,9 @@ if !errorlevel! neq 0 (
 ) else (
     echo [32m√[0m Git found
 )
+
+:: Enable git long paths
+git config --global core.longpaths true >nul 2>&1
 
 :: Check for repository updates
 echo [33mChecking for updates...[0m
