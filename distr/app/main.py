@@ -229,6 +229,9 @@ def setup_logging(clear_logs=True):
     # Add handlers to our app logger
     app_logger.addHandler(file_handler)
     app_logger.addHandler(console_handler)
+    # Prevent distr logger from propagating to root (root also has file_handler,
+    # which would cause every distr.* message to be written to the log file twice).
+    app_logger.propagate = False
     # Also add file handler to root logger to catch all logs from all modules
     logging.getLogger().addHandler(file_handler)
     
