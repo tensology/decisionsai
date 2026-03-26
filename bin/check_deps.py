@@ -24,7 +24,6 @@ CRITICAL = [
     ("litellm", "litellm"),
     ("vosk", "vosk"),
     ("pipecat", "pipecat"),
-    ("pywhispercpp", "pywhispercpp"),
     ("kokoro_onnx", "kokoro_onnx"),
     ("kanade_tokenizer", "kanade_tokenizer"),
     ("sqlalchemy", "sqlalchemy"),
@@ -40,6 +39,13 @@ CRITICAL = [
     ("resampy", "resampy"),
     ("syntok", "syntok"),
     ("colorama", "colorama"),
+]
+
+# Packages that require native compilation and may not be available on all
+# platforms (e.g. pywhispercpp needs C++ build tools on Windows).  A missing
+# optional package is logged but does not cause a non-zero exit code.
+OPTIONAL = [
+    ("pywhispercpp", "pywhispercpp"),
 ]
 
 # Packages checked via pip metadata rather than import (heavy deps that may
@@ -79,6 +85,14 @@ def main():
         for name in missing:
             print(name, file=sys.stderr)
         return 1
+
+    # Check optional packages — warn but don't fail
+    for pkg_name, import_name in OPTIONAL:
+        try:
+            __import__(import_name)
+        except ImportError:
+            print(f"optional: {pkg_name} not available", file=sys.stderr)
+
     return 0
 
 if __name__ == "__main__":

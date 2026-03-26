@@ -139,10 +139,27 @@ if (-not $depsOk) {
         Remove-Item $reqMarker -Force -ErrorAction SilentlyContinue
     }
 
-    Invoke-Pip @("install", "-r", "requirements.txt")
+    # Install main requirements (skip pywhispercpp — it needs C++ build tools on Windows)
+    # Create a filtered requirements file without pywhispercpp
+    $filteredReqs = "$env:TEMP\requirements_win.txt"
+    Get-Content "requirements.txt" | Where-Object { $_ -notmatch "pywhispercpp" } | Set-Content $filteredReqs
+
+    Invoke-Pip @("install", "-r", $filteredReqs)
     if ($LASTEXITCODE -ne 0) {
         Write-Err "pip install failed. Check the output above."
         Pop-Location; exit 1
+    }
+
+    # Try to install pywhispercpp separately (optional — needs Visual Studio Build Tools)
+    Write-Warn "Attempting to install pywhispercpp (optional, needs C++ build tools)..."
+    Invoke-Pip @("install", "pywhispercpp@git+https://github.com/absadiki/pywhispercpp")
+    if ($LASTEXITCODE -ne 0) {
+        Write-Warn "pywhispercpp could not be installed (requires Visual Studio Build Tools with C++ workload)."
+        Write-Warn "Local Whisper transcription will be unavailable. Other STT backends (AssemblyAI, OpenAI) still work."
+        Write-Warn "To install later: Install Visual Studio Build Tools, then run:"
+        Write-Warn "  pip install pywhispercpp@git+https://github.com/absadiki/pywhispercpp"
+    } else {
+        Write-Status "pywhispercpp installed"
     }
 
     New-Item -ItemType Directory -Path "installer" -Force | Out-Null
