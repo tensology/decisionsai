@@ -107,7 +107,10 @@ if sys.platform == 'darwin':
 from distr.app import run
 
 # Restore original print now that all flash-attn-warning-emitting imports are done
-_bi.print = _orig_print
+try:
+    _bi.print = _orig_print
+except NameError:
+    pass  # _orig_print was never set (no flash-attn filter needed)
 
 def kill_existing_decisions_processes():
     """Check for and kill any existing Decisions processes before starting"""

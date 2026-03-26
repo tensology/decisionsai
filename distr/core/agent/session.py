@@ -524,23 +524,25 @@ class AgentSession:
         # Create STT service
         stt_config = self.config['stt']
         if stt_config['engine'] == 'whisper':
-            # pywhispercpp manages models in Application Support directory
-            # Just use the model name directly (e.g., 'base.en', 'small.en', etc.)
-            # The library will download it if needed
-            whisper_model = stt_config['model_path']
+            # Check if pywhispercpp is available (may fail to compile on Windows)
+            from distr.core.agent.libs import WHISPER_AVAILABLE
+            if not WHISPER_AVAILABLE:
+                self.logger.warning("⚠️  Whisper.cpp (pywhispercpp) not available — falling back to Vosk STT")
+                stt_config = dict(stt_config)
+                stt_config['engine'] = 'vosk'
+            else:
+                # pywhispercpp manages models in Application Support directory
+                whisper_model = stt_config['model_path']
+                self.logger.info(f"🔧 Creating Whisper.cpp STT service with model: {whisper_model} (managed by pywhispercpp)")
+                self.logger.debug("⚠️  Metal (GPU) backend is auto-detected and used if available. Exception handling in place for crash prevention.")
 
-            # Note: pywhispercpp auto-detects and uses Metal (GPU) if available
-            # There's no runtime option to disable it - it's compiled into the library
-            self.logger.info(f"🔧 Creating Whisper.cpp STT service with model: {whisper_model} (managed by pywhispercpp)")
-            self.logger.debug("⚠️  Metal (GPU) backend is auto-detected and used if available. Exception handling in place for crash prevention.")
-
-            self.stt_service = WhisperSTTService(
-                model_path=whisper_model,
-                event_queue=self.event_queue,
-                is_hands_free=self.is_hands_free
-            )
-            self.logger.info(f"✅ Whisper.cpp STT service created successfully (type: {type(self.stt_service).__name__})")
-        elif stt_config['engine'] == 'vosk':
+                self.stt_service = WhisperSTTService(
+                    model_path=whisper_model,
+                    event_queue=self.event_queue,
+                    is_hands_free=self.is_hands_free
+                )
+                self.logger.info(f"✅ Whisper.cpp STT service created successfully (type: {type(self.stt_service).__name__})")
+        if stt_config['engine'] == 'vosk':
             if not VOSK_AVAILABLE or VoskSTTService is None:
                 raise ImportError("VoskSTTService is not available. Please ensure vosk is installed and model is downloaded.")
             # Vosk model path
