@@ -285,6 +285,11 @@ if !DEPS_OK! equ 0 (
         del /f "%REQUIREMENTS_MARKER%" 2>nul
     )
 
+    :: Use short temp path to avoid MAX_PATH 260 char limit during C++ builds
+    if not exist "C:\tmp" mkdir "C:\tmp" 2>nul
+    set "TEMP=C:\tmp"
+    set "TMP=C:\tmp"
+
     "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt
     if !errorlevel! neq 0 (
         :: Check if pywhispercpp was the problem — retry with VS dev environment
