@@ -152,6 +152,12 @@ No large model downloads. Only Whisper.cpp and Kokoro install locally. Mix and m
 
 ## Installation
 
+### One-liner
+
+```bash
+curl -fsSL https://decisionsai.net/install.sh | bash
+```
+
 ### Quick start
 
 ```bash
