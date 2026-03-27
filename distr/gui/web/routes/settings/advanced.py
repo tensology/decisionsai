@@ -309,6 +309,11 @@ def register_routes(router, templates):
             isinstance(acc, dict) and acc.get("provider") == "google" and acc.get("access_token")
             for acc in connected_accounts
         )
+        # Google also needs the OAuth client secret file for token refresh
+        if google_connected:
+            from distr.gui.web.oauth import load_google_oauth_config
+            if not load_google_oauth_config():
+                google_connected = False
         telegram_connected = any(
             isinstance(acc, dict) and acc.get("provider") == "telegram" and (acc.get("app_user_id") or acc.get("user_id"))
             for acc in connected_accounts
