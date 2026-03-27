@@ -1,5 +1,7 @@
 import os
 import sys
+import warnings
+warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
 # Fix for macOS: DYLD_LIBRARY_PATH is searched BEFORE @rpath by the dynamic
 # linker.  If Homebrew's /opt/homebrew/lib contains libc10.dylib (symlinked

@@ -46,7 +46,7 @@ class GoogleWorkspaceConnector:
             # Load OAuth config
             oauth_config = load_google_oauth_config()
             if not oauth_config:
-                logger.warning("Google OAuth config not found")
+                logger.debug("Google OAuth config not found")
                 return False
             
             web_config = oauth_config.get('web', {})

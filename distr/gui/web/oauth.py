@@ -66,7 +66,9 @@ def load_google_oauth_config() -> Optional[Dict[str, Any]]:
         except Exception as e:
             logger.error(f"Error loading OAuth config from {home_secrets}: {e}")
     
-    logger.warning("Google OAuth client secret file not found. OAuth features will not work.")
+    if not getattr(load_google_oauth_config, '_warned', False):
+        logger.warning("Google OAuth client secret file not found. OAuth features will not work.")
+        load_google_oauth_config._warned = True
     return None
 
 
