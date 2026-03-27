@@ -101,6 +101,7 @@ def create_app() -> FastAPI:
     _mount_static(app, "/projects/static/js", static_dir / "projects" / "js", "projects_js")
     _mount_static(app, "/oauth/static/css", static_dir / "oauth" / "css", "oauth_css")
     _mount_static(app, "/oauth/static/js", static_dir / "oauth" / "js", "oauth_js")
+    _mount_static(app, "/static/img", static_dir / "img", "static_img")
 
     # Legacy sub-dir paths (kept for backward compat)
     board_templates_dir = templates_dir / "board"

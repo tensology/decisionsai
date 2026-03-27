@@ -109,8 +109,6 @@ else
     echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
 fi
 
-echo -e "${GREEN}✓${NC} Python found: $($PYTHON_CMD --version)"
-
 # Check and install system dependencies
 echo -e "${YELLOW}Checking system dependencies...${NC}"
 
