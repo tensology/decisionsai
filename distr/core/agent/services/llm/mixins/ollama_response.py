@@ -456,6 +456,11 @@ class OllamaResponseMixin:
         if any(tc.get('function', {}).get('name') == 'web_search' for tc in tool_calls):
             return await self._trigger_llm_followup(full_response)
 
+        # google_workspace — results contain email/calendar/drive data that the
+        # LLM needs to summarise and present to the user.
+        if any(tc.get('function', {}).get('name') == 'google_workspace' for tc in tool_calls):
+            return await self._trigger_llm_followup(full_response)
+
         # --- errors ---
         errors = [r for r in tool_results if isinstance(r, str) and (
             r.startswith("Error") or ("error" in r.lower() and ("failed" in r.lower() or "timeout" in r.lower() or "cannot" in r.lower()))

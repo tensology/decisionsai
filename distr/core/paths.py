@@ -9,6 +9,9 @@ ASSETS_DIR = os.path.join(CORE_DIR, "assets")
 
 DB_DIR = os.path.join(CORE_DIR, "db")
 
+SECRETS_DIR = os.path.join(CORE_DIR, "secrets")
+GOOGLE_OAUTH_SECRET_PATH = os.path.join(SECRETS_DIR, "google_oauth_client_secret.json")
+
 IMAGES_DIR = os.path.join(ASSETS_DIR, "img")
 ICONS_DIR = os.path.join(IMAGES_DIR, "icons")
 TMP_DIR = os.path.join(ASSETS_DIR, "tmp")

@@ -28,46 +28,29 @@ DEFAULT_PORT = 8768  # Base port for OAuth server (increments if in use)
 
 def load_google_oauth_config() -> Optional[Dict[str, Any]]:
     """
-    Load Google OAuth client configuration from file.
+    Load Google OAuth client configuration from the canonical location.
     
-    Looks for the file in this order:
-    1. Path from GOOGLE_OAUTH_CLIENT_SECRET environment variable
-    2. secrets/google_oauth_client_secret.json (relative to project root)
-    3. ~/.decisionsai/google_oauth_client_secret.json
+    File path: <project_root>/secrets/google_oauth_client_secret.json
+    (defined as GOOGLE_OAUTH_SECRET_PATH in distr.core.paths)
     
     Returns:
         Dict with OAuth config or None if not found
     """
-    # Try environment variable first
-    env_path = os.environ.get('GOOGLE_OAUTH_CLIENT_SECRET')
-    if env_path and os.path.exists(env_path):
+    from distr.core.paths import GOOGLE_OAUTH_SECRET_PATH
+
+    if os.path.isfile(GOOGLE_OAUTH_SECRET_PATH):
         try:
-            with open(env_path, 'r') as f:
+            with open(GOOGLE_OAUTH_SECRET_PATH, 'r') as f:
                 return json.load(f)
         except Exception as e:
-            logger.error(f"Error loading OAuth config from {env_path}: {e}")
-    
-    # Try project root secrets folder
-    project_root = Path(__file__).parent.parent.parent.parent
-    secrets_path = project_root / "secrets" / "google_oauth_client_secret.json"
-    if secrets_path.exists():
-        try:
-            with open(secrets_path, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading OAuth config from {secrets_path}: {e}")
-    
-    # Try user home directory
-    home_secrets = Path.home() / ".decisionsai" / "google_oauth_client_secret.json"
-    if home_secrets.exists():
-        try:
-            with open(home_secrets, 'r') as f:
-                return json.load(f)
-        except Exception as e:
-            logger.error(f"Error loading OAuth config from {home_secrets}: {e}")
-    
+            logger.error(f"Error loading OAuth config from {GOOGLE_OAUTH_SECRET_PATH}: {e}")
+            return None
+
     if not getattr(load_google_oauth_config, '_warned', False):
-        logger.warning("Google OAuth client secret file not found. OAuth features will not work.")
+        logger.warning(
+            f"Google OAuth client secret not found at {GOOGLE_OAUTH_SECRET_PATH}. "
+            "Upload it via Settings > Advanced > Google."
+        )
         load_google_oauth_config._warned = True
     return None
 
@@ -226,13 +209,11 @@ def create_oauth_app() -> FastAPI:
                     content={"success": False, "error": "Invalid JSON file"}
                 )
             
-            # Get project root and secrets directory
-            project_root = Path(__file__).parent.parent.parent.parent
-            secrets_dir = project_root / "secrets"
-            secrets_dir.mkdir(exist_ok=True)
+            # Save file to canonical location
+            from distr.core.paths import SECRETS_DIR, GOOGLE_OAUTH_SECRET_PATH
+            os.makedirs(SECRETS_DIR, exist_ok=True)
             
-            # Save file
-            target_path = secrets_dir / "google_oauth_client_secret.json"
+            target_path = GOOGLE_OAUTH_SECRET_PATH
             with open(target_path, 'wb') as f:
                 f.write(content)
             

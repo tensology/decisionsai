@@ -341,14 +341,10 @@ def register_routes(router, templates):
             connected_accounts = parse_connected_accounts(settings)
             connected_accounts = [a for a in connected_accounts if not (isinstance(a, dict) and a.get("provider") == "google")]
             save_settings_to_db({"connected_accounts": json.dumps(connected_accounts)})
-            # Delete the client secret file
-            project_root = Path(__file__).parent.parent.parent.parent
-            secrets_path = project_root / "secrets" / "google_oauth_client_secret.json"
-            if secrets_path.exists():
-                secrets_path.unlink()
-            home_secrets = Path.home() / ".decisionsai" / "google_oauth_client_secret.json"
-            if home_secrets.exists():
-                home_secrets.unlink()
+            # Delete the client secret file from canonical location
+            from distr.core.paths import GOOGLE_OAUTH_SECRET_PATH
+            if os.path.isfile(GOOGLE_OAUTH_SECRET_PATH):
+                os.unlink(GOOGLE_OAUTH_SECRET_PATH)
             logger.info("Google disconnected: tokens removed, secret file deleted")
             return JSONResponse({"success": True})
         except Exception as e:
@@ -435,10 +431,9 @@ def register_routes(router, templates):
             if base not in origins:
                 origins.append(base)
                 json_data[config_key]["javascript_origins"] = origins
-            project_root = Path(__file__).parent.parent.parent.parent
-            secrets_dir = project_root / "secrets"
-            secrets_dir.mkdir(exist_ok=True)
-            target_path = secrets_dir / "google_oauth_client_secret.json"
+            from distr.core.paths import SECRETS_DIR, GOOGLE_OAUTH_SECRET_PATH
+            os.makedirs(SECRETS_DIR, exist_ok=True)
+            target_path = GOOGLE_OAUTH_SECRET_PATH
             with open(target_path, "w") as f:
                 _json.dump(json_data, f, indent=2)
             logger.info(f"Google OAuth config saved to {target_path}")
