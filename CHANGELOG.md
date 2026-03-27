@@ -6,7 +6,9 @@
 
 ### Security & Windows Installer Fixes
 
-**LiteLLM Supply Chain Attack** – On March 24, two versions of the LiteLLM package (1.82.7 and 1.82.8) were published to PyPI with hidden malware that steals passwords, cloud credentials, and SSH keys. Both versions have been removed, but we've updated the installer to explicitly block them so they can never be installed — even from a local cache. If you installed DecisionsAI between March 24–25, delete your virtual environment and reinstall. [Full breakdown from The Register](https://theregister.com/2026/03/24/trivy_compromise_litellm).
+**LiteLLM Supply Chain Attack** – On March 24, two versions of the LiteLLM package (1.82.7 and 1.82.8) were published to PyPI with hidden malware that steals passwords, cloud credentials, and SSH keys. Both versions have been removed, but we've updated the installer to explicitly block them so they can never be installed — even from a local cache. We already had LiteLLM pinned to a safe range, so no DecisionsAI users were affected, but we added the explicit exclusion as an extra safety measure. If you installed any Python AI project between March 24–25 that uses LiteLLM, check your version. [Full breakdown from The Register](https://theregister.com/2026/03/24/trivy_compromise_litellm).
+
+**Python 3.12 Enforced** – The installer now checks for and requires Python 3.12 specifically. We already had this pinned, but the installer now actively blocks other versions to avoid compatibility issues with native packages like onnxruntime and pywhispercpp.
 
 **Windows DLL Fix** – Fixed a crash on Windows where the speech engine (Kokoro) wouldn't load because two conflicting versions of the same library were fighting each other. The installer now sets up the correct one first so there's no conflict.
 
