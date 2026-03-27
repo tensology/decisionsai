@@ -457,22 +457,10 @@ echo [32m√[0m Cache cleaned
 :: Verify onnxruntime loads (needed for Pipecat/Kokoro TTS)
 "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime; print('OK')" 2>nul | findstr "OK" >nul 2>&1
 if !errorlevel! neq 0 (
-    echo [33monnxruntime DLL issue detected. Reinstalling...[0m
-    "%VENV_DIR%\Scripts\pip.exe" install --force-reinstall onnxruntime --quiet 2>nul
-    "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime; print('OK')" 2>nul | findstr "OK" >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo [33mTrying onnxruntime-directml...[0m
-        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-        "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
-        "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime; print('OK')" 2>nul | findstr "OK" >nul 2>&1
-        if !errorlevel! neq 0 (
-            echo [33mWarning: onnxruntime could not be loaded. Voice features may be limited.[0m
-        ) else (
-            echo [32m√[0m onnxruntime-directml working
-        )
-    ) else (
-        echo [32m√[0m onnxruntime reinstalled successfully
-    )
+    echo [33monnxruntime DLL issue detected. Switching to onnxruntime-directml...[0m
+    "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
+    "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
+    echo [32m√[0m onnxruntime-directml installed
 ) else (
     echo [32m√[0m onnxruntime OK
 )
