@@ -313,14 +313,6 @@ if !DEPS_OK! equ 0 (
     set "TEMP=C:\tmp"
     set "TMP=C:\tmp"
 
-    :: On Windows, install onnxruntime-directml FIRST (before requirements.txt)
-    :: kokoro-onnx depends on onnxruntime, but onnxruntime and onnxruntime-directml
-    :: share the same namespace and can't coexist. Installing directml first means
-    :: pip sees the onnxruntime namespace as already satisfied and won't install the
-    :: standard version on top.
-    echo [33mInstalling onnxruntime-directml...[0m
-    "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir onnxruntime-directml --quiet
-
     "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt
     if !errorlevel! neq 0 (
         :: Check if pywhispercpp was the problem — retry with VS dev environment
