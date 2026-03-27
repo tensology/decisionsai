@@ -454,15 +454,15 @@ for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
 del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
-:: Verify onnxruntime loads fully (needed for Pipecat/Kokoro TTS)
-"%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi.onnxruntime_pybind11_state import *; print('OK')" 2>nul | findstr "OK" >nul 2>&1
+:: On Windows, prefer onnxruntime-directml (avoids DLL issues with standard onnxruntime)
+"%VENV_DIR%\Scripts\pip.exe" show onnxruntime-directml >nul 2>&1
 if !errorlevel! neq 0 (
-    echo [33monnxruntime DLL issue detected. Switching to onnxruntime-directml...[0m
+    echo [33mSwitching to onnxruntime-directml for better Windows compatibility...[0m
     "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
     "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
     echo [32m√[0m onnxruntime-directml installed
 ) else (
-    echo [32m√[0m onnxruntime OK
+    echo [32m√[0m onnxruntime-directml OK
 )
 
 :: Run the application
