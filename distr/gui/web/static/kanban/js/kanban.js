@@ -23,14 +23,20 @@
             dbBoards = boards.filter(function(b) { return b.source === "database"; });
             renderSidebarBoards(boards);
 
-            // Auto-select last board or first in list if nothing selected
+            // Auto-select: URL param > localStorage > first board
             if (!currentBoard && dbBoards.length) {
-                var last = null;
-                try { last = JSON.parse(localStorage.getItem("kb_last_selected")); } catch (e) {}
-                if (last && last.source === "database" && dbBoards.some(function(b) { return b.id === last.id; })) {
-                    selectBoard(last.source, last.id);
+                var params = new URLSearchParams(window.location.search);
+                var urlBoardId = parseInt(params.get("board_id"), 10);
+                if (urlBoardId && dbBoards.some(function(b) { return b.id === urlBoardId; })) {
+                    selectBoard("database", urlBoardId);
                 } else {
-                    selectBoard("database", dbBoards[0].id);
+                    var last = null;
+                    try { last = JSON.parse(localStorage.getItem("kb_last_selected")); } catch (e) {}
+                    if (last && last.source === "database" && dbBoards.some(function(b) { return b.id === last.id; })) {
+                        selectBoard(last.source, last.id);
+                    } else {
+                        selectBoard("database", dbBoards[0].id);
+                    }
                 }
             }
         }).catch(function() { showSnackbar("Failed to load boards", "error"); });

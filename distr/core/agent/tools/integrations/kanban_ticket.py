@@ -221,6 +221,10 @@ class KanbanTicketTool(BaseTool):
                 for m in path_re.finditer(content):
                     fp = os.path.expanduser(m.group(0).strip())
                     if os.path.isfile(fp) and fp not in file_paths:
+                        # Skip .tickets/ markdown files — those are project ticket
+                        # artifacts, not user-provided attachments.
+                        if '/.tickets/' in fp and fp.endswith('.md'):
+                            continue
                         file_paths.append(fp)
 
         except Exception as e:

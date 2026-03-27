@@ -600,7 +600,7 @@
                 if (data.board) {
                     statusEl.textContent = "Board: " + data.board.name;
                     var link = document.createElement("a");
-                    link.href = "/board/?board_id=" + data.board.id;
+                    link.href = "/kanban/?board_id=" + data.board.id;
                     link.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium no-underline";
                     link.textContent = "Go To Board";
                     actionsEl.appendChild(link);
