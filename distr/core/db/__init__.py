@@ -141,6 +141,25 @@ class Settings(Base):
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
 
+    # Kanban Agent Settings (global, migrated from per-board)
+    kanban_agent_enabled = Column(Boolean, default=False)
+    kanban_agent_frequency = Column(String, default='daily')
+    kanban_agent_time = Column(String, default='09:00')
+    kanban_agent_hours = Column(String, default='[]')
+    kanban_agent_days = Column(String, default='[]')
+    kanban_agent_monthly_day = Column(Integer, default=1)
+    kanban_agent_source_lane = Column(String, default='')
+    kanban_agent_done_lane = Column(String, default='')
+    kanban_agent_orchestrator_provider = Column(String, default='')
+    kanban_agent_orchestrator_model = Column(String, default='')
+    kanban_agent_coder_provider = Column(String, default='')
+    kanban_agent_coder_model = Column(String, default='')
+    kanban_agent_sub_provider = Column(String, default='')
+    kanban_agent_sub_model = Column(String, default='')
+    kanban_cli_tool = Column(String, default='')
+    kanban_cli_auth = Column(String, default='')
+    _kanban_migration_done = Column(Boolean, default=False)
+
 
 class Chat(Base):
     __tablename__ = 'chats'

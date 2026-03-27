@@ -1178,3 +1178,36 @@ def run_migrations():
         seed_workflows()
     except Exception as e:
         logger.warning(f"Could not seed workflows: {e}")
+
+    # Kanban agent global settings columns on settings table
+    _kanban_settings_columns = [
+        ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
+        ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
+        ("kanban_agent_time", "VARCHAR DEFAULT '09:00'"),
+        ("kanban_agent_hours", "VARCHAR DEFAULT '[]'"),
+        ("kanban_agent_days", "VARCHAR DEFAULT '[]'"),
+        ("kanban_agent_monthly_day", "INTEGER DEFAULT 1"),
+        ("kanban_agent_source_lane", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_done_lane", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_orchestrator_provider", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_orchestrator_model", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_coder_provider", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_coder_model", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_sub_provider", "VARCHAR DEFAULT ''"),
+        ("kanban_agent_sub_model", "VARCHAR DEFAULT ''"),
+        ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
+        ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
+        ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
+    ]
+    try:
+        with engine.connect() as conn:
+            for col, col_def in _kanban_settings_columns:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col} {col_def}"))
+                    conn.commit()
+                    logger.info(f"Added {col} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.debug(f"Could not add {col} to settings: {e}")
+    except Exception as e:
+        logger.debug(f"Kanban settings migration: {e}")
