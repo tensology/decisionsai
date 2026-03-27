@@ -475,3 +475,70 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to delete project: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+    @router.get("/projects/{project_id}/kanban-board")
+    async def get_project_kanban_board(project_id: int):
+        """Return the kanban board linked to this project, or null if none exists."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.db.kanban import KanbanBoard
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                # Check for a board with default_project_id pointing to this project
+                board = session.query(KanbanBoard).filter(
+                    KanbanBoard.default_project_id == project_id
+                ).first()
+                if board:
+                    return JSONResponse({"board": {"id": board.id, "name": board.name}})
+                # Also check for a board whose name matches the project name
+                board = session.query(KanbanBoard).filter(
+                    KanbanBoard.name == project.name
+                ).first()
+                if board:
+                    return JSONResponse({"board": {"id": board.id, "name": board.name}})
+                return JSONResponse({"board": None})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to get kanban board for project: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
+    @router.post("/projects/{project_id}/kanban-board")
+    async def create_project_kanban_board(project_id: int):
+        """Create a kanban board for this project, named after the project, and link it."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.db.kanban import KanbanBoard, KanbanLane
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                # Check if one already exists
+                existing = session.query(KanbanBoard).filter(
+                    KanbanBoard.default_project_id == project_id
+                ).first()
+                if not existing:
+                    existing = session.query(KanbanBoard).filter(
+                        KanbanBoard.name == project.name
+                    ).first()
+                if existing:
+                    # Link it if not already linked
+                    if not existing.default_project_id:
+                        existing.default_project_id = project_id
+                    return JSONResponse({"board": {"id": existing.id, "name": existing.name}, "created": False})
+                board = KanbanBoard(name=project.name, description=f"Board for project: {project.name}", source="database", default_project_id=project_id)
+                session.add(board)
+                session.flush()
+                for i, lane_name in enumerate(["Backlog", "Current", "QA / Assess", "Done"]):
+                    session.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+                session.flush()
+                return JSONResponse({"board": {"id": board.id, "name": board.name}, "created": True})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"Failed to create kanban board for project: {e}", exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))

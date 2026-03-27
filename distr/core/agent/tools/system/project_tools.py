@@ -979,11 +979,14 @@ class CreateProjectTicketTool(BaseTool):
             self.event_queue = event_queue
 
     def get_triggers(self) -> list[str]:
-        """Get triggers for create project ticket."""
+        """Get triggers for create project ticket.
+        
+        Only 'tell cursor' is a strong trigger. Other triggers are for
+        code-change instructions when a project is active — but the word
+        'ticket' on its own should route to the kanban tool, not here.
+        """
         return [
-            "tell cursor", "i need to implement", "i need to create",
-            "can you implement", "can you create", "add a feature",
-            "create a feature", "fix the bug", "implement", "add functionality"
+            "tell cursor",
         ]
 
     def _run(self, text: str = "", instruction: str = "", title: str = "", context: str = "", **kwargs) -> str:

@@ -80,7 +80,13 @@ class KanbanTicketTool(BaseTool):
         "The tool automatically gathers conversation context and attaches any "
         "images/documents from the chat thread to the ticket. "
         "IMPORTANT: When user says 'create a ticket', call this tool with "
-        "action='create_ticket'. Pass the user's full instruction as 'text'."
+        "action='create_ticket'. Pass the user's full instruction as 'text'. "
+        "BOARD SELECTION: When creating a ticket, if there are multiple boards "
+        "and the user hasn't specified one, call action='list_boards' first and "
+        "ASK the user which board to use. If there is only one board, use it "
+        "automatically but ALWAYS tell the user which board the ticket was added to. "
+        "LINKING: You can link a ticket to a project via linked_project_id or "
+        "to a workflow via linked_workflow_id when creating or updating a ticket."
     )
 
     chat_manager: Any = Field(default=None, exclude=True)
@@ -101,6 +107,8 @@ class KanbanTicketTool(BaseTool):
         return [
             "create a ticket", "create ticket", "make a ticket",
             "add a ticket", "new ticket", "add ticket",
+            "create a kanban ticket", "kanban ticket",
+            "add to board", "add to the board",
             "list boards", "show boards", "my boards",
             "list tickets", "show tickets",
         ]
@@ -337,6 +345,8 @@ class KanbanTicketTool(BaseTool):
         file_path: str = "",
         url: str = "",
         todo_text: str = "",
+        linked_project_id: int = 0,
+        linked_workflow_id: int = 0,
         **kwargs,
     ) -> str:
         try:
@@ -355,6 +365,8 @@ class KanbanTicketTool(BaseTool):
                     text=text, board_name=board_name, board_id=board_id or None,
                     lane_name=lane_name, title=title, description=description,
                     priority=priority,
+                    linked_project_id=linked_project_id or None,
+                    linked_workflow_id=linked_workflow_id or None,
                 )
             elif action == "list_tickets":
                 return self._action_list_tickets(board_id or None, board_name or None, lane_name or None)
@@ -364,6 +376,8 @@ class KanbanTicketTool(BaseTool):
                 return self._action_update_ticket(
                     ticket_id or self._last_ticket_id, title=title,
                     description=description, priority=priority, lane_name=lane_name,
+                    linked_project_id=linked_project_id or None,
+                    linked_workflow_id=linked_workflow_id or None,
                 )
             elif action == "move_ticket":
                 return self._action_move_ticket(ticket_id or self._last_ticket_id, lane_name)
@@ -421,7 +435,8 @@ class KanbanTicketTool(BaseTool):
 
     def _action_create_ticket(self, text="", board_name="", board_id=None,
                                lane_name="", title="", description="",
-                               priority="medium") -> str:
+                               priority="medium",
+                               linked_project_id=None, linked_workflow_id=None) -> str:
         # Resolve board
         board = self._find_board(board_id, board_name)
         if not board:
@@ -436,9 +451,11 @@ class KanbanTicketTool(BaseTool):
             if not board:
                 if len(boards) == 1:
                     board = boards[0]
+                elif len(boards) > 1:
+                    board_list = ", ".join(f"'{b['name']}' (ID {b['id']})" for b in boards)
+                    return f"There are multiple boards. Please specify which one: {board_list}"
                 else:
-                    board_list = ", ".join(f"'{b['name']}'" for b in boards) if boards else "none"
-                    return f"Please specify which board. Available: {board_list}"
+                    return "No boards found. Create one first with action='create_board'."
 
         # Resolve lane
         lane = self._find_lane(board["id"], lane_name)
@@ -446,14 +463,15 @@ class KanbanTicketTool(BaseTool):
             return f"No lanes found in board '{board['name']}'."
 
         # Gather conversation context for rich ticket content
-        conv_text, conv_files = self._get_conversation_context(max_messages=30)
-
-        # Build title and description
+        # Only use conversation context when the LLM didn't provide title+description.
+        # This avoids polluting the ticket with unrelated chat history (PDFs, etc.).
+        conv_files = []
         if not title and not description:
-            # Use conversation + text to build ticket via LLM
+            # Use a small window — only the last few messages are likely relevant
+            conv_text, conv_files = self._get_conversation_context(max_messages=10)
             raw = text
             if conv_text:
-                raw = f"User instruction: {text}\n\nConversation thread:\n{conv_text}"
+                raw = f"User instruction: {text}\n\nRecent conversation:\n{conv_text}"
             summary = self._summarise_for_ticket(raw)
             title = summary["title"]
             description = summary["description"]
@@ -470,7 +488,8 @@ class KanbanTicketTool(BaseTool):
 
             # Check if board has a default project
             board_obj = s.query(KB).get(board["id"])
-            linked_project_id = board_obj.default_project_id if board_obj else None
+            effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
+            effective_workflow_id = linked_workflow_id or None
 
             ticket = KanbanTicket(
                 lane_id=lane["id"],
@@ -478,7 +497,8 @@ class KanbanTicketTool(BaseTool):
                 description=description,
                 priority=priority or "medium",
                 position=max_pos + 1,
-                linked_project_id=linked_project_id,
+                linked_project_id=effective_project_id,
+                linked_workflow_id=effective_workflow_id,
             )
             s.add(ticket)
             s.flush()
@@ -545,7 +565,8 @@ class KanbanTicketTool(BaseTool):
             return "\n".join(parts)
 
     def _action_update_ticket(self, ticket_id, title="", description="",
-                               priority="", lane_name="") -> str:
+                               priority="", lane_name="",
+                               linked_project_id=None, linked_workflow_id=None) -> str:
         if not ticket_id:
             return "No ticket ID provided."
         from distr.core.db.kanban import KanbanTicket, KanbanLane
@@ -558,6 +579,11 @@ class KanbanTicketTool(BaseTool):
             if description:
                 t.description = description
             if priority:
+                t.priority = priority
+            if linked_project_id:
+                t.linked_project_id = linked_project_id
+            if linked_workflow_id:
+                t.linked_workflow_id = linked_workflow_id
                 t.priority = priority
             if lane_name:
                 # Move to different lane
