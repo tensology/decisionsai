@@ -312,7 +312,7 @@ if !DEPS_OK! equ 0 (
     set "TEMP=C:\tmp"
     set "TMP=C:\tmp"
 
-    "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt
+    "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt
     if !errorlevel! neq 0 (
         :: Check if pywhispercpp was the problem — retry with VS dev environment
         echo [33mRetrying pip install with VS developer environment...[0m
@@ -324,15 +324,20 @@ if !DEPS_OK! equ 0 (
         )
         if defined VSDEVCMD (
             echo [33mUsing VS developer environment: !VSDEVCMD![0m
-            cmd /c "call "!VSDEVCMD!" -arch=amd64 >nul 2>&1 && "%VENV_DIR%\Scripts\pip.exe" install -r requirements.txt"
+            cmd /c "call "!VSDEVCMD!" -arch=amd64 >nul 2>&1 && "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt"
             if !errorlevel! neq 0 (
                 :: Final fallback: skip pywhispercpp
                 echo [33mRetrying without pywhispercpp...[0m
                 "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
-                "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
+                "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements_win.txt
                 if !errorlevel! neq 0 (
-                    echo [31mError: pip install failed. Please check the output above.[0m
-                    exit /b 1
+                    echo [31mError: pip install failed. Clearing pip cache and retrying...[0m
+                    "%VENV_DIR%\Scripts\pip.exe" cache purge 2>nul
+                    "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements_win.txt
+                    if !errorlevel! neq 0 (
+                        echo [31mError: pip install failed. Please check the output above.[0m
+                        exit /b 1
+                    )
                 )
                 del /f requirements_win.txt 2>nul
                 echo [33mNote: pywhispercpp skipped. Local Whisper transcription unavailable.[0m
@@ -342,10 +347,15 @@ if !DEPS_OK! equ 0 (
             :: No VS dev env — skip pywhispercpp
             echo [33mNo VS developer environment found. Retrying without pywhispercpp...[0m
             "%VENV_DIR%\Scripts\python.exe" -c "lines=open('requirements.txt').readlines(); f=open('requirements_win.txt','w'); [f.write(l) for l in lines if 'pywhispercpp' not in l]; f.close()"
-            "%VENV_DIR%\Scripts\pip.exe" install -r requirements_win.txt
+            "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements_win.txt
             if !errorlevel! neq 0 (
-                echo [31mError: pip install failed. Please check the output above.[0m
-                exit /b 1
+                echo [31mError: pip install failed. Clearing pip cache and retrying...[0m
+                "%VENV_DIR%\Scripts\pip.exe" cache purge 2>nul
+                "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements_win.txt
+                if !errorlevel! neq 0 (
+                    echo [31mError: pip install failed. Please check the output above.[0m
+                    exit /b 1
+                )
             )
             del /f requirements_win.txt 2>nul
             echo [33mNote: pywhispercpp skipped. Install VS Build Tools with C++ workload to enable.[0m
