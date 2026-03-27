@@ -366,9 +366,12 @@ function handleGoogleConfigFile(file) {
                     statusEl.className = 'text-sm mt-2 text-green-400';
                     setTimeout(function () {
                         document.getElementById('google_setup_modal').classList.add('hidden');
-                        // Auto-trigger OAuth flow
-                        connectGoogle();
-                    }, 1500);
+                        // Fetch OAuth URL and redirect directly
+                        fetch(settingsBase + '/api/advanced/google/oauth-url').then(function (r) { return r.json(); }).then(function (d) {
+                            if (d.url) window.location.href = d.url;
+                            else if (typeof window.showNotification === 'function') window.showNotification(d.error || 'Could not get OAuth URL', 'error');
+                        });
+                    }, 1000);
                     if (typeof window.showNotification === 'function') window.showNotification('Google OAuth config saved', 'success');
                 } else {
                     statusEl.textContent = data.error || 'Upload failed';
