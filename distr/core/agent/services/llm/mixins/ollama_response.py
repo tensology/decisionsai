@@ -457,9 +457,14 @@ class OllamaResponseMixin:
             return await self._trigger_llm_followup(full_response)
 
         # google_workspace — results contain email/calendar/drive data that the
-        # LLM needs to summarise and present to the user.
+        # LLM needs to summarise and present to the user.  We re-query inline
+        # (instead of _trigger_llm_followup which self-cancels) so the stream
+        # stays alive and the UI remains in the busy state.
         if any(tc.get('function', {}).get('name') == 'google_workspace' for tc in tool_calls):
-            return await self._trigger_llm_followup(full_response)
+            followup_response = await self._inline_llm_followup(current_chat_id)
+            if followup_response:
+                full_response = followup_response
+            return full_response, True
 
         # --- errors ---
         errors = [r for r in tool_results if isinstance(r, str) and (
@@ -523,6 +528,47 @@ class OllamaResponseMixin:
             self._cancelled = False
         self._generation_task = asyncio.create_task(self._generate_response())
         return full_response, True
+
+    async def _inline_llm_followup(self, current_chat_id):
+        """Re-query the LLM with tool results already in self._messages.
+
+        Unlike _trigger_llm_followup this does NOT cancel the current task.
+        It streams the response inline so the UI stays in the busy state
+        throughout.  Returns the generated text (may be empty on error).
+        """
+        from distr.core.agent.libs import TextFrame
+
+        full_response = ""
+        try:
+            current_model = self._resolve_current_model()
+            stream = await self._ollama_client.chat(
+                model=current_model,
+                messages=self._messages,
+                stream=True,
+                options={"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
+            )
+            async for chunk in stream:
+                if self._cancelled:
+                    break
+                content = chunk.get("message", {}).get("content", "")
+                if content:
+                    cleaned = clean_text_for_tts(content, strip_whitespace=False)
+                    if cleaned:
+                        full_response += cleaned
+                        if not self._cancelled:
+                            try:
+                                signal_manager.chat_stream_token.emit(cleaned)
+                            except (RuntimeError, Exception):
+                                pass
+                            if self._speaker_enabled and not getattr(self, "_is_telegram_request", False):
+                                await self.push_frame(TextFrame(text=cleaned))
+        except Exception as e:
+            logger.error("LLM: inline followup error: %s", e, exc_info=True)
+
+        if full_response:
+            self._save_and_signal(current_chat_id, full_response)
+            self._messages.append({"role": "assistant", "content": full_response})
+        return full_response
 
     async def _handle_new_chat_result(self, tool_calls, tool_results, full_response):
         from distr.core.agent.libs import TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
