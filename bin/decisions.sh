@@ -67,6 +67,14 @@ if ! command -v python3.12 &> /dev/null; then
     if [[ "$OSTYPE" == "darwin"* ]]; then
         if command -v brew &> /dev/null; then
             brew install python@3.12
+            # Refresh PATH to pick up newly installed python3.12
+            if [ -d "/opt/homebrew/bin" ]; then
+                export PATH="/opt/homebrew/bin:/opt/homebrew/opt/python@3.12/bin:$PATH"
+            fi
+            if [ -d "/usr/local/bin" ]; then
+                export PATH="/usr/local/bin:/usr/local/opt/python@3.12/bin:$PATH"
+            fi
+            hash -r 2>/dev/null
         else
             echo -e "${RED}Error: Homebrew not found. Install it first:${NC}"
             echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
@@ -82,11 +90,24 @@ if ! command -v python3.12 &> /dev/null; then
 
     # Verify it installed successfully
     if ! command -v python3.12 &> /dev/null; then
-        echo -e "${RED}Error: python3.12 still not found after install. Check your PATH.${NC}"
-        exit 1
+        # Try the direct Homebrew path as last resort
+        if [ -x "/opt/homebrew/bin/python3.12" ]; then
+            PYTHON_CMD="/opt/homebrew/bin/python3.12"
+        elif [ -x "/usr/local/bin/python3.12" ]; then
+            PYTHON_CMD="/usr/local/bin/python3.12"
+        else
+            echo -e "${RED}Error: python3.12 still not found after install. Check your PATH.${NC}"
+            exit 1
+        fi
+        echo -e "${GREEN}✓${NC} Python found at: $PYTHON_CMD"
+    else
+        PYTHON_CMD="python3.12"
+        echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
     fi
+else
+    PYTHON_CMD="python3.12"
+    echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
 fi
-PYTHON_CMD="python3.12"
 
 echo -e "${GREEN}✓${NC} Python found: $($PYTHON_CMD --version)"
 
