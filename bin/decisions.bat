@@ -455,14 +455,29 @@ del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
 :: On Windows, prefer onnxruntime-directml (avoids DLL issues with standard onnxruntime)
+:: Must remove regular onnxruntime even if directml is present (pip may have reinstalled it)
+"%VENV_DIR%\Scripts\pip.exe" show onnxruntime >nul 2>&1
+if !errorlevel! equ 0 (
+    "%VENV_DIR%\Scripts\pip.exe" show onnxruntime-directml >nul 2>&1
+    if !errorlevel! equ 0 (
+        echo [33mRemoving conflicting regular onnxruntime...[0m
+        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
+    ) else (
+        echo [33mSwitching to onnxruntime-directml...[0m
+        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
+        "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
+    )
+)
 "%VENV_DIR%\Scripts\pip.exe" show onnxruntime-directml >nul 2>&1
 if !errorlevel! neq 0 (
-    echo [33mSwitching to onnxruntime-directml for better Windows compatibility...[0m
-    "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
+    echo [33mInstalling onnxruntime-directml...[0m
     "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
-    echo [32m√[0m onnxruntime-directml installed
-) else (
-    echo [32m√[0m onnxruntime-directml OK
+)
+echo [32m√[0m onnxruntime-directml OK
+
+:: Clean Python cache again (clear any cached onnxruntime imports)
+for /d /r "%VENV_DIR%" %%d in (__pycache__) do (
+    if exist "%%d" rmdir /s /q "%%d" 2>nul
 )
 
 :: Run the application
