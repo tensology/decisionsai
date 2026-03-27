@@ -3,6 +3,25 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
+# On Windows, explicitly add onnxruntime's DLL directory to the search path
+# and import it FIRST, before PyTorch or other native libraries can pollute
+# the DLL search order and cause onnxruntime_pybind11_state to fail.
+if sys.platform == 'win32':
+    try:
+        import importlib.util
+        _ort_spec = importlib.util.find_spec('onnxruntime')
+        if _ort_spec and _ort_spec.submodule_search_locations:
+            _ort_dir = _ort_spec.submodule_search_locations[0]
+            _capi_dir = os.path.join(_ort_dir, 'capi')
+            # Add both the package dir and capi dir so Windows finds the native DLLs
+            if os.path.isdir(_capi_dir):
+                os.add_dll_directory(_capi_dir)
+            if os.path.isdir(_ort_dir):
+                os.add_dll_directory(_ort_dir)
+        import onnxruntime  # noqa: F401 — must load before torch
+    except (ImportError, OSError):
+        pass
+
 # Fix for macOS: DYLD_LIBRARY_PATH is searched BEFORE @rpath by the dynamic
 # linker.  If Homebrew's /opt/homebrew/lib contains libc10.dylib (symlinked
 # from its own PyTorch for Python 3.14), torch's @rpath-based libc10 is
