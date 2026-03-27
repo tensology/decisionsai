@@ -312,6 +312,14 @@ if !DEPS_OK! equ 0 (
     set "TEMP=C:\tmp"
     set "TMP=C:\tmp"
 
+    :: On Windows, install onnxruntime-directml FIRST (before requirements.txt)
+    :: kokoro-onnx depends on onnxruntime, but onnxruntime and onnxruntime-directml
+    :: share the same namespace and can't coexist. Installing directml first means
+    :: pip sees the onnxruntime namespace as already satisfied and won't install the
+    :: standard version on top.
+    echo [33mInstalling onnxruntime-directml...[0m
+    "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir onnxruntime-directml --quiet
+
     "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt
     if !errorlevel! neq 0 (
         :: Check if pywhispercpp was the problem — retry with VS dev environment
@@ -456,16 +464,7 @@ for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
 del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
-:: On Windows, replace standard onnxruntime with onnxruntime-directml
-:: They share the same namespace and can't coexist — directml must be the only one installed
-echo [33mEnsuring onnxruntime-directml...[0m
-"%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-"%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
-:: Re-pin protobuf and numpy in case onnxruntime-directml pulled newer versions
-"%VENV_DIR%\Scripts\pip.exe" install "protobuf>=5.29.3,<5.30.0" "numpy>=2.0.0,<2.3.0" --quiet
-echo [32m√[0m onnxruntime-directml OK
-
-:: Clean Python cache again (clear any cached onnxruntime imports)
+:: Clean Python cache again (clear any cached imports)
 for /d /r "%VENV_DIR%" %%d in (__pycache__) do (
     if exist "%%d" rmdir /s /q "%%d" 2>nul
 )
