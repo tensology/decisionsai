@@ -420,6 +420,40 @@ def on_checkin(dbapi_conn, connection_record):
     pool = engine.pool
     logger.debug(f"Database connection checked in. Pool size: {pool.size()}, checked out: {pool.checkedout()}")
 
+# Add missing kanban columns to existing settings table before create_all
+try:
+    with engine.connect() as _conn:
+        _result = _conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
+        if _result.fetchone():
+            _existing = {row[1] for row in _conn.execute(text("PRAGMA table_info(settings)"))}
+            for _col, _def in [
+                ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
+                ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
+                ("kanban_agent_time", "VARCHAR DEFAULT '09:00'"),
+                ("kanban_agent_hours", "VARCHAR DEFAULT '[]'"),
+                ("kanban_agent_days", "VARCHAR DEFAULT '[]'"),
+                ("kanban_agent_monthly_day", "INTEGER DEFAULT 1"),
+                ("kanban_agent_source_lane", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_done_lane", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_orchestrator_provider", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_orchestrator_model", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_coder_provider", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_coder_model", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_sub_provider", "VARCHAR DEFAULT ''"),
+                ("kanban_agent_sub_model", "VARCHAR DEFAULT ''"),
+                ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
+                ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
+                ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
+            ]:
+                if _col not in _existing:
+                    try:
+                        _conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} {_def}"))
+                        _conn.commit()
+                    except Exception:
+                        pass
+except Exception:
+    pass
+
 # Create the table
 Base.metadata.create_all(engine)
 
