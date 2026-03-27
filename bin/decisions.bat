@@ -446,8 +446,10 @@ for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
 del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
-:: On Windows, prefer onnxruntime-directml (avoids DLL issues with standard onnxruntime)
+:: On Windows, replace standard onnxruntime with onnxruntime-directml
+:: They share the same namespace and can't coexist — directml must be the only one installed
 echo [33mEnsuring onnxruntime-directml...[0m
+"%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
 "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
 :: Re-pin protobuf and numpy in case onnxruntime-directml pulled newer versions
 "%VENV_DIR%\Scripts\pip.exe" install "protobuf>=5.29.3,<5.30.0" "numpy>=2.0.0,<2.3.0" --quiet
