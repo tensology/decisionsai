@@ -89,7 +89,7 @@ from distr.gui.dialogs.eula import EulaWindow
 from distr.gui.dialogs.audio import DeviceSelectionDialog
 from distr.core.audio.utils import get_current_device_list_hash, restore_locked_devices, detect_devices
 
-from distr import AgentSession
+from distr.core.agent.session import AgentSession
 
 
 class DeviceCheckWorkerSignals(QObject):
