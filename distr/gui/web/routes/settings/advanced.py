@@ -546,6 +546,14 @@ def register_routes(router, templates):
             google_account["connected_at"] = datetime.utcnow().isoformat()
             settings["connected_accounts"] = connected_accounts
             save_settings_to_db(settings)
+            # Reload Google Workspace service with new credentials
+            try:
+                from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceService
+                gws = GoogleWorkspaceService()
+                gws._load_credentials()
+                logger.info("Google Workspace service reloaded with new credentials")
+            except Exception as reload_err:
+                logger.debug(f"Could not reload Google Workspace service: {reload_err}")
             return RedirectResponse(url="/settings?google=connected#advanced", status_code=302)
         except Exception as e:
             logger.error(f"Google callback: {e}", exc_info=True)

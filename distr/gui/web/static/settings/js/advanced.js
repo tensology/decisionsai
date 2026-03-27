@@ -362,9 +362,13 @@ function handleGoogleConfigFile(file) {
                 body: JSON.stringify({ content: content })
             }).then(function (r) { return r.json(); }).then(function (data) {
                 if (data.success) {
-                    statusEl.textContent = 'Configuration saved. Click Google again to connect.';
+                    statusEl.textContent = 'Configuration saved. Connecting to Google...';
                     statusEl.className = 'text-sm mt-2 text-green-400';
-                    setTimeout(function () { document.getElementById('google_setup_modal').classList.add('hidden'); }, 2000);
+                    setTimeout(function () {
+                        document.getElementById('google_setup_modal').classList.add('hidden');
+                        // Auto-trigger OAuth flow
+                        connectGoogle();
+                    }, 1500);
                     if (typeof window.showNotification === 'function') window.showNotification('Google OAuth config saved', 'success');
                 } else {
                     statusEl.textContent = data.error || 'Upload failed';
