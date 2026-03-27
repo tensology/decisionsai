@@ -8,7 +8,7 @@ setlocal enabledelayedexpansion
 set "SCRIPT_DIR=%~dp0.."
 pushd "%SCRIPT_DIR%"
 set "SCRIPT_DIR=%CD%"
-popd
+:: Stay in the project root — all relative paths (requirements.txt, bin\, etc.) depend on this
 
 echo.
 echo [32mDecisionsAI Setup ^& Run[0m
@@ -325,7 +325,9 @@ if !DEPS_OK! equ 0 (
         )
         if defined VSDEVCMD (
             echo [33mUsing VS developer environment: !VSDEVCMD![0m
-            cmd /c "call "!VSDEVCMD!" -arch=amd64 >nul 2>&1 && "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt"
+            :: Write to temp file to avoid (x86) in VSDEVCMD path breaking cmd /c quoting
+            echo call "!VSDEVCMD!" -arch=amd64 ^>nul 2^>^&1 ^&^& "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir -r requirements.txt > "%TEMP%\vsdev_pip.bat"
+            cmd /c "%TEMP%\vsdev_pip.bat"
             if !errorlevel! neq 0 (
                 :: Final fallback: skip pywhispercpp
                 echo [33mRetrying without pywhispercpp...[0m
@@ -416,7 +418,7 @@ if !errorlevel! equ 0 (
 :: Check NumPy/PyTorch compatibility
 "%VENV_DIR%\Scripts\python.exe" -c "import numpy; v=numpy.__version__; exit(0 if v.startswith('2.') else 1)" >nul 2>&1
 if !errorlevel! equ 0 (
-    for /f "tokens=*" %%v in ('"%VENV_DIR%\Scripts\python.exe" -c "import torch; v=torch.__version__.split('+')[0].split('.'); print(v[0]+'.'+v[1])" 2^>nul') do set "TORCH_VER=%%v"
+    for /f "tokens=*" %%v in ('"%VENV_DIR%\Scripts\python.exe" "%SCRIPT_DIR%\bin\get_torch_ver.py" 2^>nul') do set "TORCH_VER=%%v"
     if defined TORCH_VER (
         for /f "tokens=1,2 delims=." %%a in ("!TORCH_VER!") do (
             set /a "TORCH_MAJOR=%%a"
@@ -424,22 +426,28 @@ if !errorlevel! equ 0 (
         )
         if !TORCH_MAJOR! lss 2 (
             echo [33mUpgrading PyTorch for NumPy 2.x compatibility...[0m
-            "%VENV_DIR%\Scripts\pip.exe" install "torch>=2.5.0" "torchaudio>=2.5.0" --quiet
+            echo "%VENV_DIR%\Scripts\pip.exe" install "torch>=2.5.0" "torchaudio>=2.5.0" --quiet > "%TEMP%\upgrade_torch.bat"
+            call "%TEMP%\upgrade_torch.bat"
         ) else if !TORCH_MAJOR! equ 2 if !TORCH_MINOR! lss 5 (
             echo [33mUpgrading PyTorch for NumPy 2.x compatibility...[0m
-            "%VENV_DIR%\Scripts\pip.exe" install "torch>=2.5.0" "torchaudio>=2.5.0" --quiet
+            echo "%VENV_DIR%\Scripts\pip.exe" install "torch>=2.5.0" "torchaudio>=2.5.0" --quiet > "%TEMP%\upgrade_torch.bat"
+            call "%TEMP%\upgrade_torch.bat"
         )
     )
 )
 
 :: Add project root to user PATH (so 'decisions.bat' works from anywhere)
 echo [33mChecking system PATH...[0m
-echo %PATH% | findstr /i /c:"%SCRIPT_DIR%" >nul 2>&1
-if !errorlevel! neq 0 (
+:: Use cmd /c to isolate PATH expansion (which contains parens like x86) from breaking the if-block
+set "PATH_HAS_SCRIPT=0"
+cmd /c "echo %PATH%" | findstr /i /c:"%SCRIPT_DIR%" >nul 2>&1
+if !errorlevel! equ 0 set "PATH_HAS_SCRIPT=1"
+if "!PATH_HAS_SCRIPT!"=="0" (
     echo [33mAdding DecisionsAI to user PATH...[0m
     for /f "tokens=2*" %%a in ('reg query "HKCU\Environment" /v Path 2^>nul') do set "USER_PATH=%%b"
     if not defined USER_PATH set "USER_PATH="
-    setx PATH "!USER_PATH!;%SCRIPT_DIR%" >nul 2>&1
+    :: Use cmd /c to isolate setx from parentheses in USER_PATH breaking the if-block
+    cmd /c "setx PATH "!USER_PATH!;%SCRIPT_DIR%"" >nul 2>&1
     if !errorlevel! equ 0 (
         echo [32m√[0m Added to PATH. Restart your terminal to use 'decisions.bat' from anywhere.
     ) else (
@@ -449,62 +457,15 @@ if !errorlevel! neq 0 (
     echo [32m√[0m Already on PATH
 )
 
-:: Clean Python cache
+:: Clean Python cache (project files only — skip venv to avoid paths with parentheses breaking for /d /r)
 echo [33mCleaning Python cache...[0m
-for /d /r "%SCRIPT_DIR%" %%d in (__pycache__) do (
-    if exist "%%d" rmdir /s /q "%%d" 2>nul
-)
 del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
-:: Clean Python cache again (clear any cached imports)
-for /d /r "%VENV_DIR%" %%d in (__pycache__) do (
-    if exist "%%d" rmdir /s /q "%%d" 2>nul
-)
-
 :: Verify onnxruntime native extension loads (needed for Pipecat/Kokoro TTS)
-:: Test the C++ pybind11 extension — a basic "import onnxruntime" can pass
-:: while the native DLL still fails when actually used.
 echo [33mVerifying onnxruntime...[0m
-"%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
-if !errorlevel! neq 0 (
-    echo [33monnxruntime DLL issue detected. Reinstalling...[0m
-    "%VENV_DIR%\Scripts\pip.exe" install --force-reinstall --no-cache-dir onnxruntime --quiet
-    "%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo [33mStandard onnxruntime still failing. Trying onnxruntime-directml...[0m
-        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-        "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir onnxruntime-directml --quiet
-        "%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
-        if !errorlevel! neq 0 (
-            echo.
-            echo [31m========================================[0m
-            echo [31m  FATAL: onnxruntime cannot load.[0m
-            echo [31m========================================[0m
-            echo.
-            echo [33m  The onnxruntime native DLL failed to initialize.[0m
-            echo [33m  This is required for speech (Kokoro TTS) and voice detection (Silero VAD).[0m
-            echo.
-            echo [33m  Try these fixes:[0m
-            echo [33m    1. Install Visual C++ Redistributable:[0m
-            echo [33m       https://aka.ms/vs/17/release/vc_redist.x64.exe[0m
-            echo [33m    2. Reboot after installing[0m
-            echo [33m    3. Re-run this script[0m
-            echo.
-            echo [33m  If it still fails, open an issue at:[0m
-            echo [33m    https://github.com/tensology/decisionsai/issues[0m
-            echo.
-            pause
-            exit /b 1
-        ) else (
-            echo [32m√[0m onnxruntime-directml OK
-        )
-    ) else (
-        echo [32m√[0m onnxruntime reinstalled OK
-    )
-) else (
-    echo [32m√[0m onnxruntime OK
-)
+call "%SCRIPT_DIR%\bin\check_ort.bat" "%VENV_DIR%"
+if !errorlevel! neq 0 exit /b 1
 
 :: Run the application
 echo.
