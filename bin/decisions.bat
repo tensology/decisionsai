@@ -463,17 +463,18 @@ for /d /r "%VENV_DIR%" %%d in (__pycache__) do (
 )
 
 :: Verify onnxruntime loads (needed for Pipecat/Kokoro TTS)
-:: If standard onnxruntime DLL fails, try reinstalling. If still broken, swap to directml variant.
-"%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime" >nul 2>&1
+:: Test the native C++ extension, not just the Python wrapper — the DLL failure
+:: only shows up when onnxruntime_pybind11_state is actually loaded.
+"%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
 if !errorlevel! neq 0 (
     echo [33monnxruntime DLL issue detected. Reinstalling...[0m
     "%VENV_DIR%\Scripts\pip.exe" install --force-reinstall --no-cache-dir onnxruntime --quiet
-    "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime" >nul 2>&1
+    "%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
     if !errorlevel! neq 0 (
         echo [33mStandard onnxruntime still failing. Trying onnxruntime-directml...[0m
         "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
         "%VENV_DIR%\Scripts\pip.exe" install --no-cache-dir onnxruntime-directml --quiet
-        "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime" >nul 2>&1
+        "%VENV_DIR%\Scripts\python.exe" -c "from onnxruntime.capi import onnxruntime_pybind11_state" >nul 2>&1
         if !errorlevel! neq 0 (
             echo [31mWarning: onnxruntime could not be loaded. Kokoro TTS may not work.[0m
             echo [33m  Try installing Visual C++ Redistributable: https://aka.ms/vs/17/release/vc_redist.x64.exe[0m
