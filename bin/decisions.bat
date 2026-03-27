@@ -459,11 +459,11 @@ echo [32m√[0m Cache cleaned
 :: So we ALWAYS force the swap after every pip install
 echo [33mEnsuring onnxruntime-directml...[0m
 "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-if exist "%VENV_DIR%\Lib\site-packages\onnxruntime" (
-    rmdir /s /q "%VENV_DIR%\Lib\site-packages\onnxruntime" 2>nul
+"%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
+if !errorlevel! neq 0 (
+    echo [33mRetrying onnxruntime-directml install...[0m
+    "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml
 )
-for /d %%d in ("%VENV_DIR%\Lib\site-packages\onnxruntime-*") do rmdir /s /q "%%d" 2>nul
-"%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
 echo [32m√[0m onnxruntime-directml OK
 
 :: Clean Python cache again (clear any cached onnxruntime imports)
