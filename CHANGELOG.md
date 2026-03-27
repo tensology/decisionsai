@@ -2,23 +2,33 @@
 
 ---
 
+## [2.6.8] - 2026-03-27
+
+### Security & Windows Installer Fixes
+
+**LiteLLM Supply Chain Attack** – On March 24, two versions of the LiteLLM package (1.82.7 and 1.82.8) were published to PyPI with hidden malware that steals passwords, cloud credentials, and SSH keys. Both versions have been removed, but we've updated the installer to explicitly block them so they can never be installed — even from a local cache. If you installed DecisionsAI between March 24–25, delete your virtual environment and reinstall. [Full breakdown from The Register](https://theregister.com/2026/03/24/trivy_compromise_litellm).
+
+**Windows DLL Fix** – Fixed a crash on Windows where the speech engine (Kokoro) wouldn't load because two conflicting versions of the same library were fighting each other. The installer now sets up the correct one first so there's no conflict.
+
+**Dependency Pinning** – Pinned Pydantic to avoid a version that requires Rust to compile on Windows (most users don't have Rust installed). Pip is now auto-upgraded to the latest version before installing anything. All installs skip the pip cache to avoid stale packages causing failures, and the installer automatically clears the cache and retries if something goes wrong.
+
+---
+
 ## [2.6.7] - 2026-03-27
 
 ### Windows Installer, Qwen3-TTS Removal, Bug Fixes
 
-**Windows Installer Overhaul** – The Windows `.bat` installer now auto-installs Git via winget if missing, installs Visual Studio C++ Build Tools and CMake for pywhispercpp compilation, adds the project root to the user PATH so `decisions.bat` works from anywhere, enables long paths in the registry and git (`core.longpaths`) to fix the MAX_PATH 260 character limit, and uses `C:\tmp` as TEMP during pip install to avoid path length failures. If pywhispercpp can't be built, it's skipped gracefully and the app falls back to Vosk for speech recognition.
+**Windows Installer** – The Windows installer now handles a lot more automatically: installs Git if it's missing, sets up C++ build tools for compiling native packages, adds DecisionsAI to your system PATH so you can run it from anywhere, and fixes the Windows 260-character path limit that was breaking some installs. If a package can't be compiled, the installer skips it and falls back to an alternative.
 
-**Qwen3-TTS Removed** – Dropped Qwen3-TTS as a TTS provider. In our experience, the 600M parameter model wasn't practical for real-time streaming — latency was too high for a conversational voice assistant. Deleted the service, voice presets, cloning logic, sample rate config, and the `qwen-tts` pip dependency. Cleaned up references across the service factory, session loader, command handler, constants, settings UI, chat JS, API docs, and README. Kokoro (offline) and ElevenLabs (cloud) remain as the recommended TTS and voice cloning options.
+**Qwen3-TTS Removed** – We removed Qwen3-TTS as a voice option. It sounded good in demos, but in real conversations the latency was too high — you'd be waiting a couple seconds for every response. Kokoro (offline, fast) and ElevenLabs (cloud, high quality) are the recommended options for text-to-speech and voice cloning.
 
-**Telegram Improvements** – Telegram voice notes now use the chat's voice settings instead of a hardcoded default. The welcome voice message is forwarded to Telegram on connect. The system prevents macOS sleep while Telegram is connected so the bot stays responsive.
+**Telegram** – Voice notes sent through Telegram now use whatever voice you've picked in your chat settings instead of a default. The welcome message gets forwarded to Telegram when you connect. On Mac, the system stays awake while Telegram is connected so the bot doesn't go silent.
 
-**Google OAuth** – Added a disconnect button with confirmation dialog that removes tokens and the secret file. Connected services now show a checkmark (✓ Google, ✓ Telegram) on their buttons. Improved the OAuth setup modal with copy button feedback (green flash + snackbar).
+**Google** – You can now disconnect Google with a button (instead of manually deleting files). Connected services show a checkmark so you can see at a glance what's linked.
 
-**Voice & Mouse Fixes** – Fixed "move mouse to center of my screen" being misrouted to the screenshot tool. Added "mask" as a mouse synonym and support for ordinal screen numbers ("move to screen two"). Filtered `[BLANK_AUDIO]` and bracket-wrapped artifacts from push-to-talk transcription. Disabled the Pipecat idle timeout that was killing the agent every 5 minutes.
+**Voice & Mouse** – Fixed "move mouse to center" accidentally taking a screenshot instead. Fixed audio glitches in push-to-talk where blank audio artifacts would show up as text. Fixed the agent randomly dying every 5 minutes due to an idle timeout.
 
-**Multi-Ticket Creation** – You can now create multiple tickets from a single voice command.
-
-**Config & Startup** – Unified the config directory to `~/.decisionsai/` (was inconsistently `.decisions/` and `.decisions_ai/` in some places). `setup.py` no longer crashes when Ollama isn't installed. The app now shows the git commit hash and date at startup. Fixed duplicate log lines from the distr logger propagating to root. Replaced the emoji lightning bolt with a PNG in the web UI logo. Fixed LLM provider select widths in the UI.
+**Other** – Create multiple tickets from one voice command. Config folder unified to one location. App shows version info at startup. Various UI fixes.
 
 ---
 
