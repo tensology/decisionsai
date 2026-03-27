@@ -540,7 +540,7 @@ class ElevenLabsTTSService(TTSService):
                     # CRITICAL: Prevent duplicate processing of the same sentence
                     normalized_sentence = sentence.strip().lower()
                     if normalized_sentence in self._processed_sentences:
-                        logger.warning(f"TTS: Skipping duplicate sentence: '{sentence[:50]}...' (already processed)")
+                        logger.debug(f"TTS: Skipping duplicate sentence: '{sentence[:30]}...'")
                         continue
                     
                     # Only skip when current is SUBSET of processed (redundant). Do NOT skip when
@@ -550,7 +550,7 @@ class ElevenLabsTTSService(TTSService):
                         for processed in self._processed_sentences:
                             if len(processed) > 20:
                                 if normalized_sentence in processed:
-                                    logger.warning(f"TTS: Skipping duplicate (subset): '{sentence[:50]}...'")
+                                    logger.debug(f"TTS: Skipping duplicate (subset): '{sentence[:30]}...'")
                                     is_duplicate = True
                                     break
                                 words1 = set(normalized_sentence.split())
@@ -559,7 +559,7 @@ class ElevenLabsTTSService(TTSService):
                                     overlap = len(words1 & words2)
                                     total_unique = len(words1 | words2)
                                     if total_unique > 0 and overlap / total_unique > 0.9:
-                                        logger.warning(f"TTS: Skipping duplicate (word overlap {overlap}/{total_unique}): '{sentence[:50]}...'")
+                                        logger.debug(f"TTS: Skipping duplicate (overlap): '{sentence[:30]}...'")
                                         is_duplicate = True
                                         break
                     
