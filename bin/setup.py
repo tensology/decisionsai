@@ -145,35 +145,6 @@ def _download_hf_model(repo_id: str, local_dir: str, label: str = "model"):
         return False
 
 
-def setup_qwen3_models(model_name: str = None):
-    """
-    Pre-download Qwen3-TTS models into distr/core/agent/models/ so
-    from_pretrained() can load from a local path without HuggingFace cache
-    validation on every startup.
-
-    Downloads two models:
-      1. CustomVoice — used for preset speakers (normal TTS)
-      2. Base — used for voice cloning (custom voices)
-    """
-    models_root = os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', 'distr', 'core', 'agent', 'models')
-    models_root = os.path.abspath(models_root)
-
-    custom_voice_repo = model_name or "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
-    base_repo = "Qwen/Qwen3-TTS-12Hz-0.6B-Base"
-
-    custom_voice_dir = os.path.join(models_root, 'qwen3-tts')
-    base_dir = os.path.join(models_root, 'qwen3-tts-base')
-
-    print("")
-    print("=" * 60)
-    print("Qwen3-TTS Model Setup")
-    print("=" * 60)
-    print("")
-
-    _download_hf_model(custom_voice_repo, custom_voice_dir, label="CustomVoice model (preset speakers)")
-    print("")
-    _download_hf_model(base_repo, base_dir, label="Base model (voice cloning)")
-    print("")
 
 
 def setup_kanade_models():
@@ -226,15 +197,13 @@ def setup_kanade_models():
     print("")
 
 
-def setup(skip_model_pull=False, install_optional=False, setup_qwen3=False, qwen3_model=None):
+def setup(skip_model_pull=False, install_optional=False):
     """
     Main setup function to download and extract files.
 
     Args:
         skip_model_pull: If True, skip automatic model pull and show manual instructions
         install_optional: If True, install optional dependencies (LlamaIndex)
-        setup_qwen3: If True, pre-download Qwen3-TTS model from HuggingFace
-        qwen3_model: Override the Qwen3 model id (default: 0.6B)
     """
     # Install optional dependencies if requested
     if install_optional:
@@ -444,9 +413,6 @@ def setup(skip_model_pull=False, install_optional=False, setup_qwen3=False, qwen
         print(f"⚠ Playwright setup error: {e}")
         print("  You can install manually: python -m playwright install chromium")
 
-    # Pre-download Qwen3-TTS model (always — avoids long wait on first voice use)
-    setup_qwen3_models(model_name=qwen3_model)
-
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
     setup_kanade_models()
 
@@ -470,34 +436,11 @@ if __name__ == "__main__":
         action='store_true',
         help='Install optional dependencies (LlamaIndex)'
     )
-    parser.add_argument(
-        '--setup-qwen3',
-        action='store_true',
-        help='Pre-download Qwen3-TTS model from HuggingFace (0.6B by default, ~4GB VRAM)'
-    )
-    parser.add_argument(
-        '--setup-qwen3-only',
-        action='store_true',
-        help='Only pre-download Qwen3-TTS model (skip Kokoro/Ollama setup)'
-    )
-    parser.add_argument(
-        '--qwen3-model',
-        type=str,
-        default=None,
-        help='Override Qwen3 model id (e.g. Qwen/Qwen3-TTS-12Hz-1.7B-CustomVoice for higher quality)'
-    )
     
     args = parser.parse_args()
     skip_pull = args.skip_model_pull or args.manual_model
 
-    # --setup-qwen3-only: just download the Qwen3 model and exit
-    if args.setup_qwen3_only:
-        setup_qwen3_models(model_name=args.qwen3_model)
-        sys.exit(0)
-
     setup(
         skip_model_pull=skip_pull,
         install_optional=args.install_optional,
-        setup_qwen3=args.setup_qwen3,
-        qwen3_model=args.qwen3_model,
     )

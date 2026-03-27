@@ -247,13 +247,6 @@ if (-not (Test-Path "$modelsDir\kokoro-v1.0.onnx") -or -not (Test-Path "$modelsD
     Write-Status "Setup complete"
 } else { Write-Status "Models already installed" }
 
-# Pre-download Qwen3-TTS into distr\core\agent\models\qwen3-tts\ if not present
-$qwen3Local = Join-Path $ScriptDir "distr\core\agent\models\qwen3-tts\config.json"
-if (-not (Test-Path $qwen3Local)) {
-    Write-Warn "Qwen3-TTS model not found locally. Downloading..."
-    & "$VenvDir\Scripts\python.exe" bin\setup.py --setup-qwen3-only
-} else { Write-Status "Qwen3-TTS model already present" }
-
 # --- Ollama ---
 if (Get-Command ollama -ErrorAction SilentlyContinue) {
     Write-Status "Ollama found"

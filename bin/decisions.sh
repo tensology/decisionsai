@@ -556,15 +556,6 @@ else
     echo -e "${GREEN}✓${NC} Models already installed"
 fi
 
-# Pre-download Qwen3-TTS model into distr/core/agent/models/qwen3-tts/ if not present
-QWEN3_LOCAL="$SCRIPT_DIR/distr/core/agent/models/qwen3-tts/config.json"
-if [ ! -f "$QWEN3_LOCAL" ]; then
-    echo -e "${YELLOW}Qwen3-TTS model not found locally. Downloading (this may take a few minutes)...${NC}"
-    "$VENV_DIR/bin/python" bin/setup.py --setup-qwen3-only
-else
-    echo -e "${GREEN}✓${NC} Qwen3-TTS model already present"
-fi
-
 # Install Playwright browser (chromium only) if not already present
 PLAYWRIGHT_CHROMIUM=$("$VENV_DIR/bin/python" -c "from playwright._impl._driver import compute_driver_executable; import os; print(os.path.exists(os.path.join(os.path.dirname(compute_driver_executable()), '.local-browsers')))" 2>/dev/null || echo "False")
 if [ "$PLAYWRIGHT_CHROMIUM" != "True" ]; then

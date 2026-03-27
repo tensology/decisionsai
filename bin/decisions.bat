@@ -374,14 +374,6 @@ if !MODELS_EXIST! equ 0 (
     echo [32m√[0m Models already installed
 )
 
-:: Pre-download Qwen3-TTS model into distr\core\agent\models\qwen3-tts\ if not present
-if not exist "%SCRIPT_DIR%\distr\core\agent\models\qwen3-tts\config.json" (
-    echo [33mQwen3-TTS model not found locally. Downloading...[0m
-    "%VENV_DIR%\Scripts\python.exe" bin\setup.py --setup-qwen3-only
-) else (
-    echo [32m√[0m Qwen3-TTS model already present
-)
-
 :: Check for Ollama
 where ollama >nul 2>&1
 if !errorlevel! equ 0 (
@@ -456,7 +448,9 @@ echo [32m√[0m Cache cleaned
 
 :: On Windows, prefer onnxruntime-directml (avoids DLL issues with standard onnxruntime)
 echo [33mEnsuring onnxruntime-directml...[0m
-"%VENV_DIR%\Scripts\pip.exe" install --force-reinstall onnxruntime-directml --quiet
+"%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
+:: Re-pin protobuf and numpy in case onnxruntime-directml pulled newer versions
+"%VENV_DIR%\Scripts\pip.exe" install "protobuf>=5.29.3,<5.30.0" "numpy>=2.0.0,<2.3.0" --quiet
 echo [32m√[0m onnxruntime-directml OK
 
 :: Clean Python cache again (clear any cached onnxruntime imports)
