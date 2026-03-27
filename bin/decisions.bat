@@ -455,15 +455,8 @@ del /s /q "%SCRIPT_DIR%\*.pyc" >nul 2>&1
 echo [32m√[0m Cache cleaned
 
 :: On Windows, prefer onnxruntime-directml (avoids DLL issues with standard onnxruntime)
-:: pip install -r requirements.txt keeps reinstalling regular onnxruntime via kokoro-onnx/pipecat deps
-:: So we ALWAYS force the swap after every pip install
 echo [33mEnsuring onnxruntime-directml...[0m
-"%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-"%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet
-if !errorlevel! neq 0 (
-    echo [33mRetrying onnxruntime-directml install...[0m
-    "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml
-)
+"%VENV_DIR%\Scripts\pip.exe" install --force-reinstall onnxruntime-directml --quiet
 echo [32m√[0m onnxruntime-directml OK
 
 :: Clean Python cache again (clear any cached onnxruntime imports)
