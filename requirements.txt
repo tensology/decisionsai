@@ -51,6 +51,9 @@ litellm>=1.80.0,<2.0.0
 PyQt6-QScintilla
 elevenlabs
 anthropic>=0.25.0
+# Pin pydantic to avoid pydantic-core versions that lack pre-built Windows wheels
+# (e.g. 2.43.0+ ships only source tarballs requiring Rust to compile)
+pydantic>=2.7.0,<2.13.0
 pyAudioDspTools
 resampy>=0.4.3
 # NumPy 2.x - requires torch 2.5+ which is compiled for numpy 2.x
