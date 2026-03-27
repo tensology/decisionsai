@@ -104,7 +104,7 @@ if sys.platform == 'darwin':
     except ImportError:
         print("Warning: AppKit (PyObjC) not found. Install with: pip install pyobjc")
         print("Continuing anyway...")
-from distr.app import run
+from distr.app.main import run
 
 # Restore original print now that all flash-attn-warning-emitting imports are done
 try:
