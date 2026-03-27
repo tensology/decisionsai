@@ -286,7 +286,8 @@ if exist "%VENV_DIR%\Scripts\activate.bat" (
     exit /b 1
 )
 
-:: Check pip
+:: Check pip and upgrade to latest
+"%VENV_DIR%\Scripts\python.exe" -m pip install --upgrade pip --quiet 2>nul
 for /f "tokens=*" %%v in ('"%VENV_DIR%\Scripts\pip.exe" --version 2^>nul') do echo [32m√[0m pip: %%v
 
 :: Install requirements if needed
