@@ -458,20 +458,26 @@ echo [32m√[0m Cache cleaned
 :: Must remove regular onnxruntime even if directml is present (pip may have reinstalled it)
 "%VENV_DIR%\Scripts\pip.exe" show onnxruntime >nul 2>&1
 if !errorlevel! equ 0 (
-    "%VENV_DIR%\Scripts\pip.exe" show onnxruntime-directml >nul 2>&1
-    if !errorlevel! equ 0 (
-        echo [33mRemoving conflicting regular onnxruntime...[0m
-        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-    ) else (
-        echo [33mSwitching to onnxruntime-directml...[0m
-        "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
-        "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
+    echo [33mRemoving conflicting regular onnxruntime...[0m
+    "%VENV_DIR%\Scripts\pip.exe" uninstall onnxruntime -y --quiet 2>nul
+    :: Force remove leftover onnxruntime files that pip doesn't clean
+    if exist "%VENV_DIR%\Lib\site-packages\onnxruntime" (
+        rmdir /s /q "%VENV_DIR%\Lib\site-packages\onnxruntime" 2>nul
     )
+    for /d %%d in ("%VENV_DIR%\Lib\site-packages\onnxruntime-*") do rmdir /s /q "%%d" 2>nul
+    for %%f in ("%VENV_DIR%\Lib\site-packages\onnxruntime-*.dist-info") do rmdir /s /q "%%f" 2>nul
 )
 "%VENV_DIR%\Scripts\pip.exe" show onnxruntime-directml >nul 2>&1
 if !errorlevel! neq 0 (
     echo [33mInstalling onnxruntime-directml...[0m
     "%VENV_DIR%\Scripts\pip.exe" install onnxruntime-directml --quiet 2>nul
+) else (
+    :: Verify it actually works
+    "%VENV_DIR%\Scripts\python.exe" -c "import onnxruntime; onnxruntime.InferenceSession" >nul 2>&1
+    if !errorlevel! neq 0 (
+        echo [33monnxruntime-directml broken, reinstalling...[0m
+        "%VENV_DIR%\Scripts\pip.exe" install --force-reinstall onnxruntime-directml --quiet 2>nul
+    )
 )
 echo [32m√[0m onnxruntime-directml OK
 
