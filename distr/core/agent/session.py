@@ -531,11 +531,8 @@ class AgentSession:
                 stt_config = dict(stt_config)
                 stt_config['engine'] = 'vosk'
             else:
-                # pywhispercpp manages models in Application Support directory
                 whisper_model = stt_config['model_path']
                 self.logger.info(f"🔧 Creating Whisper.cpp STT service with model: {whisper_model} (managed by pywhispercpp)")
-                self.logger.debug("⚠️  Metal (GPU) backend is auto-detected and used if available. Exception handling in place for crash prevention.")
-
                 self.stt_service = WhisperSTTService(
                     model_path=whisper_model,
                     event_queue=self.event_queue,
@@ -545,18 +542,16 @@ class AgentSession:
         if stt_config['engine'] == 'vosk':
             if not VOSK_AVAILABLE or VoskSTTService is None:
                 raise ImportError("VoskSTTService is not available. Please ensure vosk is installed and model is downloaded.")
-            # Vosk model path
             vosk_model_path = os.path.join(models_dir, DEFAULT_VOSK_MODEL_DIR)
             if not os.path.exists(vosk_model_path):
                 raise FileNotFoundError(f"Vosk model not found at {vosk_model_path}. Please download it using Settings > AI > Transcription Model.")
-            self.logger.debug(f"Creating Vosk STT service with model: {vosk_model_path}")
             self.stt_service = VoskSTTService(
                 model_path=vosk_model_path,
                 event_queue=self.event_queue,
                 is_hands_free=self.is_hands_free
             )
             self.logger.debug(f"✅ Vosk STT service created successfully")
-        elif stt_config['engine'] == 'openai_whisper':
+        if stt_config['engine'] == 'openai_whisper':
             if not OPENAI_STT_AVAILABLE or OpenAIWhisperSTTService is None:
                 raise ImportError("OpenAIWhisperSTTService is not available. Please ensure openai library is installed.")
             api_key = self.settings.get('openai_key', '')
@@ -571,7 +566,7 @@ class AgentSession:
                 is_hands_free=self.is_hands_free
             )
             self.logger.debug(f"✅ OpenAI Whisper STT service created successfully")
-        elif stt_config['engine'] == 'assemblyai':
+        if stt_config['engine'] == 'assemblyai':
             if not ASSEMBLYAI_STT_AVAILABLE or AssemblyAISTTService is None:
                 raise ImportError("AssemblyAISTTService is not available. Please ensure assemblyai library is installed. Install with: pip install assemblyai")
             api_key = self.settings.get('assemblyai_key', '')
@@ -579,7 +574,6 @@ class AgentSession:
                 raise ValueError("AssemblyAI API key is required but not found in settings for STT")
             model_name = stt_config.get('model', DEFAULT_ASSEMBLYAI_MODEL)
             self.logger.info(f"🔧 Creating AssemblyAI STT service with model: {model_name}")
-            self.logger.debug(f"🔧 AssemblyAI API key present: {bool(api_key)}")
             self.stt_service = AssemblyAISTTService(
                 api_key=api_key,
                 model=model_name,
@@ -587,7 +581,7 @@ class AgentSession:
                 is_hands_free=self.is_hands_free
             )
             self.logger.info(f"✅ AssemblyAI STT service created successfully (type: {type(self.stt_service).__name__})")
-        else:
+        if stt_config['engine'] not in ('whisper', 'vosk', 'openai_whisper', 'assemblyai'):
             raise ValueError(f"Unsupported STT engine: {stt_config['engine']}")
         
         # CRITICAL: Restore hands-free and PTT state after creating new STT service
