@@ -835,6 +835,12 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 logger.debug("Fast tool match: %s (confidence=%.1f%%)", tool.name, confidence * 100)
                 current_chat_id = self._ensure_user_message_persisted(text)
                 self._messages.append({"role": "user", "content": text})
+
+                # Signal the UI that the agent is working
+                if self.event_queue and current_chat_id:
+                    self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
+                    self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
+
                 try:
                     if 'text' not in args:
                         args['text'] = text
@@ -864,6 +870,11 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                             await self.push_frame(TextFrame(text=cleaned))
                 except Exception as e:
                     logger.error("Error running fast tool %s: %s", tool.name, e, exc_info=True)
+                finally:
+                    # Signal the UI that the agent is done
+                    if self.event_queue and current_chat_id:
+                        self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
+                        self.event_queue.put(('chat_stream_finished', {'chat_id': current_chat_id, 'response_text': ''}), block=False)
                 return
 
             # Normal LLM generation
