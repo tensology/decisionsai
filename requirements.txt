@@ -47,7 +47,9 @@ torch>=2.5.0,<2.10.0
 torchaudio>=2.5.0,<2.10.0
 spacy
 scipy
-litellm>=1.80.0,<2.0.0
+# SECURITY: litellm 1.82.7 and 1.82.8 were compromised (supply chain attack, March 24 2026).
+# Both versions have been removed from PyPI. Pin to exclude them explicitly.
+litellm>=1.80.0,<2.0.0,!=1.82.7,!=1.82.8
 PyQt6-QScintilla
 elevenlabs
 anthropic>=0.25.0
