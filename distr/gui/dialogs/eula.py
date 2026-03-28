@@ -266,9 +266,8 @@ class EulaWindow(QtWidgets.QDialog):
     
     def _load_eula_content(self):
         """Load EULA content from LICENSE.md or fallback."""
-        # Try to find LICENSE.md in project root
-        # Current file is in distr/gui/eula_window.py -> ../../.. to root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+        # File is at distr/gui/dialogs/eula.py — need 4 levels up to reach project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         license_path = os.path.join(project_root, "LICENSE.md")
         
         eula_text = ""

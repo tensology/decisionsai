@@ -3,6 +3,15 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
+# Fix Windows console encoding — cp1252 can't handle emoji in log messages
+if sys.platform == 'win32':
+    import io
+    if hasattr(sys.stdout, 'buffer'):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    if hasattr(sys.stderr, 'buffer'):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+    os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
+
 # On Windows, explicitly add onnxruntime's DLL directory to the search path
 # and import it FIRST, before PyTorch or other native libraries can pollute
 # the DLL search order and cause onnxruntime_pybind11_state to fail.

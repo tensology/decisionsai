@@ -888,35 +888,40 @@ class AgentSession:
             
         # Bridge SignalManager signals (emitted by OllamaLLMService)
         # Note: signals must be connected to a slot, lambda works fine
-        signal_manager.chat_stream_started.connect(
-            lambda chat_id: self.event_queue.put(('chat_stream_started', {'chat_id': chat_id}))
-        )
-        signal_manager.chat_stream_token.connect(
-            lambda token: self.event_queue.put(('chat_stream_token', {'token': token}))
-        )
-        signal_manager.chat_stream_finished.connect(
-            lambda chat_id: self.event_queue.put(('chat_stream_finished', {'chat_id': chat_id}))
-        )
-        signal_manager.chat_stream_error.connect(
-            lambda error: self.event_queue.put((
-                'chat_stream_error',
-                {
-                    'error': error,
-                    'chat_id': (self.chat_manager.get_current_chat() if self.chat_manager else None),
-                }
-            ))
-        )
-        signal_manager.typing_indicator_changed.connect(
-            lambda show: self.event_queue.put(('typing_indicator_changed', {'show': show}))
-        )
-        signal_manager.chat_message_added.connect(
-            lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
-        )
-        
-        # Model hot-reload signal - update ChatManager model immediately
-        signal_manager.model_hot_reload.connect(self._on_model_hot_reload)
-        
-        self.logger.debug("Signal bridging setup complete")
+        # Guard against the signal_manager being GC'd in spawned child processes
+        # (no QApplication exists there, so QObject instances get deleted immediately)
+        try:
+            signal_manager.chat_stream_started.connect(
+                lambda chat_id: self.event_queue.put(('chat_stream_started', {'chat_id': chat_id}))
+            )
+            signal_manager.chat_stream_token.connect(
+                lambda token: self.event_queue.put(('chat_stream_token', {'token': token}))
+            )
+            signal_manager.chat_stream_finished.connect(
+                lambda chat_id: self.event_queue.put(('chat_stream_finished', {'chat_id': chat_id}))
+            )
+            signal_manager.chat_stream_error.connect(
+                lambda error: self.event_queue.put((
+                    'chat_stream_error',
+                    {
+                        'error': error,
+                        'chat_id': (self.chat_manager.get_current_chat() if self.chat_manager else None),
+                    }
+                ))
+            )
+            signal_manager.typing_indicator_changed.connect(
+                lambda show: self.event_queue.put(('typing_indicator_changed', {'show': show}))
+            )
+            signal_manager.chat_message_added.connect(
+                lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
+            )
+            # Model hot-reload signal - update ChatManager model immediately
+            signal_manager.model_hot_reload.connect(self._on_model_hot_reload)
+            self.logger.debug("Signal bridging setup complete")
+        except RuntimeError as e:
+            # signal_manager QObject has been deleted (happens in spawned child processes
+            # where no QApplication exists). Agent uses event_queue for all comms anyway.
+            self.logger.debug("Signal bridging skipped (no QApplication in this process): %s", e)
     
     def _on_model_hot_reload(self, provider: str, model_name: str, chat_id: Optional[int] = None):
         """Handle model hot-reload signal — hot-swap LLM and TTS to match chat.
