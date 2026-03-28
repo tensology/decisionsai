@@ -237,6 +237,7 @@
         }
         if (tabName === "cli") {
             loadCliAudit();
+            loadKiroCliStatus();
         }
     }
 
@@ -815,6 +816,12 @@
         });
         var cliRefreshBtn = document.getElementById("cli-refresh");
         if (cliRefreshBtn) cliRefreshBtn.addEventListener("click", loadCliAudit);
+        var cliFilterSel = document.getElementById("cli-filter");
+        if (cliFilterSel) cliFilterSel.addEventListener("change", loadCliAudit);
+        var kiroLoginBtn = document.getElementById("kiro-cli-login");
+        if (kiroLoginBtn) kiroLoginBtn.addEventListener("click", kiroCliLogin);
+        var kiroLogoutBtn = document.getElementById("kiro-cli-logout");
+        if (kiroLogoutBtn) kiroLogoutBtn.addEventListener("click", kiroCliLogout);
     }
 
     function sendCliInstruction() {
@@ -831,13 +838,19 @@
             body: JSON.stringify({instruction: instruction}),
         }).then(function(data) {
             if (data.success) {
-                showSnackbar("Instruction sent", "success");
-                setTimeout(loadCliAudit, 1000);
+                showSnackbar("Task started", "success");
+                setTimeout(loadCliAudit, 500);
+                // Poll for updates while running
+                if (window._cliPollTimer) clearInterval(window._cliPollTimer);
+                window._cliPollTimer = setInterval(function() {
+                    loadCliAudit();
+                }, 3000);
+                setTimeout(function() { clearInterval(window._cliPollTimer); }, 120000);
             } else {
                 showSnackbar(data.error || "Failed", "error");
             }
         }).catch(function() {
-            showSnackbar("Failed to send instruction", "error");
+            showSnackbar("Failed to send task", "error");
         }).finally(function() {
             if (sendBtn) sendBtn.disabled = false;
         });
@@ -847,37 +860,121 @@
         if (!currentProjectId) return;
         var list = document.getElementById("cli-audit-list");
         if (!list) return;
+        var filter = (document.getElementById("cli-filter") || {}).value || "all";
         apiFetch("/api/projects/" + currentProjectId + "/cli/audit")
             .then(function(data) {
                 var sessions = data.sessions || [];
+                if (filter !== "all") {
+                    sessions = sessions.filter(function(s) { return s.status === filter; });
+                }
                 if (!sessions.length) {
-                    list.innerHTML = "<p class=\"text-gray-500 text-xs italic\">No actions yet.</p>";
+                    list.innerHTML = "<p class=\"text-gray-500 text-xs italic\">No sessions" + (filter !== "all" ? " matching filter" : "") + ".</p>";
                     return;
                 }
-                list.innerHTML = sessions.map(function(s) {
-                    var statusColor = s.status === "completed" ? "text-green-400" : s.status === "failed" ? "text-red-400" : "text-yellow-400";
+                list.innerHTML = sessions.map(function(s, idx) {
+                    var statusIcon = s.status === "completed" ? "✓" : s.status === "failed" ? "✗" : s.status === "in_progress" ? "⟳" : "○";
+                    var statusColor = s.status === "completed" ? "text-green-400" : s.status === "failed" ? "text-red-400" : s.status === "in_progress" ? "text-yellow-400" : "text-gray-400";
                     var stepsHtml = (s.steps || []).map(function(st) {
-                        var stColor = st.status === "completed" ? "text-green-400" : st.status === "failed" ? "text-red-400" : "text-gray-400";
-                        return "<div class=\"ml-4 py-1 border-l border-white/10 pl-3\">" +
-                            "<span class=\"" + stColor + " text-xs\">●</span> " +
+                        var stIcon = st.status === "completed" ? "✓" : st.status === "failed" ? "✗" : st.status === "running" ? "⟳" : "·";
+                        var stColor = st.status === "completed" ? "text-green-400" : st.status === "failed" ? "text-red-400" : st.status === "running" ? "text-yellow-400" : "text-gray-500";
+                        return "<div class=\"ml-4 py-1 pl-3 border-l border-white/10 flex items-start gap-2\">" +
+                            "<span class=\"" + stColor + " text-xs flex-shrink-0 mt-0.5\">" + stIcon + "</span>" +
+                            "<div class=\"min-w-0\">" +
                             "<span class=\"text-xs text-gray-300\">" + escapeAttr(st.title) + "</span>" +
-                            (st.tool ? " <span class=\"text-xs text-gray-500\">(" + escapeAttr(st.tool) + ")</span>" : "") +
-                            (st.result ? "<div class=\"text-xs text-gray-500 mt-0.5 truncate max-w-full\">" + escapeAttr(st.result.substring(0, 150)) + "</div>" : "") +
-                            "</div>";
+                            (st.tool ? " <span class=\"text-xs text-gray-600\">via " + escapeAttr(st.tool) + "</span>" : "") +
+                            (st.result ? "<div class=\"text-xs text-gray-500 mt-0.5 break-words\">" + escapeAttr(st.result.substring(0, 200)) + (st.result.length > 200 ? "…" : "") + "</div>" : "") +
+                            "</div></div>";
                     }).join("");
-                    return "<div class=\"border border-white/10 rounded p-2 bg-white/5\">" +
-                        "<div class=\"flex items-center justify-between\">" +
-                        "<span class=\"text-xs text-gray-300 font-medium\">" + escapeAttr(s.instruction) + "</span>" +
-                        "<span class=\"" + statusColor + " text-xs\">" + escapeAttr(s.status) + "</span>" +
-                        "</div>" +
-                        (s.created ? "<div class=\"text-xs text-gray-500 mt-0.5\">" + escapeAttr(s.created) + "</div>" : "") +
-                        stepsHtml +
-                        "</div>";
+                    var timeStr = s.created ? new Date(s.created).toLocaleString() : "";
+                    return "<details class=\"border border-white/10 rounded bg-white/5\"" + (idx === 0 ? " open" : "") + ">" +
+                        "<summary class=\"px-3 py-2 cursor-pointer hover:bg-white/5 flex items-center gap-2\">" +
+                        "<span class=\"" + statusColor + " text-sm flex-shrink-0\">" + statusIcon + "</span>" +
+                        "<span class=\"text-xs text-gray-300 flex-1 truncate\">" + escapeAttr(s.instruction) + "</span>" +
+                        "<span class=\"text-xs text-gray-600 flex-shrink-0\">" + escapeAttr(timeStr) + "</span>" +
+                        "</summary>" +
+                        "<div class=\"px-3 pb-2\">" + (stepsHtml || "<p class=\"text-xs text-gray-500 ml-4\">No steps</p>") + "</div>" +
+                        "</details>";
                 }).join("");
             })
             .catch(function() {
-                list.innerHTML = "<p class=\"text-red-400 text-xs\">Failed to load audit trail.</p>";
+                list.innerHTML = "<p class=\"text-red-400 text-xs\">Failed to load sessions.</p>";
             });
+    }
+
+    function loadKiroCliStatus() {
+        var dot = document.getElementById("kiro-cli-dot");
+        var label = document.getElementById("kiro-cli-label");
+        var loginBtn = document.getElementById("kiro-cli-login");
+        var logoutBtn = document.getElementById("kiro-cli-logout");
+        var inputSection = document.getElementById("kiro-cli-input-section");
+        apiFetch("/api/kiro-cli/status")
+            .then(function(data) {
+                if (!data.installed) {
+                    dot.className = "w-2 h-2 rounded-full bg-red-500";
+                    label.textContent = "Kiro CLI not installed";
+                    label.className = "text-xs text-red-400";
+                    loginBtn.classList.add("hidden");
+                    logoutBtn.classList.add("hidden");
+                    if (inputSection) inputSection.classList.add("hidden");
+                } else if (!data.authenticated) {
+                    dot.className = "w-2 h-2 rounded-full bg-yellow-500";
+                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — not logged in";
+                    label.className = "text-xs text-yellow-400";
+                    loginBtn.classList.remove("hidden");
+                    logoutBtn.classList.add("hidden");
+                    if (inputSection) inputSection.classList.add("hidden");
+                } else {
+                    dot.className = "w-2 h-2 rounded-full bg-green-500";
+                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — authenticated";
+                    label.className = "text-xs text-green-400";
+                    loginBtn.classList.add("hidden");
+                    logoutBtn.classList.remove("hidden");
+                    if (inputSection) inputSection.classList.remove("hidden");
+                }
+            })
+            .catch(function() {
+                dot.className = "w-2 h-2 rounded-full bg-gray-500";
+                label.textContent = "Could not check Kiro CLI status";
+                label.className = "text-xs text-gray-500";
+            });
+    }
+
+    function kiroCliLogin() {
+        apiFetch("/api/kiro-cli/login", { method: "POST" })
+            .then(function(data) {
+                if (data.success) {
+                    showSnackbar("Login started — check your browser", "success");
+                    // Poll for auth status
+                    var polls = 0;
+                    var pollTimer = setInterval(function() {
+                        polls++;
+                        if (polls > 30) { clearInterval(pollTimer); return; }
+                        apiFetch("/api/kiro-cli/status").then(function(s) {
+                            if (s.authenticated) {
+                                clearInterval(pollTimer);
+                                loadKiroCliStatus();
+                                showSnackbar("Kiro CLI authenticated", "success");
+                            }
+                        }).catch(function() {});
+                    }, 3000);
+                } else {
+                    showSnackbar(data.error || "Login failed", "error");
+                }
+            })
+            .catch(function() { showSnackbar("Login failed", "error"); });
+    }
+
+    function kiroCliLogout() {
+        apiFetch("/api/kiro-cli/logout", { method: "POST" })
+            .then(function(data) {
+                if (data.success) {
+                    showSnackbar("Logged out", "success");
+                    loadKiroCliStatus();
+                } else {
+                    showSnackbar(data.error || "Logout failed", "error");
+                }
+            })
+            .catch(function() { showSnackbar("Logout failed", "error"); });
     }
 
     if (document.readyState === "loading") {

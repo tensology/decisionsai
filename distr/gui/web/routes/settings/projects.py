@@ -554,12 +554,18 @@ def register_routes(router, templates):
 
     @router.post("/projects/{project_id}/cli")
     async def send_cli_instruction(project_id: int, request: Request):
-        """Send an instruction to the agent in the context of a project."""
+        """Send an instruction to Kiro CLI in the context of a project."""
         try:
             body = await request.json()
             instruction = (body.get("instruction") or "").strip()
             if not instruction:
                 return JSONResponse({"success": False, "error": "instruction required"}, status_code=400)
+
+            # Check Kiro CLI is available
+            import shutil
+            kiro_path = shutil.which("kiro-cli")
+            if not kiro_path:
+                return JSONResponse({"success": False, "error": "Kiro CLI not installed. Run: curl -fsSL https://cli.kiro.dev/install | bash"}, status_code=400)
 
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -570,39 +576,82 @@ def register_routes(router, templates):
                 folder = project.folder_location or ""
                 project_name = project.name or ""
 
-            # Create a step runner session for this instruction
-            from distr.core.step_runner.service import plan_session
-            session_id = plan_session(
-                instruction=f"[Project: {project_name}] {instruction}",
-                chat_id=None,
-            )
-            if not session_id:
-                return JSONResponse({"success": False, "error": "Failed to plan session"}, status_code=500)
+            if not folder:
+                return JSONResponse({"success": False, "error": "Project has no folder set"}, status_code=400)
 
-            # Log to current chat so the agent has context
+            # Log to current chat
+            chat_id = None
             try:
                 from distr.core.settings import load_settings_from_db
                 settings = load_settings_from_db()
                 chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
                 if chat_id:
                     from distr.core.chat import ChatService
-                    ChatService.add_message(int(chat_id), "user", f"[CLI: {project_name}] {instruction}")
+                    ChatService.add_message(int(chat_id), "user", f"[Kiro CLI: {project_name}] {instruction}")
             except Exception as e:
                 logger.debug(f"Could not log CLI instruction to chat: {e}")
 
-            # Trigger execution via the step runner signal (same as run-all button)
-            try:
-                from distr.core.step_runner.service import get_session_with_steps
-                from distr.core.signals import signal_manager
-                session_data = get_session_with_steps(session_id)
-                steps_data = session_data.get("steps", []) if session_data else []
-                signal_manager.step_runner_run_all_requested.emit(
-                    session_id, steps_data, None, "instruction"
+            # Create audit session to track this execution
+            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            with get_session() as session:
+                audit = StepRunnerSession(
+                    instruction=f"[Project: {project_name}] {instruction}",
+                    status="in_progress",
+                    chat_id=int(chat_id) if chat_id else None,
+                    session_type="kiro_cli",
                 )
-            except Exception as e:
-                logger.warning(f"Could not trigger step runner execution: {e}")
+                session.add(audit)
+                session.flush()
+                step = StepRunnerStep(
+                    session_id=audit.id,
+                    position=0,
+                    title="Kiro CLI",
+                    instruction=instruction,
+                    status="running",
+                    tool_used="kiro-cli",
+                )
+                session.add(step)
+                session.commit()
+                audit_id = audit.id
+                step_id = step.id
 
-            return JSONResponse({"success": True, "session_id": session_id})
+            # Run Kiro CLI in background thread
+            import threading
+            def _run_kiro():
+                import subprocess as _sp
+                try:
+                    result = _sp.run(
+                        [kiro_path, "chat", "--message", instruction],
+                        capture_output=True, text=True, timeout=300,
+                        cwd=folder,
+                    )
+                    output = (result.stdout + result.stderr).strip()[:3000]
+                    status = "completed" if result.returncode == 0 else "failed"
+
+                    # Update audit trail
+                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    update_step_status(step_id, status=status, result=output[:2000])
+                    update_session_status(audit_id, status)
+
+                    # Log result to chat
+                    if chat_id:
+                        try:
+                            from distr.core.chat import ChatService
+                            ChatService.add_message(int(chat_id), "assistant", f"[Kiro CLI: {project_name}] {output[:1500]}")
+                        except Exception:
+                            pass
+                except _sp.TimeoutExpired:
+                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    update_step_status(step_id, status="failed", result="Timed out after 5 minutes")
+                    update_session_status(audit_id, "failed")
+                except Exception as e:
+                    logger.error(f"Kiro CLI execution failed: {e}", exc_info=True)
+                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    update_step_status(step_id, status="failed", result=str(e)[:2000])
+                    update_session_status(audit_id, "failed")
+
+            threading.Thread(target=_run_kiro, daemon=True).start()
+            return JSONResponse({"success": True, "session_id": audit_id, "engine": "kiro-cli"})
         except HTTPException:
             raise
         except Exception as e:
@@ -611,7 +660,7 @@ def register_routes(router, templates):
 
     @router.get("/projects/{project_id}/cli/audit")
     async def get_cli_audit(project_id: int):
-        """Get audit trail of CLI actions for a project."""
+        """Get audit trail of Kiro CLI actions for a project."""
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -623,11 +672,14 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 project_name = project.name or ""
 
-                # Find sessions that match this project
+                # Find kiro_cli sessions for this project
                 prefix = f"[Project: {project_name}]"
                 sessions = (
                     session.query(StepRunnerSession)
-                    .filter(StepRunnerSession.instruction.like(f"{prefix}%"))
+                    .filter(
+                        StepRunnerSession.instruction.like(f"{prefix}%"),
+                        StepRunnerSession.session_type == "kiro_cli",
+                    )
                     .order_by(StepRunnerSession.created_date.desc())
                     .limit(50)
                     .all()
@@ -663,3 +715,59 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"CLI audit failed: {e}", exc_info=True)
             return JSONResponse({"sessions": []})
+
+
+    # ── Kiro CLI management ──
+
+    @router.get("/kiro-cli/status")
+    async def get_kiro_cli_status():
+        """Check if Kiro CLI is installed and authenticated."""
+        import shutil
+        import subprocess
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            return JSONResponse({"installed": False, "authenticated": False, "version": None, "path": None})
+        try:
+            version = subprocess.run([kiro_path, "--version"], capture_output=True, text=True, timeout=5)
+            ver_str = version.stdout.strip().split("\n")[0] if version.returncode == 0 else None
+        except Exception:
+            ver_str = None
+        # Check auth by looking for config files
+        import os
+        auth_dir = os.path.expanduser("~/.kiro-cli")
+        has_auth = os.path.exists(os.path.join(auth_dir, "credentials")) or os.path.exists(os.path.join(auth_dir, "config"))
+        return JSONResponse({
+            "installed": True,
+            "authenticated": has_auth,
+            "version": ver_str,
+            "path": kiro_path,
+        })
+
+    @router.post("/kiro-cli/login")
+    async def kiro_cli_login():
+        """Trigger Kiro CLI login (opens browser for auth)."""
+        import shutil
+        import subprocess
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            return JSONResponse({"success": False, "error": "Kiro CLI not installed"}, status_code=400)
+        try:
+            # kiro-cli login opens a browser — run it detached
+            subprocess.Popen([kiro_path, "login"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return JSONResponse({"success": True, "message": "Login started — check your browser"})
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.post("/kiro-cli/logout")
+    async def kiro_cli_logout():
+        """Logout from Kiro CLI."""
+        import shutil
+        import subprocess
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            return JSONResponse({"success": False, "error": "Kiro CLI not installed"}, status_code=400)
+        try:
+            result = subprocess.run([kiro_path, "logout"], capture_output=True, text=True, timeout=10)
+            return JSONResponse({"success": result.returncode == 0, "output": result.stdout.strip()})
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)

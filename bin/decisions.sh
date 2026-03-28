@@ -744,6 +744,65 @@ if [ "$DECISIONS_EXISTS" = false ] && ([ -z "$SYMLINK_DIR" ] || [ "$SYMLINK_DIR"
     [ "$DECISIONS_EXISTS" = false ] && echo ""
 fi
 
+# Check and install Kiro CLI (AI coding agent for project tasks)
+check_kiro_cli() {
+    if command -v kiro-cli &> /dev/null; then
+        KIRO_CLI_VERSION=$(kiro-cli --version 2>/dev/null | head -1 || echo "unknown")
+        echo -e "${GREEN}✓${NC} Kiro CLI found (version: $KIRO_CLI_VERSION)"
+    else
+        echo -e "${YELLOW}Kiro CLI not found. Installing...${NC}"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            # macOS install
+            if curl -fsSL https://cli.kiro.dev/install | bash 2>/dev/null; then
+                # Refresh PATH
+                export PATH="$PATH:$HOME/.local/bin"
+                hash -r 2>/dev/null
+                if command -v kiro-cli &> /dev/null; then
+                    echo -e "${GREEN}✓${NC} Kiro CLI installed successfully"
+                    echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
+                else
+                    echo -e "${YELLOW}⚠${NC}  Kiro CLI installed but not found in PATH. You may need to restart your terminal."
+                fi
+            else
+                echo -e "${YELLOW}⚠${NC}  Could not install Kiro CLI automatically."
+                echo -e "${YELLOW}   Install manually: curl -fsSL https://cli.kiro.dev/install | bash${NC}"
+            fi
+        elif [[ -f /etc/debian_version ]]; then
+            # Ubuntu/Debian
+            echo -e "${YELLOW}Downloading Kiro CLI .deb package...${NC}"
+            if wget -q https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.deb -O /tmp/kiro-cli.deb 2>/dev/null; then
+                if sudo dpkg -i /tmp/kiro-cli.deb 2>/dev/null && sudo apt-get install -f -y 2>/dev/null; then
+                    echo -e "${GREEN}✓${NC} Kiro CLI installed successfully"
+                    echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
+                else
+                    echo -e "${YELLOW}⚠${NC}  Could not install Kiro CLI .deb package."
+                fi
+                rm -f /tmp/kiro-cli.deb
+            else
+                echo -e "${YELLOW}⚠${NC}  Could not download Kiro CLI. Install manually:"
+                echo -e "${YELLOW}   wget https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.deb${NC}"
+                echo -e "${YELLOW}   sudo dpkg -i kiro-cli.deb && sudo apt-get install -f${NC}"
+            fi
+        else
+            # Other Linux — use AppImage
+            echo -e "${YELLOW}Downloading Kiro CLI AppImage...${NC}"
+            KIRO_CLI_DIR="$HOME/.local/bin"
+            mkdir -p "$KIRO_CLI_DIR"
+            if curl -fsSL https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.appimage -o "$KIRO_CLI_DIR/kiro-cli" 2>/dev/null; then
+                chmod +x "$KIRO_CLI_DIR/kiro-cli"
+                export PATH="$PATH:$KIRO_CLI_DIR"
+                echo -e "${GREEN}✓${NC} Kiro CLI installed to $KIRO_CLI_DIR/kiro-cli"
+                echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
+            else
+                echo -e "${YELLOW}⚠${NC}  Could not download Kiro CLI AppImage."
+                echo -e "${YELLOW}   Download manually from: https://kiro.dev/docs/cli/installation/${NC}"
+            fi
+        fi
+    fi
+}
+
+check_kiro_cli
+
 # Run the application
 echo ""
 echo -e "${GREEN}Starting DecisionsAI...${NC}"
