@@ -468,7 +468,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
             try:
                 from distr.core.settings import load_settings_from_db
                 settings = load_settings_from_db()
-                if settings.get("always_confirm_file_operations", True):
+                if settings.get("initiative_ask_file_changes", True):
                     import uuid, time
                     confirmation_id = str(uuid.uuid4())
                     preview = code[:300] + ("..." if len(code) > 300 else "")

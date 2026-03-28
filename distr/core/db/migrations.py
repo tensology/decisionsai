@@ -1237,3 +1237,38 @@ def run_migrations():
                     logger.debug(f"Could not add position to kanban_boards: {e}")
     except Exception as e:
         logger.debug(f"Kanban board position migration: {e}")
+
+    # Initiative settings columns
+    initiative_columns = [
+        ("initiative_level", "VARCHAR DEFAULT 'assist'"),
+        ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
+        ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
+        ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
+        ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
+    ]
+    for col_name, col_type in initiative_columns:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {col_name} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {col_name} {col_type}"))
+                    conn.commit()
+                    logger.info(f"Added {col_name} column to settings table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.warning(f"Could not add {col_name} column: {e}")
+
+    # Migrate always_confirm_file_operations value to initiative_ask_file_changes
+    try:
+        with Session() as session:
+            settings = session.query(Settings).first()
+            if settings and hasattr(settings, 'always_confirm_file_operations') and hasattr(settings, 'initiative_ask_file_changes'):
+                if settings.initiative_ask_file_changes is None:
+                    settings.initiative_ask_file_changes = settings.always_confirm_file_operations
+                    session.commit()
+                    logger.info("Migrated always_confirm_file_operations -> initiative_ask_file_changes")
+    except Exception as e:
+        logger.debug(f"Initiative migration: {e}")

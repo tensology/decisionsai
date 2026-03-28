@@ -496,7 +496,7 @@ class FileOperationConfirmationDialog(QDialog):
             try:
                 from distr.core.settings import load_settings_from_db, save_settings_to_db
                 settings = load_settings_from_db()
-                settings['always_confirm_file_operations'] = False
+                settings['initiative_ask_file_changes'] = False
                 save_settings_to_db(settings)
                 logger.info("User disabled file operation confirmations")
             except Exception as e:
@@ -731,7 +731,7 @@ def confirm_file_operations_with_plan(plan: Dict,
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
-        always_confirm = settings.get('always_confirm_file_operations', True)
+        always_confirm = settings.get('initiative_ask_file_changes', True)
         
         # If user has disabled confirmations, auto-approve all operations
         if not always_confirm:

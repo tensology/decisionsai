@@ -442,32 +442,29 @@ def check_and_confirm_code_execution(
     intent = _extract_intent_from_code(code, task, op_type) if operations else (task or 'File operation')
     quick_plan = file_safety.generate_plan(operations, intent) if operations else None
     
-    # Check if always_confirm_file_operations is enabled
-    # Respect user's preference - if disabled, auto-approve all operations
+    # Check if file change confirmations are enabled (Initiative settings)
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
-        always_confirm = settings.get('always_confirm_file_operations', True)
-        logger.debug(f"[FILE SAFETY] always_confirm_file_operations setting: {always_confirm}")
+        ask_file_changes = settings.get('initiative_ask_file_changes', True)
+        logger.debug(f"[FILE SAFETY] initiative_ask_file_changes setting: {ask_file_changes}")
         
         # If user has disabled confirmations, auto-approve all operations
-        if not always_confirm:
-            logger.debug("[FILE SAFETY] File operation confirmations disabled in settings - auto-approving all operations")
+        if not ask_file_changes:
+            logger.debug("[FILE SAFETY] File operation confirmations disabled in initiative settings - auto-approving")
             file_safety.log_operation('bypassed_confirmation_disabled', {
                 'code': code[:500],
                 'language': language,
                 'task': task,
                 'operation_type': op_type.value
             })
-            # Return early with the quick plan - auto-approved
             return (True, quick_plan or {
                 'intent': intent,
                 'operations': operations,
                 'auto_approved': True
             })
     except Exception as e:
-        logger.warning(f"[FILE SAFETY] Could not check always_confirm_file_operations setting: {e}")
-        # Default to requiring confirmation for safety if we can't read the setting
+        logger.warning(f"[FILE SAFETY] Could not check initiative_ask_file_changes setting: {e}")
         logger.debug("[FILE SAFETY] Defaulting to require confirmation (setting check failed)")
     
     # Check for rename operations - these get a special preview dialog
@@ -799,12 +796,11 @@ def check_and_confirm_direct_file_operation(
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
-        always_confirm = settings.get('always_confirm_file_operations', True)
-        logger.debug(f"[GUARDRAIL] always_confirm_file_operations setting: {always_confirm}")
+        ask_file_changes = settings.get('initiative_ask_file_changes', True)
+        logger.debug(f"[GUARDRAIL] initiative_ask_file_changes setting: {ask_file_changes}")
         
-        # If user has disabled confirmations, auto-approve all operations
-        if not always_confirm:
-            logger.debug(f"[GUARDRAIL] File operation confirmations disabled in settings - auto-approving {operation_type} operation")
+        if not ask_file_changes:
+            logger.debug(f"[GUARDRAIL] File operation confirmations disabled in initiative settings - auto-approving {operation_type}")
             file_safety.log_operation('bypassed_confirmation_disabled', {
                 'operation_type': operation_type,
                 'source_path': source_path,
@@ -812,8 +808,7 @@ def check_and_confirm_direct_file_operation(
             })
             return (True, plan)
     except Exception as e:
-        logger.warning(f"[GUARDRAIL] Could not check always_confirm_file_operations setting: {e}")
-        # Default to requiring confirmation for safety if we can't read the setting
+        logger.warning(f"[GUARDRAIL] Could not check initiative_ask_file_changes setting: {e}")
         logger.debug(f"[GUARDRAIL] Defaulting to require confirmation (setting check failed)")
     
     # Show confirmation dialog

@@ -134,7 +134,6 @@ class GeneralSettings(BaseModel):
     load_splash_sound: bool = False
     show_about: bool = False
     welcome_greet_me: bool = False
-    always_confirm_file_operations: bool = False
     listening_state: str = "remember"
     voice_provider: str = "kokoro"
     kokoro_voice: str = "af_heart"

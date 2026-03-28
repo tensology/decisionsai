@@ -138,6 +138,14 @@ class Settings(Base):
     # Note: Jira and Trello accounts are now stored in connected_accounts JSON field
     # Individual columns removed to support multiple accounts
     
+    # Initiative Settings
+    initiative_level = Column(String, default='assist')
+    initiative_allow_telegram = Column(Boolean, default=False)
+    initiative_allow_routine_tasks = Column(Boolean, default=False)
+    initiative_ask_external_comms = Column(Boolean, default=True)
+    initiative_ask_file_changes = Column(Boolean, default=True)
+    initiative_ask_sensitive = Column(Boolean, default=True)
+    
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
 

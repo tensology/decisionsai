@@ -38,7 +38,6 @@ def register_routes(router, templates):
             "load_splash_sound": settings.get("load_splash_sound", False),
             "show_about": settings.get("show_about", False),
             "welcome_greet_me": settings.get("welcome_greet_me", False),
-            "always_confirm_file_operations": settings.get("always_confirm_file_operations", False),
             "listening_state": settings.get("listening_state", "remember"),
             "voice_provider": settings.get("voice_provider", "kokoro"),
             "kokoro_voice": settings.get("kokoro_voice", "af_heart"),
