@@ -273,12 +273,15 @@ class ContextAssembler:
             tools = load_tools(
                 chat_manager=None, use_navigation_tools=False,
                 llm_service=None, tts_service=None,
+                llm_model=None, event_queue=None,
+                command_queue=None, confirmation_results_dict=None,
             )
             return [
                 {"name": t.name, "description": (t.description or "")[:100]}
                 for t in tools[:30]
             ]
-        except Exception:
+        except Exception as e:
+            logger.debug("_fetch_available_tools failed: %s", e)
             return []
 
     def _fetch_snippets(self) -> list:

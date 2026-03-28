@@ -193,13 +193,17 @@ class InitiativeService:
         if not drafts:
             return
         logger.info("InitiativeService: surfacing %d pending draft(s) for chat_id=%s", len(drafts), chat_id)
-        # Inject drafts as a system message into the chat context
-        # (For now, log them — full injection requires chat_manager integration)
-        for draft in drafts:
-            logger.info(
-                "InitiativeService: pending draft [%s] %s: %s",
-                draft.action_type, draft.id, draft.description,
-            )
+        # Inject drafts as assistant messages into the chat
+        if self.chat_manager:
+            current_chat = self.chat_manager.get_current_chat()
+            if current_chat:
+                for draft in drafts:
+                    msg = f"[Pending action] {draft.description}\n\nDraft: {draft.draft}\n\nSay 'approve' or 'reject' to respond."
+                    self.chat_manager.add_assistant_message(current_chat, msg)
+                    logger.info("InitiativeService: surfaced draft [%s] %s to chat %s", draft.action_type, draft.id, current_chat)
+        else:
+            for draft in drafts:
+                logger.info("InitiativeService: pending draft [%s] %s: %s", draft.action_type, draft.id, draft.description)
 
     def _run_initiative_cycle(self, trigger_source: str) -> None:
         logger.debug("InitiativeService: cycle started (trigger=%s)", trigger_source)
@@ -339,10 +343,12 @@ class InitiativeService:
             self._dispatch_kanban(action, settings)
         elif action.action_type == "suggestion":
             self._send_telegram_or_queue(action, settings, reason="suggestion")
+            self._log_to_chat(f"Suggestion: {action.description}", settings)
         else:
             # For external_comms, file_change, sensitive with EXECUTE decision
             logger.info("InitiativeService: executing action_type=%s: %s", action.action_type, action.description)
             self._send_telegram_or_queue(action, settings, reason="execute")
+            self._log_to_chat(f"Executed {action.action_type}: {action.description}", settings)
 
     def _dispatch_step_runner(self, action: ProposedAction, settings: dict) -> None:
         from distr.core.step_runner.service import create_scheduled_session
@@ -353,6 +359,7 @@ class InitiativeService:
             session_id = create_scheduled_session(instruction=instruction, schedule=schedule)
             if session_id:
                 logger.info("InitiativeService: created step runner session %s for: %s", session_id, instruction)
+                self._log_to_chat(f"Created scheduled task: {instruction}", settings)
                 msg = action.telegram_message or f"[Initiative] Started: {instruction}"
                 self._send_telegram_if_allowed(msg, settings)
             else:
@@ -361,18 +368,59 @@ class InitiativeService:
             logger.error("InitiativeService: step runner dispatch failed", exc_info=True)
 
     def _dispatch_kanban(self, action: ProposedAction, settings: dict) -> None:
-        # The kanban board scheduler (check_kanban_schedules / step_runner_scheduler_timer)
-        # owns the scheduling of KanbanAgentCheckIn runs. The initiative service must NOT
-        # fire a second check-in independently — that would cause duplicate agent runs on
-        # the same board within the same tick window.
-        #
-        # Instead, we surface the suggestion via Telegram/draft so the user is aware,
-        # and let the existing scheduler handle the actual execution when the board is due.
+        """Create a kanban ticket from the proposed action."""
         payload = action.payload or {}
-        board_id = payload.get("board_id", "unknown")
-        msg = action.telegram_message or f"Kanban check-in for board {board_id} is scheduled — the agent will run it at its next due time."
-        logger.info("InitiativeService: kanban action deferred to existing scheduler for board_id=%s", board_id)
-        self._send_telegram_or_queue(action, settings, reason="kanban_deferred_to_scheduler")
+        board_id = payload.get("board_id")
+        lane_name = payload.get("lane", "Backlog")
+        title = payload.get("title") or action.description
+        description = payload.get("description") or action.draft or ""
+
+        if board_id:
+            try:
+                from distr.core.db import get_session
+                from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+                with get_session() as session:
+                    # Find the target lane
+                    lane = (
+                        session.query(KanbanLane)
+                        .filter(KanbanLane.board_id == int(board_id), KanbanLane.name.ilike(f"%{lane_name}%"))
+                        .first()
+                    )
+                    if not lane:
+                        # Fallback to first lane
+                        lane = session.query(KanbanLane).filter(KanbanLane.board_id == int(board_id)).order_by(KanbanLane.position).first()
+                    if lane:
+                        max_pos = max((t.position for t in lane.tickets), default=-1)
+                        ticket = KanbanTicket(
+                            lane_id=lane.id,
+                            title=title[:200],
+                            description=description[:2000],
+                            position=max_pos + 1,
+                        )
+                        session.add(ticket)
+                        session.commit()
+                        logger.info("InitiativeService: created kanban ticket '%s' in lane '%s' (board %s)", title[:50], lane.name, board_id)
+                        self._log_to_chat(f"Created kanban ticket: {title[:100]}", settings)
+                        msg = action.telegram_message or f"Created ticket: {title[:100]}"
+                        self._send_telegram_if_allowed(msg, settings)
+                        return
+            except Exception:
+                logger.error("InitiativeService: kanban ticket creation failed", exc_info=True)
+
+        # Fallback: notify via telegram
+        msg = action.telegram_message or f"Kanban action: {action.description}"
+        self._send_telegram_or_queue(action, settings, reason="kanban_fallback")
+
+    def _log_to_chat(self, message: str, settings: dict) -> None:
+        """Log an initiative action to the current chat as an assistant message."""
+        if not self.chat_manager:
+            return
+        try:
+            current_chat = self.chat_manager.get_current_chat()
+            if current_chat:
+                self.chat_manager.add_assistant_message(current_chat, f"[Initiative] {message}")
+        except Exception as e:
+            logger.debug("InitiativeService: _log_to_chat failed: %s", e)
 
     def _send_telegram_if_allowed(self, text: str, settings: dict) -> None:
         allow_telegram = settings.get("initiative_allow_telegram", True)

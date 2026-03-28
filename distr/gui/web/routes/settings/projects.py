@@ -579,6 +579,17 @@ def register_routes(router, templates):
             if not session_id:
                 return JSONResponse({"success": False, "error": "Failed to plan session"}, status_code=500)
 
+            # Log to current chat so the agent has context
+            try:
+                from distr.core.settings import load_settings_from_db
+                settings = load_settings_from_db()
+                chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+                if chat_id:
+                    from distr.core.chat import ChatService
+                    ChatService.add_message(int(chat_id), "user", f"[CLI: {project_name}] {instruction}")
+            except Exception as e:
+                logger.debug(f"Could not log CLI instruction to chat: {e}")
+
             # Trigger execution via the step runner signal (same as run-all button)
             try:
                 from distr.core.step_runner.service import get_session_with_steps
