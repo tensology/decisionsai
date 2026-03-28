@@ -81,11 +81,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.total_size = self.content_size + 2 * (self.shadow_size + self.stroke_width)
         
         # Setup window flags and attributes
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint |
-            Qt.WindowType.WindowStaysOnTopHint |
-            Qt.WindowType.Tool
-        )
+        # Tool flag keeps the oracle off the Windows taskbar, but on macOS it causes
+        # the window (and all child windows) to hide when focus moves to another app.
+        _flags = Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint
+        if platform.system() == 'Windows':
+            _flags |= Qt.WindowType.Tool
+        self.setWindowFlags(_flags)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground)
         
         # Enable drag and drop
@@ -134,7 +135,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Window flags already set above — don't call setWindowFlags again
         # as it recreates the native window and can break on-top state on macOS.
-        # But re-assert translucent background in case it was lost.
+        # NOTE: Do NOT add Qt.WindowType.Tool — it causes the oracle and all child
+        # windows (about, settings) to hide when focus moves to another app on macOS.
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._shadow_color = QtGui.QColor(0, 0, 0, 100)
