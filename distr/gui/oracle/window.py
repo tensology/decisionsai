@@ -266,9 +266,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.raise_()
         self.activateWindow()
         
-        # On macOS, ensure the app comes to front
+        # On macOS, ensure the window stays on top using NSWindow level
+        # Qt's WindowStaysOnTopHint can lose effect when other apps go fullscreen
+        # or when the window is hidden and reshown.
         if platform.system() == 'Darwin':
-            QTimer.singleShot(100, lambda: (self.raise_(), self.activateWindow()))
+            QTimer.singleShot(100, self._ensure_macos_on_top)
         
         # Position player window after oracle is shown and settled
         QTimer.singleShot(500, self._position_player_after_show)
@@ -1183,8 +1185,25 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         logger.debug(f"Oracle shown. self.isVisible(): {self.isVisible()}, oracle_visible: {self.oracle_visible}")
         QTimer.singleShot(0, self.show)
         QTimer.singleShot(0, self.gif_label.show)
+        QTimer.singleShot(50, self.raise_)
+        if platform.system() == 'Darwin':
+            QTimer.singleShot(100, self._ensure_macos_on_top)
         # Position player window after oracle is shown and settled
         QTimer.singleShot(500, self._position_player_after_show)
+
+    def _ensure_macos_on_top(self):
+        """Use NSWindow API to force floating window level on macOS."""
+        try:
+            from AppKit import NSApp
+            win_id = int(self.winId())
+            for ns_window in NSApp.windows():
+                if ns_window.windowNumber() == win_id:
+                    # NSFloatingWindowLevel = 3 (CGWindowLevelForKey kCGFloatingWindowLevelKey)
+                    ns_window.setLevel_(3)
+                    break
+        except Exception:
+            # Fallback to Qt raise
+            self.raise_()
     
     def _position_player_after_show(self):
         """Position player window after oracle has been shown and settled"""
