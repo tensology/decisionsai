@@ -5,24 +5,24 @@
 <div class="mb-8">
     <label class="block text-sm font-medium text-gray-300 mb-3">Proactivity Level</label>
     <div id="initiative-level" class="grid grid-cols-2 gap-3">
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="passive">
-            <div class="text-sm font-medium text-white mb-1">Passive</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="observe">
+            <div class="text-sm font-medium text-white mb-1">Observe</div>
             <div class="text-xs text-gray-400">I only act when you explicitly ask me to. No suggestions, no independent actions.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="assistive">
-            <div class="text-sm font-medium text-white mb-1">Assistive</div>
-            <div class="text-xs text-gray-400">I suggest helpful next steps and point things out, but I won't act on my own.</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="assist">
+            <div class="text-sm font-medium text-white mb-1">Assist</div>
+            <div class="text-xs text-gray-400">I notice useful next steps and flag risks during our conversation, but I won't initiate anything on my own.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="proactive">
-            <div class="text-sm font-medium text-white mb-1">Proactive</div>
-            <div class="text-xs text-gray-400">I may take approved routine actions and keep you updated on progress.</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="operate">
+            <div class="text-sm font-medium text-white mb-1">Operate</div>
+            <div class="text-xs text-gray-400">I follow up on stuck work, run approved routine tasks, and keep you updated on progress.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="autonomous">
-            <div class="text-sm font-medium text-white mb-1">Autonomous</div>
-            <div class="text-xs text-gray-400">I independently handle tasks, send updates, and follow through within the boundaries you set below.</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="own">
+            <div class="text-sm font-medium text-white mb-1">Own</div>
+            <div class="text-xs text-gray-400">I manage defined outcomes end-to-end, follow through automatically, and only pull you in when it matters.</div>
         </button>
     </div>
-    <input type="hidden" id="initiative_level" value="assistive">
+    <input type="hidden" id="initiative_level" value="assist">
 </div>
 
 <!-- Boundary Controls -->

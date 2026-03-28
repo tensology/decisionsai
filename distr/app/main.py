@@ -511,6 +511,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         signal_manager.step_runner_continue_requested.connect(self._on_step_runner_continue_requested)
         # Check for missed scheduled runs on startup (delayed to let agent initialize first)
         QTimer.singleShot(10000, self._run_step_runner_scheduled)
+
+        # Initialize Initiative Service
+        from distr.core.initiative.service import InitiativeService
+        self.initiative_service = InitiativeService(
+            telegram_manager=self.telegram_manager,
+            chat_manager=self.chat_manager,
+        )
+        self.initiative_service.start()
         
     
     
@@ -1256,6 +1264,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
                 self.device_check_timer.stop()
             if hasattr(self, 'step_runner_scheduler_timer'):
                 self.step_runner_scheduler_timer.stop()
+            if hasattr(self, 'initiative_service'):
+                self.initiative_service.stop()
             
             # First cleanup agent process
             self._cleanup_agent_process()

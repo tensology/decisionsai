@@ -32,7 +32,7 @@
     window.loadInitiativeSettings = function() {
         fetch('/api/initiative').then(function(r) { return r.ok ? r.json() : {}; })
         .then(function(data) {
-            setLevel(data.initiative_level || 'assistive');
+            setLevel(data.initiative_level || 'assist');
             document.getElementById(FIELDS.allowTelegram).checked = !!data.initiative_allow_telegram;
             document.getElementById(FIELDS.allowRoutineTasks).checked = !!data.initiative_allow_routine_tasks;
             document.getElementById(FIELDS.askExternalComms).checked = data.initiative_ask_external_comms !== false;

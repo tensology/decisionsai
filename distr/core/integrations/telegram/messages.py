@@ -217,16 +217,30 @@ class TelegramMessagesMixin:
         media = inner_data.get("media")
         media_handled = False
         if media:
-            logger.info("Received media message (type: %s)", media.get("type"))
-            if media.get("type") == "voice":
+            media_type = media.get("type")
+            logger.info("Received media message (type: %s)", media_type)
+            if media_type == "voice":
                 self._handle_voice_message(media.get("download_url"), "voice", message_id=msg_id)
                 media_handled = True
-            elif media.get("type") == "audio":
+            elif media_type == "audio":
                 self._handle_voice_message(media.get("download_url"), "audio", message_id=msg_id)
                 media_handled = True
-            elif media.get("type") in ("photo", "document", "video"):
+            elif media_type in ("photo", "document", "video"):
                 self._handle_file_message(media, inner_data.get("caption") or inner_data.get("text"))
                 media_handled = True
+            else:
+                # Unhandled media type (sticker, animation, contact, etc.)
+                # Don't silently drop — forward a description to the agent so the
+                # message isn't lost. If there's a caption, that becomes the text.
+                logger.warning(
+                    "[Telegram] Unhandled media type %r — forwarding description to agent",
+                    media_type,
+                )
+                caption_text = inner_data.get("caption") or inner_data.get("text")
+                fallback_text = caption_text or f"[Telegram {media_type or 'media'} received]"
+                # Inject as text so the agent/emit path below picks it up
+                inner_data = dict(inner_data)
+                inner_data["text"] = fallback_text
 
         # 5. Emit to App / Agent
         text = inner_data.get("text")
@@ -871,6 +885,7 @@ class TelegramMessagesMixin:
         """Trigger background thread used for transcription (requests/STT)."""
         if not url:
             logger.warning("[Telegram] ⚠️ No download_url for %s — skipping transcription", media_type)
+            self.send_to_telegram("⚠️ Could not process voice note: no download URL in message. Please resend.")
             return
         # Mark the voice message as read immediately
         if message_id:
@@ -886,17 +901,19 @@ class TelegramMessagesMixin:
         if not requests:
             logger.error("[Telegram] ❌ requests library not available — cannot download voice note")
             self._stop_typing_loop()
+            self.send_to_telegram("⚠️ Could not process voice note: requests library unavailable.")
             return
 
         try:
             # Typing loop already started by _handle_voice_message (as record_voice)
 
             # Download
-            logger.info("[Telegram] 🎙️ Downloading %s from %s...", media_type, media_url[:80])
+            logger.info("[Telegram] 🎙️ Downloading %s from %s...", media_type, media_url[:80] if media_url else "None")
             resp = requests.get(media_url, timeout=30)
             if resp.status_code != 200:
                 logger.error("[Telegram] ❌ Failed to download voice: HTTP %s", resp.status_code)
                 self._stop_typing_loop()
+                self.send_to_telegram(f"⚠️ Could not download voice note (HTTP {resp.status_code}). Please try again.")
                 return
 
             temp_dir = Path(tempfile.gettempdir()) / "decisions_ai_telegram"
@@ -951,10 +968,16 @@ class TelegramMessagesMixin:
             else:
                 logger.warning("[Telegram] ⚠️ Agent queue not available for transcription — voice note will not be processed")
                 self._stop_typing_loop()
+                self.send_to_telegram("⚠️ Could not process voice note: agent not ready. Please try again.")
 
+        except requests.exceptions.Timeout:
+            logger.error("[Telegram] ❌ Voice download timed out after 30s — URL may have expired")
+            self._stop_typing_loop()
+            self.send_to_telegram("⚠️ Voice note download timed out. The link may have expired — please resend.")
         except Exception as e:
             logger.error("[Telegram] ❌ Voice transcription error: %s", e, exc_info=True)
             self._stop_typing_loop()
+            self.send_to_telegram(f"⚠️ Could not process voice note: {e}")
 
     # -------------------------------------------------------------------------
     #  Incoming file handling (photos, documents, video from Telegram)

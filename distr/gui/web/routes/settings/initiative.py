@@ -16,7 +16,7 @@ INITIATIVE_FIELDS = [
 ]
 
 DEFAULTS = {
-    "initiative_level": "assistive",
+    "initiative_level": "assist",
     "initiative_allow_telegram": False,
     "initiative_allow_routine_tasks": False,
     "initiative_ask_external_comms": True,

@@ -23,7 +23,7 @@ class StepRunnerMixin:
     """Handles step runner scheduling, orchestration, and lifecycle."""
 
     def _run_step_runner_scheduled(self):
-        """Run due Step Runner scheduled sessions (e.g. daily calendar check)."""
+        """Run due Step Runner scheduled sessions and kanban agent check-ins."""
         try:
             from distr.core.step_runner.scheduler import get_due_scheduled_sessions, run_scheduled_session
             from distr.core.signals import signal_manager
@@ -40,6 +40,15 @@ class StepRunnerMixin:
                 )
         except Exception as e:
             logger.error("Step Runner scheduler error: %s", e, exc_info=True)
+
+        # Kanban agent scheduling runs on the same 60-second tick.
+        # This is the single authoritative place that fires KanbanAgentCheckIn —
+        # the initiative service reads kanban state as context only, never fires agents directly.
+        try:
+            from distr.core.kanban.scheduler import check_kanban_schedules
+            check_kanban_schedules()
+        except Exception as e:
+            logger.error("Kanban scheduler error: %s", e, exc_info=True)
 
     def _on_step_runner_run_all_requested(self, session_id: int, steps_data: list, run_id, session_type: str):
         """Handle Run All request from API (one-time or manual run)."""
