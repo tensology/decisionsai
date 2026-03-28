@@ -145,8 +145,24 @@ class AnthropicLLMService(BaseLLMService):
         # Also set _default_template_raw for shared mixin compatibility
         self._default_template_raw = load_system_prompt_template()
 
-        # Initialize _messages (Anthropic uses system as a separate param, not a message)
-        self._messages = []
+        # Initialize _messages with chat history if available
+        # (Anthropic uses system as a separate param, not a message, but we still
+        # need a system message at index 0 for the shared mixin's on_chat_changed)
+        system_msg = {"role": "system", "content": self._system_prompt}
+        self._messages = [system_msg]
+
+        # Load existing chat history
+        if self.chat_manager:
+            current_chat_id = self.chat_manager.get_current_chat()
+            if current_chat_id:
+                try:
+                    history = self.chat_manager.get_chat_history(current_chat_id)
+                    non_system = [msg for msg in history if msg.get('role') != 'system']
+                    if non_system:
+                        self._messages = [system_msg] + non_system
+                        logger.info("Anthropic: loaded %d messages from chat %s", len(non_system), current_chat_id)
+                except Exception as e:
+                    logger.warning("Anthropic: failed to load chat history: %s", e)
 
     def _format_vision_message(self, text: str, base64_image: str, mime_type: str):
         """Anthropic vision format."""
