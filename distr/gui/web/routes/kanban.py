@@ -513,62 +513,68 @@ def create_routes():
         trello_boards = []
         jira_boards = []
         try:
-            from distr.core.db import get_session as gs, Settings
+            from distr.core.settings import load_settings_from_db
             import json as _json
-            with gs() as s:
-                settings = s.query(Settings).first()
-                if not settings or not settings.connected_accounts:
-                    logger.info("External boards: no connected accounts found")
-                    return JSONResponse({"trello": [], "jira": []})
-                accounts = _json.loads(settings.connected_accounts or "[]")
-                logger.info("External boards: found %d connected accounts", len(accounts))
-                for acct in accounts:
-                    provider = acct.get("provider", "").lower()
-                    logger.info("External boards: account provider='%s' has_key=%s has_token=%s has_email=%s",
-                                provider, bool(acct.get("api_key")), bool(acct.get("api_token")), bool(acct.get("email")))
-                    if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
-                        try:
-                            import requests
-                            resp = requests.get(
-                                "https://api.trello.com/1/members/me/boards",
-                                params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"},
-                                timeout=10,
-                            )
-                            logger.info("Trello API response: %d", resp.status_code)
-                            if resp.status_code == 200:
-                                for b in resp.json():
-                                    trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
-                        except Exception as e:
-                            logger.warning("Trello board fetch failed: %s", e)
-                    elif provider == "jira" and acct.get("email") and acct.get("api_token"):
-                        domain = acct.get("domain") or ""
-                        if not domain:
-                            server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                            if server_url:
-                                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
-                        if not domain:
-                            logger.warning("Jira account has no domain or server_url, skipping")
-                            continue
-                        try:
-                            import requests
-                            from requests.auth import HTTPBasicAuth
-                            base_url = f"https://{domain}"
-                            logger.info("Fetching Jira boards from %s", base_url)
-                            resp = requests.get(
-                                f"{base_url}/rest/agile/1.0/board",
-                                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
-                                headers={"Accept": "application/json"},
-                                timeout=10,
-                            )
-                            logger.info("Jira API response: %d", resp.status_code)
-                            if resp.status_code == 200:
-                                for b in resp.json().get("values", []):
-                                    jira_boards.append({
-                                        "id": str(b["id"]), "name": b["name"],
-                                        "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
-                                    })
-                        except Exception as e:
-                            logger.warning("Jira board fetch failed: %s", e)
+            settings = load_settings_from_db()
+            raw = settings.get("connected_accounts") or "[]"
+            if isinstance(raw, str):
+                try:
+                    accounts = _json.loads(raw)
+                except Exception:
+                    accounts = []
+            else:
+                accounts = raw if isinstance(raw, list) else []
+            if not accounts:
+                logger.info("External boards: no connected accounts found")
+                return JSONResponse({"trello": [], "jira": []})
+            logger.info("External boards: found %d connected accounts", len(accounts))
+            for acct in accounts:
+                provider = acct.get("provider", "").lower()
+                logger.info("External boards: account provider='%s' has_key=%s has_token=%s has_email=%s",
+                            provider, bool(acct.get("api_key")), bool(acct.get("api_token")), bool(acct.get("email")))
+                if provider == "trello" and acct.get("api_key") and acct.get("api_token") and acct.get("is_valid", True):
+                    try:
+                        import requests
+                        resp = requests.get(
+                            "https://api.trello.com/1/members/me/boards",
+                            params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"},
+                            timeout=10,
+                        )
+                        logger.info("Trello API response: %d", resp.status_code)
+                        if resp.status_code == 200:
+                            for b in resp.json():
+                                trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
+                    except Exception as e:
+                        logger.warning("Trello board fetch failed: %s", e)
+                elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
+                    domain = acct.get("domain") or ""
+                    if not domain:
+                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                        if server_url:
+                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    if not domain:
+                        logger.warning("Jira account has no domain or server_url, skipping")
+                        continue
+                    try:
+                        import requests
+                        from requests.auth import HTTPBasicAuth
+                        base_url = f"https://{domain}"
+                        logger.info("Fetching Jira boards from %s", base_url)
+                        resp = requests.get(
+                            f"{base_url}/rest/agile/1.0/board",
+                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                            headers={"Accept": "application/json"},
+                            timeout=10,
+                        )
+                        logger.info("Jira API response: %d", resp.status_code)
+                        if resp.status_code == 200:
+                            for b in resp.json().get("values", []):
+                                jira_boards.append({
+                                    "id": str(b["id"]), "name": b["name"],
+                                    "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
+                                })
+                    except Exception as e:
+                        logger.warning("Jira board fetch failed: %s", e)
         except Exception as e:
             logger.warning("External board fetch error: %s", e)
         logger.info("External boards result: %d trello, %d jira", len(trello_boards), len(jira_boards))
@@ -581,71 +587,73 @@ def create_routes():
         board_name = ""
         board_url = ""
         try:
-            from distr.core.db import get_session as gs, Settings
+            from distr.core.settings import load_settings_from_db
             import json as _json
-            with gs() as s:
-                settings = s.query(Settings).first()
-                accounts = _json.loads(settings.connected_accounts or "[]") if settings else []
-                if provider == "trello":
-                    for acct in accounts:
-                        if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
-                            import requests
-                            # Get board info
-                            br = requests.get(f"https://api.trello.com/1/boards/{board_id}",
-                                              params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"}, timeout=10)
-                            if br.status_code == 200:
-                                bd = br.json()
-                                board_name = bd.get("name", "")
-                                board_url = bd.get("url", "")
-                            # Get lists
-                            lr = requests.get(f"https://api.trello.com/1/boards/{board_id}/lists",
-                                              params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url"}, timeout=10)
-                            if lr.status_code == 200:
-                                for lst in lr.json():
-                                    cards = [{"id": c["id"], "title": c["name"], "description": c.get("desc", ""), "url": c.get("url", "")} for c in lst.get("cards", [])]
-                                    lanes.append({"id": lst["id"], "name": lst["name"], "tickets": cards})
-                            break
-                elif provider == "jira":
-                    for acct in accounts:
-                        if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
-                            import requests
-                            from requests.auth import HTTPBasicAuth
-                            domain = acct.get("domain") or ""
-                            if not domain:
-                                server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                                if server_url:
-                                    domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
-                            if not domain:
-                                continue
-                            auth = HTTPBasicAuth(acct["email"], acct["api_token"])
-                            base_url = f"https://{domain}" if not domain.startswith("http") else domain
-                            # Get board config for columns
-                            cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
-                                              auth=auth, headers={"Accept": "application/json"}, timeout=10)
-                            if cr.status_code == 200:
-                                cfg = cr.json()
-                                board_name = cfg.get("name", "")
-                                board_url = f"https://{domain}/jira/software/projects/{cfg.get('location', {}).get('projectKey', '')}/boards/{board_id}"
-                                for col in cfg.get("columnConfig", {}).get("columns", []):
-                                    lanes.append({"id": col["name"], "name": col["name"], "tickets": []})
-                            # Get issues on board
-                            ir = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
-                                              auth=auth, headers={"Accept": "application/json"},
-                                              params={"maxResults": 100}, timeout=10)
-                            if ir.status_code == 200:
-                                for issue in ir.json().get("issues", []):
-                                    fields = issue.get("fields", {})
-                                    status_name = fields.get("status", {}).get("name", "")
-                                    card = {
-                                        "id": issue["key"], "title": fields.get("summary", ""),
-                                        "description": fields.get("description", "") or "",
-                                        "url": f"https://{domain}/browse/{issue['key']}",
-                                    }
-                                    for lane in lanes:
-                                        if lane["name"].lower() == status_name.lower():
-                                            lane["tickets"].append(card)
-                                            break
-                            break
+            settings = load_settings_from_db()
+            raw = settings.get("connected_accounts") or "[]"
+            if isinstance(raw, str):
+                try:
+                    accounts = _json.loads(raw)
+                except Exception:
+                    accounts = []
+            else:
+                accounts = raw if isinstance(raw, list) else []
+            if provider == "trello":
+                for acct in accounts:
+                    if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
+                        import requests
+                        br = requests.get(f"https://api.trello.com/1/boards/{board_id}",
+                                          params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"}, timeout=10)
+                        if br.status_code == 200:
+                            bd = br.json()
+                            board_name = bd.get("name", "")
+                            board_url = bd.get("url", "")
+                        lr = requests.get(f"https://api.trello.com/1/boards/{board_id}/lists",
+                                          params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url"}, timeout=10)
+                        if lr.status_code == 200:
+                            for lst in lr.json():
+                                cards = [{"id": c["id"], "title": c["name"], "description": c.get("desc", ""), "url": c.get("url", "")} for c in lst.get("cards", [])]
+                                lanes.append({"id": lst["id"], "name": lst["name"], "tickets": cards})
+                        break
+            elif provider == "jira":
+                for acct in accounts:
+                    if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
+                        import requests
+                        from requests.auth import HTTPBasicAuth
+                        domain = acct.get("domain") or ""
+                        if not domain:
+                            server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                            if server_url:
+                                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                        if not domain:
+                            continue
+                        auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+                        base_url = f"https://{domain}" if not domain.startswith("http") else domain
+                        cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
+                                          auth=auth, headers={"Accept": "application/json"}, timeout=10)
+                        if cr.status_code == 200:
+                            cfg = cr.json()
+                            board_name = cfg.get("name", "")
+                            board_url = f"https://{domain}/jira/software/projects/{cfg.get('location', {}).get('projectKey', '')}/boards/{board_id}"
+                            for col in cfg.get("columnConfig", {}).get("columns", []):
+                                lanes.append({"id": col["name"], "name": col["name"], "tickets": []})
+                        ir = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
+                                          auth=auth, headers={"Accept": "application/json"},
+                                          params={"maxResults": 100}, timeout=10)
+                        if ir.status_code == 200:
+                            for issue in ir.json().get("issues", []):
+                                fields = issue.get("fields", {})
+                                status_name = fields.get("status", {}).get("name", "")
+                                card = {
+                                    "id": issue["key"], "title": fields.get("summary", ""),
+                                    "description": fields.get("description", "") or "",
+                                    "url": f"https://{domain}/browse/{issue['key']}",
+                                }
+                                for lane in lanes:
+                                    if lane["name"].lower() == status_name.lower():
+                                        lane["tickets"].append(card)
+                                        break
+                        break
         except Exception as e:
             logger.warning("External board detail fetch error: %s", e)
         return JSONResponse({"name": board_name, "url": board_url, "lanes": lanes})
