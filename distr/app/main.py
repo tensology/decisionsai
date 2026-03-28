@@ -212,8 +212,16 @@ def setup_logging(clear_logs=True):
     app_logger = logging.getLogger('distr')
     
     # Create handlers
-    file_handler = logging.FileHandler(log_file)
-    console_handler = logging.StreamHandler()
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # On Windows the console may be cp1252 — use errors='replace' to avoid UnicodeEncodeError on emoji
+    import sys as _sys
+    _console_stream = _sys.stderr
+    if hasattr(_console_stream, 'reconfigure'):
+        try:
+            _console_stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    console_handler = logging.StreamHandler(_console_stream)
     
     # Create formatter
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')

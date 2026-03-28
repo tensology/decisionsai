@@ -4,7 +4,8 @@ import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
 # Fix Windows console encoding — cp1252 can't handle emoji in log messages
-if sys.platform == 'win32':
+# Only do this in the main process, not in multiprocessing spawn workers
+if sys.platform == 'win32' and __name__ == '__main__':
     import io
     if hasattr(sys.stdout, 'buffer'):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
@@ -85,6 +86,10 @@ if sys.platform == 'darwin':
 
 import multiprocessing
 
+# freeze_support() MUST be called at module level before any other code on Windows
+# to handle the multiprocessing spawn bootstrap correctly.
+multiprocessing.freeze_support()
+
 # Fix for macOS multiprocessing spawn issues with semaphores
 # Must be done BEFORE any other multiprocessing usage
 if sys.platform == 'darwin':
@@ -92,8 +97,6 @@ if sys.platform == 'darwin':
         multiprocessing.set_start_method('spawn', force=False)
     except RuntimeError:
         pass  # Already set
-    # Required for frozen/packaged applications
-    multiprocessing.freeze_support()
 
 # Add project root to Python path (one directory up from bin/)
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -134,13 +137,6 @@ if sys.platform == 'darwin':
     except ImportError:
         print("Warning: AppKit (PyObjC) not found. Install with: pip install pyobjc")
         print("Continuing anyway...")
-from distr.app.main import run
-
-# Restore original print now that all flash-attn-warning-emitting imports are done
-try:
-    _bi.print = _orig_print
-except NameError:
-    pass  # _orig_print was never set (no flash-attn filter needed)
 
 def kill_existing_decisions_processes():
     """Check for and kill any existing Decisions processes before starting"""
@@ -398,8 +394,10 @@ def kill_existing_decisions_processes():
 
 # Main execution block
 if __name__ == "__main__":
+    from distr.app.main import run
+
     # Kill any existing Decisions processes before starting
     kill_existing_decisions_processes()
-    
+
     print("Starting Decisions...")
     run()
