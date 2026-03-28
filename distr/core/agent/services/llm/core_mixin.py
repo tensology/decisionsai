@@ -731,6 +731,7 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
         from distr.core.agent.libs import (
             StartFrame, CancelFrame, InterruptionFrame, TranscriptionFrame,
             UserStartedSpeakingFrame, TextFrame,
+            LLMFullResponseStartFrame, LLMFullResponseEndFrame,
         )
         from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
         from distr.core.agent.tools.base import fast_tool_matcher
@@ -841,6 +842,8 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                     self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
                     self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
 
+                await self.push_frame(LLMFullResponseStartFrame(), direction)
+
                 try:
                     if 'text' not in args:
                         args['text'] = text
@@ -871,6 +874,7 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 except Exception as e:
                     logger.error("Error running fast tool %s: %s", tool.name, e, exc_info=True)
                 finally:
+                    await self.push_frame(LLMFullResponseEndFrame(), direction)
                     # Signal the UI that the agent is done
                     if self.event_queue and current_chat_id:
                         self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)

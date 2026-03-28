@@ -188,7 +188,15 @@ def fast_tool_matcher(transcription: str, tools: List[BaseTool], tools_dict: Dic
                     # Special case: If trigger is "copy" and text mentions file/folder/directory, it's a file operation, not text editing
                     if trigger == "copy" and re.search(r'\b(file|folder|directory|it|that|this)\s+(to|into|in|on)', transcription_norm, re.IGNORECASE):
                         continue  # Skip this match - it's a file operation
-                    confidence = 0.90
+                    # If the transcription is much longer than the trigger, it's likely
+                    # a conversational sentence that happens to contain the trigger phrase.
+                    # Reduce confidence proportionally.
+                    trigger_words = len(trigger.split())
+                    text_words = len(transcription_norm.split())
+                    if text_words > trigger_words * 4:
+                        confidence = 0.60  # Too much surrounding context — let the LLM handle it
+                    else:
+                        confidence = 0.90
                     args = {'text': transcription}
             
             # Special handling for question forms if the trigger is embedded

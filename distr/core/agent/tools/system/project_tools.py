@@ -53,8 +53,7 @@ class ListProjectsTool(BaseTool):
             "list projects", "show projects", "what projects",
             "my projects", "available projects", "show all projects",
             "list my projects", "projects list", "check projects",
-            "look at projects", "see the projects", "is it there",
-            "does it have", "go look", "check if"
+            "look at projects", "see the projects",
         ]
 
     def _run(self, text: str = "", **kwargs) -> str:
