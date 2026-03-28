@@ -860,7 +860,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
                         except FileNotFoundError:
                             continue
                 elif sys.platform == "win32":
-                    os.startfile(sound_path)
+                    # Use ffplay (bundled with ffmpeg) — runs as a separate process
+                    # so it won't conflict with the app's sounddevice audio pipeline
+                    subprocess.Popen(
+                        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', sound_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 else:
                     logger.warning(f"Unsupported platform for audio playback: {sys.platform}")
             except Exception as e:
