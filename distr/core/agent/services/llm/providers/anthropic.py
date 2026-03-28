@@ -182,9 +182,11 @@ class AnthropicLLMService(BaseLLMService):
     # ------------------------------------------------------------------
 
     async def _generate_response(self):
-        """Generate LLM response using Anthropic streaming API."""
+        """Generate LLM response using Anthropic streaming API with multi-step tool chaining."""
+        import time as _time
+        _t0 = _time.time()
         full_content = ""
-        follow_up_content = ""
+        final_text = ""
         try:
             await self.push_frame(LLMFullResponseStartFrame(), self._pipeline_direction)
 
@@ -210,96 +212,113 @@ class AnthropicLLMService(BaseLLMService):
                         return
 
             # Build Anthropic messages (system is separate)
-            anthropic_messages = []
-            for msg in self._messages:
-                role = msg.get("role")
-                content = msg.get("content")
-                if role == "system":
-                    continue
-                elif role == "user":
-                    anthropic_messages.append({"role": "user", "content": content})
-                elif role == "assistant":
-                    anthropic_messages.append({"role": "assistant", "content": content or ""})
-                elif role == "tool":
-                    anthropic_messages.append({
-                        "role": "user",
-                        "content": f"[Tool {msg.get('name', '')} result: {content}]",
-                    })
+            anthropic_messages = self._build_anthropic_messages()
 
-            # Truncate if too long
-            if len(anthropic_messages) > 50:
-                anthropic_messages = anthropic_messages[-50:]
+            # Get tools
+            last_user_msg = ""
+            for msg in reversed(self._messages):
+                if msg.get("role") == "user":
+                    c = msg.get("content", "")
+                    last_user_msg = c if isinstance(c, str) else str(c)
+                    break
+            anthropic_tools = self._get_anthropic_tools(last_user_msg)
 
-            anthropic_tools = convert_tools_to_anthropic_format(
-                self._get_filtered_tools(
-                    anthropic_messages[-1].get('content', '') if anthropic_messages else None
-                )
-            ) if self._tools else None
-
-            # Ensure tools is a valid list or None — Anthropic rejects non-list values
-            if not isinstance(anthropic_tools, list) or not anthropic_tools:
-                anthropic_tools = None
-
-            create_kwargs = dict(
-                model=self._model_name, max_tokens=4096,
-                system=self._system_prompt, messages=anthropic_messages,
-                stream=True,
-            )
-            if anthropic_tools:
-                create_kwargs["tools"] = anthropic_tools
-
-            stream = await self.client.messages.create(**create_kwargs)
-
-            full_content = ""
-            tool_use_blocks = []
-            current_tool_use = None
-            tool_use_detected = False
-
-            async for event in stream:
+            # --- Multi-step generation loop (up to 10 rounds) ---
+            MAX_ROUNDS = 10
+            for round_num in range(MAX_ROUNDS):
                 if self._cancelled:
                     break
 
-                if event.type == "content_block_start":
-                    if event.content_block.type == "tool_use":
-                        tool_use_detected = True
-                        current_tool_use = {
-                            "id": event.content_block.id,
-                            "name": event.content_block.name,
-                            "input_json": "",
-                        }
-                        tool_use_blocks.append(current_tool_use)
+                create_kwargs = dict(
+                    model=self._model_name, max_tokens=4096,
+                    system=self._system_prompt, messages=anthropic_messages,
+                    stream=True,
+                )
+                if anthropic_tools:
+                    create_kwargs["tools"] = anthropic_tools
 
-                elif event.type == "content_block_delta":
-                    delta = event.delta
-                    if delta.type == "text_delta":
-                        full_content += delta.text
-                        if self._speaker_enabled and not tool_use_detected and not getattr(self, '_is_telegram_request', False):
-                            await self.push_frame(TextFrame(text=delta.text), self._pipeline_direction)
-                        if self.event_queue:
-                            self.event_queue.put(('chat_stream_token', {'token': delta.text}), block=False)
-                    elif delta.type == "input_json_delta" and current_tool_use:
-                        current_tool_use["input_json"] += delta.partial_json
+                logger.info("Anthropic round %d: %d messages, tools=%s",
+                            round_num, len(anthropic_messages), bool(anthropic_tools))
 
-                elif event.type == "content_block_stop":
-                    current_tool_use = None
+                try:
+                    stream = await asyncio.wait_for(
+                        self.client.messages.create(**create_kwargs),
+                        timeout=60.0,
+                    )
+                except (asyncio.TimeoutError, TimeoutError):
+                    logger.warning("Anthropic API timed out (round %d)", round_num)
+                    break
+                except Exception as e:
+                    logger.error("Anthropic API call failed (round %d): %s", round_num, e, exc_info=True)
+                    raise
 
-            await self.push_frame(LLMFullResponseEndFrame(), self._pipeline_direction)
+                # Stream the response
+                round_text = ""
+                tool_use_blocks = []
+                current_tool_use = None
+                tool_use_detected = False
 
-            # Handle tool use
-            if tool_use_blocks and not self._cancelled:
+                async for event in stream:
+                    if self._cancelled:
+                        break
+
+                    if event.type == "content_block_start":
+                        if event.content_block.type == "tool_use":
+                            tool_use_detected = True
+                            current_tool_use = {
+                                "id": event.content_block.id,
+                                "name": event.content_block.name,
+                                "input_json": "",
+                            }
+                            tool_use_blocks.append(current_tool_use)
+
+                    elif event.type == "content_block_delta":
+                        delta = event.delta
+                        if delta.type == "text_delta":
+                            round_text += delta.text
+                            # Only push to TTS if no tool use detected (don't read "I'll search for that")
+                            if self._speaker_enabled and not tool_use_detected and not getattr(self, '_is_telegram_request', False):
+                                await self.push_frame(TextFrame(text=delta.text), self._pipeline_direction)
+                            if self.event_queue:
+                                self.event_queue.put(('chat_stream_token', {'token': delta.text}), block=False)
+                        elif delta.type == "input_json_delta" and current_tool_use:
+                            current_tool_use["input_json"] += delta.partial_json
+
+                    elif event.type == "content_block_stop":
+                        current_tool_use = None
+
+                full_content += round_text
+
+                # No tool calls — we have our final response
+                if not tool_use_blocks:
+                    final_text = full_content
+                    break
+
+                # --- Execute tool calls ---
                 for tu in tool_use_blocks:
                     try:
                         tu["input"] = json.loads(tu.get("input_json", "{}"))
                     except json.JSONDecodeError:
                         tu["input"] = {}
 
-                self._messages.append({"role": "assistant", "content": full_content if full_content else None})
+                # Build assistant message with tool_use blocks
+                assistant_content = []
+                if round_text:
+                    assistant_content.append({"type": "text", "text": round_text})
+                for tu in tool_use_blocks:
+                    assistant_content.append({
+                        "type": "tool_use", "id": tu["id"],
+                        "name": tu["name"], "input": tu["input"],
+                    })
+                anthropic_messages.append({"role": "assistant", "content": assistant_content})
 
+                # Execute each tool
                 tool_results = []
                 for tu in tool_use_blocks:
                     tool = self._tools_dict.get(tu["name"])
                     if tool:
                         try:
+                            logger.info("🔧 Anthropic tool: %s (round %d)", tu["name"], round_num)
                             loop = asyncio.get_running_loop()
                             result = await loop.run_in_executor(
                                 None, lambda t=tool, inp=tu["input"]: t._run(**inp)
@@ -317,176 +336,77 @@ class AnthropicLLMService(BaseLLMService):
                     else:
                         tool_results.append({"type": "tool_result", "tool_use_id": tu["id"], "content": f"Tool '{tu['name']}' not found"})
 
-                # Follow-up with tool results
-                follow_up_messages = anthropic_messages.copy()
-                assistant_content = []
-                if full_content:
-                    assistant_content.append({"type": "text", "text": full_content})
-                for tu in tool_use_blocks:
-                    assistant_content.append({"type": "tool_use", "id": tu["id"], "name": tu["name"], "input": tu["input"]})
-                follow_up_messages.append({"role": "assistant", "content": assistant_content})
-                follow_up_messages.append({"role": "user", "content": tool_results})
+                # Add tool results as user message and loop
+                anthropic_messages.append({"role": "user", "content": tool_results})
+                # Reset for next round
+                full_content = ""
 
-                # Collect tool result text for fallback
-                tool_result_texts = [tr.get("content", "") for tr in tool_results if tr.get("content")]
-
-                # Up to 2 rounds of follow-up (in case model chains tool calls)
-                for follow_up_round in range(2):
-                    try:
-                        logger.info("Anthropic follow-up round %d: %d messages, last role=%s",
-                                    follow_up_round, len(follow_up_messages),
-                                    follow_up_messages[-1].get("role") if follow_up_messages else "?")
-                        follow_up_stream = await asyncio.wait_for(
-                            self.client.messages.create(
-                                model=self._model_name, max_tokens=4096,
-                                system=self._system_prompt, messages=follow_up_messages, stream=True,
-                            ),
-                            timeout=30.0,
-                        )
-                    except (asyncio.TimeoutError, TimeoutError):
-                        logger.warning("Anthropic follow-up timed out (round %d)", follow_up_round)
-                        break
-                    except Exception as e:
-                        logger.error("Anthropic follow-up API call failed (round %d): %s", follow_up_round, e, exc_info=True)
-                        break
-
-                    follow_up_content = ""
-                    follow_up_tool_blocks = []
-                    current_follow_up_tool = None
-
-                    async for event in follow_up_stream:
-                        if self._cancelled:
-                            logger.warning("Anthropic follow-up cancelled during streaming (round %d)", follow_up_round)
-                            break
-                        if event.type == "content_block_start":
-                            if hasattr(event, 'content_block') and event.content_block.type == "tool_use":
-                                current_follow_up_tool = {
-                                    "id": event.content_block.id,
-                                    "name": event.content_block.name,
-                                    "input_json": "",
-                                }
-                                follow_up_tool_blocks.append(current_follow_up_tool)
-                                logger.info("Anthropic follow-up wants tool call (round %d): %s", follow_up_round, event.content_block.name)
-                        elif event.type == "content_block_delta":
-                            if event.delta.type == "text_delta":
-                                follow_up_content += event.delta.text
-                                if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
-                                    await self.push_frame(TextFrame(text=event.delta.text), self._pipeline_direction)
-                                if self.event_queue:
-                                    self.event_queue.put(('chat_stream_token', {'token': event.delta.text}), block=False)
-                            elif event.delta.type == "input_json_delta" and current_follow_up_tool:
-                                current_follow_up_tool["input_json"] += event.delta.partial_json
-                        elif event.type == "content_block_stop":
-                            current_follow_up_tool = None
-                        elif event.type == "message_delta":
-                            stop = getattr(getattr(event, 'delta', None), 'stop_reason', None)
-                            if stop:
-                                logger.info("Anthropic follow-up message_delta: stop_reason=%s", stop)
-
-                    # If we got text content, we're done
-                    if follow_up_content:
-                        break
-
-                    # If model wants more tool calls, execute them and loop
-                    if follow_up_tool_blocks and not self._cancelled:
-                        for ftu in follow_up_tool_blocks:
-                            try:
-                                ftu["input"] = json.loads(ftu.get("input_json", "{}"))
-                            except json.JSONDecodeError:
-                                ftu["input"] = {}
-
-                        chained_assistant = []
-                        if follow_up_content:
-                            chained_assistant.append({"type": "text", "text": follow_up_content})
-                        for ftu in follow_up_tool_blocks:
-                            chained_assistant.append({"type": "tool_use", "id": ftu["id"], "name": ftu["name"], "input": ftu["input"]})
-                        follow_up_messages.append({"role": "assistant", "content": chained_assistant})
-
-                        chained_results = []
-                        for ftu in follow_up_tool_blocks:
-                            tool = self._tools_dict.get(ftu["name"])
-                            if tool:
-                                try:
-                                    loop = asyncio.get_running_loop()
-                                    result = await loop.run_in_executor(
-                                        None, lambda t=tool, inp=ftu["input"]: t._run(**inp)
-                                    )
-                                    chained_results.append({"type": "tool_result", "tool_use_id": ftu["id"], "content": str(result)})
-                                    tool_result_texts.append(str(result))
-                                except Exception as e:
-                                    chained_results.append({"type": "tool_result", "tool_use_id": ftu["id"], "content": f"Error: {e}"})
-                            else:
-                                chained_results.append({"type": "tool_result", "tool_use_id": ftu["id"], "content": f"Tool '{ftu['name']}' not found"})
-                        follow_up_messages.append({"role": "user", "content": chained_results})
-                        continue
-
-                    # No text and no tool calls — break
-                    logger.warning("Anthropic follow-up produced no content and no tool calls (round %d, cancelled=%s)", follow_up_round, self._cancelled)
-                    break
-
-                if follow_up_content:
-                    self._messages.append({"role": "assistant", "content": follow_up_content})
-                    if self.chat_manager:
-                        cid = self.chat_manager.get_current_chat()
-                        if cid:
-                            self.chat_manager.add_assistant_message(cid, follow_up_content)
-                else:
-                    # Follow-up produced no text — try one more time with an explicit prompt
-                    if tool_result_texts and not self._cancelled:
-                        logger.info("Anthropic: follow-up empty, retrying with explicit summarize prompt")
-                        retry_messages = follow_up_messages.copy()
-                        retry_messages.append({"role": "user", "content": [{"type": "text", "text": "Please summarize the tool results above in a natural, conversational way for the user."}]})
-                        try:
-                            retry_stream = await asyncio.wait_for(
-                                self.client.messages.create(
-                                    model=self._model_name, max_tokens=4096,
-                                    system=self._system_prompt, messages=retry_messages, stream=True,
-                                ),
-                                timeout=30.0,
-                            )
-                            retry_content = ""
-                            async for event in retry_stream:
-                                if self._cancelled:
-                                    break
-                                if event.type == "content_block_delta" and event.delta.type == "text_delta":
-                                    retry_content += event.delta.text
-                                    if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
-                                        await self.push_frame(TextFrame(text=event.delta.text), self._pipeline_direction)
-                                    if self.event_queue:
-                                        self.event_queue.put(('chat_stream_token', {'token': event.delta.text}), block=False)
-                            if retry_content:
-                                follow_up_content = retry_content
-                                self._messages.append({"role": "assistant", "content": follow_up_content})
-                                if self.chat_manager:
-                                    cid = self.chat_manager.get_current_chat()
-                                    if cid:
-                                        self.chat_manager.add_assistant_message(cid, follow_up_content)
-                                logger.info("Anthropic: retry summarize succeeded (%d chars)", len(follow_up_content))
-                        except Exception as e:
-                            logger.warning("Anthropic: retry summarize failed: %s", e)
-
-                    if not follow_up_content:
-                        logger.warning("Anthropic follow-up produced no content after all retries")
-
-            elif full_content:
-                self._messages.append({"role": "assistant", "content": full_content})
+            # --- Save final response ---
+            if final_text:
+                self._messages.append({"role": "assistant", "content": final_text})
                 if self.chat_manager:
                     cid = self.chat_manager.get_current_chat()
                     if cid:
-                        self.chat_manager.add_assistant_message(cid, full_content)
+                        self.chat_manager.add_assistant_message(cid, final_text)
+            elif not self._cancelled:
+                # Model finished with tool use but no final text — say "Done"
+                done_text = "Done"
+                if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
+                    await self.push_frame(TextFrame(text=done_text), self._pipeline_direction)
+                if self.event_queue:
+                    self.event_queue.put(('chat_stream_token', {'token': done_text}), block=False)
+                self._messages.append({"role": "assistant", "content": done_text})
+                if self.chat_manager:
+                    cid = self.chat_manager.get_current_chat()
+                    if cid:
+                        self.chat_manager.add_assistant_message(cid, done_text)
 
         except Exception as e:
-            logger.error("Error in AnthropicLLMService._generate_response: %s", e, exc_info=True)
+            logger.error("Error in AnthropicLLMService._generate_response (%.3fs): %s",
+                         _time.time() - _t0, e, exc_info=True)
             await self.push_frame(ErrorFrame(error=str(e)), self._pipeline_direction)
         finally:
-            self._emit_telegram_response(full_content, follow_up_content)
+            logger.info("Anthropic: total generation: %.3fs", _time.time() - _t0)
+            self._emit_telegram_response(full_content, final_text)
             self._cleanup_telegram_flags()
-            # Always signal the UI that generation is done
+            await self.push_frame(LLMFullResponseEndFrame(), self._pipeline_direction)
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
                 current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 if current_chat_id:
                     self.event_queue.put(('chat_stream_finished', {
                         'chat_id': current_chat_id,
-                        'response_text': follow_up_content or full_content or '',
+                        'response_text': final_text or full_content or '',
                     }), block=False)
+
+    def _build_anthropic_messages(self):
+        """Convert internal messages to Anthropic format."""
+        anthropic_messages = []
+        for msg in self._messages:
+            role = msg.get("role")
+            content = msg.get("content")
+            if role == "system":
+                continue
+            elif role == "user":
+                anthropic_messages.append({"role": "user", "content": content})
+            elif role == "assistant":
+                anthropic_messages.append({"role": "assistant", "content": content or ""})
+            elif role == "tool":
+                anthropic_messages.append({
+                    "role": "user",
+                    "content": f"[Tool {msg.get('name', '')} result: {content}]",
+                })
+        if len(anthropic_messages) > 50:
+            anthropic_messages = anthropic_messages[-50:]
+        return anthropic_messages
+
+    def _get_anthropic_tools(self, last_user_msg=""):
+        """Get tools in Anthropic format, or None."""
+        if not self._tools:
+            return None
+        anthropic_tools = convert_tools_to_anthropic_format(
+            self._get_filtered_tools(last_user_msg)
+        )
+        if not isinstance(anthropic_tools, list) or not anthropic_tools:
+            return None
+        return anthropic_tools
