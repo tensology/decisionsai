@@ -130,7 +130,7 @@ class AgentLifecycleMixin:
 
     def start_agent_session(self, skip_welcome=False, chat_id=None):
         """Start the agent session in a separate process."""
-        from distr.app.main import run_agent_session
+        from distr.app.agent_worker import run_agent_session
 
         try:
             if self._quitting:
