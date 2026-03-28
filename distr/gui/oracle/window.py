@@ -132,12 +132,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         signal_manager.dictation_started.connect(self.on_dictation_started)
         signal_manager.dictation_stopped.connect(self.on_dictation_stopped)
         
-        self.setWindowFlags(
-            QtCore.Qt.WindowType.FramelessWindowHint |
-            QtCore.Qt.WindowType.WindowStaysOnTopHint |
-            QtCore.Qt.WindowType.Tool  # Keeps window off the taskbar
-        )
-        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
+        # Window flags already set above — don't call setWindowFlags again
+        # as it recreates the native window and can break on-top state on macOS.
 
         self._shadow_color = QtGui.QColor(0, 0, 0, 100)
 
@@ -271,6 +267,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # or when the window is hidden and reshown.
         if platform.system() == 'Darwin':
             QTimer.singleShot(100, self._ensure_macos_on_top)
+            # Periodically re-assert on-top — macOS can demote the window level
+            # when other apps activate or spaces change.
+            self._on_top_timer = QTimer()
+            self._on_top_timer.timeout.connect(self._ensure_macos_on_top)
+            self._on_top_timer.start(5000)  # Every 5 seconds
         
         # Position player window after oracle is shown and settled
         QTimer.singleShot(500, self._position_player_after_show)
