@@ -1066,6 +1066,8 @@ class FastActionDetector:
                     # Misc tools
                     'snippet', 'telegram', 'generate', 'export', 'import',
                     'automate', 'step runner', 'project', 'kanban', 'ticket',
+                    # Clipboard — any mention means the user wants clipboard content processed
+                    'clipboard', 'clip board',
                 ]
                 if not any(verb in text.lower() for verb in action_verbs):
                     return True

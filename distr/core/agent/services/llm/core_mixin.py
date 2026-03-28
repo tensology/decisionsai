@@ -879,7 +879,17 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
             # Normal LLM generation
             self._ensure_user_message_persisted(text)
-            self._messages.append({"role": "user", "content": text})
+            # Inject clipboard content if the user is asking about it
+            user_content = text
+            try:
+                from distr.core.agent.services.llm.tool_routing import should_inject_clipboard, get_clipboard_content_fast
+                if should_inject_clipboard(text):
+                    clipboard = get_clipboard_content_fast()
+                    if clipboard and clipboard.strip():
+                        user_content = f"{text}\n\n[Clipboard content:\n{clipboard.strip()[:4000]}]"
+            except Exception:
+                pass
+            self._messages.append({"role": "user", "content": user_content})
 
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                 self._cancelled = True
