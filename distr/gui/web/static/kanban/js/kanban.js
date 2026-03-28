@@ -56,8 +56,33 @@
         db.forEach(function(b) {
             var div = document.createElement("div");
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
-            div.innerHTML = '<span class="kb-src-icon kb-src-db"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
+            div.draggable = true;
+            div.dataset.boardId = b.id;
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
             div.onclick = function() { selectBoard("database", b.id); };
+            div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
+            div.ondragend = function() { div.classList.remove("dragging"); };
+            div.ondragover = function(e) { e.preventDefault(); div.style.borderTop = "2px solid #f97316"; };
+            div.ondragleave = function() { div.style.borderTop = ""; };
+            div.ondrop = function(e) {
+                e.preventDefault();
+                div.style.borderTop = "";
+                var data = e.dataTransfer.getData("text/plain");
+                if (!data.startsWith("board:")) return;
+                var draggedId = parseInt(data.split(":")[1], 10);
+                if (draggedId === b.id) return;
+                // Reorder: collect current order, move dragged before drop target
+                var items = container.querySelectorAll("[data-board-id]");
+                var order = [];
+                items.forEach(function(el) { order.push(parseInt(el.dataset.boardId, 10)); });
+                order = order.filter(function(id) { return id !== draggedId; });
+                var dropIdx = order.indexOf(b.id);
+                order.splice(dropIdx, 0, draggedId);
+                apiFetch("/api/kanban/boards/reorder", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ order: order })
+                }).then(function() { loadBoards(); }).catch(function() {});
+            };
             div.oncontextmenu = function(e) { e.preventDefault(); showBoardContextMenu(e, b.id); };
             container.appendChild(div);
         });
@@ -159,11 +184,16 @@
     }
 
     function renderBoard(data, isLocal) {
+        // Apply board accent color as CSS variable
+        var boardColor = data.color || "#f97316";
+        document.getElementById("kb-board-view").style.setProperty("--kb-accent", boardColor);
+
         document.getElementById("kb-board-title").textContent = data.name || "Board";
         var badge = document.getElementById("kb-board-source-badge");
         var source = currentBoard.source;
         badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
-        badge.className = "text-xs px-2 py-0.5 rounded text-white " + (source === "database" ? "bg-[#f97316]" : source === "trello" ? "bg-[#0079bf]" : "bg-[#0052cc]");
+        badge.className = "text-xs px-2 py-0.5 rounded text-white";
+        badge.style.backgroundColor = source === "database" ? boardColor : source === "trello" ? "#0079bf" : "#0052cc";
 
         document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
         document.getElementById("kb-edit-board").style.display = isLocal ? "" : "none";
@@ -546,13 +576,15 @@
     }
 
     function openBoardModal(boardId) {
-        editingBoardId = boardId || null;
+        // Ensure boardId is a number (not string from URL params etc.)
+        boardId = boardId ? parseInt(boardId, 10) : null;
+        editingBoardId = boardId;
         document.getElementById("kb-board-modal-title").textContent = boardId ? "Edit Board" : "New Board";
         document.getElementById("kb-board-modal-save").textContent = boardId ? "Save" : "Create";
         // Reset to Details tab
         switchBoardModalTab("details");
 
-        if (boardId && currentBoardData && currentBoardData.id === boardId) {
+        if (boardId && currentBoardData && currentBoardData.id == boardId) {
             populateBoardModal(currentBoardData);
         } else if (boardId) {
             apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
@@ -561,6 +593,10 @@
         } else {
             document.getElementById("kb-board-modal-name").value = "";
             document.getElementById("kb-board-modal-desc").value = "";
+            var colorInput = document.getElementById("kb-board-modal-color");
+            var colorHex = document.getElementById("kb-board-modal-color-hex");
+            colorInput.value = "#f97316";
+            colorHex.textContent = "#f97316";
             loadBoardDefaults(null);
         }
         document.getElementById("kb-board-modal").classList.remove("hidden");
@@ -570,6 +606,11 @@
     function populateBoardModal(data) {
         document.getElementById("kb-board-modal-name").value = data.name || "";
         document.getElementById("kb-board-modal-desc").value = data.description || "";
+        var colorInput = document.getElementById("kb-board-modal-color");
+        var colorHex = document.getElementById("kb-board-modal-color-hex");
+        var c = data.color || "#f97316";
+        colorInput.value = c;
+        colorHex.textContent = c;
         loadBoardDefaults(data);
     }
 
@@ -607,11 +648,13 @@
     function saveBoardModal() {
         var name = document.getElementById("kb-board-modal-name").value.trim();
         if (!name) { showSnackbar("Board name is required", "error"); return; }
+        var boardColor = document.getElementById("kb-board-modal-color").value || "";
         var payload = {
             name: name,
             description: document.getElementById("kb-board-modal-desc").value.trim(),
             default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value) || 0,
             default_project_id: parseInt(document.getElementById("kb-board-def-project").value) || 0,
+            color: boardColor,
         };
         if (editingBoardId) {
             apiFetch("/api/kanban/boards/" + editingBoardId, {
@@ -969,7 +1012,11 @@
         // Board actions
         document.getElementById("kb-add-ticket").addEventListener("click", addTicket);
         document.getElementById("kb-edit-board").addEventListener("click", function() {
-            if (currentBoard && currentBoard.source === "database") openBoardModal(currentBoard.id);
+            if (currentBoard && currentBoard.source === "database" && currentBoard.id) {
+                openBoardModal(currentBoard.id);
+            } else if (currentBoardData && currentBoardData.id) {
+                openBoardModal(currentBoardData.id);
+            }
         });
         document.getElementById("kb-delete-board").addEventListener("click", deleteBoard);
 
@@ -989,6 +1036,15 @@
         document.getElementById("kb-board-modal-save").addEventListener("click", saveBoardModal);
         document.getElementById("kb-board-modal").addEventListener("click", function(e) {
             if (e.target === this) closeBoardModal();
+        });
+        // Color picker sync
+        document.getElementById("kb-board-modal-color").addEventListener("input", function() {
+            document.getElementById("kb-board-modal-color-hex").textContent = this.value;
+        });
+        document.getElementById("kb-board-modal-color-reset").addEventListener("click", function() {
+            var colorInput = document.getElementById("kb-board-modal-color");
+            colorInput.value = "#f97316";
+            document.getElementById("kb-board-modal-color-hex").textContent = "#f97316";
         });
 
         // Ticket modal

@@ -36,6 +36,8 @@ class KanbanBoard(Base):
     default_project_id = Column(Integer, nullable=True)  # default project for new tickets
     default_snippet_id = Column(Integer, nullable=True)  # default snippet for new tickets
     default_action_id = Column(Integer, nullable=True)  # default action for new tickets
+    color = Column(String, nullable=True)  # board accent color (hex, e.g. '#f97316')
+    position = Column(Integer, default=0)  # sidebar display order
 
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

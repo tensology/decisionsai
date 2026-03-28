@@ -37,6 +37,8 @@ class BoardUpdate(BaseModel):
     default_project_id: Optional[int] = None
     default_snippet_id: Optional[int] = None
     default_action_id: Optional[int] = None
+    color: Optional[str] = None
+    position: Optional[int] = None
 
 class TicketCreate(BaseModel):
     lane_id: int
@@ -171,13 +173,14 @@ def create_routes():
     @router.get("/kanban/boards")
     async def list_boards():
         with get_session() as s:
-            boards = s.query(KanbanBoard).order_by(KanbanBoard.name).all()
+            boards = s.query(KanbanBoard).order_by(KanbanBoard.position, KanbanBoard.name).all()
             result = []
             for b in boards:
                 result.append({
                     "id": b.id, "name": b.name, "description": b.description or "",
                     "source": b.source, "external_board_id": b.external_board_id,
-                    "external_url": b.external_url,
+                    "external_url": b.external_url, "color": b.color or "",
+                    "position": b.position or 0,
                 })
             return JSONResponse(result)
 
@@ -210,6 +213,10 @@ def create_routes():
                 board.default_snippet_id = payload.default_snippet_id if payload.default_snippet_id else None
             if payload.default_action_id is not None:
                 board.default_action_id = payload.default_action_id if payload.default_action_id else None
+            if payload.color is not None:
+                board.color = payload.color if payload.color else None
+            if payload.position is not None:
+                board.position = payload.position
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -219,6 +226,19 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
             s.delete(board)
+            return JSONResponse({"success": True})
+
+    @router.post("/kanban/boards/reorder")
+    async def reorder_boards(payload: dict):
+        """Reorder boards. Expects {"order": [id1, id2, ...]}"""
+        order = payload.get("order", [])
+        if not order:
+            return JSONResponse({"success": True})
+        with get_session() as s:
+            for pos, board_id in enumerate(order):
+                board = s.query(KanbanBoard).get(board_id)
+                if board:
+                    board.position = pos
             return JSONResponse({"success": True})
 
     @router.get("/kanban/boards/{board_id}")
@@ -253,6 +273,7 @@ def create_routes():
                 "default_project_id": board.default_project_id,
                 "default_snippet_id": board.default_snippet_id,
                 "default_action_id": board.default_action_id,
+                "color": board.color or "",
             })
 
     # ── Tickets ──

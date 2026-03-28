@@ -442,13 +442,20 @@ def register_routes(router, templates):
             raise HTTPException(status_code=500, detail=str(e))
 
     @router.post("/projects")
-    async def create_project():
-        """Create a new project (matches desktop Add)."""
+    async def create_project(request: Request):
+        """Create a new project with optional name and folder."""
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
+            body = {}
+            try:
+                body = await request.json()
+            except Exception:
+                pass
+            name = (body.get("name") or "").strip() or "New Project"
+            folder = (body.get("folder_location") or "").strip()
             with get_session() as session:
-                project = Project(name="New Project", description="", folder_location="", additional_trigger_words="[]")
+                project = Project(name=name, description="", folder_location=folder, additional_trigger_words="[]")
                 session.add(project)
                 session.commit()
                 session.refresh(project)

@@ -420,18 +420,58 @@
     }
 
     function addProject() {
-        fetch("/api/projects", { method: "POST" })
+        document.getElementById("create-project-name").value = "";
+        document.getElementById("create-project-folder").value = "";
+        document.getElementById("create-project-modal").classList.remove("hidden");
+    }
+
+    function closeCreateProjectModal() {
+        document.getElementById("create-project-modal").classList.add("hidden");
+    }
+
+    function saveNewProject() {
+        var name = document.getElementById("create-project-name").value.trim();
+        if (!name) { showSnackbar("Project name is required", "error"); return; }
+        var folder = document.getElementById("create-project-folder").value.trim();
+        fetch("/api/projects", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ name: name, folder_location: folder }),
+        })
             .then(function(r) {
                 if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Create failed"); });
                 return r.json();
             })
             .then(function(data) {
+                closeCreateProjectModal();
                 loadProjects();
                 selectProject(data.id);
+                showSnackbar("Project created", "success");
             })
             .catch(function(e) {
-                alert(e.message || "Failed to create project");
+                showSnackbar(e.message || "Failed to create project", "error");
             });
+    }
+
+    function browseForNewProject() {
+        var input = document.getElementById("create-project-folder");
+        var initial = (input.value || "").trim();
+        var url = "/api/browse-folder";
+        if (initial) url += "?initial_dir=" + encodeURIComponent(initial);
+        fetch(url)
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                if (data.path) {
+                    input.value = data.path;
+                    // Auto-fill name from folder if name is empty
+                    var nameInput = document.getElementById("create-project-name");
+                    if (!nameInput.value.trim()) {
+                        var parts = data.path.replace(/\/+$/, "").split("/");
+                        nameInput.value = parts[parts.length - 1] || "";
+                    }
+                }
+            })
+            .catch(function() { showSnackbar("Could not open folder picker", "error"); });
     }
 
     function openContextItemModal(item) {
@@ -674,6 +714,17 @@
 
         document.getElementById("project-add").addEventListener("click", addProject);
         document.getElementById("project-create-big").addEventListener("click", addProject);
+
+        // Create project modal
+        document.getElementById("create-project-cancel").addEventListener("click", closeCreateProjectModal);
+        document.getElementById("create-project-save").addEventListener("click", saveNewProject);
+        document.getElementById("create-project-browse").addEventListener("click", browseForNewProject);
+        document.getElementById("create-project-modal").addEventListener("click", function(e) {
+            if (e.target === this) closeCreateProjectModal();
+        });
+        document.getElementById("create-project-name").addEventListener("keydown", function(e) {
+            if (e.key === "Enter") { e.preventDefault(); saveNewProject(); }
+        });
 
         var folderBrowseBtn = document.getElementById("folder-browse");
         if (folderBrowseBtn) folderBrowseBtn.addEventListener("click", browseFolder);
