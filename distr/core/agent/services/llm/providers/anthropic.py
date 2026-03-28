@@ -337,16 +337,26 @@ class AnthropicLLMService(BaseLLMService):
                     raise
 
                 follow_up_content = ""
+                follow_up_tool_use = False
                 async for event in follow_up_stream:
                     if self._cancelled:
                         logger.warning("Anthropic follow-up cancelled during streaming")
                         break
-                    if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                    if event.type == "content_block_start":
+                        if hasattr(event, 'content_block') and event.content_block.type == "tool_use":
+                            follow_up_tool_use = True
+                            logger.info("Anthropic follow-up wants another tool call: %s", event.content_block.name)
+                    elif event.type == "content_block_delta" and event.delta.type == "text_delta":
                         follow_up_content += event.delta.text
                         if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
                             await self.push_frame(TextFrame(text=event.delta.text), self._pipeline_direction)
                         if self.event_queue:
                             self.event_queue.put(('chat_stream_token', {'token': event.delta.text}), block=False)
+                    elif event.type == "message_start":
+                        msg = getattr(event, 'message', None)
+                        if msg:
+                            logger.info("Anthropic follow-up: model=%s, stop_reason=%s",
+                                        getattr(msg, 'model', '?'), getattr(msg, 'stop_reason', None))
 
                 if follow_up_content:
                     self._messages.append({"role": "assistant", "content": follow_up_content})
@@ -355,7 +365,7 @@ class AnthropicLLMService(BaseLLMService):
                         if cid:
                             self.chat_manager.add_assistant_message(cid, follow_up_content)
                 else:
-                    logger.warning("Anthropic follow-up produced no content (cancelled=%s)", self._cancelled)
+                    logger.warning("Anthropic follow-up produced no content (cancelled=%s, tool_use=%s)", self._cancelled, follow_up_tool_use)
 
             elif full_content:
                 self._messages.append({"role": "assistant", "content": full_content})
