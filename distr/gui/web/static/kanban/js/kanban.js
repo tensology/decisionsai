@@ -576,13 +576,15 @@
     }
 
     function openBoardModal(boardId) {
-        editingBoardId = boardId || null;
+        // Ensure boardId is a number (not string from URL params etc.)
+        boardId = boardId ? parseInt(boardId, 10) : null;
+        editingBoardId = boardId;
         document.getElementById("kb-board-modal-title").textContent = boardId ? "Edit Board" : "New Board";
         document.getElementById("kb-board-modal-save").textContent = boardId ? "Save" : "Create";
         // Reset to Details tab
         switchBoardModalTab("details");
 
-        if (boardId && currentBoardData && currentBoardData.id === boardId) {
+        if (boardId && currentBoardData && currentBoardData.id == boardId) {
             populateBoardModal(currentBoardData);
         } else if (boardId) {
             apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
@@ -1010,7 +1012,11 @@
         // Board actions
         document.getElementById("kb-add-ticket").addEventListener("click", addTicket);
         document.getElementById("kb-edit-board").addEventListener("click", function() {
-            if (currentBoard && currentBoard.source === "database") openBoardModal(currentBoard.id);
+            if (currentBoard && currentBoard.source === "database" && currentBoard.id) {
+                openBoardModal(currentBoard.id);
+            } else if (currentBoardData && currentBoardData.id) {
+                openBoardModal(currentBoardData.id);
+            }
         });
         document.getElementById("kb-delete-board").addEventListener("click", deleteBoard);
 
