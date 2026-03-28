@@ -25,6 +25,9 @@
                 <a href="#general" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="general">
                     <span class="font-medium">General</span>
                 </a>
+                <a href="#initiative" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="initiative">
+                    <span class="font-medium">Initiative</span>
+                </a>
                 <a href="#audio" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="audio">
                     <span class="font-medium">Audio</span>
                 </a>
@@ -39,9 +42,6 @@
                 </a>
                 <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
                     <span class="font-medium">Advanced</span>
-                </a>
-                <a href="#initiative" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="initiative">
-                    <span class="font-medium">Initiative</span>
                 </a>
                 <a href="#logs" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="logs">
                     <span class="font-medium">Activity Logs</span>
@@ -61,6 +61,9 @@
                 <div id="tab-general" class="tab-content">  
                     {% include "settings/sections/general.html" %}
                 </div>
+                <div id="tab-initiative" class="tab-content">
+                    {% include "settings/sections/initiative.html" %}
+                </div>
                 <div id="tab-audio" class="tab-content">
                     {% include "settings/sections/audio.html" %}
                 </div>
@@ -75,9 +78,6 @@
                 </div>
                 <div id="tab-advanced" class="tab-content">
                     {% include "settings/sections/advanced.html" %}
-                </div>
-                <div id="tab-initiative" class="tab-content">
-                    {% include "settings/sections/initiative.html" %}
                 </div>
                 <div id="tab-logs" class="tab-content">
                     {% include "settings/sections/logs.html" %}

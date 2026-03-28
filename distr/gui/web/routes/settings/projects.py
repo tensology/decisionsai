@@ -1,7 +1,7 @@
 """
 Projects routes — /projects/*, /browse-folder
 """
-from fastapi import HTTPException, File, UploadFile, Form
+from fastapi import HTTPException, File, UploadFile, Form, Request
 from fastapi.responses import JSONResponse
 from typing import Optional
 import json

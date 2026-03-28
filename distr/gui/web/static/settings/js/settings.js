@@ -17,7 +17,7 @@ function showNotification(message, type) {
 }
 window.showNotification = showNotification;
 
-var SETTINGS_TABS = ['general', 'audio', 'thirdparty', 'llms', 'skins', 'advanced', 'initiative', 'logs'];
+var SETTINGS_TABS = ['general', 'initiative', 'audio', 'thirdparty', 'llms', 'skins', 'advanced', 'logs'];
 
 function getTabFromHash() {
     var hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
