@@ -132,7 +132,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         signal_manager.dictation_started.connect(self.on_dictation_started)
         signal_manager.dictation_stopped.connect(self.on_dictation_stopped)
         
-        self.setWindowFlags(QtCore.Qt.WindowType.FramelessWindowHint | QtCore.Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool  # Keeps window off the taskbar
+        )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._shadow_color = QtGui.QColor(0, 0, 0, 100)

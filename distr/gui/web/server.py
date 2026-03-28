@@ -175,8 +175,8 @@ def create_app() -> FastAPI:
         return response
 
     def _template_context(request: Request, base_path: str) -> dict:
+        # Starlette 1.0+: request is passed as first arg to TemplateResponse, not in context
         return {
-            "request": request,
             "base_path": base_path,
             "internal_api_token": app.state.internal_api_token,
         }
@@ -206,20 +206,20 @@ def create_app() -> FastAPI:
     # Settings page (tabbed: general, audio, thirdparty, llms, advanced, logs)
     @app.get("/settings", response_class=HTMLResponse)
     async def settings_page_no_slash(request: Request):
-        return page_templates.TemplateResponse("settings/settings.html", _template_context(request, "/settings"))
+        return page_templates.TemplateResponse(request, "settings/settings.html", _template_context(request, "/settings"))
 
     @app.get("/settings/", response_class=HTMLResponse)
     async def settings_page_with_slash(request: Request):
-        return page_templates.TemplateResponse("settings/settings.html", _template_context(request, "/settings"))
+        return page_templates.TemplateResponse(request, "settings/settings.html", _template_context(request, "/settings"))
 
     # Chat page
     @app.get("/chat", response_class=HTMLResponse)
     async def chat_page_no_slash(request: Request):
-        return page_templates.TemplateResponse("chat/chat.html", _template_context(request, "/chat"))
+        return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
 
     @app.get("/chat/", response_class=HTMLResponse)
     async def chat_page_with_slash(request: Request):
-        return page_templates.TemplateResponse("chat/chat.html", _template_context(request, "/chat"))
+        return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
 
     try:
         from distr.gui.web.routes.chat import create_routes as create_chat_routes
@@ -240,7 +240,7 @@ def create_app() -> FastAPI:
     # Standalone pages — each has its own template directory
     @app.get("/actions/", response_class=HTMLResponse)
     async def actions_page(request: Request):
-        return page_templates.TemplateResponse("actions/actions.html", _template_context(request, "/actions"))
+        return page_templates.TemplateResponse(request, "actions/actions.html", _template_context(request, "/actions"))
 
     @app.get("/actions", response_class=HTMLResponse)
     async def actions_redirect():
@@ -248,7 +248,7 @@ def create_app() -> FastAPI:
 
     @app.get("/snippets/", response_class=HTMLResponse)
     async def snippets_page(request: Request):
-        return page_templates.TemplateResponse("snippets/snippets.html", _template_context(request, "/snippets"))
+        return page_templates.TemplateResponse(request, "snippets/snippets.html", _template_context(request, "/snippets"))
 
     @app.get("/snippets", response_class=HTMLResponse)
     async def snippets_redirect():
@@ -256,7 +256,7 @@ def create_app() -> FastAPI:
 
     @app.get("/projects/", response_class=HTMLResponse)
     async def projects_page(request: Request):
-        return page_templates.TemplateResponse("projects/projects.html", _template_context(request, "/projects"))
+        return page_templates.TemplateResponse(request, "projects/projects.html", _template_context(request, "/projects"))
 
     @app.get("/projects", response_class=HTMLResponse)
     async def projects_redirect():
@@ -264,7 +264,7 @@ def create_app() -> FastAPI:
 
     @app.get("/workflows/", response_class=HTMLResponse)
     async def workflows_page(request: Request):
-        return page_templates.TemplateResponse("workflows/workflows.html", _template_context(request, "/workflows"))
+        return page_templates.TemplateResponse(request, "workflows/workflows.html", _template_context(request, "/workflows"))
 
     @app.get("/workflows", response_class=HTMLResponse)
     async def workflows_redirect():
@@ -273,7 +273,7 @@ def create_app() -> FastAPI:
     # Kanban
     @app.get("/kanban/", response_class=HTMLResponse)
     async def kanban_page(request: Request):
-        return page_templates.TemplateResponse("kanban/kanban.html", _template_context(request, "/kanban"))
+        return page_templates.TemplateResponse(request, "kanban/kanban.html", _template_context(request, "/kanban"))
 
     @app.get("/kanban", response_class=HTMLResponse)
     async def kanban_redirect():
@@ -298,7 +298,7 @@ def create_app() -> FastAPI:
 
     @app.get("/docs/", response_class=HTMLResponse)
     async def docs_page(request: Request):
-        return page_templates.TemplateResponse("docs/docs.html", _template_context(request, "/docs"))
+        return page_templates.TemplateResponse(request, "docs/docs.html", _template_context(request, "/docs"))
 
     @app.get("/docs", response_class=HTMLResponse)
     async def docs_redirect():

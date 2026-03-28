@@ -524,14 +524,32 @@ def init_db():
     
     with Session() as session:
         if not session.query(Settings).first():
+            # Detect system RAM and pick appropriate models directly
+            try:
+                from distr.core.system_resources import recommend_ollama_defaults, get_total_ram_gb
+                _rec = recommend_ollama_defaults(get_total_ram_gb())
+            except Exception:
+                _rec = {"conversational": "qwen3:0.6b", "coding": "qwen2.5-coder:0.5b", "vision": "qwen3-vl:2b"}
+
+            # Also consume the setup.py JSON if it exists (may have more accurate values)
+            _model_defaults_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'installer', '.model_defaults.json')
+            try:
+                import json as _json
+                if os.path.exists(_model_defaults_path):
+                    with open(_model_defaults_path, 'r') as _f:
+                        _rec.update(_json.load(_f))
+                    os.remove(_model_defaults_path)
+            except Exception:
+                pass
+
             default_settings = Settings(
                 language='English',
                 oracle_position='Middle Right',
                 selected_oracle='0.gif',
                 startup_listening_state='remember',
                 sphere_size=120,
-                input_device=None,  # None means user hasn't selected yet - will show dialog
-                output_device=None,  # None means user hasn't selected yet - will show dialog
+                input_device=None,
+                output_device=None,
                 play_output='System Default',
                 play_translation='System Default',
                 speech_volume=50,
@@ -543,19 +561,19 @@ def init_db():
                 voice_provider='kokoro',
                 kokoro_voice='af_heart',
                 agent_provider='Ollama',
-                agent_model='qwen3:8b',
+                agent_model=_rec.get('conversational', 'qwen3:0.6b'),
                 llm_provider='Ollama',
-                llm_model='qwen3:8b',
+                llm_model=_rec.get('conversational', 'qwen3:0.6b'),
                 conversational_llm_provider='Ollama',
-                conversational_llm_model='qwen3:8b',
+                conversational_llm_model=_rec.get('conversational', 'qwen3:0.6b'),
                 coding_llm_provider='Ollama',
-                coding_llm_model='qwen2.5-coder:7b',
+                coding_llm_model=_rec.get('coding', 'qwen2.5-coder:0.5b'),
                 vision_llm_provider='Ollama',
-                vision_llm_model='qwen3-vl:2b',
+                vision_llm_model=_rec.get('vision', 'qwen3-vl:2b'),
                 image_llm_provider='Ollama',
                 image_llm_model='x/flux2-klein:latest',
                 code_provider='Ollama',
-                code_model='qwen2.5-coder:7b',
+                code_model=_rec.get('coding', 'qwen2.5-coder:0.5b'),
                 input_speech='Vosk',
                 transcription_model='Whisper.cpp (Local & Offline)',
                 indexed_folders='[]',

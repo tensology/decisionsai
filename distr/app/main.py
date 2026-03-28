@@ -212,8 +212,16 @@ def setup_logging(clear_logs=True):
     app_logger = logging.getLogger('distr')
     
     # Create handlers
-    file_handler = logging.FileHandler(log_file)
-    console_handler = logging.StreamHandler()
+    file_handler = logging.FileHandler(log_file, encoding='utf-8')
+    # On Windows the console may be cp1252 — use errors='replace' to avoid UnicodeEncodeError on emoji
+    import sys as _sys
+    _console_stream = _sys.stderr
+    if hasattr(_console_stream, 'reconfigure'):
+        try:
+            _console_stream.reconfigure(encoding='utf-8', errors='replace')
+        except Exception:
+            pass
+    console_handler = logging.StreamHandler(_console_stream)
     
     # Create formatter
     formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
@@ -823,8 +831,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         """Play the splash sound file in a separate thread."""
         def play_sound():
             try:
-                # Get the path to the sound file
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # Get the path to the sound file — main.py is at distr/app/main.py,
+                # assets are at project_root/assets/
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 sound_path = os.path.join(base_dir, "assets", "sounds", "decisions.mp3")
                 
                 if not os.path.exists(sound_path):
@@ -851,7 +860,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
                         except FileNotFoundError:
                             continue
                 elif sys.platform == "win32":
-                    os.startfile(sound_path)
+                    # Use ffplay (bundled with ffmpeg) — runs as a separate process
+                    # so it won't conflict with the app's sounddevice audio pipeline
+                    subprocess.Popen(
+                        ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', sound_path],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                    )
                 else:
                     logger.warning(f"Unsupported platform for audio playback: {sys.platform}")
             except Exception as e:

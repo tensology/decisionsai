@@ -25,7 +25,7 @@ from distr.core.utils import save_settings_to_db as core_save_settings
 
 # Default settings
 DEFAULT_SETTINGS = {
-    'load_splash_sound': False,
+    'load_splash_sound': True,
     'show_about': False,
     'welcome_greet_me': True,
     'always_confirm_file_operations': True,

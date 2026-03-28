@@ -95,10 +95,13 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         # Connect signals (session orchestrates chat switches — no current_chat_changed listener)
         if self.chat_manager:
             self.chat_manager.on("chat_deleted", self.on_chat_deleted)
-            signal_manager.chat_cleared.connect(self.on_chat_cleared)
+            try:
+                signal_manager.chat_cleared.connect(self.on_chat_cleared)
+            except RuntimeError:
+                pass  # signal_manager GC'd in spawned child process — no QApplication
         try:
             signal_manager.files_indexed.connect(self._on_files_indexed)
-        except Exception:
+        except (RuntimeError, Exception):
             pass
 
         # Username + system prompt (shared helpers)
