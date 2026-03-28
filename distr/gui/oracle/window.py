@@ -134,6 +134,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Window flags already set above — don't call setWindowFlags again
         # as it recreates the native window and can break on-top state on macOS.
+        # But re-assert translucent background in case it was lost.
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._shadow_color = QtGui.QColor(0, 0, 0, 100)
 
