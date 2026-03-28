@@ -831,8 +831,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         """Play the splash sound file in a separate thread."""
         def play_sound():
             try:
-                # Get the path to the sound file
-                base_dir = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+                # Get the path to the sound file — main.py is at distr/app/main.py,
+                # assets are at project_root/assets/
+                base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
                 sound_path = os.path.join(base_dir, "assets", "sounds", "decisions.mp3")
                 
                 if not os.path.exists(sound_path):

@@ -917,17 +917,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def mousePressEvent(self, event):
         logging.info(f"mousePressEvent: button={event.button()}, hands_free={self.is_hands_free}")
-        import platform
-        is_windows = platform.system() == 'Windows'
-
-        ptt_button = QtCore.Qt.MouseButton.RightButton if is_windows else QtCore.Qt.MouseButton.LeftButton
-        menu_button = QtCore.Qt.MouseButton.LeftButton if is_windows else QtCore.Qt.MouseButton.RightButton
-
-        if event.button() == ptt_button:
+        if event.button() == QtCore.Qt.MouseButton.LeftButton:
             self.offset = event.position().toPoint()
             self.dragging = False
             self.start_hold_to_talk()
-        elif event.button() == menu_button:
+        elif event.button() == QtCore.Qt.MouseButton.RightButton:
             # Update menu state before showing to ensure it's current
             self._update_recording_menu_state()
             self.menu.exec(event.globalPosition().toPoint())

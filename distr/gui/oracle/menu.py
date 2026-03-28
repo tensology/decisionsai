@@ -298,7 +298,6 @@ class MenuTrayMixin:
         """Handle tray icon activation (click events)."""
         from PyQt6.QtWidgets import QSystemTrayIcon
         from PyQt6.QtCore import QTimer
-        import platform
 
         # If recording was just stopped, ignore this click (don't show menu)
         if self._recording_just_stopped:
@@ -318,13 +317,6 @@ class MenuTrayMixin:
             self._recording_just_stopped = True
             QTimer.singleShot(100, lambda: self.tray_icon.setContextMenu(original_menu) if original_menu else None)
             return
-
-        # On Windows, left-click on tray shows the menu (Windows convention)
-        if platform.system() == 'Windows' and reason == QSystemTrayIcon.ActivationReason.Trigger:
-            self._update_recording_menu_state()
-            self.tray_icon.contextMenu().exec(
-                self.tray_icon.geometry().bottomLeft()
-            )
 
     def create_tray_icon(self):
         """Create and configure the system tray icon"""

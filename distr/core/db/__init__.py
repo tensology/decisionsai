@@ -524,6 +524,18 @@ def init_db():
     
     with Session() as session:
         if not session.query(Settings).first():
+            # Read RAM-based model recommendations written by setup.py
+            _rec = {"conversational": "qwen3:8b", "coding": "qwen2.5-coder:7b", "vision": "qwen3-vl:2b"}
+            _model_defaults_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'installer', '.model_defaults.json')
+            try:
+                import json as _json
+                if os.path.exists(_model_defaults_path):
+                    with open(_model_defaults_path, 'r') as _f:
+                        _rec.update(_json.load(_f))
+                    # Clean up the temp file — values are now in the DB
+                    os.remove(_model_defaults_path)
+            except Exception:
+                pass  # Fall back to hardcoded defaults
             default_settings = Settings(
                 language='English',
                 oracle_position='Middle Right',
@@ -543,15 +555,15 @@ def init_db():
                 voice_provider='kokoro',
                 kokoro_voice='af_heart',
                 agent_provider='Ollama',
-                agent_model='qwen3:8b',
+                agent_model=_rec.get('conversational', 'qwen3:8b'),
                 llm_provider='Ollama',
-                llm_model='qwen3:8b',
+                llm_model=_rec.get('conversational', 'qwen3:8b'),
                 conversational_llm_provider='Ollama',
-                conversational_llm_model='qwen3:8b',
+                conversational_llm_model=_rec.get('conversational', 'qwen3:8b'),
                 coding_llm_provider='Ollama',
-                coding_llm_model='qwen2.5-coder:7b',
+                coding_llm_model=_rec.get('coding', 'qwen2.5-coder:7b'),
                 vision_llm_provider='Ollama',
-                vision_llm_model='qwen3-vl:2b',
+                vision_llm_model=_rec.get('vision', 'qwen3-vl:2b'),
                 image_llm_provider='Ollama',
                 image_llm_model='x/flux2-klein:latest',
                 code_provider='Ollama',

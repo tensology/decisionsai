@@ -247,6 +247,16 @@ def setup(skip_model_pull=False, install_optional=False):
         ram_gb = 16.0
         rec = {"conversational": "qwen3:8b", "coding": "qwen2.5-coder:7b", "vision": "qwen3-vl:2b"}
 
+    # Write recommended models to a file so the DB can pick them up on first creation
+    try:
+        import json
+        os.makedirs('installer', exist_ok=True)
+        with open(os.path.join('installer', '.model_defaults.json'), 'w') as f:
+            json.dump(rec, f)
+        print(f"Saved model defaults: {rec}")
+    except Exception as _e:
+        print(f"Warning: could not save model defaults: {_e}")
+
     default_models = [
         (rec["conversational"], "Conversational LLM"),
         (rec["coding"],         "Coding LLM"),

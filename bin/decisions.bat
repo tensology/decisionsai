@@ -410,30 +410,22 @@ if !MODELS_EXIST! equ 0 (
 )
 
 :: Check for Ollama
+:: Check for Ollama (model pulling is handled by bin/setup.py based on system RAM)
 where ollama >nul 2>&1
 if !errorlevel! equ 0 (
     echo [32m√[0m Ollama found
-    ollama list 2>nul | findstr /i "llama3.1:8b" >nul 2>&1
-    if !errorlevel! neq 0 (
-        echo [33mOllama model llama3.1:8b not found. Pulling...[0m
-        ollama pull llama3.1:8b
-    ) else (
-        echo [32m√[0m Ollama model llama3.1:8b is available
-    )
 ) else (
     echo [33mOllama not found. Installing...[0m
     where winget >nul 2>&1
     if !errorlevel! equ 0 (
         winget install Ollama.Ollama --accept-package-agreements --accept-source-agreements >nul 2>&1
         if !errorlevel! equ 0 (
-            echo [32m√[0m Ollama installed. It will be available after restarting your terminal.
-            echo [33m  Then run: ollama pull llama3.1:8b[0m
+            echo [32m√[0m Ollama installed. Restart your terminal, then re-run this script.
         ) else (
             echo [33mCould not auto-install Ollama. Download from https://ollama.com/download[0m
         )
     ) else (
         echo [33mNote: Install Ollama from https://ollama.com/download for local LLM support[0m
-        echo   Then run: ollama pull llama3.1:8b
     )
 )
 
