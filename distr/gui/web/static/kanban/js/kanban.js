@@ -18,8 +18,26 @@
 
     // ── Load boards sidebar ──
 
-    function loadBoards() {
-        apiFetch("/api/kanban/boards").then(function(boards) {
+    var _boardsCache = null;
+    var _externalCache = null;
+    var _boardsCacheTime = 0;
+    var _externalCacheTime = 0;
+    var CACHE_TTL = 60000; // 1 minute
+
+    function loadBoards(forceRefresh) {
+        var now = Date.now();
+        var boardsStale = forceRefresh || !_boardsCache || (now - _boardsCacheTime > CACHE_TTL);
+        var externalStale = forceRefresh || !_externalCache || (now - _externalCacheTime > CACHE_TTL);
+
+        var boardsPromise = boardsStale
+            ? apiFetch("/api/kanban/boards").then(function(boards) {
+                _boardsCache = boards;
+                _boardsCacheTime = Date.now();
+                return boards;
+            })
+            : Promise.resolve(_boardsCache);
+
+        boardsPromise.then(function(boards) {
             dbBoards = boards.filter(function(b) { return b.source === "database"; });
             renderSidebarBoards(boards);
 
@@ -41,10 +59,19 @@
             }
         }).catch(function() { showSnackbar("Failed to load boards", "error"); });
 
-        apiFetch("/api/kanban/external-boards").then(function(data) {
-            renderExternalBoards("kb-trello-boards", data.trello || [], "trello");
-            renderExternalBoards("kb-jira-boards", data.jira || [], "jira");
-        }).catch(function() {});
+        if (externalStale) {
+            apiFetch("/api/kanban/external-boards").then(function(data) {
+                _externalCache = data;
+                _externalCacheTime = Date.now();
+                renderExternalBoards("kb-trello-boards", data.trello || [], "trello");
+                renderExternalBoards("kb-jira-boards", data.jira || [], "jira");
+            }).catch(function(e) {
+                console.error("Failed to load external boards:", e);
+            });
+        } else if (_externalCache) {
+            renderExternalBoards("kb-trello-boards", _externalCache.trello || [], "trello");
+            renderExternalBoards("kb-jira-boards", _externalCache.jira || [], "jira");
+        }
     }
 
     function renderSidebarBoards(boards) {
@@ -81,7 +108,7 @@
                 apiFetch("/api/kanban/boards/reorder", {
                     method: "POST", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ order: order })
-                }).then(function() { loadBoards(); }).catch(function() {});
+                }).then(function() { loadBoards(true); }).catch(function() {});
             };
             div.oncontextmenu = function(e) { e.preventDefault(); showBoardContextMenu(e, b.id); };
             container.appendChild(div);
@@ -134,7 +161,7 @@
             body: JSON.stringify({ name: newName.trim() })
         }).then(function() {
             showSnackbar("Board renamed");
-            loadBoards();
+            loadBoards(true);
             if (currentBoard && currentBoard.id === boardId) selectBoard("database", boardId);
         }).catch(function(e) { showSnackbar("Rename failed: " + e.message, "error"); });
     }
@@ -160,7 +187,7 @@
                 document.getElementById("kb-board-view").classList.add("hidden");
                 document.getElementById("kb-empty").classList.remove("hidden");
             }
-            loadBoards();
+            loadBoards(true);
         }).catch(function(e) { showSnackbar("Delete failed: " + e.message, "error"); });
     }
 
@@ -183,7 +210,7 @@
                 renderBoard(data, false);
             }).catch(function(e) { showSnackbar("Failed to load external board: " + e.message, "error"); });
         }
-        loadBoards();
+        loadBoards(); // uses cache, just re-renders sidebar active state
     }
 
     function renderBoard(data, isLocal) {
@@ -194,9 +221,14 @@
         document.getElementById("kb-board-title").textContent = data.name || "Board";
         var badge = document.getElementById("kb-board-source-badge");
         var source = currentBoard.source;
-        badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
-        badge.className = "text-xs px-2 py-0.5 rounded text-white";
-        badge.style.backgroundColor = source === "database" ? boardColor : source === "trello" ? "#0079bf" : "#0052cc";
+        if (source === "database") {
+            badge.classList.add("hidden");
+        } else {
+            badge.classList.remove("hidden");
+            badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
+            badge.className = "text-xs px-2 py-0.5 rounded text-white";
+            badge.style.backgroundColor = source === "trello" ? "#0079bf" : "#0052cc";
+        }
 
         document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
         document.getElementById("kb-edit-board").style.display = isLocal ? "" : "none";
@@ -664,7 +696,7 @@
                 method: "PUT", headers: { "Content-Type": "application/json" },
                 body: JSON.stringify(payload)
             }).then(function() {
-                showSnackbar("Board updated"); closeBoardModal(); loadBoards();
+                showSnackbar("Board updated"); closeBoardModal(); loadBoards(true);
                 if (currentBoard && currentBoard.id === editingBoardId) selectBoard("database", editingBoardId);
             }).catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
         } else {
@@ -681,7 +713,7 @@
                     })
                 }).then(function() { return data; });
             }).then(function(data) {
-                showSnackbar("Board created"); closeBoardModal(); loadBoards();
+                showSnackbar("Board created"); closeBoardModal(); loadBoards(true);
                 selectBoard("database", data.id);
             }).catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
         }
@@ -695,7 +727,7 @@
             currentBoard = null; currentBoardData = null;
             document.getElementById("kb-board-view").classList.add("hidden");
             document.getElementById("kb-empty").classList.remove("hidden");
-            loadBoards();
+            loadBoards(true);
         }).catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
     }
 
