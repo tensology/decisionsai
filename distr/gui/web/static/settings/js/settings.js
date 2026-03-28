@@ -17,7 +17,7 @@ function showNotification(message, type) {
 }
 window.showNotification = showNotification;
 
-var SETTINGS_TABS = ['general', 'audio', 'thirdparty', 'llms', 'skins', 'advanced', 'logs'];
+var SETTINGS_TABS = ['general', 'audio', 'thirdparty', 'llms', 'skins', 'advanced', 'initiative', 'logs'];
 
 function getTabFromHash() {
     var hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
@@ -90,6 +90,7 @@ function setupActionButtons() {
                 else if (active.id === 'tab-llms' && typeof window.saveLLMsSettings === 'function') window.saveLLMsSettings();
                 else if (active.id === 'tab-skins') showNotification('Use the Save button in the Skin Editor', 'info');
                 else if (active.id === 'tab-advanced' && typeof window.saveAdvancedSettings === 'function') window.saveAdvancedSettings();
+                else if (active.id === 'tab-initiative' && typeof window.saveInitiativeSettings === 'function') window.saveInitiativeSettings();
                 else if (active.id === 'tab-logs') showNotification('Logs tab has no save action', 'info');
                 else showNotification('Settings saved (UI only)', 'info');
             }
@@ -114,6 +115,7 @@ function setupActionButtons() {
                 else if (active.id === 'tab-llms' && typeof window.loadLLMsSettings === 'function') window.loadLLMsSettings();
                 else if (active.id === 'tab-skins' && typeof window.loadSkinsSettings === 'function') window.loadSkinsSettings();
                 else if (active.id === 'tab-advanced' && typeof window.loadAdvancedSettings === 'function') window.loadAdvancedSettings();
+                else if (active.id === 'tab-initiative' && typeof window.loadInitiativeSettings === 'function') window.loadInitiativeSettings();
             }
             showNotification('Settings reloaded', 'info');
         }, true);

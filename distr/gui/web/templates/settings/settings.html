@@ -10,6 +10,7 @@
 <script src="/settings/static/js/llms.js"></script>
 <script src="/settings/static/js/skins.js"></script>
 <script src="/settings/static/js/advanced.js"></script>
+<script src="/settings/static/js/initiative.js"></script>
 <script src="/settings/static/js/logs.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}
@@ -38,6 +39,9 @@
                 </a>
                 <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
                     <span class="font-medium">Advanced</span>
+                </a>
+                <a href="#initiative" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="initiative">
+                    <span class="font-medium">Initiative</span>
                 </a>
                 <a href="#logs" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="logs">
                     <span class="font-medium">Activity Logs</span>
@@ -71,6 +75,9 @@
                 </div>
                 <div id="tab-advanced" class="tab-content">
                     {% include "settings/sections/advanced.html" %}
+                </div>
+                <div id="tab-initiative" class="tab-content">
+                    {% include "settings/sections/initiative.html" %}
                 </div>
                 <div id="tab-logs" class="tab-content">
                     {% include "settings/sections/logs.html" %}

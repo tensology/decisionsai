@@ -56,8 +56,33 @@
         db.forEach(function(b) {
             var div = document.createElement("div");
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
-            div.innerHTML = '<span class="kb-src-icon kb-src-db"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
+            div.draggable = true;
+            div.dataset.boardId = b.id;
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
             div.onclick = function() { selectBoard("database", b.id); };
+            div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
+            div.ondragend = function() { div.classList.remove("dragging"); };
+            div.ondragover = function(e) { e.preventDefault(); div.style.borderTop = "2px solid #f97316"; };
+            div.ondragleave = function() { div.style.borderTop = ""; };
+            div.ondrop = function(e) {
+                e.preventDefault();
+                div.style.borderTop = "";
+                var data = e.dataTransfer.getData("text/plain");
+                if (!data.startsWith("board:")) return;
+                var draggedId = parseInt(data.split(":")[1], 10);
+                if (draggedId === b.id) return;
+                // Reorder: collect current order, move dragged before drop target
+                var items = container.querySelectorAll("[data-board-id]");
+                var order = [];
+                items.forEach(function(el) { order.push(parseInt(el.dataset.boardId, 10)); });
+                order = order.filter(function(id) { return id !== draggedId; });
+                var dropIdx = order.indexOf(b.id);
+                order.splice(dropIdx, 0, draggedId);
+                apiFetch("/api/kanban/boards/reorder", {
+                    method: "POST", headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ order: order })
+                }).then(function() { loadBoards(); }).catch(function() {});
+            };
             div.oncontextmenu = function(e) { e.preventDefault(); showBoardContextMenu(e, b.id); };
             container.appendChild(div);
         });
