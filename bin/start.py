@@ -3,6 +3,16 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
+# On Windows, import onnxruntime FIRST before any other heavy packages.
+# PyTorch and other native libraries can pollute the DLL search path,
+# causing onnxruntime_pybind11_state to fail with "DLL load failed".
+# Loading onnxruntime before torch ensures its DLLs are found correctly.
+if sys.platform == 'win32':
+    try:
+        import onnxruntime  # noqa: F401 — must load before torch
+    except ImportError:
+        pass
+
 # Fix Windows console encoding — cp1252 can't handle emoji in log messages
 # Only do this in the main process, not in multiprocessing spawn workers
 if sys.platform == 'win32' and __name__ == '__main__':
