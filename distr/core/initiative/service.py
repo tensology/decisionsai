@@ -278,6 +278,9 @@ class InitiativeService:
             f"You are an autonomous agent assistant. Current initiative level: {settings.get('initiative_level', 'assist')}.\n"
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {_json.dumps({k: v for k, v in settings.items() if k.startswith('initiative_')})}\n\n"
+            "You have awareness of: the active project (folder, context, board), kanban boards and tickets, "
+            "step runner sessions (stuck/unfinished), scheduled tasks, recent tool audit trail, available tools, "
+            "and saved snippets. Use this context to propose intelligent, helpful actions.\n\n"
             "Based on the context, propose ONE action the agent should take. "
             "Respond with a JSON object only (no markdown fences) with fields: "
             "action_type (suggestion|routine_task|external_comms|file_change|sensitive|none), "
@@ -287,10 +290,14 @@ class InitiativeService:
 
         user_prompt = _json.dumps({
             "chat_history": bundle.chat_history,
+            "active_project": bundle.active_project,
             "scheduled_sessions": bundle.scheduled_sessions,
             "kanban_summary": bundle.kanban_summary,
             "stuck_tasks": bundle.stuck_tasks,
             "unfinished_workflows": bundle.unfinished_workflows,
+            "available_tools": bundle.available_tools[:15],
+            "snippets": bundle.snippets[:10],
+            "recent_audit": bundle.recent_audit[:10],
         }, ensure_ascii=False)
 
         response = litellm.completion(

@@ -13,6 +13,10 @@ class ContextBundle:
     kanban_summary: list = field(default_factory=list)
     stuck_tasks: list = field(default_factory=list)
     unfinished_workflows: list = field(default_factory=list)
+    active_project: dict = field(default_factory=dict)
+    available_tools: list = field(default_factory=list)
+    snippets: list = field(default_factory=list)
+    recent_audit: list = field(default_factory=list)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
 
@@ -56,12 +60,44 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to fetch unfinished workflows", exc_info=True)
 
+        # --- active_project ---
+        active_project = {}
+        try:
+            active_project = self._fetch_active_project()
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch active project", exc_info=True)
+
+        # --- available_tools ---
+        available_tools = []
+        try:
+            available_tools = self._fetch_available_tools()
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch available tools", exc_info=True)
+
+        # --- snippets ---
+        snippets = []
+        try:
+            snippets = self._fetch_snippets()
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch snippets", exc_info=True)
+
+        # --- recent_audit ---
+        recent_audit = []
+        try:
+            recent_audit = self._fetch_recent_audit(settings)
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch recent audit", exc_info=True)
+
         return ContextBundle(
             chat_history=chat_history,
             scheduled_sessions=scheduled_sessions,
             kanban_summary=kanban_summary,
             stuck_tasks=stuck_tasks,
             unfinished_workflows=unfinished_workflows,
+            active_project=active_project,
+            available_tools=available_tools,
+            snippets=snippets,
+            recent_audit=recent_audit,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
         )
@@ -198,3 +234,106 @@ class ContextAssembler:
                 })
 
         return result
+
+    def _fetch_active_project(self) -> dict:
+        """Fetch the currently active project with its context items and board info."""
+        from distr.core.db.projects import Project, ProjectContextItem
+        from distr.core.db import get_session
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.in_use == True).first()
+            if not project:
+                return {}
+
+            context_items = (
+                session.query(ProjectContextItem)
+                .filter(ProjectContextItem.project_id == project.id)
+                .all()
+            )
+
+            return {
+                "id": project.id,
+                "name": project.name or "",
+                "description": project.description or "",
+                "folder_location": project.folder_location or "",
+                "provider": project.provider or "",
+                "board_name": project.board_name or "",
+                "trigger_words": project.additional_trigger_words or "[]",
+                "startup_instructions": project.startup_instructions or "",
+                "context_items": [
+                    {"title": c.title, "content": (c.content or "")[:500]}
+                    for c in context_items[:10]
+                ],
+            }
+
+    def _fetch_available_tools(self) -> list:
+        """Fetch a summary of available agent tools."""
+        try:
+            from distr.core.agent.tools import load_tools
+            tools = load_tools(
+                chat_manager=None, use_navigation_tools=False,
+                llm_service=None, tts_service=None,
+            )
+            return [
+                {"name": t.name, "description": (t.description or "")[:100]}
+                for t in tools[:30]
+            ]
+        except Exception:
+            return []
+
+    def _fetch_snippets(self) -> list:
+        """Fetch saved snippets/actions."""
+        from distr.core.db import get_session
+
+        result = []
+        try:
+            from distr.core.db.kanban import Snippet
+            with get_session() as session:
+                snippets = session.query(Snippet).limit(20).all()
+                for s in snippets:
+                    result.append({
+                        "id": s.id,
+                        "title": s.title or "",
+                        "content": (s.content or "")[:200],
+                    })
+        except Exception:
+            pass
+        return result
+
+    def _fetch_recent_audit(self, settings: dict) -> list:
+        """Fetch recent tool audit entries from the current chat."""
+        from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+        from distr.core.db import get_session
+
+        chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+        if not chat_id:
+            return []
+
+        with get_session() as session:
+            # Find audit sessions for this chat
+            audit_sessions = (
+                session.query(StepRunnerSession)
+                .filter(
+                    StepRunnerSession.chat_id == int(chat_id),
+                    StepRunnerSession.session_type == "audit",
+                )
+                .order_by(StepRunnerSession.modified_date.desc())
+                .limit(3)
+                .all()
+            )
+            result = []
+            for s in audit_sessions:
+                steps = (
+                    session.query(StepRunnerStep)
+                    .filter(StepRunnerStep.session_id == s.id)
+                    .order_by(StepRunnerStep.position.desc())
+                    .limit(10)
+                    .all()
+                )
+                for st in steps:
+                    result.append({
+                        "tool": st.tool_used or st.title or "",
+                        "status": st.status,
+                        "result": (st.result or "")[:200],
+                    })
+            return result[:15]

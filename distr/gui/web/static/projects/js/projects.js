@@ -235,6 +235,9 @@
             loadBoardProvidersAndSelect(ps ? ps.value : "", bid, bname);
             loadKanbanBoardStatus();
         }
+        if (tabName === "cli") {
+            loadCliAudit();
+        }
     }
 
     function loadBoardProvidersAndSelect(providerValue, boardId, boardName) {
@@ -802,6 +805,79 @@
         if (contextSaveBtn) contextSaveBtn.addEventListener("click", saveContextItem);
         var contextCancelBtn = document.getElementById("context-item-cancel");
         if (contextCancelBtn) contextCancelBtn.addEventListener("click", closeContextItemModal);
+
+        // CLI tab
+        var cliSendBtn = document.getElementById("cli-send");
+        if (cliSendBtn) cliSendBtn.addEventListener("click", sendCliInstruction);
+        var cliInput = document.getElementById("cli-instruction");
+        if (cliInput) cliInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") sendCliInstruction();
+        });
+        var cliRefreshBtn = document.getElementById("cli-refresh");
+        if (cliRefreshBtn) cliRefreshBtn.addEventListener("click", loadCliAudit);
+    }
+
+    function sendCliInstruction() {
+        if (!currentProjectId) return;
+        var input = document.getElementById("cli-instruction");
+        var instruction = (input.value || "").trim();
+        if (!instruction) return;
+        input.value = "";
+        var sendBtn = document.getElementById("cli-send");
+        if (sendBtn) sendBtn.disabled = true;
+        apiFetch("/api/projects/" + currentProjectId + "/cli", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({instruction: instruction}),
+        }).then(function(data) {
+            if (data.success) {
+                showSnackbar("Instruction sent", "success");
+                setTimeout(loadCliAudit, 1000);
+            } else {
+                showSnackbar(data.error || "Failed", "error");
+            }
+        }).catch(function() {
+            showSnackbar("Failed to send instruction", "error");
+        }).finally(function() {
+            if (sendBtn) sendBtn.disabled = false;
+        });
+    }
+
+    function loadCliAudit() {
+        if (!currentProjectId) return;
+        var list = document.getElementById("cli-audit-list");
+        if (!list) return;
+        apiFetch("/api/projects/" + currentProjectId + "/cli/audit")
+            .then(function(data) {
+                var sessions = data.sessions || [];
+                if (!sessions.length) {
+                    list.innerHTML = "<p class=\"text-gray-500 text-xs italic\">No actions yet.</p>";
+                    return;
+                }
+                list.innerHTML = sessions.map(function(s) {
+                    var statusColor = s.status === "completed" ? "text-green-400" : s.status === "failed" ? "text-red-400" : "text-yellow-400";
+                    var stepsHtml = (s.steps || []).map(function(st) {
+                        var stColor = st.status === "completed" ? "text-green-400" : st.status === "failed" ? "text-red-400" : "text-gray-400";
+                        return "<div class=\"ml-4 py-1 border-l border-white/10 pl-3\">" +
+                            "<span class=\"" + stColor + " text-xs\">●</span> " +
+                            "<span class=\"text-xs text-gray-300\">" + escapeAttr(st.title) + "</span>" +
+                            (st.tool ? " <span class=\"text-xs text-gray-500\">(" + escapeAttr(st.tool) + ")</span>" : "") +
+                            (st.result ? "<div class=\"text-xs text-gray-500 mt-0.5 truncate max-w-full\">" + escapeAttr(st.result.substring(0, 150)) + "</div>" : "") +
+                            "</div>";
+                    }).join("");
+                    return "<div class=\"border border-white/10 rounded p-2 bg-white/5\">" +
+                        "<div class=\"flex items-center justify-between\">" +
+                        "<span class=\"text-xs text-gray-300 font-medium\">" + escapeAttr(s.instruction) + "</span>" +
+                        "<span class=\"" + statusColor + " text-xs\">" + escapeAttr(s.status) + "</span>" +
+                        "</div>" +
+                        (s.created ? "<div class=\"text-xs text-gray-500 mt-0.5\">" + escapeAttr(s.created) + "</div>" : "") +
+                        stepsHtml +
+                        "</div>";
+                }).join("");
+            })
+            .catch(function() {
+                list.innerHTML = "<p class=\"text-red-400 text-xs\">Failed to load audit trail.</p>";
+            });
     }
 
     if (document.readyState === "loading") {

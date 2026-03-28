@@ -549,3 +549,106 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to create kanban board for project: {e}", exc_info=True)
             raise HTTPException(status_code=500, detail=str(e))
+
+    # ── CLI: send instruction & audit trail ──
+
+    @router.post("/projects/{project_id}/cli")
+    async def send_cli_instruction(project_id: int, request: Request):
+        """Send an instruction to the agent in the context of a project."""
+        try:
+            body = await request.json()
+            instruction = (body.get("instruction") or "").strip()
+            if not instruction:
+                return JSONResponse({"success": False, "error": "instruction required"}, status_code=400)
+
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                folder = project.folder_location or ""
+                project_name = project.name or ""
+
+            # Create a step runner session for this instruction
+            from distr.core.step_runner.service import plan_session
+            session_id = plan_session(
+                instruction=f"[Project: {project_name}] {instruction}",
+                chat_id=None,
+            )
+            if not session_id:
+                return JSONResponse({"success": False, "error": "Failed to plan session"}, status_code=500)
+
+            # Trigger execution via the step runner signal (same as run-all button)
+            try:
+                from distr.core.step_runner.service import get_session_with_steps
+                from distr.core.signals import signal_manager
+                session_data = get_session_with_steps(session_id)
+                steps_data = session_data.get("steps", []) if session_data else []
+                signal_manager.step_runner_run_all_requested.emit(
+                    session_id, steps_data, None, "instruction"
+                )
+            except Exception as e:
+                logger.warning(f"Could not trigger step runner execution: {e}")
+
+            return JSONResponse({"success": True, "session_id": session_id})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"CLI instruction failed: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.get("/projects/{project_id}/cli/audit")
+    async def get_cli_audit(project_id: int):
+        """Get audit trail of CLI actions for a project."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                project_name = project.name or ""
+
+                # Find sessions that match this project
+                prefix = f"[Project: {project_name}]"
+                sessions = (
+                    session.query(StepRunnerSession)
+                    .filter(StepRunnerSession.instruction.like(f"{prefix}%"))
+                    .order_by(StepRunnerSession.created_date.desc())
+                    .limit(50)
+                    .all()
+                )
+
+                result = []
+                for s in sessions:
+                    steps = (
+                        session.query(StepRunnerStep)
+                        .filter(StepRunnerStep.session_id == s.id)
+                        .order_by(StepRunnerStep.position)
+                        .all()
+                    )
+                    result.append({
+                        "id": s.id,
+                        "instruction": (s.instruction or "").replace(prefix, "").strip(),
+                        "status": s.status,
+                        "created": s.created_date.isoformat() if s.created_date else None,
+                        "steps": [
+                            {
+                                "id": st.id,
+                                "title": st.title,
+                                "status": st.status,
+                                "result": (st.result or "")[:300],
+                                "tool": st.tool_used or "",
+                            }
+                            for st in steps
+                        ],
+                    })
+                return JSONResponse({"sessions": result})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error(f"CLI audit failed: {e}", exc_info=True)
+            return JSONResponse({"sessions": []})
