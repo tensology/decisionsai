@@ -275,9 +275,16 @@ class KanbanTicketTool(BaseTool):
         if self.llm_service and hasattr(self.llm_service, '_model_name'):
             try:
                 prompt = (
-                    "You are a project manager. Given the following conversation, "
-                    "extract a concise ticket title (max 10 words) and a clear description. "
-                    "If files or images are mentioned, note them in the description. "
+                    "You are a project manager creating a work ticket. "
+                    "Given the following conversation, extract:\n"
+                    "1. A concise ticket title (max 10 words) — describe the ISSUE or TASK, not the act of creating a ticket.\n"
+                    "2. A clear, actionable description written as a task — what needs to be done, investigated, or fixed.\n\n"
+                    "RULES:\n"
+                    "- Write the description as an actionable work item (e.g. 'Investigate why Iridium is rejecting emails...').\n"
+                    "- Do NOT write 'Create a ticket about...' or 'The user wants...' — write the actual task.\n"
+                    "- Do NOT reference the conversation or the user — just describe the work.\n"
+                    "- If files or images are mentioned as relevant to the issue, note them.\n"
+                    "- Do NOT reference .tickets/*.md files — those are internal artifacts.\n\n"
                     "Reply ONLY in this exact format:\n"
                     "Title: <title>\n"
                     "Description: <description>\n\n"
