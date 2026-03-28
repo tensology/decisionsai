@@ -231,11 +231,19 @@ class AnthropicLLMService(BaseLLMService):
                 )
             ) if self._tools else None
 
-            stream = await self.client.messages.create(
+            # Ensure tools is a valid list or None — Anthropic rejects non-list values
+            if not isinstance(anthropic_tools, list) or not anthropic_tools:
+                anthropic_tools = None
+
+            create_kwargs = dict(
                 model=self._model_name, max_tokens=4096,
                 system=self._system_prompt, messages=anthropic_messages,
-                tools=anthropic_tools if anthropic_tools else None, stream=True,
+                stream=True,
             )
+            if anthropic_tools:
+                create_kwargs["tools"] = anthropic_tools
+
+            stream = await self.client.messages.create(**create_kwargs)
 
             full_content = ""
             tool_use_blocks = []

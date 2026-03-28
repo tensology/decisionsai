@@ -195,11 +195,6 @@
             });
         });
 
-        var boardLink = document.getElementById("project-open-board");
-        var boardUrl = (project.board_name || project.provider) ? "/board/?project_id=" + project.id : "/board/";
-        boardLink.href = boardUrl;
-        boardLink.classList.toggle("hidden", !(project.board_name || project.provider));
-
         document.getElementById("project-use").textContent = project.in_use ? "In use" : "Use";
         document.getElementById("project-use").disabled = !!project.in_use;
         renderList(projectsData);
@@ -273,6 +268,7 @@
                     boardSel.value = "";
                 }
                 boardSel.disabled = false;
+                updateKanbanVisibility();
             });
     }
 
@@ -288,6 +284,15 @@
         boardSel.value = want;
     }
 
+    function updateKanbanVisibility() {
+        var providerSel = document.getElementById("detail-provider");
+        var boardSel = document.getElementById("detail-board");
+        var kanbanSection = document.getElementById("kanban-board-section");
+        if (!kanbanSection) return;
+        var hasExternalBoard = providerSel && providerSel.value && boardSel && boardSel.value;
+        kanbanSection.classList.toggle("hidden", !!hasExternalBoard);
+    }
+
     function onBoardProviderChange() {
         var providerSel = document.getElementById("detail-provider");
         var boardSel = document.getElementById("detail-board");
@@ -297,6 +302,7 @@
             boardSel.innerHTML = "<option value=\"\">None</option>";
             boardSel.value = "";
             boardSel.disabled = false;
+            updateKanbanVisibility();
             return;
         }
         boardSel.disabled = true;
@@ -310,6 +316,7 @@
                 boardSel.innerHTML = "<option value=\"\">None</option>" + boards.map(function(b) { return "<option value=\"" + escapeAttr(String(b.id)) + "\">" + escapeAttr(b.name || "") + "</option>"; }).join("");
                 boardSel.value = "";
                 boardSel.disabled = false;
+                updateKanbanVisibility();
             });
     }
 
@@ -748,6 +755,9 @@
 
         var detailProvider = document.getElementById("detail-provider");
         if (detailProvider) detailProvider.addEventListener("change", onBoardProviderChange);
+
+        var detailBoard = document.getElementById("detail-board");
+        if (detailBoard) detailBoard.addEventListener("change", updateKanbanVisibility);
 
         document.getElementById("project-update").addEventListener("click", saveProject);
         document.getElementById("project-use").addEventListener("click", useProject);
