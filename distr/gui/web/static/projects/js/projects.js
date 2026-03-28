@@ -395,9 +395,12 @@
         })
             .then(function(r) {
                 if (r.ok) {
-                    loadProjects();
-                    selectProject(currentProjectId);
-                    showSnackbar("Project updated", "success");
+                    showSnackbar("'" + payload.name + "' updated", "success");
+                    // Refresh the list without changing selection
+                    fetch("/api/projects").then(function(r2) { return r2.ok ? r2.json() : []; }).then(function(data) {
+                        projectsData = Array.isArray(data) ? data : [];
+                        renderList(projectsData);
+                    }).catch(function() {});
                 } else {
                     r.json().then(function(e) { showSnackbar(e.detail || "Failed to save", "error"); });
                 }
