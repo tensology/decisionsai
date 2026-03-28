@@ -145,6 +145,9 @@ class AnthropicLLMService(BaseLLMService):
         # Also set _default_template_raw for shared mixin compatibility
         self._default_template_raw = load_system_prompt_template()
 
+        # Initialize _messages (Anthropic uses system as a separate param, not a message)
+        self._messages = []
+
     def _format_vision_message(self, text: str, base64_image: str, mime_type: str):
         """Anthropic vision format."""
         return [
@@ -180,6 +183,8 @@ class AnthropicLLMService(BaseLLMService):
 
     async def _generate_response(self):
         """Generate LLM response using Anthropic streaming API."""
+        full_content = ""
+        follow_up_content = ""
         try:
             await self.push_frame(LLMFullResponseStartFrame(), self._pipeline_direction)
 
@@ -322,14 +327,19 @@ class AnthropicLLMService(BaseLLMService):
                 follow_up_messages.append({"role": "assistant", "content": assistant_content})
                 follow_up_messages.append({"role": "user", "content": tool_results})
 
-                follow_up_stream = await self.client.messages.create(
-                    model=self._model_name, max_tokens=4096,
-                    system=self._system_prompt, messages=follow_up_messages, stream=True,
-                )
+                try:
+                    follow_up_stream = await self.client.messages.create(
+                        model=self._model_name, max_tokens=4096,
+                        system=self._system_prompt, messages=follow_up_messages, stream=True,
+                    )
+                except Exception as e:
+                    logger.error("Anthropic follow-up API call failed: %s", e, exc_info=True)
+                    raise
 
                 follow_up_content = ""
                 async for event in follow_up_stream:
                     if self._cancelled:
+                        logger.warning("Anthropic follow-up cancelled during streaming")
                         break
                     if event.type == "content_block_delta" and event.delta.type == "text_delta":
                         follow_up_content += event.delta.text
@@ -344,6 +354,8 @@ class AnthropicLLMService(BaseLLMService):
                         cid = self.chat_manager.get_current_chat()
                         if cid:
                             self.chat_manager.add_assistant_message(cid, follow_up_content)
+                else:
+                    logger.warning("Anthropic follow-up produced no content (cancelled=%s)", self._cancelled)
 
             elif full_content:
                 self._messages.append({"role": "assistant", "content": full_content})
@@ -358,3 +370,12 @@ class AnthropicLLMService(BaseLLMService):
         finally:
             self._emit_telegram_response(full_content, follow_up_content)
             self._cleanup_telegram_flags()
+            # Always signal the UI that generation is done
+            if self.event_queue:
+                self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
+                current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                if current_chat_id:
+                    self.event_queue.put(('chat_stream_finished', {
+                        'chat_id': current_chat_id,
+                        'response_text': follow_up_content or full_content or '',
+                    }), block=False)
