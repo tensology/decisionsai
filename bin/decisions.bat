@@ -373,6 +373,28 @@ if !DEPS_OK! equ 0 (
     echo [32m√[0m Dependencies already installed
 )
 
+:: Fix PyQt6 bundled msvcp140.dll version conflict
+:: PyQt6 ships an old msvcp140.dll (14.26.x) that crashes on modern Windows.
+:: Replace it with the system copy if the system version is newer.
+set "PYQT6_DLL=%VENV_DIR%\Lib\site-packages\PyQt6\Qt6\bin\msvcp140.dll"
+set "SYSTEM_DLL=%SystemRoot%\System32\msvcp140.dll"
+if exist "%PYQT6_DLL%" (
+    if exist "%SYSTEM_DLL%" (
+        echo [33mChecking PyQt6 msvcp140.dll...[0m
+        set "NEEDS_UPDATE=0"
+        for /f "tokens=*" %%v in ('powershell -NoProfile -Command "(Get-Item '%SYSTEM_DLL%').VersionInfo.FileVersionRaw -gt (Get-Item '%PYQT6_DLL%').VersionInfo.FileVersionRaw" 2^>nul') do (
+            if /i "%%v"=="True" set "NEEDS_UPDATE=1"
+        )
+        if "!NEEDS_UPDATE!"=="1" (
+            echo [33mFixing PyQt6 bundled msvcp140.dll ^(old version causes crash^)...[0m
+            copy /y "%SYSTEM_DLL%" "%PYQT6_DLL%" >nul 2>&1
+            echo [32m√[0m PyQt6 msvcp140.dll updated to system version
+        ) else (
+            echo [32m√[0m PyQt6 msvcp140.dll OK
+        )
+    )
+)
+
 :: Check if models are installed
 set "MODELS_DIR=.\distr\core\agent\models"
 set "MODELS_EXIST=1"
