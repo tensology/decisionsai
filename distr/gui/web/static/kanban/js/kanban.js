@@ -194,9 +194,14 @@
         document.getElementById("kb-board-title").textContent = data.name || "Board";
         var badge = document.getElementById("kb-board-source-badge");
         var source = currentBoard.source;
-        badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
-        badge.className = "text-xs px-2 py-0.5 rounded text-white";
-        badge.style.backgroundColor = source === "database" ? boardColor : source === "trello" ? "#0079bf" : "#0052cc";
+        if (source === "database") {
+            badge.classList.add("hidden");
+        } else {
+            badge.classList.remove("hidden");
+            badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
+            badge.className = "text-xs px-2 py-0.5 rounded text-white";
+            badge.style.backgroundColor = source === "trello" ? "#0079bf" : "#0052cc";
+        }
 
         document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
         document.getElementById("kb-edit-board").style.display = isLocal ? "" : "none";
