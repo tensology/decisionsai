@@ -238,6 +238,7 @@
             var bid = bs && bs.value ? bs.value : null;
             var bname = bs && bs.options[bs.selectedIndex] ? bs.options[bs.selectedIndex].textContent.trim() : "";
             loadBoardProvidersAndSelect(ps ? ps.value : "", bid, bname);
+            loadKanbanBoardStatus();
         }
     }
 
@@ -580,6 +581,60 @@
                 }
             })
             .catch(function() { alert("Could not open folder picker."); });
+    }
+
+    function loadKanbanBoardStatus() {
+        if (!currentProjectId) return;
+        var statusEl = document.getElementById("kanban-board-status");
+        var actionsEl = document.getElementById("kanban-board-actions");
+        if (!statusEl || !actionsEl) return;
+        statusEl.textContent = "Checking...";
+        // Remove any existing buttons
+        var oldBtn = actionsEl.querySelector("button, a");
+        while (oldBtn) { oldBtn.remove(); oldBtn = actionsEl.querySelector("button, a"); }
+
+        fetch("/api/projects/" + currentProjectId + "/kanban-board")
+            .then(function(r) { return r.ok ? r.json() : { board: null }; })
+            .catch(function() { return { board: null }; })
+            .then(function(data) {
+                if (data.board) {
+                    statusEl.textContent = "Board: " + data.board.name;
+                    var link = document.createElement("a");
+                    link.href = "/kanban/?board_id=" + data.board.id;
+                    link.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium no-underline";
+                    link.textContent = "Go To Board";
+                    actionsEl.appendChild(link);
+                } else {
+                    statusEl.textContent = "No kanban board for this project.";
+                    var btn = document.createElement("button");
+                    btn.type = "button";
+                    btn.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium";
+                    btn.textContent = "Create Board";
+                    btn.addEventListener("click", createKanbanBoard);
+                    actionsEl.appendChild(btn);
+                }
+            });
+    }
+
+    function createKanbanBoard() {
+        if (!currentProjectId) return;
+        var statusEl = document.getElementById("kanban-board-status");
+        if (statusEl) statusEl.textContent = "Creating...";
+        fetch("/api/projects/" + currentProjectId + "/kanban-board", { method: "POST" })
+            .then(function(r) { return r.ok ? r.json() : null; })
+            .then(function(data) {
+                if (data && data.board) {
+                    showSnackbar("Board '" + data.board.name + "' " + (data.created ? "created" : "linked"), "success");
+                    loadKanbanBoardStatus();
+                } else {
+                    showSnackbar("Failed to create board", "error");
+                    if (statusEl) statusEl.textContent = "Error creating board.";
+                }
+            })
+            .catch(function() {
+                showSnackbar("Failed to create board", "error");
+                if (statusEl) statusEl.textContent = "Error creating board.";
+            });
     }
 
     function init() {

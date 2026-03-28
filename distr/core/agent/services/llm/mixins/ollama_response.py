@@ -534,23 +534,50 @@ class OllamaResponseMixin:
 
         Unlike _trigger_llm_followup this does NOT cancel the current task.
         It streams the response inline so the UI stays in the busy state
-        throughout.  Returns the generated text (may be empty on error).
+        throughout.  Tools are included so the LLM can chain calls (e.g.
+        read email → create ticket).  Returns the generated text (may be
+        empty on error).
         """
         from distr.core.agent.libs import TextFrame
 
         full_response = ""
         try:
             current_model = self._resolve_current_model()
-            stream = await self._ollama_client.chat(
-                model=current_model,
-                messages=self._messages,
-                stream=True,
-                options={"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
-            )
+
+            # Determine last user message for tool filtering
+            last_user_msg = ""
+            for msg in reversed(self._messages):
+                if msg.get("role") == "user":
+                    last_user_msg = msg.get("content", "")
+                    break
+
+            # Include tools so the LLM can chain calls
+            filtered_tools = self._get_filtered_tools(last_user_msg)
+            ollama_tools = self._convert_tools_to_ollama_format(filtered_tools)
+
+            # Validate messages so Ollama doesn't choke on orphan tool msgs
+            system_msg = self._messages[0] if self._messages and self._messages[0].get("role") == "system" else None
+            conv = [m for m in self._messages[1:] if m.get("role") != "system"] if system_msg else list(self._messages)
+            conv = self._validate_messages_for_ollama(conv)
+            validated = ([system_msg] + conv) if system_msg else conv
+
+            chat_kwargs = {
+                "model": current_model,
+                "messages": validated,
+                "stream": True,
+                "options": {"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
+            }
+            if ollama_tools:
+                chat_kwargs["tools"] = ollama_tools
+
+            stream = await self._ollama_client.chat(**chat_kwargs)
+
+            tool_calls = []
             async for chunk in stream:
                 if self._cancelled:
                     break
-                content = chunk.get("message", {}).get("content", "")
+                msg = chunk.get("message", {})
+                content = msg.get("content", "")
                 if content:
                     cleaned = clean_text_for_tts(content, strip_whitespace=False)
                     if cleaned:
@@ -562,6 +589,51 @@ class OllamaResponseMixin:
                                 pass
                             if self._speaker_enabled and not getattr(self, "_is_telegram_request", False):
                                 await self.push_frame(TextFrame(text=cleaned))
+                # Collect any tool calls from the follow-up
+                if msg.get("tool_calls"):
+                    tool_calls.extend(msg["tool_calls"])
+
+            # If the LLM wants to chain another tool call, execute it and
+            # do one more follow-up (non-recursive to avoid infinite loops).
+            if tool_calls and not self._cancelled:
+                self._intercept_tool_calls(tool_calls, last_user_msg)
+                tool_results = await self._execute_tool_calls(tool_calls, last_user_message=last_user_msg)
+                self._messages.append({"role": "assistant", "content": full_response or "", "tool_calls": tool_calls})
+                for tc, result in zip(tool_calls, tool_results):
+                    name = tc.get("function", {}).get("name", "")
+                    self._messages.append({"role": "tool", "content": str(result), "name": name})
+
+                # One more LLM pass to summarise the chained results (no tools
+                # this time to prevent infinite chaining).
+                conv2 = [m for m in self._messages[1:] if m.get("role") != "system"] if system_msg else list(self._messages)
+                conv2 = self._validate_messages_for_ollama(conv2)
+                validated2 = ([system_msg] + conv2) if system_msg else conv2
+
+                chain_response = ""
+                stream2 = await self._ollama_client.chat(
+                    model=current_model,
+                    messages=validated2,
+                    stream=True,
+                    options={"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
+                )
+                async for chunk in stream2:
+                    if self._cancelled:
+                        break
+                    content = chunk.get("message", {}).get("content", "")
+                    if content:
+                        cleaned = clean_text_for_tts(content, strip_whitespace=False)
+                        if cleaned:
+                            chain_response += cleaned
+                            if not self._cancelled:
+                                try:
+                                    signal_manager.chat_stream_token.emit(cleaned)
+                                except (RuntimeError, Exception):
+                                    pass
+                                if self._speaker_enabled and not getattr(self, "_is_telegram_request", False):
+                                    await self.push_frame(TextFrame(text=cleaned))
+                if chain_response:
+                    full_response = chain_response  # final answer replaces intermediate
+
         except Exception as e:
             logger.error("LLM: inline followup error: %s", e, exc_info=True)
 

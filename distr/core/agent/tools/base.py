@@ -131,6 +131,18 @@ def fast_tool_matcher(transcription: str, tools: List[BaseTool], tools_dict: Dic
     from distr.core.agent.services.llm.utils import normalize_text
     transcription_norm = normalize_text(transcription)
     transcription_lower = transcription.lower().strip()
+
+    # Skip fast matching when the user references prior context — these need
+    # the LLM to orchestrate multi-step tool chains (e.g. read email → create ticket).
+    _CONTEXT_REFS = re.compile(
+        r'\b(from\s+(that|this|the|my)\s+(email|message|conversation|chat|thread|result))'
+        r'|(\b(that|this|the)\s+(email|message|one|result)\b)'
+        r'|(\bbased\s+on\s+(that|this|the|my)\b)',
+        re.IGNORECASE,
+    )
+    if _CONTEXT_REFS.search(transcription_lower):
+        logger.debug("Fast matcher: skipping — contextual reference detected in '%s'", transcription[:80])
+        return None
     
     # Pre-calculate word set for faster lookup
     transcription_words = set(re.findall(r'\w+', transcription_norm))
