@@ -333,6 +333,9 @@ class AnthropicLLMService(BaseLLMService):
                 # Up to 2 rounds of follow-up (in case model chains tool calls)
                 for follow_up_round in range(2):
                     try:
+                        logger.info("Anthropic follow-up round %d: %d messages, last role=%s",
+                                    follow_up_round, len(follow_up_messages),
+                                    follow_up_messages[-1].get("role") if follow_up_messages else "?")
                         follow_up_stream = await asyncio.wait_for(
                             self.client.messages.create(
                                 model=self._model_name, max_tokens=4096,
@@ -375,6 +378,10 @@ class AnthropicLLMService(BaseLLMService):
                                 current_follow_up_tool["input_json"] += event.delta.partial_json
                         elif event.type == "content_block_stop":
                             current_follow_up_tool = None
+                        elif event.type == "message_delta":
+                            stop = getattr(getattr(event, 'delta', None), 'stop_reason', None)
+                            if stop:
+                                logger.info("Anthropic follow-up message_delta: stop_reason=%s", stop)
 
                     # If we got text content, we're done
                     if follow_up_content:
@@ -424,21 +431,42 @@ class AnthropicLLMService(BaseLLMService):
                         if cid:
                             self.chat_manager.add_assistant_message(cid, follow_up_content)
                 else:
-                    # Synthesize a response from tool results so the user isn't left hanging
-                    if tool_result_texts:
-                        fallback = "Here's what I found:\n\n" + "\n".join(tool_result_texts[:3])
-                        self._messages.append({"role": "assistant", "content": fallback})
-                        if self.chat_manager:
-                            cid = self.chat_manager.get_current_chat()
-                            if cid:
-                                self.chat_manager.add_assistant_message(cid, fallback)
-                        if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
-                            await self.push_frame(TextFrame(text=fallback), self._pipeline_direction)
-                        if self.event_queue:
-                            self.event_queue.put(('chat_stream_token', {'token': fallback}), block=False)
-                        logger.info("Anthropic: used fallback response from tool results")
-                    else:
-                        logger.warning("Anthropic follow-up produced no content and no tool results to fall back on")
+                    # Follow-up produced no text — try one more time with an explicit prompt
+                    if tool_result_texts and not self._cancelled:
+                        logger.info("Anthropic: follow-up empty, retrying with explicit summarize prompt")
+                        retry_messages = follow_up_messages.copy()
+                        retry_messages.append({"role": "user", "content": [{"type": "text", "text": "Please summarize the tool results above in a natural, conversational way for the user."}]})
+                        try:
+                            retry_stream = await asyncio.wait_for(
+                                self.client.messages.create(
+                                    model=self._model_name, max_tokens=4096,
+                                    system=self._system_prompt, messages=retry_messages, stream=True,
+                                ),
+                                timeout=30.0,
+                            )
+                            retry_content = ""
+                            async for event in retry_stream:
+                                if self._cancelled:
+                                    break
+                                if event.type == "content_block_delta" and event.delta.type == "text_delta":
+                                    retry_content += event.delta.text
+                                    if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
+                                        await self.push_frame(TextFrame(text=event.delta.text), self._pipeline_direction)
+                                    if self.event_queue:
+                                        self.event_queue.put(('chat_stream_token', {'token': event.delta.text}), block=False)
+                            if retry_content:
+                                follow_up_content = retry_content
+                                self._messages.append({"role": "assistant", "content": follow_up_content})
+                                if self.chat_manager:
+                                    cid = self.chat_manager.get_current_chat()
+                                    if cid:
+                                        self.chat_manager.add_assistant_message(cid, follow_up_content)
+                                logger.info("Anthropic: retry summarize succeeded (%d chars)", len(follow_up_content))
+                        except Exception as e:
+                            logger.warning("Anthropic: retry summarize failed: %s", e)
+
+                    if not follow_up_content:
+                        logger.warning("Anthropic follow-up produced no content after all retries")
 
             elif full_content:
                 self._messages.append({"role": "assistant", "content": full_content})
