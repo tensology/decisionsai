@@ -233,66 +233,9 @@ def kill_existing_decisions_processes():
                 pass
                 
         elif system == 'Windows':
-            # Windows: Use tasklist and taskkill
-            try:
-                # Find processes running Python with our scripts
-                tasklist_output = subprocess.check_output(
-                    ['tasklist', '/FI', 'IMAGENAME eq python.exe', '/FO', 'CSV'],
-                    stderr=subprocess.DEVNULL,
-                    text=True
-                )
-                
-                import csv
-                import io
-                
-                # Parse CSV output
-                reader = csv.DictReader(io.StringIO(tasklist_output))
-                pids_to_kill = []
-                
-                for row in reader:
-                    try:
-                        pid = int(row['PID'])
-                        # Get command line for this process (PowerShell; wmic is deprecated)
-                        cmdline = ""
-                        try:
-                            result = subprocess.run(
-                                ['powershell', '-NoProfile', '-Command',
-                                 f'(Get-CimInstance Win32_Process -Filter "ProcessId={pid}").CommandLine'],
-                                capture_output=True, text=True, timeout=2
-                            )
-                            if result.returncode == 0 and result.stdout:
-                                cmdline = result.stdout.strip()
-                        except (FileNotFoundError, subprocess.TimeoutExpired):
-                            pass
-                        
-                        # Check if command line contains our scripts
-                        if cmdline and ('bin\\start.py' in cmdline or 'bin/start.py' in cmdline or
-                                        'distr\\app.py' in cmdline or 'distr/app.py' in cmdline):
-                            if pid != os.getpid():
-                                pids_to_kill.append(pid)
-                    except (ValueError, KeyError, subprocess.CalledProcessError):
-                        continue
-                
-                # Kill the processes
-                for pid in pids_to_kill:
-                    try:
-                        subprocess.run(['taskkill', '/PID', str(pid), '/F'], 
-                                     check=False,
-                                     stderr=subprocess.DEVNULL,
-                                     stdout=subprocess.DEVNULL)
-                        killed_count += 1
-                        print(f"Terminated existing Decisions process (PID: {pid})")
-                    except:
-                        pass
-                        
-                if killed_count > 0:
-                    import time
-                    time.sleep(1)
-                    
-            except (subprocess.CalledProcessError, FileNotFoundError):
-                pass
-            except Exception:
-                pass
+            # On Windows, skip killing other python processes — too risky as it
+            # can kill the multiprocessing Manager server or other unrelated processes.
+            pass
                 
         else:  # Linux/Unix
             # Similar to macOS but use pgrep if available
@@ -395,9 +338,6 @@ def kill_existing_decisions_processes():
 # Main execution block
 if __name__ == "__main__":
     from distr.app.main import run
-
-    # Kill any existing Decisions processes before starting
     kill_existing_decisions_processes()
-
     print("Starting Decisions...")
     run()
