@@ -127,7 +127,7 @@ class KanbanTicketTool(BaseTool):
                      "default_project_id": b.default_project_id} for b in boards]
 
     def _find_board(self, board_id: Optional[int] = None, board_name: Optional[str] = None) -> Optional[Dict]:
-        """Find a board by ID or fuzzy name match."""
+        """Find a board by ID or fuzzy name match (resilient to STT variations)."""
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
             if board_id:
@@ -138,17 +138,38 @@ class KanbanTicketTool(BaseTool):
                 return None
             if board_name:
                 name_lower = board_name.strip().lower()
+                # Strip spaces/punctuation for loose comparison
+                name_stripped = re.sub(r'[^a-z0-9]', '', name_lower)
                 boards = s.query(KanbanBoard).all()
                 # Exact match first
                 for b in boards:
                     if b.name.lower() == name_lower:
                         return {"id": b.id, "name": b.name, "description": b.description or "",
                                 "default_project_id": b.default_project_id}
-                # Fuzzy: board name contains search or search contains board name
+                # Substring match
                 for b in boards:
                     if name_lower in b.name.lower() or b.name.lower() in name_lower:
                         return {"id": b.id, "name": b.name, "description": b.description or "",
                                 "default_project_id": b.default_project_id}
+                # Stripped match (handles STT: "mary pack" vs "merrypak")
+                for b in boards:
+                    board_stripped = re.sub(r'[^a-z0-9]', '', b.name.lower())
+                    if name_stripped in board_stripped or board_stripped in name_stripped:
+                        return {"id": b.id, "name": b.name, "description": b.description or "",
+                                "default_project_id": b.default_project_id}
+                # Word overlap — if most words match, it's probably the right board
+                name_words = set(name_lower.split())
+                best_overlap = 0
+                best_board = None
+                for b in boards:
+                    board_words = set(b.name.lower().split())
+                    overlap = len(name_words & board_words)
+                    if overlap > best_overlap:
+                        best_overlap = overlap
+                        best_board = b
+                if best_board and best_overlap > 0:
+                    return {"id": best_board.id, "name": best_board.name, "description": best_board.description or "",
+                            "default_project_id": best_board.default_project_id}
                 # Single board? Use it.
                 if len(boards) == 1:
                     b = boards[0]

@@ -524,6 +524,8 @@ def create_routes():
                 logger.info("External boards: found %d connected accounts", len(accounts))
                 for acct in accounts:
                     provider = acct.get("provider", "").lower()
+                    logger.info("External boards: account provider='%s' has_key=%s has_token=%s has_email=%s",
+                                provider, bool(acct.get("api_key")), bool(acct.get("api_token")), bool(acct.get("email")))
                     if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
                         try:
                             import requests
