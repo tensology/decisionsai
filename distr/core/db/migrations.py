@@ -1211,3 +1211,16 @@ def run_migrations():
                         logger.debug(f"Could not add {col} to settings: {e}")
     except Exception as e:
         logger.debug(f"Kanban settings migration: {e}")
+
+    # Add color column to kanban_boards table
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE kanban_boards ADD COLUMN color VARCHAR"))
+                conn.commit()
+                logger.info("Added color column to kanban_boards table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.debug(f"Could not add color to kanban_boards: {e}")
+    except Exception as e:
+        logger.debug(f"Kanban board color migration: {e}")

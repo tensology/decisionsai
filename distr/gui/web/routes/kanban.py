@@ -37,6 +37,7 @@ class BoardUpdate(BaseModel):
     default_project_id: Optional[int] = None
     default_snippet_id: Optional[int] = None
     default_action_id: Optional[int] = None
+    color: Optional[str] = None
 
 class TicketCreate(BaseModel):
     lane_id: int
@@ -177,7 +178,7 @@ def create_routes():
                 result.append({
                     "id": b.id, "name": b.name, "description": b.description or "",
                     "source": b.source, "external_board_id": b.external_board_id,
-                    "external_url": b.external_url,
+                    "external_url": b.external_url, "color": b.color or "",
                 })
             return JSONResponse(result)
 
@@ -210,6 +211,8 @@ def create_routes():
                 board.default_snippet_id = payload.default_snippet_id if payload.default_snippet_id else None
             if payload.default_action_id is not None:
                 board.default_action_id = payload.default_action_id if payload.default_action_id else None
+            if payload.color is not None:
+                board.color = payload.color if payload.color else None
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -253,6 +256,7 @@ def create_routes():
                 "default_project_id": board.default_project_id,
                 "default_snippet_id": board.default_snippet_id,
                 "default_action_id": board.default_action_id,
+                "color": board.color or "",
             })
 
     # ── Tickets ──

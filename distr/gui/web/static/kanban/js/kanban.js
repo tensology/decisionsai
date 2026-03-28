@@ -159,11 +159,16 @@
     }
 
     function renderBoard(data, isLocal) {
+        // Apply board accent color as CSS variable
+        var boardColor = data.color || "#f97316";
+        document.getElementById("kb-board-view").style.setProperty("--kb-accent", boardColor);
+
         document.getElementById("kb-board-title").textContent = data.name || "Board";
         var badge = document.getElementById("kb-board-source-badge");
         var source = currentBoard.source;
         badge.textContent = source.charAt(0).toUpperCase() + source.slice(1);
-        badge.className = "text-xs px-2 py-0.5 rounded text-white " + (source === "database" ? "bg-[#f97316]" : source === "trello" ? "bg-[#0079bf]" : "bg-[#0052cc]");
+        badge.className = "text-xs px-2 py-0.5 rounded text-white";
+        badge.style.backgroundColor = source === "database" ? boardColor : source === "trello" ? "#0079bf" : "#0052cc";
 
         document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
         document.getElementById("kb-edit-board").style.display = isLocal ? "" : "none";
@@ -561,6 +566,10 @@
         } else {
             document.getElementById("kb-board-modal-name").value = "";
             document.getElementById("kb-board-modal-desc").value = "";
+            var colorInput = document.getElementById("kb-board-modal-color");
+            var colorHex = document.getElementById("kb-board-modal-color-hex");
+            colorInput.value = "#f97316";
+            colorHex.textContent = "#f97316";
             loadBoardDefaults(null);
         }
         document.getElementById("kb-board-modal").classList.remove("hidden");
@@ -570,6 +579,11 @@
     function populateBoardModal(data) {
         document.getElementById("kb-board-modal-name").value = data.name || "";
         document.getElementById("kb-board-modal-desc").value = data.description || "";
+        var colorInput = document.getElementById("kb-board-modal-color");
+        var colorHex = document.getElementById("kb-board-modal-color-hex");
+        var c = data.color || "#f97316";
+        colorInput.value = c;
+        colorHex.textContent = c;
         loadBoardDefaults(data);
     }
 
@@ -607,11 +621,13 @@
     function saveBoardModal() {
         var name = document.getElementById("kb-board-modal-name").value.trim();
         if (!name) { showSnackbar("Board name is required", "error"); return; }
+        var boardColor = document.getElementById("kb-board-modal-color").value || "";
         var payload = {
             name: name,
             description: document.getElementById("kb-board-modal-desc").value.trim(),
             default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value) || 0,
             default_project_id: parseInt(document.getElementById("kb-board-def-project").value) || 0,
+            color: boardColor,
         };
         if (editingBoardId) {
             apiFetch("/api/kanban/boards/" + editingBoardId, {
@@ -989,6 +1005,15 @@
         document.getElementById("kb-board-modal-save").addEventListener("click", saveBoardModal);
         document.getElementById("kb-board-modal").addEventListener("click", function(e) {
             if (e.target === this) closeBoardModal();
+        });
+        // Color picker sync
+        document.getElementById("kb-board-modal-color").addEventListener("input", function() {
+            document.getElementById("kb-board-modal-color-hex").textContent = this.value;
+        });
+        document.getElementById("kb-board-modal-color-reset").addEventListener("click", function() {
+            var colorInput = document.getElementById("kb-board-modal-color");
+            colorInput.value = "#f97316";
+            document.getElementById("kb-board-modal-color-hex").textContent = "#f97316";
         });
 
         // Ticket modal

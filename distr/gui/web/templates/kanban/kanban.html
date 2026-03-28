@@ -10,7 +10,7 @@
 .kb-lane-body { min-height: 80px; }
 /* Drag states */
 .kb-card.dragging { opacity: 0.4; }
-.kb-lane-body.drag-over { background: rgba(249,115,22,0.08); border: 1px dashed #f97316; border-radius: 0.5rem; }
+.kb-lane-body.drag-over { background: color-mix(in srgb, var(--kb-accent, #f97316) 8%, transparent); border: 1px dashed var(--kb-accent, #f97316); border-radius: 0.5rem; }
 /* Priority badges */
 .kb-pri-critical { background: #dc2626; }
 .kb-pri-high { background: #ea580c; }
@@ -31,6 +31,8 @@
 .kb-board-item { cursor: pointer; padding: 8px 12px; border-radius: 6px; display: flex; align-items: center; font-size: 0.875rem; }
 .kb-board-item:hover { background: rgba(255,255,255,0.07); }
 .kb-board-item.active { background: rgba(249,115,22,0.2); color: #f97316; }
+/* Card hover uses board accent */
+.kb-card:hover { border-color: var(--kb-accent, #f97316) !important; opacity: 0.85; }
 /* Disabled copy button */
 .kb-copy-btn.disabled { opacity: 0.3 !important; cursor: not-allowed; }
 /* Scrollbar for lanes container */
@@ -284,6 +286,14 @@
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Description</label>
                 <input type="text" id="kb-board-modal-desc" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Optional description">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Board Colour</label>
+                <div class="flex items-center gap-3">
+                    <input type="color" id="kb-board-modal-color" value="#f97316" class="w-10 h-10 rounded border border-white/20 bg-transparent cursor-pointer" style="padding: 2px;">
+                    <span id="kb-board-modal-color-hex" class="text-xs text-gray-400 font-mono">#f97316</span>
+                    <button type="button" id="kb-board-modal-color-reset" class="text-xs text-gray-500 hover:text-white underline">Reset</button>
+                </div>
             </div>
         </div>
         <!-- Advanced tab (board defaults for new tickets) -->
