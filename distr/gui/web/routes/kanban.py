@@ -534,12 +534,21 @@ def create_routes():
                                         trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
                             except Exception as e:
                                 logger.warning("Trello board fetch failed: %s", e)
-                        elif provider == "jira" and acct.get("domain") and acct.get("email") and acct.get("api_token"):
+                        elif provider == "jira" and acct.get("email") and acct.get("api_token"):
+                            # Support both 'domain' and 'server_url' field names
+                            domain = acct.get("domain") or ""
+                            if not domain:
+                                server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                                if server_url:
+                                    domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                            if not domain:
+                                continue
                             try:
                                 import requests
                                 from requests.auth import HTTPBasicAuth
+                                base_url = f"https://{domain}" if not domain.startswith("http") else domain
                                 resp = requests.get(
-                                    f"https://{acct['domain']}/rest/agile/1.0/board",
+                                    f"{base_url}/rest/agile/1.0/board",
                                     auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
                                     headers={"Accept": "application/json"},
                                     timeout=10,
@@ -548,7 +557,7 @@ def create_routes():
                                     for b in resp.json().get("values", []):
                                         jira_boards.append({
                                             "id": str(b["id"]), "name": b["name"],
-                                            "url": f"https://{acct['domain']}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
+                                            "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
                                         })
                             except Exception as e:
                                 logger.warning("Jira board fetch failed: %s", e)
@@ -589,13 +598,20 @@ def create_routes():
                             break
                 elif provider == "jira":
                     for acct in accounts:
-                        if acct.get("provider", "").lower() == "jira" and acct.get("domain") and acct.get("email") and acct.get("api_token"):
+                        if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
                             import requests
                             from requests.auth import HTTPBasicAuth
+                            domain = acct.get("domain") or ""
+                            if not domain:
+                                server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                                if server_url:
+                                    domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                            if not domain:
+                                continue
                             auth = HTTPBasicAuth(acct["email"], acct["api_token"])
-                            domain = acct["domain"]
+                            base_url = f"https://{domain}" if not domain.startswith("http") else domain
                             # Get board config for columns
-                            cr = requests.get(f"https://{domain}/rest/agile/1.0/board/{board_id}/configuration",
+                            cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
                                               auth=auth, headers={"Accept": "application/json"}, timeout=10)
                             if cr.status_code == 200:
                                 cfg = cr.json()
@@ -604,7 +620,7 @@ def create_routes():
                                 for col in cfg.get("columnConfig", {}).get("columns", []):
                                     lanes.append({"id": col["name"], "name": col["name"], "tickets": []})
                             # Get issues on board
-                            ir = requests.get(f"https://{domain}/rest/agile/1.0/board/{board_id}/issue",
+                            ir = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
                                               auth=auth, headers={"Accept": "application/json"},
                                               params={"maxResults": 100}, timeout=10)
                             if ir.status_code == 200:

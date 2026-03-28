@@ -124,41 +124,44 @@
 
     function ctxRenameBoard() {
         if (!ctxMenuBoardId) return;
-        var board = dbBoards.find(function(b) { return b.id === ctxMenuBoardId; });
+        var boardId = ctxMenuBoardId;
+        var board = dbBoards.find(function(b) { return b.id === boardId; });
         var newName = prompt("Rename board:", board ? board.name : "");
         if (!newName || !newName.trim()) { hideBoardContextMenu(); return; }
-        apiFetch("/api/kanban/boards/" + ctxMenuBoardId, {
+        hideBoardContextMenu();
+        apiFetch("/api/kanban/boards/" + boardId, {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ name: newName.trim() })
         }).then(function() {
             showSnackbar("Board renamed");
             loadBoards();
-            if (currentBoard && currentBoard.id === ctxMenuBoardId) selectBoard("database", ctxMenuBoardId);
+            if (currentBoard && currentBoard.id === boardId) selectBoard("database", boardId);
         }).catch(function(e) { showSnackbar("Rename failed: " + e.message, "error"); });
-        hideBoardContextMenu();
     }
 
     function ctxEditBoard() {
         if (!ctxMenuBoardId) return;
+        var boardId = ctxMenuBoardId;
         hideBoardContextMenu();
-        openBoardModal(ctxMenuBoardId);
+        openBoardModal(boardId);
     }
 
     function ctxDeleteBoard() {
         if (!ctxMenuBoardId) return;
-        var board = dbBoards.find(function(b) { return b.id === ctxMenuBoardId; });
+        var boardId = ctxMenuBoardId;
+        var board = dbBoards.find(function(b) { return b.id === boardId; });
         var name = board ? board.name : "this board";
         if (!confirm('Delete board "' + name + '" and all its tickets? This cannot be undone.')) { hideBoardContextMenu(); return; }
-        apiFetch("/api/kanban/boards/" + ctxMenuBoardId, { method: "DELETE" }).then(function() {
+        hideBoardContextMenu();
+        apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
             showSnackbar("Board deleted");
-            if (currentBoard && currentBoard.id === ctxMenuBoardId) {
+            if (currentBoard && currentBoard.id === boardId) {
                 currentBoard = null; currentBoardData = null;
                 document.getElementById("kb-board-view").classList.add("hidden");
                 document.getElementById("kb-empty").classList.remove("hidden");
             }
             loadBoards();
         }).catch(function(e) { showSnackbar("Delete failed: " + e.message, "error"); });
-        hideBoardContextMenu();
     }
 
     // ── Select board ──
