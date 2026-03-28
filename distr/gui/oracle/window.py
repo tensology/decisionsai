@@ -132,7 +132,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         signal_manager.dictation_started.connect(self.on_dictation_started)
         signal_manager.dictation_stopped.connect(self.on_dictation_stopped)
         
-        self.setWindowFlags(QtCore.Qt.WindowType.FramelessWindowHint | QtCore.Qt.WindowType.WindowStaysOnTopHint)
+        self.setWindowFlags(
+            QtCore.Qt.WindowType.FramelessWindowHint |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint |
+            QtCore.Qt.WindowType.Tool  # Keeps window off the taskbar
+        )
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
 
         self._shadow_color = QtGui.QColor(0, 0, 0, 100)
@@ -913,11 +917,17 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
     def mousePressEvent(self, event):
         logging.info(f"mousePressEvent: button={event.button()}, hands_free={self.is_hands_free}")
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:
+        import platform
+        is_windows = platform.system() == 'Windows'
+
+        ptt_button = QtCore.Qt.MouseButton.RightButton if is_windows else QtCore.Qt.MouseButton.LeftButton
+        menu_button = QtCore.Qt.MouseButton.LeftButton if is_windows else QtCore.Qt.MouseButton.RightButton
+
+        if event.button() == ptt_button:
             self.offset = event.position().toPoint()
             self.dragging = False
             self.start_hold_to_talk()
-        elif event.button() == QtCore.Qt.MouseButton.RightButton:
+        elif event.button() == menu_button:
             # Update menu state before showing to ensure it's current
             self._update_recording_menu_state()
             self.menu.exec(event.globalPosition().toPoint())
