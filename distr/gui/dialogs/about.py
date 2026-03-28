@@ -144,6 +144,10 @@ class AboutWindow(QtWidgets.QMainWindow):
         """Configure main window properties and styling."""
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_DeleteOnClose, False)
         self.setWindowTitle("About DecisionsAI")
+        self.setWindowFlags(
+            self.windowFlags() |
+            QtCore.Qt.WindowType.WindowStaysOnTopHint
+        )
         self.setMinimumSize(1000, 650)
         self.setStyleSheet("""
             QMainWindow, QWidget {
