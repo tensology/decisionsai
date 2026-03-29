@@ -482,6 +482,10 @@ echo [33mVerifying onnxruntime...[0m
 call "%SCRIPT_DIR%\bin\check_ort.bat" "%VENV_DIR%"
 if !errorlevel! neq 0 exit /b 1
 
+:: Set up Windows Start Menu shortcuts, desktop shortcut, and app icon
+echo [33mChecking shortcuts...[0m
+"%VENV_DIR%\Scripts\python.exe" "%SCRIPT_DIR%\bin\setup_shortcuts.py"
+
 :: Run the application
 echo.
 echo [32mStarting DecisionsAI...[0m
