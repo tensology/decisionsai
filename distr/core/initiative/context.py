@@ -143,6 +143,7 @@ class ContextAssembler:
         overdue_cutoff = now - timedelta(days=7)
         summary = []
 
+        # Local boards
         with get_session() as session:
             boards = session.query(KanbanBoard).all()
             for board in boards:
@@ -171,10 +172,57 @@ class ContextAssembler:
                 summary.append({
                     "board_id": board.id,
                     "board_name": board.name,
+                    "source": "local",
                     "total_tickets": total_tickets,
                     "overdue_tickets": overdue_tickets,
                     "lanes": lanes_data,
                 })
+
+        # External boards (Trello/Jira) — just names, no ticket counts (too slow)
+        try:
+            import json as _json
+            from distr.core.settings import load_settings_from_db
+            settings = load_settings_from_db()
+            raw = settings.get("connected_accounts") or "[]"
+            accounts = _json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+            for acct in accounts:
+                provider = (acct.get("provider") or "").lower()
+                if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
+                    try:
+                        import requests
+                        resp = requests.get(
+                            "https://api.trello.com/1/members/me/boards",
+                            params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,closed"},
+                            timeout=5,
+                        )
+                        if resp.status_code == 200:
+                            for b in resp.json():
+                                if not b.get("closed", False):
+                                    summary.append({"board_name": b["name"], "source": "trello", "board_id": b["id"]})
+                    except Exception:
+                        pass
+                elif provider == "jira" and acct.get("email") and acct.get("api_token"):
+                    try:
+                        import requests
+                        from requests.auth import HTTPBasicAuth
+                        domain = acct.get("domain") or ""
+                        if not domain:
+                            server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                            if server_url:
+                                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                        if domain:
+                            resp = requests.get(
+                                f"https://{domain}/rest/agile/1.0/board",
+                                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                                headers={"Accept": "application/json"}, timeout=5,
+                            )
+                            if resp.status_code == 200:
+                                for b in resp.json().get("values", []):
+                                    summary.append({"board_name": b["name"], "source": "jira", "board_id": str(b["id"])})
+                    except Exception:
+                        pass
+        except Exception:
+            pass
 
         return summary
 

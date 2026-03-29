@@ -71,7 +71,8 @@ class KanbanTicketTool(BaseTool):
     description: str = (
         "Full CRUD for Kanban boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
-        "Use action='list_boards' to see available boards. "
+        "Use action='list_boards' to see available boards (local, Trello, and Jira). "
+        "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
         "Use action='create_board' with board_name to create a new board. "
         "Use action='delete_ticket' with ticket_id to delete a ticket. "
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
@@ -450,6 +451,23 @@ class KanbanTicketTool(BaseTool):
                 )
             elif action == "list_tickets":
                 return self._action_list_tickets(board_id or None, board_name or None, lane_name or None)
+            elif action in ("list_trello_tickets", "list_jira_tickets", "list_external_tickets"):
+                provider = "trello" if "trello" in action else "jira" if "jira" in action else (text.split()[0] if text else "trello")
+                ext_board_id = str(board_id) if board_id else ""
+                if not ext_board_id and board_name:
+                    # Try to find the external board by name
+                    ext = self._fetch_external_boards()
+                    for b in ext.get(provider, []):
+                        if board_name.lower() in b["name"].lower():
+                            ext_board_id = b["id"]
+                            break
+                if not ext_board_id:
+                    return f"Please specify a board. Use action='list_boards' to see available {provider} boards."
+                tickets = self._fetch_external_tickets(provider, ext_board_id)
+                if not tickets:
+                    return f"No tickets found on {provider} board {ext_board_id}."
+                lines = [f"#{t['id']} {t['title']}" + (f" [{t.get('status', '')}]" if t.get('status') else "") for t in tickets[:30]]
+                return f"{provider.title()} board tickets ({len(tickets)}):\n" + "\n".join(lines)
             elif action == "get_ticket":
                 return self._action_get_ticket(ticket_id or self._last_ticket_id)
             elif action == "update_ticket":
@@ -498,12 +516,138 @@ class KanbanTicketTool(BaseTool):
 
     def _action_list_boards(self) -> str:
         boards = self._all_boards()
-        if not boards:
-            return "No Kanban boards found. You can create one in the Board UI."
         lines = []
         for b in boards:
-            lines.append(f"Board '{b['name']}' (ID {b['id']})")
-        return "Available boards: " + ", ".join(lines)
+            lines.append(f"Board '{b['name']}' (ID {b['id']}, local)")
+
+        # Also fetch external boards
+        try:
+            ext = self._fetch_external_boards()
+            for b in ext.get("trello", []):
+                lines.append(f"Board '{b['name']}' (Trello, ID {b['id']})")
+            for b in ext.get("jira", []):
+                lines.append(f"Board '{b['name']}' (Jira, ID {b['id']})")
+        except Exception as e:
+            logger.debug("Could not fetch external boards: %s", e)
+
+        if not lines:
+            return "No Kanban boards found. You can create one in the Board UI."
+        return "Available boards:\n" + "\n".join(lines)
+
+    def _fetch_external_boards(self) -> Dict:
+        """Fetch Trello and Jira boards from connected accounts."""
+        import json as _json
+        from distr.core.settings import load_settings_from_db
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        if isinstance(raw, str):
+            try:
+                accounts = _json.loads(raw)
+            except Exception:
+                accounts = []
+        else:
+            accounts = raw if isinstance(raw, list) else []
+
+        result = {"trello": [], "jira": []}
+        for acct in accounts:
+            provider = (acct.get("provider") or "").lower()
+            if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
+                try:
+                    import requests
+                    resp = requests.get(
+                        "https://api.trello.com/1/members/me/boards",
+                        params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        for b in resp.json():
+                            if not b.get("closed", False):
+                                result["trello"].append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
+                except Exception:
+                    pass
+            elif provider == "jira" and acct.get("email") and acct.get("api_token"):
+                try:
+                    import requests
+                    from requests.auth import HTTPBasicAuth
+                    domain = acct.get("domain") or ""
+                    if not domain:
+                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                        if server_url:
+                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    if domain:
+                        resp = requests.get(
+                            f"https://{domain}/rest/agile/1.0/board",
+                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                            headers={"Accept": "application/json"}, timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            for b in resp.json().get("values", []):
+                                result["jira"].append({"id": str(b["id"]), "name": b["name"]})
+                except Exception:
+                    pass
+        return result
+
+    def _fetch_external_tickets(self, provider: str, board_id: str) -> List[Dict]:
+        """Fetch tickets/cards from an external Trello or Jira board."""
+        import json as _json
+        from distr.core.settings import load_settings_from_db
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        if isinstance(raw, str):
+            try:
+                accounts = _json.loads(raw)
+            except Exception:
+                accounts = []
+        else:
+            accounts = raw if isinstance(raw, list) else []
+
+        tickets = []
+        for acct in accounts:
+            acct_provider = (acct.get("provider") or "").lower()
+            if provider == "trello" and acct_provider == "trello" and acct.get("api_key") and acct.get("api_token"):
+                try:
+                    import requests
+                    resp = requests.get(
+                        f"https://api.trello.com/1/boards/{board_id}/cards",
+                        params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,desc,url,idList"},
+                        timeout=10,
+                    )
+                    if resp.status_code == 200:
+                        for c in resp.json():
+                            tickets.append({"id": c["id"], "title": c["name"], "description": c.get("desc", "")[:300], "url": c.get("url", "")})
+                    break
+                except Exception:
+                    pass
+            elif provider == "jira" and acct_provider == "jira" and acct.get("email") and acct.get("api_token"):
+                try:
+                    import requests
+                    from requests.auth import HTTPBasicAuth
+                    domain = acct.get("domain") or ""
+                    if not domain:
+                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                        if server_url:
+                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    if domain:
+                        resp = requests.get(
+                            f"https://{domain}/rest/agile/1.0/board/{board_id}/issue",
+                            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                            headers={"Accept": "application/json"},
+                            params={"maxResults": 50}, timeout=10,
+                        )
+                        if resp.status_code == 200:
+                            for issue in resp.json().get("issues", []):
+                                fields = issue.get("fields", {})
+                                tickets.append({
+                                    "id": issue["key"],
+                                    "title": fields.get("summary", ""),
+                                    "description": (str(fields.get("description", "")) or "")[:300],
+                                    "status": fields.get("status", {}).get("name", ""),
+                                    "url": f"https://{domain}/browse/{issue['key']}",
+                                })
+                    break
+                except Exception:
+                    pass
+        return tickets
 
     def _action_list_lanes(self, board_id=None, board_name=None) -> str:
         board = self._find_board(board_id, board_name)
