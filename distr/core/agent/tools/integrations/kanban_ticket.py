@@ -287,12 +287,50 @@ class KanbanTicketTool(BaseTool):
     # ── LLM-based ticket summarisation ────────────────────────────────────
 
     def _summarise_for_ticket(self, raw_text: str) -> Dict[str, str]:
-        """Use the LLM to extract a title and description from raw conversation text.
+        """Use the LLM to extract ticket(s) from raw text.
 
-        Returns {"title": ..., "description": ...}.
-        Falls back to simple extraction if LLM is unavailable.
+        If the text contains multiple distinct tasks/action items, returns
+        multiple tickets. Otherwise returns a single ticket.
+
+        Returns {"title": ..., "description": ...} for single mode,
+        or a list of those dicts for bulk mode.
         """
-        # Try LLM summarisation
+        # Detect bulk mode
+        is_bulk = self._detect_bulk_mode(raw_text)
+
+        if is_bulk and self.llm_service and hasattr(self.llm_service, '_model_name'):
+            try:
+                prompt = (
+                    "You are a project manager creating work tickets from meeting notes or a task list.\n"
+                    "Extract ALL distinct tasks, action items, or work items from the text below.\n\n"
+                    "For each item, provide:\n"
+                    "- title: concise ticket title (max 10 words)\n"
+                    "- description: actionable description of what needs to be done\n"
+                    "- priority: low, medium, high, or critical\n\n"
+                    "RULES:\n"
+                    "- Each ticket should be a SEPARATE, independent work item\n"
+                    "- Write descriptions as actionable tasks, not summaries\n"
+                    "- Do NOT combine multiple tasks into one ticket\n"
+                    "- Do NOT reference the meeting or conversation\n\n"
+                    "Reply with a JSON array only (no markdown fences):\n"
+                    '[{"title": "...", "description": "...", "priority": "medium"}, ...]\n\n'
+                    f"Text:\n{raw_text[:4000]}"
+                )
+                result = self._call_llm_sync(prompt)
+                if result:
+                    import json as _json
+                    # Strip markdown fences
+                    cleaned = result.strip()
+                    if cleaned.startswith("```"):
+                        cleaned = re.sub(r'^```\w*\s*', '', cleaned)
+                        cleaned = re.sub(r'\s*```\s*$', '', cleaned)
+                    parsed = _json.loads(cleaned)
+                    if isinstance(parsed, list) and len(parsed) > 1:
+                        return parsed  # Return list for bulk mode
+            except Exception as e:
+                logger.warning("Bulk ticket extraction failed, falling back to single: %s", e)
+
+        # Single ticket mode (original behavior)
         if self.llm_service and hasattr(self.llm_service, '_model_name'):
             try:
                 prompt = (
@@ -311,7 +349,6 @@ class KanbanTicketTool(BaseTool):
                     "Description: <description>\n\n"
                     f"Conversation:\n{raw_text[:3000]}"
                 )
-                # Use a simple sync call via the configured provider
                 result = self._call_llm_sync(prompt)
                 if result:
                     title_match = re.search(r'^Title:\s*(.+)', result, re.MULTILINE | re.IGNORECASE)
@@ -323,11 +360,22 @@ class KanbanTicketTool(BaseTool):
             except Exception as e:
                 logger.warning("LLM summarisation failed, using fallback: %s", e)
 
-        # Fallback: first line as title, rest as description
+        # Fallback
         lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
         title = lines[0][:80] if lines else "New Ticket"
         desc = "\n".join(lines[1:]) if len(lines) > 1 else raw_text[:500]
         return {"title": title, "description": desc}
+
+    def _detect_bulk_mode(self, text: str) -> bool:
+        """Detect if text contains multiple distinct tasks/items."""
+        if len(text) < 200:
+            return False
+        # Count bullet points, numbered items, action items
+        lines = text.strip().split("\n")
+        bullet_count = sum(1 for l in lines if re.match(r'^\s*[-•*]\s+', l))
+        numbered_count = sum(1 for l in lines if re.match(r'^\s*\d+[.)]\s+', l))
+        action_count = sum(1 for l in lines if re.match(r'^\s*(TODO|ACTION|TASK|ITEM)\s*:', l, re.IGNORECASE))
+        return (bullet_count >= 3) or (numbered_count >= 3) or (action_count >= 2) or (len(text) > 1000)
 
     def _call_llm_sync(self, prompt: str) -> Optional[str]:
         """Synchronous LLM call for ticket summarisation."""
@@ -495,16 +543,21 @@ class KanbanTicketTool(BaseTool):
             return f"No lanes found in board '{board['name']}'."
 
         # Gather conversation context for rich ticket content
-        # Only use conversation context when the LLM didn't provide title+description.
-        # This avoids polluting the ticket with unrelated chat history (PDFs, etc.).
         conv_files = []
         if not title and not description:
-            # Use a small window — only the last few messages are likely relevant
             conv_text, conv_files = self._get_conversation_context(max_messages=10)
             raw = text
             if conv_text:
                 raw = f"User instruction: {text}\n\nRecent conversation:\n{conv_text}"
             summary = self._summarise_for_ticket(raw)
+
+            # Bulk mode — summary is a list of dicts
+            if isinstance(summary, list):
+                return self._create_bulk_tickets(
+                    board, lane, summary, conv_files,
+                    linked_project_id, linked_workflow_id,
+                )
+
             title = summary["title"]
             description = summary["description"]
         elif not title:
@@ -550,6 +603,50 @@ class KanbanTicketTool(BaseTool):
         if attached:
             result += f". Attached {len(attached)} file(s): {', '.join(attached)}"
         return result
+
+    def _create_bulk_tickets(self, board, lane, tickets_data, conv_files,
+                              linked_project_id, linked_workflow_id):
+        """Create multiple tickets from a list of {title, description, priority} dicts."""
+        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+
+        created = []
+        with self._get_session() as s:
+            lane_obj = s.query(KanbanLane).get(lane["id"])
+            max_pos = max([t.position for t in lane_obj.tickets], default=-1) if lane_obj else -1
+            board_obj = s.query(KB).get(board["id"])
+            effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
+            effective_workflow_id = linked_workflow_id or None
+
+            for item in tickets_data:
+                if not isinstance(item, dict):
+                    continue
+                t_title = (item.get("title") or "Untitled")[:200]
+                t_desc = (item.get("description") or "")[:2000]
+                t_priority = item.get("priority", "medium")
+                if t_priority not in ("low", "medium", "high", "critical"):
+                    t_priority = "medium"
+                max_pos += 1
+                ticket = KanbanTicket(
+                    lane_id=lane["id"], title=t_title, description=t_desc,
+                    priority=t_priority, position=max_pos,
+                    linked_project_id=effective_project_id,
+                    linked_workflow_id=effective_workflow_id,
+                )
+                s.add(ticket)
+                s.flush()
+                created.append({"id": ticket.id, "title": t_title})
+
+                # Attach conversation files to first ticket only
+                if conv_files and len(created) == 1:
+                    for fp in conv_files:
+                        self._attach_file_to_ticket(ticket.id, fp)
+
+        self._last_board_id = board["id"]
+        if created:
+            self._last_ticket_id = created[-1]["id"]
+
+        titles = [f"#{c['id']} {c['title']}" for c in created]
+        return f"Created {len(created)} ticket(s) in board '{board['name']}', lane '{lane['name']}':\n" + "\n".join(titles)
 
     def _action_list_tickets(self, board_id=None, board_name=None, lane_name=None) -> str:
         board = self._find_board(board_id, board_name)

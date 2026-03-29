@@ -1272,3 +1272,16 @@ def run_migrations():
                     logger.info("Migrated always_confirm_file_operations -> initiative_ask_file_changes")
     except Exception as e:
         logger.debug(f"Initiative migration: {e}")
+
+    # Add send_to_cli column to kanban_boards
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE kanban_boards ADD COLUMN send_to_cli BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added send_to_cli column to kanban_boards table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.debug(f"Could not add send_to_cli to kanban_boards: {e}")
+    except Exception as e:
+        logger.debug(f"Kanban board send_to_cli migration: {e}")

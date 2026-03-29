@@ -81,7 +81,9 @@ class _BoardInfo:
     agent_enabled: bool
     agent_source_lane: str
     agent_done_lane: str
-    default_workflow_id: int
+    default_workflow_id: Optional[int]
+    send_to_cli: bool = False
+    default_project_id: Optional[int] = None
     agent_orchestrator_provider: str = ""
     agent_orchestrator_model: str = ""
     agent_coder_provider: str = ""
@@ -111,44 +113,48 @@ class KanbanAgentCheckIn:
         """Fetch the board and validate required agent fields.
 
         Agent configuration (enabled, lanes, LLM provider/model) is read from
-        global settings.  Only ``default_workflow_id`` comes from the board record.
+        the board first, falling back to global settings.
 
         Returns a ``_BoardInfo`` or ``None`` if validation fails.
         """
         settings = load_settings_from_db()
-
-        if not settings.get('kanban_agent_enabled', False):
-            logger.info("Agent check-in: agent not enabled in global settings")
-            return None
-
-        agent_source_lane = settings.get('kanban_agent_source_lane', '')
-        agent_done_lane = settings.get('kanban_agent_done_lane', '')
-
-        if not agent_source_lane:
-            logger.error("Agent check-in: no source lane configured in global settings")
-            return None
-        if not agent_done_lane:
-            logger.error("Agent check-in: no done lane configured in global settings")
-            return None
 
         with get_session() as db:
             board = db.query(KanbanBoard).filter(KanbanBoard.id == self.board_id).first()
             if not board:
                 logger.error("Agent check-in: board %s not found", self.board_id)
                 return None
-            if not board.default_workflow_id:
-                logger.error("Agent check-in: no default_workflow_id on board %s", self.board_id)
-                return None
 
+            # Per-board settings take priority, fall back to global
+            agent_enabled = settings.get('kanban_agent_enabled', False)
+            agent_source_lane = board.agent_source_lane or settings.get('kanban_agent_source_lane', '')
+            agent_done_lane = board.agent_done_lane or settings.get('kanban_agent_done_lane', '')
+            send_to_cli = getattr(board, 'send_to_cli', False) or False
             default_workflow_id = board.default_workflow_id
+            default_project_id = board.default_project_id
             board_id = board.id
+
+        if not agent_enabled:
+            logger.info("Agent check-in: agent not enabled in global settings")
+            return None
+
+        if not agent_source_lane:
+            logger.error("Agent check-in: no source lane configured for board %s", self.board_id)
+            return None
+
+        # Require either a workflow or send_to_cli
+        if not send_to_cli and not default_workflow_id:
+            logger.error("Agent check-in: board %s has no workflow and send_to_cli is off", self.board_id)
+            return None
 
         info = _BoardInfo(
             id=board_id,
             agent_enabled=True,
             agent_source_lane=agent_source_lane,
-            agent_done_lane=agent_done_lane,
+            agent_done_lane=agent_done_lane or "Done",
             default_workflow_id=default_workflow_id,
+            send_to_cli=send_to_cli,
+            default_project_id=default_project_id,
             agent_orchestrator_provider=settings.get('kanban_agent_orchestrator_provider', ''),
             agent_orchestrator_model=settings.get('kanban_agent_orchestrator_model', ''),
             agent_coder_provider=settings.get('kanban_agent_coder_provider', ''),
@@ -185,26 +191,27 @@ class KanbanAgentCheckIn:
         return result
 
     def _process_ticket(self, board, ticket: dict) -> str:
-        """Run the ticket through Kiro CLI (if project linked) or the board's default workflow.
+        """Process a ticket — via Kiro CLI if board.send_to_cli, otherwise via workflow.
 
-        On completion, moves the ticket to the NEXT lane (e.g. Current → QA/Assess),
-        not straight to Done. Only falls back to Done if there's no next lane.
-
+        On completion, moves the ticket to the NEXT lane (e.g. Current → QA/Assess).
         Returns the terminal status ('completed', 'failed', 'cancelled').
         """
         self._status.current_ticket_id = ticket["id"]
         self._status.current_ticket_title = ticket.get("title", "")
 
-        # Try Kiro CLI first — if the ticket or board has a linked project with a folder
-        kiro_result = self._try_kiro_cli(ticket)
-        if kiro_result is not None:
-            if kiro_result == "completed":
+        if board.send_to_cli:
+            result = self._try_kiro_cli(ticket, board)
+            if result == "completed":
                 self._move_ticket_to_next_lane(board, ticket)
             else:
-                logger.info("Agent check-in: Kiro CLI ended with '%s' for ticket %s", kiro_result, ticket["id"])
-            return kiro_result
+                logger.info("Agent check-in: Kiro CLI ended with '%s' for ticket %s", result, ticket["id"])
+            return result
 
-        # Fallback to workflow
+        # Workflow path
+        if not board.default_workflow_id:
+            logger.error("Agent check-in: no workflow and send_to_cli is off for ticket %s", ticket["id"])
+            return "failed"
+
         run_result = start_workflow_run(board.default_workflow_id)
         if "error" in run_result:
             logger.error("Agent check-in: failed to start workflow for ticket %s: %s", ticket["id"], run_result["error"])
@@ -219,34 +226,34 @@ class KanbanAgentCheckIn:
         if terminal_status == "completed":
             self._move_ticket_to_next_lane(board, ticket)
         else:
-            logger.info("Agent check-in: ticket %s run ended with status '%s', leaving in current lane", ticket["id"], terminal_status)
+            logger.info("Agent check-in: ticket %s run ended with '%s', leaving in current lane", ticket["id"], terminal_status)
 
         self._current_run_id = None
         self._status.current_run_id = None
         return terminal_status
 
-    def _try_kiro_cli(self, ticket: dict) -> Optional[str]:
-        """Try to process a ticket via Kiro CLI. Returns status or None if not applicable."""
+    def _try_kiro_cli(self, ticket: dict, board) -> str:
+        """Process a ticket via Kiro CLI. Returns status string."""
         import shutil
         kiro_path = shutil.which("kiro-cli")
         if not kiro_path:
-            return None
+            logger.error("Agent check-in: send_to_cli is on but kiro-cli not found")
+            return "failed"
 
-        # Resolve project folder from ticket or board
+        # Resolve project folder
         folder = None
         project_name = None
         try:
             from distr.core.db.projects import Project
-            with get_session() as db:
-                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
-                if not tk:
-                    return None
-                project_id = tk.linked_project_id
-                if not project_id and tk.lane:
-                    board = db.query(KanbanBoard).filter(KanbanBoard.id == tk.lane.board_id).first()
-                    if board:
-                        project_id = board.default_project_id
-                if project_id:
+            project_id = board.default_project_id
+            if not project_id:
+                # Check ticket-level link
+                with get_session() as db:
+                    tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                    if tk:
+                        project_id = tk.linked_project_id
+            if project_id:
+                with get_session() as db:
                     project = db.query(Project).filter(Project.id == project_id).first()
                     if project and project.folder_location:
                         folder = project.folder_location
@@ -255,7 +262,8 @@ class KanbanAgentCheckIn:
             logger.debug("Could not resolve project for ticket %s: %s", ticket["id"], e)
 
         if not folder:
-            return None  # No project folder — can't use Kiro CLI
+            logger.error("Agent check-in: send_to_cli but no project folder for ticket %s", ticket["id"])
+            return "failed"
 
         # Build instruction from ticket
         title = ticket.get("title", "")

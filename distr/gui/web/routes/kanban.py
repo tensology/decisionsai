@@ -37,6 +37,7 @@ class BoardUpdate(BaseModel):
     default_project_id: Optional[int] = None
     default_snippet_id: Optional[int] = None
     default_action_id: Optional[int] = None
+    send_to_cli: Optional[bool] = None
     color: Optional[str] = None
     position: Optional[int] = None
 
@@ -213,6 +214,8 @@ def create_routes():
                 board.default_snippet_id = payload.default_snippet_id if payload.default_snippet_id else None
             if payload.default_action_id is not None:
                 board.default_action_id = payload.default_action_id if payload.default_action_id else None
+            if payload.send_to_cli is not None:
+                board.send_to_cli = payload.send_to_cli
             if payload.color is not None:
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
@@ -273,6 +276,7 @@ def create_routes():
                 "default_project_id": board.default_project_id,
                 "default_snippet_id": board.default_snippet_id,
                 "default_action_id": board.default_action_id,
+                "send_to_cli": getattr(board, 'send_to_cli', False) or False,
                 "color": board.color or "",
             })
 

@@ -36,6 +36,7 @@ class KanbanBoard(Base):
     default_project_id = Column(Integer, nullable=True)  # default project for new tickets
     default_snippet_id = Column(Integer, nullable=True)  # default snippet for new tickets
     default_action_id = Column(Integer, nullable=True)  # default action for new tickets
+    send_to_cli = Column(Boolean, default=False)  # if True, agent sends tickets to Kiro CLI instead of running a workflow
     color = Column(String, nullable=True)  # board accent color (hex, e.g. '#f97316')
     position = Column(Integer, default=0)  # sidebar display order
 
