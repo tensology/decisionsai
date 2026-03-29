@@ -43,8 +43,11 @@ def play_search_sound():
                 stderr=subprocess.DEVNULL
             )
         elif system == "Windows":
-            # winsound only supports WAV; use os.startfile for MP3/other formats
-            os.startfile(SEARCH_SOUND_PATH)
+            subprocess.Popen(
+                ['ffplay', '-nodisp', '-autoexit', '-loglevel', 'quiet', SEARCH_SOUND_PATH],
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+            )
         else:  # Linux
             players = [['paplay', SEARCH_SOUND_PATH], ['aplay', SEARCH_SOUND_PATH],
                       ['mpg123', SEARCH_SOUND_PATH], ['ffplay', '-nodisp', '-autoexit', SEARCH_SOUND_PATH]]
