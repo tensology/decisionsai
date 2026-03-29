@@ -452,6 +452,13 @@ try:
                 ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
                 ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
                 ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
+                # Initiative settings
+                ("initiative_level", "VARCHAR DEFAULT 'assist'"),
+                ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
+                ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
+                ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
+                ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
+                ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
             ]:
                 if _col not in _existing:
                     try:
