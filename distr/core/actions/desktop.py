@@ -304,8 +304,20 @@ def _platform_open(app_name: str):
                     windows.append(hwnd)
             win32gui.EnumWindows(cb, None)
             if windows:
-                win32gui.ShowWindow(windows[0], win32con.SW_RESTORE)
-                win32gui.SetForegroundWindow(windows[0])
+                try:
+                    win32gui.ShowWindow(windows[0], win32con.SW_RESTORE)
+                    # Windows blocks SetForegroundWindow from background processes.
+                    # Simulate an Alt press to trick Windows into allowing it.
+                    import ctypes
+                    ctypes.windll.user32.keybd_event(0x12, 0, 0, 0)  # Alt down
+                    ctypes.windll.user32.keybd_event(0x12, 0, 2, 0)  # Alt up
+                    win32gui.SetForegroundWindow(windows[0])
+                except Exception:
+                    # Last resort: use pyautogui alt-tab approach
+                    try:
+                        win32gui.ShowWindow(windows[0], win32con.SW_SHOW)
+                    except Exception:
+                        pass
                 return
         except ImportError:
             pass
