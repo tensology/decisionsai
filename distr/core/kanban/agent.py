@@ -185,40 +185,179 @@ class KanbanAgentCheckIn:
         return result
 
     def _process_ticket(self, board, ticket: dict) -> str:
-        """Run the board's default workflow for a ticket and handle completion.
+        """Run the ticket through Kiro CLI (if project linked) or the board's default workflow.
 
-        Returns the terminal run status ('completed', 'failed', 'cancelled').
+        On completion, moves the ticket to the NEXT lane (e.g. Current → QA/Assess),
+        not straight to Done. Only falls back to Done if there's no next lane.
+
+        Returns the terminal status ('completed', 'failed', 'cancelled').
         """
         self._status.current_ticket_id = ticket["id"]
         self._status.current_ticket_title = ticket.get("title", "")
 
-        # Start workflow run
+        # Try Kiro CLI first — if the ticket or board has a linked project with a folder
+        kiro_result = self._try_kiro_cli(ticket)
+        if kiro_result is not None:
+            if kiro_result == "completed":
+                self._move_ticket_to_next_lane(board, ticket)
+            else:
+                logger.info("Agent check-in: Kiro CLI ended with '%s' for ticket %s", kiro_result, ticket["id"])
+            return kiro_result
+
+        # Fallback to workflow
         run_result = start_workflow_run(board.default_workflow_id)
         if "error" in run_result:
-            logger.error(
-                "Agent check-in: failed to start workflow for ticket %s: %s",
-                ticket["id"], run_result["error"],
-            )
+            logger.error("Agent check-in: failed to start workflow for ticket %s: %s", ticket["id"], run_result["error"])
             return "failed"
 
         run_id = run_result.get("run_id")
         self._current_run_id = run_id
         self._status.current_run_id = run_id
 
-        # Wait for terminal status
         terminal_status = self._wait_for_run(run_id)
 
         if terminal_status == "completed":
-            self._move_ticket_to_done(board, ticket)
+            self._move_ticket_to_next_lane(board, ticket)
         else:
-            logger.info(
-                "Agent check-in: ticket %s run ended with status '%s', leaving in source lane",
-                ticket["id"], terminal_status,
-            )
+            logger.info("Agent check-in: ticket %s run ended with status '%s', leaving in current lane", ticket["id"], terminal_status)
 
         self._current_run_id = None
         self._status.current_run_id = None
         return terminal_status
+
+    def _try_kiro_cli(self, ticket: dict) -> Optional[str]:
+        """Try to process a ticket via Kiro CLI. Returns status or None if not applicable."""
+        import shutil
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            return None
+
+        # Resolve project folder from ticket or board
+        folder = None
+        project_name = None
+        try:
+            from distr.core.db.projects import Project
+            with get_session() as db:
+                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                if not tk:
+                    return None
+                project_id = tk.linked_project_id
+                if not project_id and tk.lane:
+                    board = db.query(KanbanBoard).filter(KanbanBoard.id == tk.lane.board_id).first()
+                    if board:
+                        project_id = board.default_project_id
+                if project_id:
+                    project = db.query(Project).filter(Project.id == project_id).first()
+                    if project and project.folder_location:
+                        folder = project.folder_location
+                        project_name = project.name
+        except Exception as e:
+            logger.debug("Could not resolve project for ticket %s: %s", ticket["id"], e)
+
+        if not folder:
+            return None  # No project folder — can't use Kiro CLI
+
+        # Build instruction from ticket
+        title = ticket.get("title", "")
+        description = ""
+        try:
+            with get_session() as db:
+                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                if tk:
+                    description = tk.description or ""
+        except Exception:
+            pass
+
+        instruction = f"{title}\n\n{description}".strip() if description else title
+
+        logger.info("Agent check-in: sending ticket #%s to Kiro CLI in %s", ticket["id"], folder)
+
+        try:
+            import subprocess
+            result = subprocess.run(
+                [kiro_path, "chat", "--message", instruction],
+                capture_output=True, text=True, timeout=600,
+                cwd=folder,
+            )
+            output = (result.stdout + result.stderr).strip()[:3000]
+            status = "completed" if result.returncode == 0 else "failed"
+            logger.info("Agent check-in: Kiro CLI %s for ticket #%s (%d chars output)", status, ticket["id"], len(output))
+
+            # Log to audit trail
+            try:
+                from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+                with get_session() as db:
+                    audit = StepRunnerSession(
+                        instruction=f"[Project: {project_name}] Ticket #{ticket['id']}: {title}",
+                        status=status,
+                        session_type="kiro_cli",
+                    )
+                    db.add(audit)
+                    db.flush()
+                    step = StepRunnerStep(
+                        session_id=audit.id, position=0,
+                        title=f"Ticket #{ticket['id']}", instruction=instruction[:500],
+                        status=status, result=output[:2000], tool_used="kiro-cli",
+                    )
+                    db.add(step)
+                    db.commit()
+            except Exception as e:
+                logger.debug("Could not create audit for kiro-cli ticket: %s", e)
+
+            return status
+        except subprocess.TimeoutExpired:
+            logger.warning("Agent check-in: Kiro CLI timed out for ticket #%s", ticket["id"])
+            return "failed"
+        except Exception as e:
+            logger.error("Agent check-in: Kiro CLI error for ticket #%s: %s", ticket["id"], e)
+            return "failed"
+
+    def _move_ticket_to_next_lane(self, board, ticket: dict):
+        """Move a ticket to the next lane in sequence (e.g. Current → QA/Assess).
+        Falls back to the configured done lane if there's no next lane."""
+        with get_session() as db:
+            tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+            if not tk:
+                return
+
+            current_lane = db.query(KanbanLane).filter(KanbanLane.id == tk.lane_id).first()
+            if not current_lane:
+                return
+
+            # Find the next lane by position
+            next_lane = (
+                db.query(KanbanLane)
+                .filter(
+                    KanbanLane.board_id == board.id,
+                    KanbanLane.position > current_lane.position,
+                )
+                .order_by(KanbanLane.position.asc())
+                .first()
+            )
+
+            if not next_lane:
+                # No next lane — try the configured done lane
+                next_lane = (
+                    db.query(KanbanLane)
+                    .filter(KanbanLane.board_id == board.id, KanbanLane.name == board.agent_done_lane)
+                    .first()
+                )
+
+            if not next_lane:
+                logger.warning("Agent check-in: no next lane found for ticket %s, leaving in place", ticket["id"])
+                return
+
+            from sqlalchemy import func
+            max_pos = (
+                db.query(func.max(KanbanTicket.position))
+                .filter(KanbanTicket.lane_id == next_lane.id)
+                .scalar()
+            )
+            tk.lane_id = next_lane.id
+            tk.position = 0 if max_pos is None else max_pos + 1
+            db.commit()
+
+        logger.info("Agent check-in: moved ticket %s to lane '%s'", ticket["id"], next_lane.name)
 
     def _wait_for_run(self, run_id: int) -> str:
         """Poll until the workflow run reaches a terminal status."""
