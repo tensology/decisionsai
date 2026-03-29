@@ -726,21 +726,31 @@ def register_routes(router, templates):
         import subprocess
         kiro_path = shutil.which("kiro-cli")
         if not kiro_path:
-            return JSONResponse({"installed": False, "authenticated": False, "version": None, "path": None})
+            return JSONResponse({"installed": False, "authenticated": False, "version": None, "path": None, "email": None})
         try:
             version = subprocess.run([kiro_path, "--version"], capture_output=True, text=True, timeout=5)
             ver_str = version.stdout.strip().split("\n")[0] if version.returncode == 0 else None
         except Exception:
             ver_str = None
-        # Check auth by looking for config files
-        import os
-        auth_dir = os.path.expanduser("~/.kiro-cli")
-        has_auth = os.path.exists(os.path.join(auth_dir, "credentials")) or os.path.exists(os.path.join(auth_dir, "config"))
+        # Check auth via kiro-cli whoami
+        authenticated = False
+        email = None
+        try:
+            whoami = subprocess.run([kiro_path, "whoami"], capture_output=True, text=True, timeout=10)
+            if whoami.returncode == 0 and "Logged in" in whoami.stdout:
+                authenticated = True
+                import re
+                email_match = re.search(r'Email:\s*(\S+)', whoami.stdout)
+                if email_match:
+                    email = email_match.group(1)
+        except Exception:
+            pass
         return JSONResponse({
             "installed": True,
-            "authenticated": has_auth,
+            "authenticated": authenticated,
             "version": ver_str,
             "path": kiro_path,
+            "email": email,
         })
 
     @router.post("/kiro-cli/login")

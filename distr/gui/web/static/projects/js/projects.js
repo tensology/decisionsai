@@ -954,7 +954,7 @@
                     if (inputSection) inputSection.classList.add("hidden");
                 } else {
                     dot.className = "w-2 h-2 rounded-full bg-green-500";
-                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — authenticated";
+                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — " + (data.email || "authenticated");
                     label.className = "text-xs text-green-400";
                     loginBtn.classList.add("hidden");
                     logoutBtn.classList.remove("hidden");
