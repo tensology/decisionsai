@@ -106,6 +106,7 @@ TOOL_REGISTRY = {
     "CreateCursorTicketTool":  ("integrations.create_cursor_ticket", "CreateCursorTicketTool"),
     "KanbanTicketTool":        ("integrations.kanban_ticket", "KanbanTicketTool"),
     "PlaywrightTool":          ("integrations.playwright_tool", "PlaywrightTool"),
+    "KiroCliTool":             ("integrations.kiro_cli", "KiroCliTool"),
 }
 
 _BASE_PACKAGE = "distr.core.agent.tools"
@@ -224,6 +225,8 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
             # Playwright Browser Automation
             ("PlaywrightTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+            # Kiro CLI — AI coding agent for project tasks
+            ("KiroCliTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
             # Document Extractor
             ("DocumentExtractorTool", {}),
             # System Information
