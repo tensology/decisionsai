@@ -3,6 +3,17 @@ import sys
 import warnings
 warnings.filterwarnings("ignore", message=".*DecompressionBomb.*")
 
+# On Windows, prevent ALL child processes from flashing a console window.
+# This patches subprocess.Popen to always use CREATE_NO_WINDOW.
+if sys.platform == 'win32':
+    import subprocess
+    _orig_popen_init = subprocess.Popen.__init__
+    def _patched_popen_init(self, *args, **kwargs):
+        if kwargs.get('creationflags', 0) == 0 and not kwargs.get('shell', False):
+            kwargs['creationflags'] = 0x08000000  # CREATE_NO_WINDOW
+        _orig_popen_init(self, *args, **kwargs)
+    subprocess.Popen.__init__ = _patched_popen_init
+
 # On Windows, import onnxruntime FIRST before any other heavy packages.
 # PyTorch and other native libraries can pollute the DLL search path,
 # causing onnxruntime_pybind11_state to fail with "DLL load failed".
