@@ -105,6 +105,13 @@ import multiprocessing
 # to handle the multiprocessing spawn bootstrap correctly.
 multiprocessing.freeze_support()
 
+# On Windows, force child processes to use pythonw.exe too so they don't flash
+# a console window when spawned.
+if sys.platform == 'win32':
+    _pythonw = os.path.join(os.path.dirname(sys.executable), 'pythonw.exe')
+    if os.path.exists(_pythonw):
+        multiprocessing.set_executable(_pythonw)
+
 # Fix for macOS multiprocessing spawn issues with semaphores
 # Must be done BEFORE any other multiprocessing usage
 if sys.platform == 'darwin':
