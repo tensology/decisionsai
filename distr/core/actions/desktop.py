@@ -213,6 +213,19 @@ def _fuzzy_match_installed(speech: str, threshold=70):
                 if f.endswith('.app'):
                     apps.append(f.replace('.app', ''))
     elif system == 'Windows':
+        # Scan Start Menu shortcuts — this is where apps like Office, Chrome etc. are registered
+        start_menu_dirs = [
+            os.path.join(os.environ.get('ProgramData', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+            os.path.join(os.environ.get('APPDATA', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+        ]
+        for sm_dir in start_menu_dirs:
+            if not os.path.isdir(sm_dir):
+                continue
+            for root, dirs, files in os.walk(sm_dir):
+                for f in files:
+                    if f.endswith('.lnk'):
+                        apps.append(f.replace('.lnk', ''))
+        # Also scan Program Files as fallback
         for d in [os.environ.get('ProgramFiles', ''), os.environ.get('ProgramFiles(x86)', '')]:
             if d and os.path.isdir(d):
                 apps.extend(os.listdir(d))
@@ -282,6 +295,7 @@ def _platform_open(app_name: str):
         logger.warning("Failed to launch %s on macOS", app_name)
 
     elif system == 'Windows':
+        # Try to focus an already-open window first
         try:
             import win32gui, win32con
             windows = []
@@ -295,7 +309,30 @@ def _platform_open(app_name: str):
                 return
         except ImportError:
             pass
-        subprocess.Popen([app_name], shell=True)
+
+        # Try to find and launch via Start Menu shortcut (.lnk files)
+        launched = False
+        start_menu_dirs = [
+            os.path.join(os.environ.get('ProgramData', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+            os.path.join(os.environ.get('APPDATA', ''), 'Microsoft', 'Windows', 'Start Menu', 'Programs'),
+        ]
+        for sm_dir in start_menu_dirs:
+            if not os.path.isdir(sm_dir):
+                continue
+            for root, dirs, files in os.walk(sm_dir):
+                for f in files:
+                    if f.endswith('.lnk') and app_name.lower() in f.lower():
+                        os.startfile(os.path.join(root, f))
+                        launched = True
+                        break
+                if launched:
+                    break
+            if launched:
+                break
+
+        if not launched:
+            # Fallback: use 'start' command which searches PATH and App Paths registry
+            subprocess.Popen(f'start "" "{app_name}"', shell=True)
 
     else:  # Linux
         for tool, args in [('wmctrl', ['-a', app_name]), ('xdotool', ['search', '--name', app_name, 'windowactivate'])]:
