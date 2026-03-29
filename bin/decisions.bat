@@ -502,3 +502,4 @@ echo ================================
 start "" "%VENV_DIR%\Scripts\pythonw.exe" bin\start.py 2>nul
 
 endlocal
+exit
