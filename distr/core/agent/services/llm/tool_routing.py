@@ -163,27 +163,9 @@ def detect_request_type(text: str) -> str:
 
 
 def filter_tools_by_context(user_input: str, all_tools: List, previous_messages: List[Dict]) -> List:
-    """Filter tools based on request type and semantic relevance.
+    """Return all tools — capable models (GPT-4+, Claude, etc.) handle large tool sets fine.
     
-    Pipeline:
-      1. If conversational → return empty (no tools)
-      2. If instruction/question → use ToolRouter to select top-k relevant tools
-      3. Fallback: return all tools if router isn't ready
+    Tool filtering was causing missed tool calls across all providers.
+    The LLM is better at deciding which tools to use than our heuristic filter.
     """
-    if not user_input:
-        return all_tools
-    
-    request_type = detect_request_type(user_input)
-    
-    if request_type == 'conversational':
-        return []
-    
-    try:
-        from distr.core.agent.services.llm.tool_router import get_tool_router
-        router = get_tool_router()
-        if router.is_ready:
-            return router.route(user_input, all_tools)
-    except Exception as e:
-        logger.debug("ToolRouter unavailable, returning all tools: %s", e)
-    
     return all_tools
