@@ -486,6 +486,6 @@ if !errorlevel! neq 0 exit /b 1
 echo.
 echo [32mStarting DecisionsAI...[0m
 echo ================================
-start "DecisionsAI" /min "%VENV_DIR%\Scripts\python.exe" bin\start.py
+start "" "%VENV_DIR%\Scripts\pythonw.exe" bin\start.py 2>nul
 
 endlocal

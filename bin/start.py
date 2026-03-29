@@ -15,11 +15,16 @@ if sys.platform == 'win32':
 
 # Fix Windows console encoding — cp1252 can't handle emoji in log messages
 # Only do this in the main process, not in multiprocessing spawn workers
+# pythonw.exe sets stdout/stderr to None — guard against that
 if sys.platform == 'win32' and __name__ == '__main__':
     import io
-    if hasattr(sys.stdout, 'buffer'):
+    if sys.stdout is None:
+        sys.stdout = io.StringIO()
+    elif hasattr(sys.stdout, 'buffer'):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-    if hasattr(sys.stderr, 'buffer'):
+    if sys.stderr is None:
+        sys.stderr = io.StringIO()
+    elif hasattr(sys.stderr, 'buffer'):
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
     os.environ.setdefault('PYTHONIOENCODING', 'utf-8')
 
