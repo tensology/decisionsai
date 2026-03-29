@@ -173,6 +173,21 @@
         openBoardModal(boardId);
     }
 
+    function ctxArchiveBoard() {
+        if (!ctxMenuBoardId) return;
+        var boardId = ctxMenuBoardId;
+        hideBoardContextMenu();
+        apiFetch("/api/kanban/boards/" + boardId + "/archive", { method: "POST" }).then(function() {
+            showSnackbar("Board archived");
+            if (currentBoard && currentBoard.id === boardId) {
+                currentBoard = null; currentBoardData = null;
+                document.getElementById("kb-board-view").classList.add("hidden");
+                document.getElementById("kb-empty").classList.remove("hidden");
+            }
+            loadBoards(true);
+        }).catch(function(e) { showSnackbar("Archive failed: " + e.message, "error"); });
+    }
+
     function ctxDeleteBoard() {
         if (!ctxMenuBoardId) return;
         var boardId = ctxMenuBoardId;
@@ -1126,6 +1141,7 @@
         // Context menu
         document.querySelector(".kb-ctx-edit").addEventListener("click", ctxEditBoard);
         document.querySelector(".kb-ctx-rename").addEventListener("click", ctxRenameBoard);
+        document.querySelector(".kb-ctx-archive").addEventListener("click", ctxArchiveBoard);
         document.querySelector(".kb-ctx-delete").addEventListener("click", ctxDeleteBoard);
         document.addEventListener("click", function(e) {
             if (!e.target.closest("#kb-board-ctx-menu")) hideBoardContextMenu();

@@ -172,9 +172,12 @@ def create_routes():
     # ── Boards ──
 
     @router.get("/kanban/boards")
-    async def list_boards():
+    async def list_boards(include_archived: bool = False):
         with get_session() as s:
-            boards = s.query(KanbanBoard).order_by(KanbanBoard.position, KanbanBoard.name).all()
+            query = s.query(KanbanBoard)
+            if not include_archived:
+                query = query.filter((KanbanBoard.archived == False) | (KanbanBoard.archived == None))
+            boards = query.order_by(KanbanBoard.position, KanbanBoard.name).all()
             result = []
             for b in boards:
                 result.append({
@@ -182,6 +185,7 @@ def create_routes():
                     "source": b.source, "external_board_id": b.external_board_id,
                     "external_url": b.external_url, "color": b.color or "",
                     "position": b.position or 0,
+                    "archived": getattr(b, 'archived', False) or False,
                 })
             return JSONResponse(result)
 
@@ -229,6 +233,24 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
             s.delete(board)
+            return JSONResponse({"success": True})
+
+    @router.post("/kanban/boards/{board_id}/archive")
+    async def archive_board(board_id: int):
+        with get_session() as s:
+            board = s.query(KanbanBoard).get(board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+            board.archived = True
+            return JSONResponse({"success": True})
+
+    @router.post("/kanban/boards/{board_id}/unarchive")
+    async def unarchive_board(board_id: int):
+        with get_session() as s:
+            board = s.query(KanbanBoard).get(board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+            board.archived = False
             return JSONResponse({"success": True})
 
     @router.post("/kanban/boards/reorder")
@@ -541,13 +563,14 @@ def create_routes():
                         import requests
                         resp = requests.get(
                             "https://api.trello.com/1/members/me/boards",
-                            params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"},
+                            params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
                             timeout=10,
                         )
                         logger.info("Trello API response: %d", resp.status_code)
                         if resp.status_code == 200:
                             for b in resp.json():
-                                trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
+                                if not b.get("closed", False):
+                                    trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
                     except Exception as e:
                         logger.warning("Trello board fetch failed: %s", e)
                 elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
