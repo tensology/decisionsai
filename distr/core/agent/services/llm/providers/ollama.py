@@ -52,7 +52,7 @@ from distr.core.signals import signal_manager
 class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     """Ollama-based LLM service using Pipecat."""
 
-    def __init__(self, model_name: str = "qwen3:8b", system_prompt: str = None,
+    def __init__(self, model_name: str = None, system_prompt: str = None,
                  event_queue=None, is_listening=True, chat_manager=None, tts_service=None,
                  agent_name: str = "Heart", command_queue=None, confirmation_results_dict=None, **kwargs):
         if not PIPECAT_AVAILABLE:
@@ -61,6 +61,14 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             raise ImportError("ollama is required for OllamaLLMService")
 
         super().__init__(**kwargs)
+
+        # Resolve model name: use provided, or fall back to RAM-based recommendation
+        if not model_name or not model_name.strip():
+            try:
+                from distr.core.system_resources import recommend_model
+                model_name = recommend_model()
+            except Exception:
+                model_name = "qwen3:0.6b"  # absolute fallback — smallest model
 
         # --- Common state ---
         self._model_name = model_name
@@ -349,7 +357,22 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     signal_manager.typing_indicator_changed.emit(True)
                 except (RuntimeError, Exception):
                     pass
-            stream = await self._ollama_client.chat(**chat_kwargs)
+            try:
+                stream = await self._ollama_client.chat(**chat_kwargs)
+            except Exception as _tool_err:
+                _err_str = str(_tool_err).lower()
+                if "does not support tools" in _err_str or ("400" in _err_str and "tool" in _err_str):
+                    # Model doesn't support native tool calling — retry without tools
+                    logger.warning(
+                        "LLM: Model '%s' does not support tools. Retrying without tools (conversation-only mode).",
+                        current_model,
+                    )
+                    chat_kwargs.pop("tools", None)
+                    stream = await self._ollama_client.chat(**chat_kwargs)
+                    allow_tools = False
+                    ollama_tools = []
+                else:
+                    raise
             logger.info("LLM: [5] ollama.chat() returned stream: %.3fs", time.time() - t3)
 
             # 6. Process streaming chunks
@@ -474,7 +497,11 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         return False
 
     def _resolve_current_model(self):
-        """Determine the model to use for this request."""
+        """Determine the model to use for this request.
+
+        If the resolved model is not installed in Ollama, falls back to the
+        first available model and logs a warning so the user knows.
+        """
         model = self._model_name
         if self.chat_manager and hasattr(self.chat_manager, 'current_model') and self.chat_manager.current_model:
             mgr = self.chat_manager.current_model
@@ -491,6 +518,29 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     session.close()
                 except Exception:
                     pass
+
+        # Validate the model is actually installed in Ollama
+        try:
+            import ollama as _ollama
+            installed = {m.get("name", m.get("model", "")) for m in _ollama.list().get("models", [])}
+            # Ollama list returns names like "qwen3:8b" — normalize for comparison
+            # Also check without the ":latest" suffix
+            model_variants = {model, f"{model}:latest"}
+            if not model_variants & installed:
+                # Model not installed — try to find any available model
+                if installed:
+                    fallback = next(iter(installed))
+                    logger.warning(
+                        "Model '%s' not found in Ollama. Available: %s. Falling back to '%s'. "
+                        "Please start a new chat with the correct model, or run: ollama pull %s",
+                        model, ", ".join(sorted(installed)[:5]), fallback, model,
+                    )
+                    model = fallback
+                else:
+                    logger.error("No Ollama models installed. Please run: ollama pull <model_name>")
+        except Exception as e:
+            logger.debug("Could not validate Ollama model availability: %s", e)
+
         return model
 
     async def _process_stream(self, stream, current_chat_id,

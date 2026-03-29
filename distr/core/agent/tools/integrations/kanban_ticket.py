@@ -1140,4 +1140,6 @@ class KanbanTicketTool(BaseTool):
             with open(ticket_path, "w", encoding="utf-8") as f:
                 f.write(content)
 
-        return f"Sent ticket #{ticket_id} to project '{project.name}' → {ticket_path}"
+            project_name = project.name
+
+        return f"Sent ticket #{ticket_id} to project '{project_name}' → {ticket_path}"

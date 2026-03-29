@@ -37,6 +37,7 @@ class ActionType(Enum):
     ACTION_PLAY = "action_play"               # Play/execute an action
     ACTION_START_RECORDING = "action_start_recording"  # Start recording action
     ACTION_STOP_RECORDING = "action_stop_recording"    # Stop recording action
+    TYPE_TEXT = "type_text"                   # Type/dictate text as keyboard input
     CLEAR_CHAT = "clear_chat"                 # Clear chat history
     NEW_CHAT = "new_chat"                     # Start new chat
     EXIT_APP = "exit_app"                     # Exit application
@@ -130,6 +131,18 @@ class FastActionDetector:
              ActionType.SNIPPET_USE, "use_snippet", {}, False, "done"),
             (re.compile(r'\bsnippet\b.*\b(create|make|save)\b', re.IGNORECASE), 
              ActionType.SNIPPET_CREATE, "create_snippet", {}, False, "done"),
+            
+            # === TYPE / DICTATE TEXT ===
+            # "type out ...", "type this", "dictate ...", "type from clipboard"
+            # These bypass the LLM entirely — just type and done, no screenshot verification.
+            (re.compile(r'\btype\s+(?:out\s+)?from\s+clipboard\b', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"source": "clipboard"}, False, "done"),
+            (re.compile(r'\bdictate\s+from\s+clipboard\b', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"source": "clipboard"}, False, "done"),
+            (re.compile(r'\b(?:type|dictate)\s+(?:out\s+)?["\u201c](.+?)["\u201d]', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
+            (re.compile(r'\b(?:type|dictate)\s+(?:out\s+)?(.{3,})', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
             
             # === ACTION ACTIONS ===
             # More specific patterns first - "run action X", "play action X", "execute action X"
@@ -855,6 +868,12 @@ class FastActionDetector:
                             final_args[key] = match.group(len(match.groups())).lower()
                         else:
                             final_args[key] = match.group(0).lower()
+                    elif value == "__MATCH_GROUP_PRESERVE_CASE__":
+                        # Extract matched group — preserve original casing (for type_text/dictate)
+                        if match.groups():
+                            final_args[key] = match.group(1)
+                        else:
+                            final_args[key] = match.group(0)
                     elif value == "__SCROLL_MATCH__":
                         # Map "up" -> "scroll_up", "down" -> "scroll_down"
                         if match.groups():
