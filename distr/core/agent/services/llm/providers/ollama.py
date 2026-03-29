@@ -128,8 +128,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         self._cancelled = False
         self._processed_fast_actions = set()
 
-        # Reusable Ollama client — avoids connection setup overhead per request
-        self._ollama_client = ollama.AsyncClient(timeout=120.0)
+        # Reusable Ollama client — generous timeout for slow/memory-constrained machines
+        # where model loading can take minutes due to disk swapping
+        self._ollama_client = ollama.AsyncClient(timeout=300.0)
 
         logger.info("OllamaLLMService initialized with model: %s", model_name)
 

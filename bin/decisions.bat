@@ -409,11 +409,12 @@ if !MODELS_EXIST! equ 0 (
     echo [32m√[0m Models already installed
 )
 
-:: Check for Ollama
-:: Check for Ollama (model pulling is handled by bin/setup.py based on system RAM)
+:: Check for Ollama and ensure RAM-appropriate models are pulled
 where ollama >nul 2>&1
 if !errorlevel! equ 0 (
     echo [32m√[0m Ollama found
+    echo [33mEnsuring Ollama models are available...[0m
+    "%VENV_DIR%\Scripts\python.exe" "%SCRIPT_DIR%\bin\ensure_models.py"
 ) else (
     echo [33mOllama not found. Installing...[0m
     where winget >nul 2>&1
