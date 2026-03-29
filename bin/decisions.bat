@@ -4,6 +4,15 @@ setlocal enabledelayedexpansion
 :: Cross-platform setup and run script for DecisionsAI (Windows)
 :: Equivalent of bin/decisions.sh for macOS/Linux
 
+:: Check if DecisionsAI is already running
+tasklist /FI "IMAGENAME eq pythonw.exe" /FO CSV 2>nul | findstr /i "pythonw" >nul 2>&1
+if !errorlevel! equ 0 (
+    echo [33mDecisionsAI is already running.[0m
+    echo To restart, right-click the oracle and choose Quit first.
+    timeout /t 3 >nul
+    exit /b 0
+)
+
 :: Get the project root directory (parent of bin\)
 set "SCRIPT_DIR=%~dp0.."
 pushd "%SCRIPT_DIR%"
