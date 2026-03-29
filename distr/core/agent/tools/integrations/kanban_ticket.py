@@ -432,6 +432,8 @@ class KanbanTicketTool(BaseTool):
     ) -> str:
         try:
             action = (action or "create_ticket").strip().lower().replace(" ", "_")
+            logger.info("KanbanTicketTool: action=%s board_name=%s board_id=%s title=%s",
+                        action, board_name, board_id, title[:50] if title else "")
 
             if action == "list_boards":
                 return self._action_list_boards()
@@ -746,6 +748,7 @@ class KanbanTicketTool(BaseTool):
         result = f"Created ticket '{title}' in board '{board['name']}', lane '{lane['name']}' (ID {ticket_id})"
         if attached:
             result += f". Attached {len(attached)} file(s): {', '.join(attached)}"
+        logger.info("KanbanTicketTool: %s", result)
         return result
 
     def _create_bulk_tickets(self, board, lane, tickets_data, conv_files,
