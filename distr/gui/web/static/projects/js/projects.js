@@ -238,6 +238,9 @@
         if (tabName === "cli") {
             loadCliAudit();
             loadKiroCliStatus();
+            startCliStream();
+        } else {
+            stopCliStream();
         }
     }
 
@@ -838,14 +841,9 @@
             body: JSON.stringify({instruction: instruction}),
         }).then(function(data) {
             if (data.success) {
-                showSnackbar("Task started", "success");
-                setTimeout(loadCliAudit, 500);
-                // Poll for updates while running
-                if (window._cliPollTimer) clearInterval(window._cliPollTimer);
-                window._cliPollTimer = setInterval(function() {
-                    loadCliAudit();
-                }, 3000);
-                setTimeout(function() { clearInterval(window._cliPollTimer); }, 120000);
+                showSnackbar("Task started via " + (data.engine || "kiro-cli"), "success");
+                loadCliAudit();
+                startCliStream();
             } else {
                 showSnackbar(data.error || "Failed", "error");
             }
@@ -854,6 +852,37 @@
         }).finally(function() {
             if (sendBtn) sendBtn.disabled = false;
         });
+    }
+
+    var _cliEventSource = null;
+
+    function startCliStream() {
+        stopCliStream();
+        if (!currentProjectId) return;
+        try {
+            _cliEventSource = new EventSource("/api/projects/" + currentProjectId + "/cli/stream");
+            _cliEventSource.onmessage = function(e) {
+                try {
+                    var data = JSON.parse(e.data);
+                    if (data.refresh) loadCliAudit();
+                } catch (err) {}
+            };
+            _cliEventSource.onerror = function() {
+                stopCliStream();
+                setTimeout(function() {
+                    if (document.getElementById("tab-cli") && !document.getElementById("tab-cli").classList.contains("hidden")) {
+                        startCliStream();
+                    }
+                }, 5000);
+            };
+        } catch (e) {}
+    }
+
+    function stopCliStream() {
+        if (_cliEventSource) {
+            try { _cliEventSource.close(); } catch (e) {}
+            _cliEventSource = null;
+        }
     }
 
     function loadCliAudit() {

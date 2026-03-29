@@ -771,3 +771,49 @@ def register_routes(router, templates):
             return JSONResponse({"success": result.returncode == 0, "output": result.stdout.strip()})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+
+    # ── SSE: real-time audit log updates ──
+
+    @router.get("/projects/{project_id}/cli/stream")
+    async def stream_cli_audit(project_id: int):
+        """SSE endpoint — pushes an event whenever the project's Kiro CLI audit changes."""
+        import asyncio
+        from fastapi.responses import StreamingResponse
+
+        async def event_generator():
+            last_version = 0
+            while True:
+                try:
+                    from distr.core.db import get_session
+                    from distr.core.db.projects import Project
+                    from distr.core.db.step_runner import StepRunnerSession
+                    with get_session() as session:
+                        project = session.query(Project).filter(Project.id == project_id).first()
+                        if not project:
+                            yield "data: {\"error\": \"project not found\"}\n\n"
+                            return
+                        prefix = f"[Project: {project.name or ''}]"
+                        # Get latest session modified time as version
+                        latest = (
+                            session.query(StepRunnerSession)
+                            .filter(
+                                StepRunnerSession.instruction.like(f"{prefix}%"),
+                                StepRunnerSession.session_type == "kiro_cli",
+                            )
+                            .order_by(StepRunnerSession.modified_date.desc())
+                            .first()
+                        )
+                        version = int(latest.modified_date.timestamp() * 1000) if latest and latest.modified_date else 0
+                        if version != last_version:
+                            last_version = version
+                            yield f"data: {{\"version\": {version}, \"refresh\": true}}\n\n"
+                except Exception:
+                    pass
+                await asyncio.sleep(1.5)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
