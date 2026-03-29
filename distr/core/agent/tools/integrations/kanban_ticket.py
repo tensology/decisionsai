@@ -16,9 +16,27 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from langchain.tools import BaseTool
-from pydantic import Field
+from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+class KanbanTicketInput(BaseModel):
+    """Input schema for KanbanTicketTool."""
+    text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
+    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project")
+    board_name: str = Field(default="", description="Board name (fuzzy matched)")
+    board_id: int = Field(default=0, description="Board ID (exact)")
+    lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
+    title: str = Field(default="", description="Ticket title")
+    description: str = Field(default="", description="Ticket description")
+    priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
+    ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete actions")
+    file_path: str = Field(default="", description="File path for attach_file action")
+    url: str = Field(default="", description="URL for add_link action")
+    todo_text: str = Field(default="", description="Text for add_todo/toggle_todo action")
+    linked_project_id: int = Field(default=0, description="Link ticket to a project by ID")
+    linked_workflow_id: int = Field(default=0, description="Link ticket to a workflow by ID")
 
 
 class KanbanTicketTool(BaseTool):
@@ -68,6 +86,7 @@ class KanbanTicketTool(BaseTool):
     """
 
     name: str = "create_ticket"
+    args_schema: type[BaseModel] = KanbanTicketInput
     description: str = (
         "Full CRUD for Kanban boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
