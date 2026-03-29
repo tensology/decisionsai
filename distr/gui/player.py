@@ -47,13 +47,17 @@ class PlayerWindow(QtWidgets.QWidget):
         self._close_event_processing = False
         self._close_event_lock = threading.Lock()
         
-        # Set window flags to ensure it stays on top independently
-        # Removing Tool flag and adding Window flag to improve macOS behavior
-        self.setWindowFlags(
-            Qt.WindowType.Window |
-            Qt.WindowType.WindowStaysOnTopHint | 
+        # Set window flags — Tool flag hides from taskbar on Windows
+        _flags = (
+            Qt.WindowType.WindowStaysOnTopHint |
             Qt.WindowType.FramelessWindowHint
         )
+        import sys
+        if sys.platform == 'win32':
+            _flags |= Qt.WindowType.Tool
+        else:
+            _flags |= Qt.WindowType.Window  # macOS needs Window flag for proper layering
+        self.setWindowFlags(_flags)
         
         # Critical attributes for window behavior
         self.setAttribute(Qt.WidgetAttribute.WA_ShowWithoutActivating)
