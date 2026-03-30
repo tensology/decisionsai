@@ -510,12 +510,16 @@ def get_gemini_models(api_key: str):
                 if not model_id:
                     continue
 
+                # Strip 'models/' prefix from Google's response
+                if model_id.startswith('models/'):
+                    model_id = model_id[7:]
+
                 # Only include gemini chat models
-                if not model_id.lower().startswith('gemini-'):
+                if not model_id.lower().startswith(('gemini-', 'gemma-')):
                     continue
 
-                # Skip embedding models
-                if 'embed' in model_id.lower():
+                # Skip embedding, TTS, and image-only models
+                if any(x in model_id.lower() for x in ['embed', '-tts', 'imagen']):
                     continue
 
                 chat_models.append(model_id)
