@@ -80,7 +80,7 @@ class CopyToBoard(BaseModel):
     priority: Optional[str] = "medium"
 
 
-ALLOWED_FREQUENCIES = {"hourly", "daily", "weekly", "fortnightly", "monthly"}
+ALLOWED_FREQUENCIES = {"5min", "10min", "15min", "30min", "hourly", "daily", "weekly", "fortnightly", "monthly"}
 
 
 class KanbanSettingsUpdate(BaseModel):

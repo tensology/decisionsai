@@ -381,8 +381,8 @@
             priority: getSelectedPriority(),
             linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value) || null,
             linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value) || null,
-            linked_snippet_id: parseInt(document.getElementById("kb-modal-link-snippet").value) || null,
-            linked_action_id: parseInt(document.getElementById("kb-modal-link-action").value) || null,
+            linked_snippet_id: null,
+            linked_action_id: null,
         };
         if (!payload.title) { showSnackbar("Title is required", "error"); return; }
         apiFetch("/api/kanban/tickets/" + modalTicketId, {
@@ -543,8 +543,6 @@
         apiFetch("/api/kanban/linkable").then(function(data) {
             populateSelect("kb-modal-link-workflow", data.workflows, "id", "title", ticket.linked_workflow_id);
             populateSelect("kb-modal-link-project", data.projects, "id", "name", ticket.linked_project_id);
-            populateSelect("kb-modal-link-snippet", data.snippets, "id", "title", ticket.linked_snippet_id);
-            populateSelect("kb-modal-link-action", data.actions, "id", "title", ticket.linked_action_id);
         }).catch(function() {});
     }
 
@@ -931,10 +929,11 @@
         var monthlyDay = document.getElementById("kb-gs-monthly-day");
         var timePicker = document.getElementById("kb-gs-time");
 
+        var isMinuteBased = freq.endsWith("min");
         hourPicker.classList.toggle("hidden", freq !== "hourly");
         dayPicker.classList.toggle("hidden", freq !== "weekly" && freq !== "fortnightly");
         monthlyDay.classList.toggle("hidden", freq !== "monthly");
-        timePicker.classList.toggle("hidden", freq === "hourly");
+        timePicker.classList.toggle("hidden", freq === "hourly" || isMinuteBased);
     }
 
     // ── CLI Tool Selection & Auth Masking ──

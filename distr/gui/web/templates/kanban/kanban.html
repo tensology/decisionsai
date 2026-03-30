@@ -214,18 +214,6 @@
                                 <option value="">None</option>
                             </select>
                         </div>
-                        <div>
-                            <label class="text-xs text-gray-500">Snippet</label>
-                            <select id="kb-modal-link-snippet" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                <option value="">None</option>
-                            </select>
-                        </div>
-                        <div>
-                            <label class="text-xs text-gray-500">Action</label>
-                            <select id="kb-modal-link-action" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                <option value="">None</option>
-                            </select>
-                        </div>
                     </div>
                 </div>
             </div>
@@ -411,6 +399,10 @@
                     <div>
                         <label class="block text-xs text-gray-500 mb-2">Check-in frequency</label>
                         <select id="kb-gs-frequency" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                            <option value="5min">Every 5 minutes</option>
+                            <option value="10min">Every 10 minutes</option>
+                            <option value="15min">Every 15 minutes</option>
+                            <option value="30min">Every 30 minutes</option>
                             <option value="hourly">Hourly</option>
                             <option value="daily" selected>Daily</option>
                             <option value="weekly">Weekly</option>

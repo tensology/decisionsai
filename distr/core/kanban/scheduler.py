@@ -44,6 +44,13 @@ def compute_next_run(
     if baseline is None:
         return None
 
+    # Minute-based frequencies (5min, 10min, 15min, 30min)
+    _minute_intervals = {"5min": 5, "10min": 10, "15min": 15, "30min": 30}
+    if frequency in _minute_intervals:
+        interval = _minute_intervals[frequency]
+        next_run = baseline + timedelta(minutes=interval)
+        return next_run.replace(second=0, microsecond=0)
+
     if frequency == "hourly":
         return _compute_hourly(baseline, agent_hours)
 
