@@ -20,6 +20,8 @@ _PROVIDER_NORMALIZE = {
     "groq": "Groq",
     "openrouter": "OpenRouter",
     "kilocode": "KiloCode",
+    "gemini": "Google Gemini",
+    "google gemini": "Google Gemini",
     "kokoro": "Kokoro",
     "elevenlabs": "ElevenLabs",
 }

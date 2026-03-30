@@ -514,6 +514,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 "Groq",
                 "OpenRouter",
                 "KiloCode",
+                "Google Gemini",
             ]
             if provider not in valid_providers:
                 raise HTTPException(
@@ -775,6 +776,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "Groq",
                     "OpenRouter",
                     "KiloCode",
+                    "Google Gemini",
                 ]
                 if norm_provider not in valid_providers:
                     raise HTTPException(

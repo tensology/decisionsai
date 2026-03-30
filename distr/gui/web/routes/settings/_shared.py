@@ -112,6 +112,8 @@ class ThirdPartySettings(BaseModel):
     groq_key: str = ""
     kilo_enabled: bool = False
     kilo_key: str = ""
+    gemini_enabled: bool = False
+    gemini_key: str = ""
     rube_enabled: bool = False
     rube_token: str = ""
 

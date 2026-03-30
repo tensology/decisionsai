@@ -202,6 +202,38 @@ def validate_kilocode(api_key: str) -> tuple[bool, str]:
 
 
 
+def validate_gemini(api_key: str) -> tuple[bool, str]:
+    """Validate Google Gemini API key."""
+    try:
+        data = json.dumps({
+            "model": "gemini-2.0-flash",
+            "max_tokens": 1,
+            "messages": [{"role": "user", "content": "hi"}]
+        }).encode('utf-8')
+        req = urllib.request.Request(
+            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
+            data=data,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            }
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                return True, ""
+        return False, "Invalid API key"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Invalid API key"
+        elif e.code == 400:
+            return True, ""
+        return False, f"HTTP Error: {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
+
+
 def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     """
     Validate API key for any provider.
@@ -222,6 +254,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "openrouter": validate_openrouter,
         "groq": validate_groq,
         "kilocode": validate_kilocode,
+        "gemini": validate_gemini,
     }
 
     validator = validators.get(provider.lower())

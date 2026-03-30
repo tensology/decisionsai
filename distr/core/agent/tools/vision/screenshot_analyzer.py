@@ -818,7 +818,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 return f"Error calling Ollama vision API: {e}"
 
         # --- OpenRouter / KiloCode / Groq (OpenAI-compatible) ---
-        if vision_provider_key in ("openrouter", "kilocode", "groq"):
+        if vision_provider_key in ("openrouter", "kilocode", "groq", "gemini"):
             try:
                 import requests as _requests
                 if vision_provider_key == "openrouter":
@@ -827,6 +827,9 @@ class ScreenshotAnalyzerTool(BaseTool):
                 elif vision_provider_key == "kilocode":
                     api_key = settings.get('kilocode_key', '')
                     base_url = (settings.get('kilocode_url') or "https://api.kilo.ai/api/gateway").rstrip('/') + "/chat/completions"
+                elif vision_provider_key == "gemini":
+                    api_key = settings.get('gemini_key', '')
+                    base_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
                 else:  # groq
                     api_key = settings.get('groq_key', '')
                     base_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -896,7 +899,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 logger.error("Error calling Anthropic vision API: %s", e, exc_info=True)
                 return f"Error calling Anthropic vision API: {e}"
 
-        return f"Error: Vision provider '{vision_provider_key}' not supported. Supported: OpenAI, Ollama, OpenRouter, KiloCode, Groq, Anthropic."
+        return f"Error: Vision provider '{vision_provider_key}' not supported. Supported: OpenAI, Ollama, OpenRouter, KiloCode, Groq, Anthropic, Google Gemini."
 
     # ------------------------------------------------------------------
     # Process vision LLM JSON result

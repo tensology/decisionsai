@@ -26,6 +26,7 @@ SECRET_SETTINGS_FIELDS = {
     "openrouter_key",
     "groq_key",
     "kilo_key",
+    "gemini_key",
     "rube_token",
 }
 CONNECTED_ACCOUNT_SECRET_FIELDS = {

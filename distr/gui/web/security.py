@@ -94,6 +94,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "openrouter_key",
         "groq_key",
         "kilo_key",
+        "gemini_key",
         "rube_token",
     ]
     response: Dict[str, Any] = {
@@ -105,6 +106,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "openrouter_enabled": settings.get("openrouter_enabled", False),
         "groq_enabled": settings.get("groq_enabled", False),
         "kilo_enabled": settings.get("kilo_enabled", False),
+        "gemini_enabled": settings.get("gemini_enabled", False),
         "rube_enabled": settings.get("rube_enabled", False),
     }
     for field in secret_fields:

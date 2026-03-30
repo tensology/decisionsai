@@ -28,6 +28,7 @@ PROVIDERS = [
     ("groq", "Groq"),
     ("openrouter", "OpenRouter"),
     ("kilocode", "KiloCode"),
+    ("gemini", "Google Gemini"),
 ]
 
 _EMPTY = {"providers": {}, "last_updated": None, "generated_by": None}

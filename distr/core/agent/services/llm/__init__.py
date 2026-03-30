@@ -23,4 +23,5 @@ from .providers.anthropic import AnthropicLLMService
 from .providers.groq import GroqLLMService
 from .providers.openrouter import OpenRouterLLMService
 from .providers.kilocode import KiloCodeLLMService
+from .providers.gemini import GeminiLLMService
 from .core_mixin import LLMSharedMixin

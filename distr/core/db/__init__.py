@@ -104,6 +104,7 @@ class Settings(Base):
     openrouter_enabled = Column(Boolean, default=False)
     groq_enabled = Column(Boolean, default=False)
     kilo_enabled = Column(Boolean, default=False)
+    gemini_enabled = Column(Boolean, default=False)
 
     # Provider Keys/URLs
     assemblyai_key = Column(String, default='')
@@ -115,6 +116,7 @@ class Settings(Base):
     openrouter_key = Column(String, default='')
     groq_key = Column(String, default='')
     kilo_key = Column(String, default='')
+    gemini_key = Column(String, default='')
 
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)

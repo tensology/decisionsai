@@ -140,6 +140,8 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
         return model or "openrouter/openai/gpt-4o-mini"
     if provider == "kilocode":
         return model or "kilocode/kilocode"
+    if provider == "gemini":
+        return model or "gemini/gemini-2.5-flash"
     return f"ollama/{model}" if model else "ollama/llama3.2"
 
 

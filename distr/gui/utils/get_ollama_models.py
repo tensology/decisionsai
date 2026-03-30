@@ -478,6 +478,90 @@ def _format_kilo_model_name(model_id: str) -> str:
     return name.title()
 
 
+def get_gemini_models(api_key: str):
+    """
+    Fetch available Google Gemini models from the API.
+
+    Args:
+        api_key: Google Gemini API key
+
+    Returns:
+        List of dicts with 'id' and 'name'.
+        Returns empty list if API call fails.
+    """
+    if not api_key or not api_key.strip():
+        logger.warning("No Gemini API key provided")
+        return []
+
+    try:
+        response = requests.get(
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+            headers={"Authorization": f"Bearer {api_key}"},
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            data = response.json()
+            all_models = data.get('data', [])
+
+            chat_models = []
+            for model in all_models:
+                model_id = model.get('id', '')
+                if not model_id:
+                    continue
+
+                # Only include gemini chat models
+                if not model_id.lower().startswith('gemini-'):
+                    continue
+
+                # Skip embedding models
+                if 'embed' in model_id.lower():
+                    continue
+
+                chat_models.append(model_id)
+
+            # Sort: newer/larger models first
+            def sort_key(m):
+                ml = m.lower()
+                if 'pro' in ml:
+                    return (0, m)
+                elif 'flash' in ml:
+                    return (1, m)
+                elif 'nano' in ml:
+                    return (2, m)
+                return (3, m)
+
+            chat_models.sort(key=sort_key)
+
+            models = []
+            for model_id in chat_models:
+                display_name = _format_gemini_model_name(model_id)
+                models.append({
+                    'id': model_id,
+                    'name': display_name
+                })
+
+            logger.info(f"Found {len(models)} Gemini models (filtered from {len(all_models)} total)")
+            return models
+        else:
+            logger.warning(f"Gemini API returned status {response.status_code}: {response.text[:200]}")
+            return []
+    except Exception as e:
+        logger.error(f"Error fetching Gemini models: {e}")
+        return []
+
+
+def _format_gemini_model_name(model_id: str) -> str:
+    """Format Gemini model ID to display name."""
+    name = model_id
+    # Remove 'models/' prefix if present
+    if name.startswith('models/'):
+        name = name[7:]
+    # Capitalize and clean up
+    name = name.replace('-', ' ').replace('_', ' ')
+    return name.title()
+
+
 def _format_groq_model_name(model_id: str) -> str:
     """Format Groq model ID to display name."""
     # Common Groq model patterns

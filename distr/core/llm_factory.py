@@ -16,6 +16,8 @@ _PROVIDER_NORMALIZE = {
     "groq": "Groq",
     "openrouter": "OpenRouter",
     "kilocode": "KiloCode",
+    "gemini": "Google Gemini",
+    "google gemini": "Google Gemini",
 }
 
 
@@ -33,6 +35,13 @@ def is_openai_model(model_name: str) -> bool:
         return False
     m = model_name.lower()
     return m.startswith(('gpt-', 'o1', 'o3', 'o4', 'chatgpt-'))
+
+
+def is_gemini_model(model_name: str) -> bool:
+    """Check if a model name belongs to Google Gemini (gemini-*)."""
+    if not model_name:
+        return False
+    return model_name.lower().startswith('gemini-')
 
 
 def is_anthropic_model(model_name: str) -> bool:
@@ -53,6 +62,7 @@ def infer_provider_from_model(provider: str, model_name: str) -> str:
     m = model_name.lower()
     _is_openai = is_openai_model(model_name)
     _is_anthropic = is_anthropic_model(model_name)
+    _is_gemini = is_gemini_model(model_name)
     is_groq = m.startswith('llama-') and 'groq' in provider.lower()
     norm = normalize_provider(provider)
     if norm == 'Ollama':
@@ -60,6 +70,8 @@ def infer_provider_from_model(provider: str, model_name: str) -> str:
             return 'OpenAI'
         if _is_anthropic:
             return 'Anthropic'
+        if _is_gemini:
+            return 'Google Gemini'
     return norm
 
 
@@ -148,6 +160,12 @@ def create_stream(
             model, messages, settings,
             key_name="kilo_key",
             base_url="https://api.kilo.ai/api/gateway",
+        )
+    elif prov == "gemini" or prov == "google gemini":
+        yield from _stream_openai_compat(
+            model, messages, settings,
+            key_name="gemini_key",
+            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
         )
     else:
         raise ValueError(f"Unknown or unsupported LLM provider: {provider}")

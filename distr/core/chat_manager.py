@@ -714,7 +714,7 @@ class ChatManagerCore:
                     else text_content
                 )
 
-            if provider in ("OpenAI", "Anthropic", "OpenRouter", "Groq", "KiloCode"):
+            if provider in ("OpenAI", "Anthropic", "OpenRouter", "Groq", "KiloCode", "Google Gemini"):
                 return (
                     text_content[:40] + "..."
                     if len(text_content) > 40

@@ -150,6 +150,10 @@ def check_vision_model_support(model_name: str, provider: str) -> bool:
     elif provider == "KiloCode":
         return any(v in model_lower for v in ['gpt-4', 'claude-3', 'vision', 'llava'])
 
+    # Google Gemini vision models
+    elif provider == "Google Gemini":
+        return any(v in model_lower for v in ['gemini', 'vision'])
+
     # Ollama vision models
     elif provider == "Ollama":
         # Known vision models
@@ -247,7 +251,7 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
     prompt_text = f"Please analyze this image. The user asked: {user_text}"
 
     # --- OpenAI-compatible providers ---
-    if provider_key in ('openai', 'openrouter', 'groq', 'kilocode'):
+    if provider_key in ('openai', 'openrouter', 'groq', 'kilocode', 'gemini'):
         try:
             from openai import AsyncOpenAI
 
@@ -262,6 +266,9 @@ async def analyze_image_with_vision_llm(image_path: str, user_text: str, setting
             elif provider_key == 'kilocode':
                 api_key = settings.get('kilocode_key', api_key)
                 base_url = settings.get('kilocode_url', None)
+            elif provider_key == 'gemini':
+                api_key = settings.get('gemini_key', api_key)
+                base_url = 'https://generativelanguage.googleapis.com/v1beta/openai/'
 
             client_kwargs = {"api_key": api_key}
             if base_url:

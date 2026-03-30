@@ -199,6 +199,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("openrouter_enabled", "openrouter_key"),
         ("groq_enabled", "groq_key"),
         ("kilo_enabled", "kilo_key"),
+        ("gemini_enabled", "gemini_key"),
     ]:
         enabled_field, key_field = field_pair
         settings[enabled_field] = getattr(data, enabled_field)

@@ -1,7 +1,7 @@
 """
 Base LLM Service
 
-Shared logic for all LLM providers (OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Ollama).
+Shared logic for all LLM providers (OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Google Gemini, Ollama).
 Provider subclasses only need to implement client initialization and _generate_response().
 
 BaseLLMService inherits from LLMSharedMixin which provides:

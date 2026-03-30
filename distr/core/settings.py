@@ -49,6 +49,8 @@ DEFAULT_SETTINGS = {
     'groq_key': '',
     'kilo_enabled': False,
     'kilo_key': '',
+    'gemini_enabled': False,
+    'gemini_key': '',
     'rube_enabled': False,
     'rube_token': '',
     'ollama_enabled': True,

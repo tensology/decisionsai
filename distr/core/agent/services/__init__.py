@@ -71,6 +71,12 @@ except ImportError as e:
     logger.warning(f"Error importing KiloCodeLLMService: {e}")
     KiloCodeLLMService = None
 
+try:
+    from .llm.providers.gemini import GeminiLLMService
+except ImportError as e:
+    logger.warning(f"Error importing GeminiLLMService: {e}")
+    GeminiLLMService = None
+
 __all__ = ["WhisperSTTService", "OllamaLLMService", "KokoroTTSService", "ElevenLabsTTSService"]
 if OpenAITTSService:
     __all__.append("OpenAITTSService")

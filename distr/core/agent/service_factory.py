@@ -30,6 +30,7 @@ try:
     from .services import (
         OpenAITTSService, OpenAILLMService, OpenRouterLLMService,
         AnthropicLLMService, GroqLLMService, KiloCodeLLMService,
+        GeminiLLMService,
     )
 except ImportError:
     OpenAITTSService = None
@@ -38,6 +39,7 @@ except ImportError:
     AnthropicLLMService = None
     GroqLLMService = None
     KiloCodeLLMService = None
+    GeminiLLMService = None
 try:
     from .services import CoquiTTSService
 except ImportError:
@@ -53,6 +55,7 @@ _LLM_ENGINE_MAP = {
     'anthropic':  (AnthropicLLMService,   "AnthropicLLMService"),
     'groq':       (GroqLLMService,        "GroqLLMService"),
     'kilocode':   (KiloCodeLLMService,    "KiloCodeLLMService"),
+    'gemini':     (GeminiLLMService,      "GeminiLLMService"),
 }
 
 

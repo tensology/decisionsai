@@ -569,8 +569,8 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                 except Exception as e:
                     logger.error(f"Error calling Anthropic vision API: {e}")
                     return f"Error calling Anthropic vision API: {str(e)}"
-            elif vision_provider_key in ("kilocode", "groq"):
-                # KiloCode / Groq — OpenAI-compatible API
+            elif vision_provider_key in ("kilocode", "groq", "gemini"):
+                # KiloCode / Groq / Gemini — OpenAI-compatible API
                 try:
                     import requests
                     from distr.core.settings import load_settings_from_db
@@ -578,6 +578,9 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                     if vision_provider_key == "kilocode":
                         api_key = settings.get('kilocode_key', '')
                         base_url = (settings.get('kilocode_url') or "https://api.kilo.ai/api/gateway").rstrip('/') + "/chat/completions"
+                    elif vision_provider_key == "gemini":
+                        api_key = settings.get('gemini_key', '')
+                        base_url = "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions"
                     else:
                         api_key = settings.get('groq_key', '')
                         base_url = "https://api.groq.com/openai/v1/chat/completions"
@@ -601,7 +604,7 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                 except Exception as e:
                     return f"Error calling {vision_provider_key.title()} vision API: {e}"
             else:
-                return f"Error: Vision provider '{vision_provider}' not yet supported for image analysis. Supported providers: OpenAI, Ollama, Anthropic, OpenRouter, KiloCode, Groq."
+                return f"Error: Vision provider '{vision_provider}' not yet supported for image analysis. Supported providers: OpenAI, Ollama, Anthropic, OpenRouter, KiloCode, Groq, Google Gemini."
                 
         except Exception as e:
             logger.error(f"Error in VisionAnalyzer: {e}", exc_info=True)
