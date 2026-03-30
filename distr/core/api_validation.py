@@ -216,9 +216,15 @@ def validate_gemini(api_key: str) -> tuple[bool, str]:
     except urllib.error.HTTPError as e:
         if e.code in (401, 403):
             return False, "Invalid API key"
-        # Any other HTTP error likely means the key authenticated but something else went wrong
+        # Google returns 400 for invalid keys — check the body
         if e.code == 400:
-            return True, ""
+            try:
+                body = e.read().decode("utf-8", errors="replace")
+                if "API_KEY_INVALID" in body or "API key not valid" in body:
+                    return False, "Invalid API key"
+            except Exception:
+                pass
+            return False, "Invalid API key"
         return False, f"HTTP Error: {e.code}"
     except Exception as e:
         return False, str(e)
