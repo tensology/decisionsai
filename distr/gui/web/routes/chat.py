@@ -524,7 +524,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Normalize voice provider to lowercase before validation
             if voice_provider:
-                voice_provider = voice_provider.strip().lower()
+                from distr.core.agent.constants import normalize_voice_provider
+                voice_provider = normalize_voice_provider(voice_provider)
 
             # Validate voice provider
             valid_voice_providers = ["kokoro", "openai", "elevenlabs", ""]
@@ -786,7 +787,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Validate voice provider if provided
             valid_voice_providers = ["kokoro", "openai", "elevenlabs", "", None]
-            vp_normalized = voice_provider.strip().lower() if voice_provider else voice_provider
+            from distr.core.agent.constants import normalize_voice_provider as _nvp
+            vp_normalized = _nvp(voice_provider) if voice_provider else voice_provider
             if (
                 vp_normalized is not None
                 and vp_normalized.strip()
