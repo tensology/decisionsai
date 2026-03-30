@@ -8,8 +8,6 @@ from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import Field
 import logging
-import asyncio
-import time
 
 logger = logging.getLogger(__name__)
 
@@ -35,47 +33,38 @@ class ExitAppTool(BaseTool):
     - "quit the app" -> CALL immediately
     - "exit the app" -> CALL immediately
     - "close the app" -> CALL immediately
-    - "quit application" -> CALL immediately
-    - "exit application" -> CALL immediately
     
     DO NOT CALL FOR:
     - "goodbye" (just conversation)
     - "bye" (just conversation)
     - "see you later" (just conversation)
-    - "farewell" (just conversation)
-    - Any casual farewell without explicit exit intent
     
     CALL THE TOOL - never describe it."""
     
     llm_service: Optional[Any] = Field(default=None, exclude=True)
+    event_queue: Optional[Any] = Field(default=None, exclude=True)
     
-    def __init__(self, llm_service=None, **kwargs):
+    def __init__(self, llm_service=None, event_queue=None, **kwargs):
         super().__init__(**kwargs)
         self._llm_service = llm_service
+        self._event_queue = event_queue
     
     def _run(self, text: str = "", **kwargs) -> str:
-        """Execute exit application action."""
         try:
-            logger.info("Exit app: Saying goodbye and exiting application")
-            
-            # Return goodbye message - the LLM service will handle TTS and force quit
-            goodbye = "Goodbye! It was great helping you today."
-            
-            # Also emit the exit signal as a backup
-            try:
+            logger.info("Exit app: requesting exit")
+            # Use event_queue (works from agent subprocess) with signal fallback
+            eq = self._event_queue
+            if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):
+                eq = self._llm_service.event_queue
+            if eq:
+                eq.put(('exit_app', {}), block=False)
+            else:
                 from distr.core.signals import signal_manager
-                logger.info("Exit app: Emitting exit_app signal")
                 signal_manager.exit_app.emit()
-            except Exception as e:
-                logger.warning(f"Error emitting exit signal: {e}")
-            
-            return goodbye
-            
+            return "Goodbye! It was great helping you today."
         except Exception as e:
-            logger.error(f"Error in ExitAppTool: {e}", exc_info=True)
+            logger.error("Error in ExitAppTool: %s", e, exc_info=True)
             return "Goodbye!"
     
     async def _arun(self, text: str = "", **kwargs) -> str:
-        # Filter out any unexpected arguments
         return self._run(text=text)
-

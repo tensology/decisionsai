@@ -112,6 +112,12 @@ class EventHandlerMixin:
         elif event == 'exit_app':
             logger.info("[EVENT QUEUE] Received exit_app event from agent process - quitting application")
             self.quit()
+        elif event == 'restart_app':
+            logger.info("[EVENT QUEUE] Received restart_app event from agent process - restarting application")
+            if hasattr(self, 'oracle_window') and self.oracle_window:
+                self.oracle_window.restart_app()
+            else:
+                logger.warning("[EVENT QUEUE] No oracle_window available for restart")
         elif event == 'get_current_mouse_screen':
             self._evt_get_mouse_screen()
         elif event == 'file_operation_confirmation_request':

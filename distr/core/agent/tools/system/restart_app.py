@@ -35,16 +35,25 @@ class RestartAppTool(BaseTool):
     CALL THE TOOL - never describe it."""
 
     llm_service: Optional[Any] = Field(default=None, exclude=True)
+    event_queue: Optional[Any] = Field(default=None, exclude=True)
 
-    def __init__(self, llm_service=None, **kwargs):
+    def __init__(self, llm_service=None, event_queue=None, **kwargs):
         super().__init__(**kwargs)
         self._llm_service = llm_service
+        self._event_queue = event_queue
 
     def _run(self, text: str = "", **kwargs) -> str:
         try:
-            logger.info("Restart app: Emitting restart_app signal")
-            from distr.core.signals import signal_manager
-            signal_manager.restart_app.emit()
+            logger.info("Restart app: requesting restart")
+            # Use event_queue (works from agent subprocess) with signal fallback
+            eq = self._event_queue
+            if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):
+                eq = self._llm_service.event_queue
+            if eq:
+                eq.put(('restart_app', {}), block=False)
+            else:
+                from distr.core.signals import signal_manager
+                signal_manager.restart_app.emit()
             return "Restarting the application now. See you in a moment!"
         except Exception as e:
             logger.error("Error in RestartAppTool: %s", e, exc_info=True)

@@ -167,8 +167,8 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             # Save Audio
             ("SaveAudioTool", dict(tts_service=tts_service)),
             # Exit Application
-            ("ExitAppTool", dict(llm_service=llm_service)),
-            ("RestartAppTool", dict(llm_service=llm_service)),
+            ("ExitAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
+            ("RestartAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
             # Rework Clipboard
             ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
             # Summarize Clipboard
