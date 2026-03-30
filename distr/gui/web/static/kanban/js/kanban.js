@@ -804,11 +804,6 @@
 
     function loadGlobalKanbanSettings() {
         apiFetch("/api/kanban/settings").then(function(s) {
-            // CLI Tool
-            document.getElementById("kb-gs-cli-tool").value = s.kanban_cli_tool || "";
-
-            // Update CLI tool visibility (install status)
-            handleCliToolChange();
 
             // LLM Configuration — populate provider dropdowns then load models
             _populateProviderDropdowns(["kb-gs-orch-provider", "kb-gs-coder-provider", "kb-gs-sub-provider"]);
@@ -895,7 +890,6 @@
         });
 
         var payload = {
-            kanban_cli_tool: document.getElementById("kb-gs-cli-tool").value,
             kanban_agent_orchestrator_provider: document.getElementById("kb-gs-orch-provider").value,
             kanban_agent_orchestrator_model: document.getElementById("kb-gs-orch-model").value,
             kanban_agent_coder_provider: document.getElementById("kb-gs-coder-provider").value,
@@ -954,33 +948,7 @@
         timePicker.classList.toggle("hidden", freq === "hourly" || isMinuteBased);
     }
 
-    // ── CLI Tool Selection ──
-
-    function handleCliToolChange() {
-        var tool = document.getElementById("kb-gs-cli-tool").value;
-        var statusEl = document.getElementById("kb-gs-cli-install-status");
-
-        if (!tool) {
-            statusEl.textContent = "";
-            return;
-        }
-
-        statusEl.textContent = "Checking\u2026";
-        statusEl.className = "text-xs text-gray-500 flex-shrink-0";
-
-        apiFetch("/api/kanban/cli-tool-status?tool=" + encodeURIComponent(tool)).then(function(data) {
-            if (data && data.installed) {
-                statusEl.textContent = "\u2713 Installed";
-                statusEl.className = "text-xs text-green-400 flex-shrink-0";
-            } else {
-                statusEl.textContent = "\u2717 Not found";
-                statusEl.className = "text-xs text-red-400 flex-shrink-0";
-            }
-        }).catch(function() {
-            statusEl.textContent = "\u2014";
-            statusEl.className = "text-xs text-gray-500 flex-shrink-0";
-        });
-    }
+    // ── Event bindings ──
 
     // ── Event bindings ──
 
@@ -1004,9 +972,6 @@
             gsFreq = this.value;
             updateGsFrequencyUI(gsFreq);
         });
-
-        // CLI tool selection change
-        document.getElementById("kb-gs-cli-tool").addEventListener("change", handleCliToolChange);
 
         // Global settings hour picker toggles
         document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
