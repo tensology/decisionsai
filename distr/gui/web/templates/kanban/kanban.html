@@ -115,6 +115,9 @@
                         <span id="kb-board-source-badge" class="text-xs px-2 py-0.5 rounded"></span>
                     </div>
                     <div class="flex items-center gap-2" id="kb-board-actions">
+                        <span id="kb-agent-icon" class="hidden text-[#f97316] cursor-pointer" title="Agent check-in enabled" onclick="document.getElementById('kb-settings-cog').click()">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/><circle cx="8" cy="16" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>
+                        </span>
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
                         <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
                         <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Edit</button>
@@ -475,11 +478,15 @@
                         <div class="grid grid-cols-2 gap-3">
                             <div>
                                 <label class="text-xs text-gray-500">Source lane (work from)</label>
-                                <input type="text" id="kb-gs-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. To Do">
+                                <select id="kb-gs-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                    <option value="">Select lane…</option>
+                                </select>
                             </div>
                             <div>
                                 <label class="text-xs text-gray-500">Done lane (move to)</label>
-                                <input type="text" id="kb-gs-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" placeholder="e.g. Done">
+                                <select id="kb-gs-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                    <option value="">Select lane…</option>
+                                </select>
                             </div>
                         </div>
                     </div>

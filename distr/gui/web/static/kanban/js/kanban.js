@@ -857,9 +857,29 @@
             // Time
             document.getElementById("kb-gs-time-input").value = s.kanban_agent_time || "09:00";
 
-            // Lane routing
-            document.getElementById("kb-gs-source-lane").value = s.kanban_agent_source_lane || "";
-            document.getElementById("kb-gs-done-lane").value = s.kanban_agent_done_lane || "";
+            // Lane routing — populate dropdowns from board lanes
+            var laneNames = [];
+            if (currentBoardData && currentBoardData.lanes) {
+                laneNames = currentBoardData.lanes.map(function(l) { return l.name || l.title || ""; }).filter(Boolean);
+            }
+            var srcSel = document.getElementById("kb-gs-source-lane");
+            var doneSel = document.getElementById("kb-gs-done-lane");
+            var srcVal = s.kanban_agent_source_lane || "";
+            var doneVal = s.kanban_agent_done_lane || "";
+            [srcSel, doneSel].forEach(function(sel) {
+                sel.innerHTML = '<option value="">Select lane…</option>';
+                laneNames.forEach(function(name) {
+                    var opt = document.createElement("option");
+                    opt.value = name; opt.textContent = name;
+                    sel.appendChild(opt);
+                });
+            });
+            srcSel.value = srcVal;
+            doneSel.value = doneVal;
+
+            // Show/hide robot icon on board header
+            var agentIcon = document.getElementById("kb-agent-icon");
+            if (agentIcon) agentIcon.classList.toggle("hidden", !s.kanban_agent_enabled);
         }).catch(function(e) { showSnackbar("Failed to load settings: " + e.message, "error"); });
     }
 
@@ -903,6 +923,9 @@
             body: JSON.stringify(payload)
         }).then(function() {
             showSnackbar("Settings saved");
+            // Update robot icon visibility
+            var agentIcon = document.getElementById("kb-agent-icon");
+            if (agentIcon) agentIcon.classList.toggle("hidden", !payload.kanban_agent_enabled);
             closeGlobalSettingsModal();
         }).catch(function(e) { showSnackbar("Save failed: " + e.message, "error"); });
     }
