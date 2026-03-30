@@ -32,9 +32,9 @@
         if (styleInjected) return;
         styleInjected = true;
         var css = [
-            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-right:none;border-radius:6px 0 0 6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;height:100%}',
+            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-right:none;border-radius:6px 0 0 6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;box-sizing:border-box}',
             '.model-info-btn:hover{border-color:#10a37f;color:#10a37f}',
-            '.model-info-btn svg{width:16px;height:16px;pointer-events:none}',
+            '.model-info-btn svg{width:14px;height:14px;pointer-events:none}',
             '.mr-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;animation:mrFadeIn .15s ease}',
             '@keyframes mrFadeIn{from{opacity:0}to{opacity:1}}',
             '.mr-modal{background:#1a1f3a;border:1px solid rgba(255,255,255,.2);border-radius:.75rem;width:780px;max-width:95vw;max-height:85vh;overflow-y:auto;color:#ececf1;font-family:Quicksand,sans-serif;animation:mrSlideUp .2s ease}',
@@ -125,12 +125,22 @@
             var parent = sel.parentElement;
             if (!parent) continue;
             if (parent.querySelector('.model-info-btn')) continue;
-            // Wrap select and info button in a flex row that stretches both to equal height
+
+            // Read the select's rendered height so the button matches exactly
+            var selHeight = sel.offsetHeight || sel.getBoundingClientRect().height;
+
             var wrapper = document.createElement('div');
             wrapper.style.cssText = 'display:flex;align-items:stretch;width:100%';
+
             var btn = createInfoButton(sel);
+            if (selHeight) {
+                btn.style.height = selHeight + 'px';
+            }
+
+            // Remove left border/radius on select, it joins to the button
             sel.style.borderRadius = '0 6px 6px 0';
             sel.style.borderLeft = 'none';
+
             parent.replaceChild(wrapper, sel);
             wrapper.appendChild(btn);
             wrapper.appendChild(sel);
