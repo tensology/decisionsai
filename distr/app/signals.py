@@ -243,6 +243,17 @@ class SignalBridgeMixin:
             _post_chat_event(evt)
         signal_manager.chat_stream_finished.connect(on_chat_stream_finished_web)
 
+        def on_chat_stream_error_web(error):
+            cid = getattr(self, "_web_stream_chat_id", None)
+            # Flush any buffered tokens before sending error
+            if self._web_stream_flush_timer is not None:
+                self._web_stream_flush_timer.stop()
+                self._web_stream_flush_timer = None
+            _flush_stream_tokens()
+            self._web_stream_chat_id = None
+            _post_chat_event({"event": "stream_error", "chat_id": int(cid) if cid else None, "error": str(error)})
+        signal_manager.chat_stream_error.connect(on_chat_stream_error_web)
+
         def on_transcription_progress_web(chat_id, status_text, done):
             try:
                 _post_chat_event({

@@ -326,6 +326,10 @@ function startChatWebSocket(force) {
                     handleChatEventStreamFinished(msg);
                     return;
                 }
+                if (msg.event === 'stream_error') {
+                    handleChatEventStreamError(msg);
+                    return;
+                }
                 if (msg.event === 'transcription_progress') {
                     if (msg.chat_id === currentChatId) {
                         showTranscriptionStatus(msg.status || 'Transcription in progress...', Boolean(msg.done));
@@ -499,6 +503,47 @@ function handleChatEventStreamFinished(msg) {
     // still holds for any in-flight poll tick that fires before the microtask queue drains.
     // Resolve pending WebSocket-based wait (sendToAgentAndPoll / pollUntilAgentResponse)
     // Only fire if this stream_finished is for the currently active stream token (guards against stale events from old chats)
+    if (window._agentStreamResolve) {
+        window._agentStreamResolve();
+        window._agentStreamResolve = null;
+    }
+    streamingChatId = null;
+}
+
+function handleChatEventStreamError(msg) {
+    if (msg.chat_id != null && msg.chat_id !== currentChatId) return;
+    removeTypingIndicator();
+    // Remove any in-progress streaming bubble
+    const wrap = document.getElementById('streamingAssistantMessage');
+    if (wrap) wrap.remove();
+    // Show the error as an assistant message in the chat
+    const errorText = msg.error || 'An error occurred while generating a response.';
+    // Clean up verbose API error details — show just the key message
+    let displayError = errorText;
+    if (errorText.includes('exceeded your current quota')) {
+        displayError = '⚠️ API quota exceeded. Check your plan and billing, or switch to a different model.';
+    } else if (errorText.includes('Rate Limit')) {
+        displayError = '⚠️ Rate limit hit. Please wait a moment and try again.';
+    } else if (errorText.includes('401') || errorText.includes('authentication')) {
+        displayError = '⚠️ Authentication failed. Check your API key in Settings → Third Party Providers.';
+    } else if (errorText.length > 200) {
+        // Truncate very long error messages
+        displayError = '⚠️ ' + errorText.substring(0, 200) + '…';
+    } else {
+        displayError = '⚠️ ' + errorText;
+    }
+    if (chatMessages) {
+        const errorEl = document.createElement('div');
+        errorEl.className = 'message assistant';
+        errorEl.innerHTML = `
+            <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+            <div class="message-content">
+                <div class="message-text" style="color:#f87171">${escapeHtml(displayError)}</div>
+            </div>
+        `;
+        chatMessages.appendChild(errorEl);
+        scrollToBottom();
+    }
     if (window._agentStreamResolve) {
         window._agentStreamResolve();
         window._agentStreamResolve = null;
