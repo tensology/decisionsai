@@ -201,9 +201,14 @@
     }
 
     /* ── List view (two-lane category cards) ────────────────────── */
+    function isOllamaProvider(providerKey) {
+        return (providerKey || '').toLowerCase() === 'ollama';
+    }
+
     function buildListView(providerData, providerKey, lastUpdated) {
         var displayName = (providerData && providerData.display_name) || providerKey || 'Provider';
         var cats = (providerData && providerData.categories) || {};
+        var isOllama = isOllamaProvider(providerKey);
 
         var html = '<div class="mr-header"><span class="mr-title">' + esc(displayName) + ' — Recommended Models</span>';
         html += '<div class="mr-header-btns"><button class="mr-btn-refresh" id="mrRefreshBtn" title="Refresh recommendations">🔄</button>';
@@ -218,10 +223,31 @@
 
             html += '<div class="mr-category" data-cat="' + catKey + '">';
             html += '<div class="mr-cat-header"><span>' + meta.emoji + ' ' + meta.label + '</span><span class="mr-cat-arrow">▸ details</span></div>';
-            html += '<div class="mr-lanes">';
-            html += buildLaneCard(entry.paid, 'paid');
-            html += buildLaneCard(entry.free, 'free');
-            html += '</div></div>';
+
+            if (isOllama) {
+                // Ollama: single column, no paid/free split — show the free lane as the recommendation
+                var model = entry.free || entry.paid;
+                if (model) {
+                    html += '<div style="padding:4px 0">';
+                    html += '<div class="mr-lane-model">' + esc(model.model_name || model.model_id || '') + '</div>';
+                    html += '<div class="mr-lane-cost" style="color:#22c55e">Free / Local</div>';
+                    var q = model.quality;
+                    if (q) {
+                        html += buildCompactBar('Overall', q.overall);
+                        html += buildCompactBar('Speed', q.speed);
+                        html += buildCompactBar('Reasoning', q.reasoning);
+                    }
+                    html += '</div>';
+                } else {
+                    html += '<div class="mr-lane-null">No recommendation</div>';
+                }
+            } else {
+                html += '<div class="mr-lanes">';
+                html += buildLaneCard(entry.paid, 'paid');
+                html += buildLaneCard(entry.free, 'free');
+                html += '</div>';
+            }
+            html += '</div>';
         }
 
         html += '</div>';
@@ -281,6 +307,7 @@
         var entry = cats[catKey];
         if (!entry) return;
         var meta = CATEGORY_META[catKey] || { emoji: '', label: catKey };
+        var isOllama = isOllamaProvider(_currentProviderKey);
 
         var html = '<div class="mr-header">';
         html += '<div style="display:flex;align-items:center;gap:8px"><button class="mr-btn-back" id="mrBackBtn">← Back</button>';
@@ -288,10 +315,20 @@
         html += '<div class="mr-header-btns"><button class="mr-btn-close" id="mrCloseBtn">&times;</button></div></div>';
         html += '<div class="mr-body">';
 
-        html += '<div class="mr-detail-lanes">';
-        html += buildDetailLane(entry.paid, 'paid');
-        html += buildDetailLane(entry.free, 'free');
-        html += '</div>';
+        if (isOllama) {
+            // Ollama: single-column detail, no paid/free split
+            var model = entry.free || entry.paid;
+            if (model) {
+                html += buildDetailLane(model, 'free');
+            } else {
+                html += '<div style="padding:20px 0;color:#6b7280;font-style:italic">No recommendation available.</div>';
+            }
+        } else {
+            html += '<div class="mr-detail-lanes">';
+            html += buildDetailLane(entry.paid, 'paid');
+            html += buildDetailLane(entry.free, 'free');
+            html += '</div>';
+        }
 
         html += '</div>';
         if (_currentLastUpdated) {
@@ -385,13 +422,10 @@
 
     /* ── Refresh wiring ────────────────────────────────────────── */
     function triggerRefresh() {
-        var btn = document.getElementById('mrRefreshBtn');
-        if (btn) btn.classList.add('spinning');
-        // Show generating state so user knows something is happening
+        // Show generating state — just the centered spinner, no spinning refresh button
         updateModalBody(
             '<div class="mr-header"><span class="mr-title">Model Recommendations</span>' +
-            '<div class="mr-header-btns"><button class="mr-btn-refresh spinning" id="mrRefreshBtn">🔄</button>' +
-            '<button class="mr-btn-close" id="mrCloseBtn">&times;</button></div></div>' +
+            '<div class="mr-header-btns"><button class="mr-btn-close" id="mrCloseBtn">&times;</button></div></div>' +
             '<div class="mr-loading"><div class="spinner"></div>' +
             '<div>Generating recommendations…</div>' +
             '<div style="font-size:.72rem;color:#6b7280;margin-top:8px">This takes a few minutes (web search + LLM per provider)</div></div>'
