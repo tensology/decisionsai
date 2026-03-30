@@ -87,6 +87,7 @@
             div.dataset.boardId = b.id;
             div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + (b.agent_enabled ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>' : '');
             div.onclick = function() { selectBoard("database", b.id); };
+            div.ondblclick = function() { openBoardModal(b.id); };
             div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
             div.ondragend = function() { div.classList.remove("dragging"); };
             div.ondragover = function(e) { e.preventDefault(); div.style.borderTop = "2px solid #f97316"; };
