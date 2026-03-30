@@ -461,6 +461,9 @@ try:
                 ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
+                # Google Gemini provider
+                ("gemini_enabled", "BOOLEAN DEFAULT 0"),
+                ("gemini_key", "VARCHAR DEFAULT ''"),
             ]:
                 if _col not in _existing:
                     try:
