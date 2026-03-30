@@ -423,18 +423,33 @@ def register_routes(router, templates):
 
     @router.post("/projects/{project_id}/use")
     async def set_project_in_use(project_id: int):
-        """Set this project as the one in use (only one can be in use)."""
+        """Set this project as the one in use (only one can be in use).
+        Also sets the linked kanban board as in_use if one exists."""
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
+            from distr.core.db.kanban import KanbanBoard
             with get_session() as session:
                 session.query(Project).filter(Project.in_use == True).update({"in_use": False})
                 project = session.query(Project).filter(Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 project.in_use = True
+
+                # Also activate the linked board if the project has a board_id
+                linked_board_name = None
+                if project.board_id:
+                    # Find the kanban board linked to this project
+                    board = session.query(KanbanBoard).filter(
+                        KanbanBoard.default_project_id == project_id
+                    ).first()
+                    if board:
+                        session.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
+                        board.in_use = True
+                        linked_board_name = board.name
+
                 session.commit()
-                return JSONResponse({"success": True})
+                return JSONResponse({"success": True, "linked_board": linked_board_name})
         except HTTPException:
             raise
         except Exception as e:

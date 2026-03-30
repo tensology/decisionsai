@@ -1146,6 +1146,7 @@ def run_migrations():
         ("default_project_id", "INTEGER DEFAULT NULL"),
         ("default_snippet_id", "INTEGER DEFAULT NULL"),
         ("default_action_id", "INTEGER DEFAULT NULL"),
+        ("in_use", "BOOLEAN DEFAULT 0"),
     ]
     try:
         with engine.connect() as conn:

@@ -147,7 +147,7 @@ class KanbanTicketTool(BaseTool):
                      "default_project_id": b.default_project_id} for b in boards]
 
     def _find_board(self, board_id: Optional[int] = None, board_name: Optional[str] = None) -> Optional[Dict]:
-        """Find a board by ID or fuzzy name match (resilient to STT variations)."""
+        """Find a board by ID or fuzzy name match. Falls back to the in_use board if nothing specified."""
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
             if board_id:
@@ -191,6 +191,18 @@ class KanbanTicketTool(BaseTool):
                     return {"id": best_board.id, "name": best_board.name, "description": best_board.description or "",
                             "default_project_id": best_board.default_project_id}
                 # Single board? Use it.
+                if len(boards) == 1:
+                    b = boards[0]
+                    return {"id": b.id, "name": b.name, "description": b.description or "",
+                            "default_project_id": b.default_project_id}
+            else:
+                # No board specified — use the in_use board
+                b = s.query(KanbanBoard).filter(KanbanBoard.in_use == True).first()
+                if b:
+                    return {"id": b.id, "name": b.name, "description": b.description or "",
+                            "default_project_id": b.default_project_id}
+                # Fall back to single board if only one exists
+                boards = s.query(KanbanBoard).all()
                 if len(boards) == 1:
                     b = boards[0]
                     return {"id": b.id, "name": b.name, "description": b.description or "",

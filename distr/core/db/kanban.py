@@ -38,6 +38,7 @@ class KanbanBoard(Base):
     default_action_id = Column(Integer, nullable=True)  # default action for new tickets
     send_to_cli = Column(Boolean, default=False)  # if True, agent sends tickets to Kiro CLI instead of running a workflow
     archived = Column(Boolean, default=False)  # archived boards are hidden from the sidebar
+    in_use = Column(Boolean, default=False)  # only one board can be in_use at a time (default board for agent)
     color = Column(String, nullable=True)  # board accent color (hex, e.g. '#f97316')
     position = Column(Integer, default=0)  # sidebar display order
 

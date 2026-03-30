@@ -193,6 +193,32 @@ def create_routes():
             return JSONResponse({"message": "No boards have agent check-in enabled."})
         return JSONResponse({"message": f"Agent check-in started for {fired} board(s)."})
 
+    @router.post("/kanban/boards/{board_id}/use")
+    async def set_board_in_use(board_id: int):
+        """Set this board as the active/in-use board. Only one board can be in_use at a time.
+        If the board has a linked project, returns a prompt to activate it."""
+        with get_session() as s:
+            # Deactivate all boards
+            s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
+            board = s.query(KanbanBoard).get(board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+            board.in_use = True
+            s.flush()
+
+            # Check if board has a linked project
+            linked_project = None
+            if board.default_project_id:
+                from distr.core.db.projects import Project
+                proj = s.query(Project).get(board.default_project_id)
+                if proj and not proj.in_use:
+                    linked_project = {"id": proj.id, "name": proj.name}
+
+            return JSONResponse({
+                "success": True,
+                "linked_project": linked_project,
+            })
+
     # ── Boards ──
 
     @router.get("/kanban/boards")
@@ -211,6 +237,7 @@ def create_routes():
                     "position": b.position or 0,
                     "archived": getattr(b, 'archived', False) or False,
                     "agent_enabled": getattr(b, 'agent_enabled', False) or False,
+                    "in_use": getattr(b, 'in_use', False) or False,
                 })
             return JSONResponse(result)
 
@@ -328,6 +355,7 @@ def create_routes():
                 "send_to_cli": getattr(board, 'send_to_cli', False) or False,
                 "color": board.color or "",
                 "agent_enabled": getattr(board, 'agent_enabled', False) or False,
+                "in_use": getattr(board, 'in_use', False) or False,
             })
 
     # ── Tickets ──

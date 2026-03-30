@@ -182,46 +182,42 @@ class TelegramWebSocketManager(
         self._typing_action: str = "typing"
 
     def _get_agent_name(self) -> str:
-        """Get the agent display name from the global TTS voice setting."""
+        """Get the agent display name from the current chat's voice setting, falling back to global."""
         try:
             from distr.core.settings import load_settings_from_db
+            from distr.core.agent.constants import normalize_voice_provider
             settings = load_settings_from_db()
-            provider = settings.get("voice_provider", "kokoro")
-            # Map provider to its settings key
-            voice_keys = {
-                "kokoro": "kokoro_voice",
-                "elevenlabs": "elevenlabs_voice",
-                "openai": "openai_voice",
-                "coqui": "coqui_voice",
-            }
-            voice_id = settings.get(voice_keys.get(provider, "kokoro_voice"), "")
 
-            # Check if it's a custom voice (custom_<id>)
-            if voice_id and voice_id.startswith("custom_"):
+            # Try current chat's voice first
+            provider = None
+            voice_id = None
+            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            if chat_id:
                 try:
-                    from distr.core.db import get_session, CustomVoice
-                    cv_id = int(voice_id.split("_", 1)[1])
-                    session = get_session()
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == cv_id).first()
-                    if cv and cv.name:
-                        return cv.name.replace("⭐ ", "")
-                    session.close()
+                    from distr.core.db import get_session, Chat
+                    with get_session() as session:
+                        chat = session.get(Chat, int(chat_id))
+                        if chat and chat.voice_provider:
+                            provider = normalize_voice_provider(chat.voice_provider)
+                            voice_id = (chat.voice_model or "").strip()
                 except Exception:
                     pass
 
-            # Resolve built-in voice names
-            if provider == "kokoro":
-                from distr.core.agent.constants import KOKORO_VOICES
-                return KOKORO_VOICES.get(voice_id, voice_id.replace("af_", "").replace("am_", "").title())
-            elif provider == "openai":
-                return (voice_id or "Alloy").title()
-            elif provider == "coqui":
-                from distr.core.agent.constants import COQUI_VOICES
-                return COQUI_VOICES.get(voice_id, voice_id)
-            elif provider == "elevenlabs":
-                # ElevenLabs voice IDs are opaque — try to resolve from API cache
-                return voice_id or "Agent"
-            return voice_id or "Agent"
+            # Fall back to global settings
+            if not provider:
+                provider = normalize_voice_provider(settings.get("voice_provider", "kokoro"))
+            if not voice_id:
+                voice_keys = {
+                    "kokoro": "kokoro_voice",
+                    "elevenlabs": "elevenlabs_voice",
+                    "openai": "openai_voice",
+                    "coqui": "coqui_voice",
+                }
+                voice_id = settings.get(voice_keys.get(provider, "kokoro_voice"), "")
+
+            # Resolve display name
+            from distr.core.agent.service_factory import resolve_voice_to_display_name
+            return resolve_voice_to_display_name(provider, voice_id, settings)
         except Exception as e:
             logger.debug(f"Could not resolve agent name from voice: {e}")
             return "Agent"
