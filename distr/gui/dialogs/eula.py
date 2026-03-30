@@ -305,10 +305,7 @@ class EulaWindow(QtWidgets.QDialog):
         html = ""
         lines = text.split('\n')
         in_list = False
-        
-        # Base styles
-        heading_style = "line-height: 1.4;"
-        text_style = "line-height: 1.6;"
+        prev_empty = False
         
         for line in lines:
             line = line.strip()
@@ -316,25 +313,27 @@ class EulaWindow(QtWidgets.QDialog):
                 if in_list:
                     html += "</ul>"
                     in_list = False
-                html += "<br>"
+                prev_empty = True
                 continue
                 
             if line.startswith('# '):
-                html += f"<h1 style='color: #ffffff; font-size: 22px; margin-bottom: 15px; {heading_style}'>{line[2:]}</h1>"
+                html += f"<h1 style='color: #ffffff; font-size: 16px; margin: 12px 0 8px; line-height: 1.3;'>{line[2:]}</h1>"
             elif line.startswith('## '):
-                html += f"<h2 style='color: #ececf1; font-size: 18px; margin-top: 20px; margin-bottom: 10px; {heading_style}'>{line[3:]}</h2>"
+                html += f"<h2 style='color: #ececf1; font-size: 14px; margin: 10px 0 6px; line-height: 1.3;'>{line[3:]}</h2>"
             elif line.startswith('### '):
-                html += f"<h3 style='color: #ececf1; font-size: 16px; margin-top: 15px; margin-bottom: 5px; {heading_style}'>{line[4:]}</h3>"
+                html += f"<h3 style='color: #ececf1; font-size: 13px; margin: 8px 0 4px; line-height: 1.3;'>{line[4:]}</h3>"
             elif line.startswith('- ') or line.startswith('* '):
                 if not in_list:
-                    html += "<ul>"
+                    html += "<ul style='margin: 4px 0;'>"
                     in_list = True
-                html += f"<li style='margin-bottom: 5px; {text_style}'>{line[2:]}</li>"
+                html += f"<li style='margin-bottom: 3px; line-height: 1.5;'>{line[2:]}</li>"
             else:
                 if in_list:
                     html += "</ul>"
                     in_list = False
-                html += f"<p style='margin-bottom: 10px; {text_style}'>{line}</p>"
+                spacing = "margin: 6px 0;" if prev_empty else "margin: 2px 0;"
+                html += f"<p style='{spacing} line-height: 1.5;'>{line}</p>"
+            prev_empty = False
                 
         if in_list:
             html += "</ul>"

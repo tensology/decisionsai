@@ -1,56 +1,305 @@
-# TENSOLOGY (PTY) LTD COMMUNITY LICENSE AGREEMENT
-Last Updated: October 4, 2024
+# END USER LICENSE AGREEMENT
 
-## I. INTRODUCTION
+Tensology (Pty) Ltd — DecisionsAI
 
-This Agreement applies to any individual person or entity ("You", "Your" or "Licensee") that uses or distributes any portion or element of the Tensology Materials or Derivative Works thereof for any Research & Non-Commercial or Commercial purpose. Capitalized terms not otherwise defined herein are defined in Section V below.
+Effective Date: January 10, 2025
+Last Updated: March 30, 2026
 
-This Agreement is intended to allow research, non-commercial, and limited commercial uses of the AI Assistant Middleman Application free of charge. In order to ensure that certain limited commercial uses of the Application continue to be allowed, this Agreement preserves free access to the Application for people or organizations generating annual revenue of less than US $1,000,000 (or local currency equivalent).
+PLEASE READ THIS END USER LICENSE AGREEMENT ("AGREEMENT") CAREFULLY BEFORE USING DECISIONSAI. BY CLICKING "I ACCEPT", DOWNLOADING, INSTALLING, OR USING THE SOFTWARE, YOU ACKNOWLEDGE THAT YOU HAVE READ, UNDERSTOOD, AND AGREE TO BE BOUND BY THE TERMS OF THIS AGREEMENT. IF YOU DO NOT AGREE, DO NOT USE THE SOFTWARE.
 
-By clicking "I Accept" or by using or distributing any portion or element of the Tensology Materials or Derivative Works, You agree that You have read, understood and are bound by the terms of this Agreement. If You are acting on behalf of a company, organization or other entity, then "You" includes you and that entity, and You agree that You: (i) are an authorized representative of such entity with the authority to bind such entity to this Agreement, and (ii) You agree to the terms of this Agreement on that entity's behalf.
+If you are accepting this Agreement on behalf of a company, organisation, or other legal entity, you represent and warrant that you have the authority to bind that entity to this Agreement, and "You" and "Your" shall refer to that entity.
 
-## II. RESEARCH & NON-COMMERCIAL USE LICENSE
+---
 
-Subject to the terms of this Agreement, Tensology (Pty) Ltd grants You a non-exclusive, worldwide, non-transferable, non-sublicensable, revocable and royalty-free limited license under Tensology's intellectual property or other rights owned by Tensology embodied in the Tensology Materials to use, reproduce, distribute, and create Derivative Works of, and make modifications to, the Tensology Materials for any Research or Non-Commercial Purpose. "Research Purpose" means academic or scientific advancement, and in each case, is not primarily intended for commercial advantage or monetary compensation to You or others. "Non-Commercial Purpose" means any purpose other than a Research Purpose that is not primarily intended for commercial advantage or monetary compensation to You or others, such as personal use (i.e., hobbyist) or evaluation and testing.
+## 1. DEFINITIONS
 
-## III. COMMERCIAL USE LICENSE
+1.1. "Software" means the DecisionsAI desktop application, including all source code, object code, documentation, updates, patches, and associated files distributed via GitHub or other channels by Tensology.
 
-Subject to the terms of this Agreement (including the remainder of this Section III), Tensology (Pty) Ltd grants You a non-exclusive, worldwide, non-transferable, non-sublicensable, revocable and royalty-free limited license under Tensology's intellectual property or other rights owned by Tensology embodied in the Tensology Materials to use, reproduce, distribute, and create Derivative Works of, and make modifications to, the Tensology Materials for any Commercial Purpose. "Commercial Purpose" means any purpose other than a Research Purpose or Non-Commercial Purpose that is primarily intended for commercial advantage or monetary compensation to You or others, including but not limited to, (i) creating, modifying, or distributing Your product or service, including via a hosted service or application programming interface, and (ii) for Your business's or organization's internal operations.
+1.2. "Tensology", "We", "Us", or "Our" means Tensology (Pty) Ltd, a company registered in the Republic of South Africa (Registration No. 2025/497216/07), with its registered address at Unit D9 Westlake Square, Cape Town, South Africa, 7945.
 
-If You are using or distributing the Tensology Materials for a Commercial Purpose, You must register with Tensology. If at any time You or Your Affiliate(s), either individually or in aggregate, generate more than USD $1,000,000 in annual revenue (or the equivalent thereof in Your local currency), regardless of whether that revenue is generated directly or indirectly from the Tensology Materials or Derivative Works, any licenses granted to You under this Agreement shall terminate as of such date. You must request a license from Tensology, which Tensology may grant to You in its sole discretion. If you receive Tensology Materials, or any Derivative Works thereof, from a Licensee as part of an integrated end user product, then Section III of this Agreement will not apply to you.
+1.3. "You" or "Your" means the individual or legal entity accepting this Agreement and using the Software.
 
-## IV. GENERAL TERMS
+1.4. "Third-Party Services" means external services integrated with or accessible through the Software, including but not limited to OpenAI, Anthropic, Google (Gemini), Groq, OpenRouter, KiloCode, ElevenLabs, AssemblyAI, Telegram, Trello, and Jira.
 
-Your Research, Non-Commercial, and Commercial License(s) under this Agreement are subject to the following terms.
+1.5. "Local Processing" means computation performed entirely on Your device without transmitting data to external servers.
 
-a. Distribution & Attribution. If You distribute or make available the Tensology Materials or a Derivative Work to a third party, or a product or service that uses any portion of them, You shall: (i) provide a copy of this Agreement to that third party, (ii) retain the following attribution notice within a "Notice" text file distributed as a part of such copies: "This Tensology AI Assistant Middleman Application is licensed under the Tensology Community License, Copyright © Tensology (Pty) Ltd. All Rights Reserved", and (iii) prominently display "Powered by Tensology" on a related website, user interface, blogpost, about page, or product documentation. If You create a Derivative Work, You may add your own attribution notice(s) to the "Notice" text file included with that Derivative Work, provided that You clearly indicate which attributions apply to the Tensology Materials and state in the "Notice" text file that You changed the Tensology Materials and how it was modified.
+1.6. "Cloud Features" means optional functionality that transmits data to Third-Party Services or Tensology servers, activated only by Your explicit configuration (e.g., entering API keys or enabling Telegram remote control).
 
-b. Use Restrictions. Your use of the Tensology Materials and Derivative Works, including any output or results of the Tensology Materials or Derivative Works, must comply with applicable laws and regulations (including Trade Control Laws and equivalent regulations) and adhere to the Documentation and Tensology's AUP, which is hereby incorporated by reference. Furthermore, You will not use the Tensology Materials or Derivative Works, or any output or results of the Tensology Materials or Derivative Works, to create or improve any foundational generative AI model (excluding the Application or Derivative Works).
+1.7. "AI Output" means any text, code, actions, commands, or other content generated by the Software's artificial intelligence components.
 
-c. Intellectual Property.
-(i) Trademark License. No trademark licenses are granted under this Agreement, and in connection with the Tensology Materials or Derivative Works, You may not use any name or mark owned by or associated with Tensology or any of its Affiliates, except as required under Section IV(a) herein.
-(ii) Ownership of Derivative Works. As between You and Tensology, You are the owner of Derivative Works You create, subject to Tensology's ownership of the Tensology Materials and any Derivative Works made by or for Tensology.
-(iii) Ownership of Outputs. As between You and Tensology, You own any outputs generated from the Application or Derivative Works to the extent permitted by applicable law.
-(iv) Disputes. If You or Your Affiliate(s) institute litigation or other proceedings against Tensology (including a cross-claim or counterclaim in a lawsuit) alleging that the Tensology Materials, Derivative Works or associated outputs or results, or any portion of any of the foregoing, constitutes infringement of intellectual property or other rights owned or licensable by You, then any licenses granted to You under this Agreement shall terminate as of the date such litigation or claim is filed or instituted. You will indemnify and hold harmless Tensology from and against any claim by any third party arising out of or related to Your use or distribution of the Tensology Materials or Derivative Works in violation of this Agreement.
-(v) Feedback. From time to time, You may provide Tensology with verbal and/or written suggestions, comments or other feedback related to Tensology's existing or prospective technology, products or services (collectively, "Feedback"). You are not obligated to provide Tensology with Feedback, but to the extent that You do, You hereby grant Tensology a perpetual, irrevocable, royalty-free, fully-paid, sub-licensable, transferable, non-exclusive, worldwide right and license to exploit the Feedback in any manner without restriction. Your Feedback is provided "AS IS" and You make no warranties whatsoever about any Feedback.
+1.8. "Oracle" means the Software's desktop interface element (floating globe/avatar) through which voice and visual interaction occurs.
 
-d. Disclaimer Of Warranty. UNLESS REQUIRED BY APPLICABLE LAW, THE TENSOLOGY MATERIALS AND ANY OUTPUT AND RESULTS THEREFROM ARE PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES OF ANY KIND, EITHER EXPRESS OR IMPLIED, INCLUDING, WITHOUT LIMITATION, ANY WARRANTIES OF TITLE, NON-INFRINGEMENT, MERCHANTABILITY, OR FITNESS FOR A PARTICULAR PURPOSE. YOU ARE SOLELY RESPONSIBLE FOR DETERMINING THE APPROPRIATENESS OR LAWFULNESS OF USING OR REDISTRIBUTING THE TENSOLOGY MATERIALS, DERIVATIVE WORKS OR ANY OUTPUT OR RESULTS AND ASSUME ANY RISKS ASSOCIATED WITH YOUR USE OF THE TENSOLOGY MATERIALS, DERIVATIVE WORKS AND ANY OUTPUT AND RESULTS.
+1.9. "Agent" means the Software's AI-powered assistant that processes commands, executes actions, and generates responses.
 
-e. Limitation Of Liability. IN NO EVENT WILL TENSOLOGY OR ITS AFFILIATES BE LIABLE UNDER ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, TORT, NEGLIGENCE, PRODUCTS LIABILITY, OR OTHERWISE, ARISING OUT OF THIS AGREEMENT, FOR ANY LOST PROFITS OR ANY DIRECT, INDIRECT, SPECIAL, CONSEQUENTIAL, INCIDENTAL, EXEMPLARY OR PUNITIVE DAMAGES, EVEN IF TENSOLOGY OR ITS AFFILIATES HAVE BEEN ADVISED OF THE POSSIBILITY OF ANY OF THE FOREGOING.
+---
 
-f. Term And Termination. The term of this Agreement will commence upon Your acceptance of this Agreement or access to the Tensology Materials and will continue in full force and effect until terminated in accordance with the terms and conditions herein. Tensology may terminate this Agreement if You are in breach of any term or condition of this Agreement. Upon termination of this Agreement, You shall delete and cease use of any Tensology Materials or Derivative Works. Section IV(d), (e), and (g) shall survive the termination of this Agreement.
+## 2. LICENSE GRANT
 
-g. Governing Law. This Agreement will be governed by and constructed in accordance with the laws of South Africa without regard to choice of law principles, and the UN Convention on Contracts for International Sale of Goods does not apply to this Agreement.
+2.1. Subject to the terms of this Agreement, Tensology grants You a non-exclusive, non-transferable, revocable licence to download, install, and use the Software on devices You own or control, for personal and commercial purposes.
 
-## V. DEFINITIONS
+2.2. The Software source code is made available on GitHub. You may view, fork, and modify the source code subject to the licence terms in the repository. Redistribution of modified versions must retain this Agreement and clearly indicate modifications made.
 
-"Affiliate(s)" means any entity that directly or indirectly controls, is controlled by, or is under common control with the subject entity; for purposes of this definition, "control" means direct or indirect ownership or control of more than 50% of the voting interests of the subject entity.
-"Agreement" means this Tensology Community License Agreement.
-"AUP" means the Tensology Acceptable Use Policy available at https://www.tensology.com/use-policy, as may be updated from time to time.
-"Derivative Work(s)" means (a) any derivative work of the Tensology Materials as recognized by South African copyright laws and (b) any modifications to the Application, and any other application created which is based on or derived from the Application or the Application's output, including "fine tune" and "low-rank adaptation" applications derived from the Application or the Application's output, but do not include the output of the Application.
-"Documentation" means any specifications, manuals, documentation, and other written information provided by Tensology related to the Software or Application.
-"Application" means, collectively, Tensology's proprietary AI assistant middleman application, including machine-learning models, trained model weights and other elements of the foregoing listed on Tensology's Core Application Webpage available at, https://www.tensology.com/core-application, as may be updated from time to time.
-"Tensology" or "we" means Tensology (Pty) Ltd and its Affiliates.
-"Software" means Tensology's proprietary software made available under this Agreement now or in the future.
-"Tensology Materials" means, collectively, Tensology's proprietary Application, Software and Documentation (and any portion or combination thereof) made available under this Agreement.
-"Trade Control Laws" means any applicable South African and non-South African export control and trade sanctions laws and regulations.
+2.3. Commercial use is permitted for individuals and organisations generating annual revenue of less than US $1,000,000 (or local currency equivalent). Organisations exceeding this threshold must contact Tensology for a commercial licence at support@tensology.com.
+
+2.4. This licence does not grant You any rights to Tensology's trademarks, trade names, logos, or branding. You may not use "DecisionsAI", "Tensology", or associated marks in any manner that suggests endorsement or affiliation without prior written consent.
+
+---
+
+## 3. RESTRICTIONS
+
+You shall not:
+
+3.1. Remove, alter, or obscure any copyright notices, licence terms, or attribution contained in the Software.
+
+3.2. Use the Software to develop a competing product or service that substantially replicates the Software's core functionality.
+
+3.3. Use the Software for any purpose that violates applicable laws or regulations, including but not limited to generating illegal, harmful, defamatory, or discriminatory content.
+
+3.4. Attempt to reverse-engineer, decompile, or disassemble any compiled or obfuscated components of the Software, except to the extent expressly permitted by applicable law.
+
+3.5. Use the Software to conduct surveillance, harassment, or any activity that infringes upon the rights of others.
+
+3.6. Sublicence, sell, lease, or otherwise commercially distribute the Software as a standalone product without Tensology's prior written consent.
+
+3.7. Use the Software's computer control capabilities (GUI automation, code execution, file system access) in a manner that could cause damage to systems, data, or infrastructure belonging to third parties.
+
+---
+
+## 4. THE SOFTWARE — DESCRIPTION AND CAPABILITIES
+
+4.1. DecisionsAI is a desktop AI assistant that runs locally on Your computer (macOS, Windows, Linux). The Software provides:
+
+- Voice-controlled interaction via speech recognition and text-to-speech
+- AI-powered conversation, reasoning, and task execution
+- Computer control through GUI automation and code execution
+- File management, screen analysis, and document processing
+- Integration with external AI providers and productivity tools
+- Remote control via Telegram (optional Cloud Feature)
+- Project management integration with Trello and Jira (optional)
+
+4.2. The Software operates offline by default. All voice processing, AI inference (via local models such as Ollama), and data storage occur entirely on Your device through Local Processing.
+
+4.3. Cloud Features are activated only when You explicitly configure them by providing API keys, OAuth credentials, or enabling specific integrations in the Software's settings.
+
+---
+
+## 5. YOUR RESPONSIBILITIES
+
+5.1. AI Output Review. You are solely responsible for reviewing, verifying, and validating all AI Output before acting on it or relying on it for any purpose. AI Output may contain errors, inaccuracies, or inappropriate content. Tensology does not guarantee the accuracy, completeness, or suitability of any AI Output.
+
+5.2. Computer Control. The Software can perform actions on Your computer at Your instruction, including but not limited to clicking, typing, opening applications, executing code, reading and writing files, and taking screenshots. You are solely responsible for all actions the Agent performs on Your computer and any consequences thereof.
+
+5.3. Code Execution. The Software can write and execute code on Your system. You acknowledge that code execution carries inherent risks, including potential data loss, system instability, or security vulnerabilities. You are responsible for reviewing any code before authorising its execution.
+
+5.4. API Keys and Credentials. You are responsible for the security of Your API keys, OAuth tokens, and other credentials stored in the Software. Tensology does not have access to Your credentials, which are stored locally on Your device. You should not share Your credentials or use the Software on shared or untrusted systems without appropriate precautions.
+
+5.5. Lawful Use. You shall use the Software only for lawful purposes and in compliance with all applicable local, national, and international laws and regulations.
+
+5.6. Content Responsibility. You are responsible for all content You create, process, or distribute using the Software, including content generated by the Agent at Your instruction.
+
+---
+
+## 6. THIRD-PARTY SERVICES
+
+6.1. The Software integrates with Third-Party Services. Your use of these services is governed by their respective terms of service and privacy policies. Tensology is not a party to Your agreements with Third-Party Service providers.
+
+6.2. When You configure API keys for cloud AI providers (OpenAI, Anthropic, Google Gemini, Groq, OpenRouter, KiloCode, ElevenLabs, AssemblyAI), Your prompts, messages, and associated data are transmitted directly from Your device to those providers. Tensology does not intermediate, store, or have access to this data.
+
+6.3. Tensology is not responsible for the availability, performance, accuracy, pricing, data handling practices, or conduct of any Third-Party Service. Service interruptions, API changes, or policy modifications by Third-Party Service providers are beyond Tensology's control.
+
+6.4. You are responsible for reviewing and accepting the terms and privacy policies of each Third-Party Service before enabling it. Key provider policies can be found at:
+
+- OpenAI: https://openai.com/policies
+- Anthropic: https://www.anthropic.com/policies
+- Google AI: https://ai.google.dev/terms
+- Groq: https://groq.com/terms-of-use
+- OpenRouter: https://openrouter.ai/terms
+- ElevenLabs: https://elevenlabs.io/terms-of-service
+- AssemblyAI: https://www.assemblyai.com/legal/terms-of-service
+- Telegram: https://telegram.org/tos
+
+6.5. Tensology may add, modify, or remove Third-Party Service integrations in future updates to the Software.
+
+---
+
+## 7. DATA AND PRIVACY
+
+7.1. Local Data Processing. By default, the Software processes all data locally on Your device. This includes voice recordings, speech-to-text transcriptions, chat conversations, screenshots, screen captures, indexed files, and application settings. None of this data is transmitted to Tensology or any third party unless You explicitly enable Cloud Features.
+
+7.2. No Telemetry. The Software does not collect telemetry, usage analytics, crash reports, or any other data about Your use of the Software. There are no hidden data collection mechanisms.
+
+7.3. Cloud Features Data Flow. When You enable Cloud Features:
+
+(a) AI Provider APIs: Your prompts and messages are sent directly to the configured provider. Responses are received directly from the provider. Tensology does not proxy, store, or have access to this traffic.
+
+(b) Telegram Remote Control: Commands and screenshots are relayed through the Tensology server (www.decisionsai.net) to enable phone-to-desktop communication. Media files are stored temporarily and expire automatically. Tensology does not retain or analyse the content of Your commands or screenshots.
+
+(c) OAuth Integrations (Trello, Jira, Google): OAuth tokens are stored locally in Your settings database on Your device. Tensology does not have access to these tokens.
+
+7.4. Data Storage. All application data (settings, chat history, indexed files, credentials) is stored in a local SQLite database on Your device. You may delete this data at any time by removing the application data directory.
+
+7.5. For complete details on data handling, please refer to Our Privacy Policy at: https://www.decisionsai.net/privacy
+
+---
+
+## 8. PRIVACY COMPLIANCE — POPIA AND INTERNATIONAL REGULATIONS
+
+8.1. This Agreement and the Software's data handling practices comply with the Protection of Personal Information Act, 2013 (POPIA) of the Republic of South Africa, as well as applicable international data protection regulations including the General Data Protection Regulation (GDPR) where applicable.
+
+8.2. Tensology acts as a responsible party under POPIA with respect to any personal information processed through the DecisionsAI website (www.decisionsai.net) and the Telegram relay service.
+
+8.3. For Local Processing, You are the responsible party for any personal information processed by the Software on Your device. Tensology has no access to or control over locally processed data.
+
+8.4. Your Rights Under POPIA. In relation to personal information processed by Tensology (website and Telegram relay), You have the right to:
+
+(a) Request access to Your personal information held by Tensology.
+(b) Request correction or deletion of Your personal information.
+(c) Object to the processing of Your personal information.
+(d) Withdraw consent for marketing communications at any time.
+(e) Lodge a complaint with the Information Regulator of South Africa.
+
+8.5. Information Regulator Contact:
+- Email: inforeg@justice.gov.za
+- Website: https://inforegulator.org.za
+- Address: JD House, 27 Stiemens Street, Braamfontein, Johannesburg, 2001
+
+8.6. To exercise Your rights or make a data-related enquiry, contact Tensology at support@tensology.com.
+
+---
+
+## 9. INTELLECTUAL PROPERTY
+
+9.1. The Software, including its design, architecture, source code, documentation, branding, and all associated intellectual property rights, is and shall remain the property of Tensology (Pty) Ltd.
+
+9.2. This Agreement does not transfer any ownership rights to You. You receive only the limited licence rights expressly granted in Section 2.
+
+9.3. The Software incorporates open-source components, each governed by their respective licences. A list of key dependencies and their licences is maintained in the Software's documentation. Your use of these components is subject to their individual licence terms.
+
+9.4. You retain ownership of all content You create using the Software, including documents, code, and other works. Tensology claims no ownership over Your content or AI Output generated at Your instruction.
+
+9.5. Contributions to the Software's source code repository (e.g., pull requests) are subject to the repository's contribution guidelines and licence terms.
+
+---
+
+## 10. DISCLAIMER OF WARRANTIES
+
+10.1. THE SOFTWARE IS PROVIDED "AS IS" AND "AS AVAILABLE" WITHOUT WARRANTIES OF ANY KIND, WHETHER EXPRESS, IMPLIED, OR STATUTORY, INCLUDING BUT NOT LIMITED TO IMPLIED WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE, TITLE, AND NON-INFRINGEMENT.
+
+10.2. TENSOLOGY DOES NOT WARRANT THAT:
+
+(a) The Software will meet Your specific requirements or expectations.
+(b) The Software will operate uninterrupted, error-free, or free of harmful components.
+(c) AI Output will be accurate, complete, reliable, current, or suitable for any particular purpose.
+(d) Any defects in the Software will be corrected.
+(e) The Software will be compatible with any particular hardware, software, or network configuration.
+
+10.3. AI-SPECIFIC DISCLAIMER. Artificial intelligence systems, including those used in the Software, may produce incorrect, misleading, biased, or inappropriate output. AI Output should not be relied upon as professional, legal, medical, financial, or other expert advice. You should always exercise independent judgement and seek qualified professional advice where appropriate.
+
+10.4. COMPUTER CONTROL DISCLAIMER. The Software's ability to control Your computer through GUI automation and code execution is provided without warranty. Automated actions may produce unintended results, including but not limited to data loss, file modification, application crashes, or system instability. You use these features at Your own risk.
+
+---
+
+## 11. LIMITATION OF LIABILITY
+
+11.1. TO THE MAXIMUM EXTENT PERMITTED BY APPLICABLE LAW, IN NO EVENT SHALL TENSOLOGY, ITS DIRECTORS, OFFICERS, EMPLOYEES, AGENTS, OR AFFILIATES BE LIABLE FOR ANY:
+
+(a) Indirect, incidental, special, consequential, or punitive damages.
+(b) Loss of profits, revenue, data, goodwill, or business opportunities.
+(c) Cost of procurement of substitute goods or services.
+(d) Damages arising from AI Output, including decisions made based on AI-generated content.
+(e) Damages arising from actions performed by the Agent on Your computer.
+(f) Damages arising from the use of or inability to use Third-Party Services.
+(g) Damages arising from unauthorised access to Your credentials or data stored locally.
+
+11.2. IN NO EVENT SHALL TENSOLOGY'S TOTAL AGGREGATE LIABILITY UNDER THIS AGREEMENT EXCEED THE AMOUNT YOU HAVE PAID TO TENSOLOGY FOR THE SOFTWARE IN THE TWELVE (12) MONTHS PRECEDING THE CLAIM, OR FIFTY US DOLLARS (US $50), WHICHEVER IS GREATER.
+
+11.3. THE LIMITATIONS IN THIS SECTION APPLY REGARDLESS OF THE LEGAL THEORY ON WHICH THE CLAIM IS BASED, WHETHER IN CONTRACT, TORT (INCLUDING NEGLIGENCE), STRICT LIABILITY, OR OTHERWISE, AND EVEN IF TENSOLOGY HAS BEEN ADVISED OF THE POSSIBILITY OF SUCH DAMAGES.
+
+11.4. SOME JURISDICTIONS DO NOT ALLOW THE EXCLUSION OR LIMITATION OF CERTAIN DAMAGES. IN SUCH JURISDICTIONS, TENSOLOGY'S LIABILITY SHALL BE LIMITED TO THE MAXIMUM EXTENT PERMITTED BY LAW.
+
+---
+
+## 12. INDEMNIFICATION
+
+12.1. You agree to indemnify, defend, and hold harmless Tensology, its directors, officers, employees, agents, and affiliates from and against any and all claims, liabilities, damages, losses, costs, and expenses (including reasonable legal fees) arising from or related to:
+
+(a) Your use of the Software.
+(b) Your violation of this Agreement.
+(c) Your violation of any applicable law or regulation.
+(d) Your infringement of any third-party rights, including intellectual property rights.
+(e) Content You create, process, or distribute using the Software.
+(f) Actions performed by the Agent at Your instruction.
+(g) Your use of Third-Party Services through the Software.
+
+---
+
+## 13. UPDATES AND MODIFICATIONS
+
+13.1. Tensology may release updates, patches, or new versions of the Software from time to time. Updates may be distributed via GitHub or other channels. You are not obligated to install updates, but continued use of outdated versions is at Your own risk.
+
+13.2. Tensology reserves the right to modify this Agreement at any time. Updated terms will be included in the Software and posted at: https://www.decisionsai.net/terms
+
+13.3. Continued use of the Software after modifications to this Agreement constitutes acceptance of the revised terms. If You do not agree to the revised terms, You must stop using the Software.
+
+13.4. Material changes to this Agreement will be indicated by updating the "Last Updated" date at the top of this document.
+
+---
+
+## 14. TERMINATION
+
+14.1. This Agreement is effective until terminated. You may terminate this Agreement at any time by uninstalling the Software and destroying all copies in Your possession.
+
+14.2. Tensology may terminate this Agreement immediately if You breach any term of this Agreement.
+
+14.3. Upon termination, Your licence to use the Software is revoked. Sections 1, 5, 7, 8, 9, 10, 11, 12, 15, and 16 shall survive termination.
+
+14.4. Termination does not affect any rights or obligations that accrued prior to termination.
+
+---
+
+## 15. GOVERNING LAW AND DISPUTE RESOLUTION
+
+15.1. This Agreement shall be governed by and construed in accordance with the laws of the Republic of South Africa, without regard to its conflict of law provisions.
+
+15.2. Any dispute arising out of or in connection with this Agreement shall first be attempted to be resolved through good-faith negotiation between the parties for a period of thirty (30) days.
+
+15.3. If the dispute cannot be resolved through negotiation, it shall be submitted to the jurisdiction of the courts of the Western Cape, South Africa.
+
+15.4. Nothing in this section prevents either party from seeking urgent interim relief from a court of competent jurisdiction.
+
+---
+
+## 16. GENERAL PROVISIONS
+
+16.1. Entire Agreement. This Agreement, together with the Privacy Policy (https://www.decisionsai.net/privacy) and Terms & Conditions (https://www.decisionsai.net/terms), constitutes the entire agreement between You and Tensology regarding the Software and supersedes all prior agreements and understandings.
+
+16.2. Severability. If any provision of this Agreement is held to be invalid or unenforceable, the remaining provisions shall continue in full force and effect.
+
+16.3. Waiver. The failure of Tensology to enforce any right or provision of this Agreement shall not constitute a waiver of such right or provision.
+
+16.4. Assignment. You may not assign or transfer this Agreement or any rights hereunder without Tensology's prior written consent. Tensology may assign this Agreement without restriction.
+
+16.5. Notices. Notices under this Agreement shall be sent to support@tensology.com for Tensology, and to the email address associated with Your account or use of the Software.
+
+16.6. Force Majeure. Tensology shall not be liable for any failure or delay in performance due to circumstances beyond its reasonable control, including but not limited to natural disasters, war, terrorism, pandemics, government actions, or infrastructure failures.
+
+16.7. No Third-Party Beneficiaries. This Agreement does not create any third-party beneficiary rights.
+
+---
+
+## 17. CONTACT INFORMATION
+
+Tensology (Pty) Ltd
+Registration No.: 2025/497216/07
+
+Email: support@tensology.com
+Phone: +27 63 410 3646
+Address: Unit D9 Westlake Square, Cape Town, South Africa, 7945
+
+Website: https://www.tensology.com
+Application: https://www.decisionsai.net
+Terms & Conditions: https://www.decisionsai.net/terms
+Privacy Policy: https://www.decisionsai.net/privacy
+Source Code: https://github.com/tensology/decisionsai
+
+© 2026 Tensology (Pty) Ltd. All rights reserved.
