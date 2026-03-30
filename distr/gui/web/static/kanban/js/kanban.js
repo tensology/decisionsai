@@ -964,7 +964,7 @@
         document.getElementById("kb-gs-cancel").addEventListener("click", closeGlobalSettingsModal);
         document.getElementById("kb-gs-save").addEventListener("click", saveGlobalKanbanSettings);
         document.getElementById("kb-global-settings-modal").addEventListener("click", function(e) {
-            if (e.target === this) closeGlobalSettingsModal();
+            // Clicking overlay does NOT close — use close/cancel buttons
         });
 
         // Global settings frequency change
@@ -1022,7 +1022,6 @@
         document.getElementById("kb-board-modal-x").addEventListener("click", closeBoardModal);
         document.getElementById("kb-board-modal-save").addEventListener("click", saveBoardModal);
         document.getElementById("kb-board-modal").addEventListener("click", function(e) {
-            if (e.target === this) closeBoardModal();
         });
         // Color picker sync
         document.getElementById("kb-board-modal-color").addEventListener("input", function() {
@@ -1040,7 +1039,6 @@
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
         document.getElementById("kb-modal-send-project").addEventListener("click", sendTicketToProject);
         document.getElementById("kb-ticket-modal").addEventListener("click", function(e) {
-            if (e.target === this) closeTicketModal();
         });
 
         // Priority buttons
@@ -1072,7 +1070,6 @@
         document.getElementById("kb-copy-cancel").addEventListener("click", closeCopyModal);
         document.getElementById("kb-copy-confirm").addEventListener("click", confirmCopy);
         document.getElementById("kb-copy-modal").addEventListener("click", function(e) {
-            if (e.target === this) closeCopyModal();
         });
 
         // Context menu

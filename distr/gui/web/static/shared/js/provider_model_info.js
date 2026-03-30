@@ -176,7 +176,6 @@
         closeModal();
         var overlay = document.createElement('div');
         overlay.className = 'mr-overlay';
-        overlay.addEventListener('click', function (e) { if (e.target === overlay) closeModal(); });
         var modal = document.createElement('div');
         modal.className = 'mr-modal';
         modal.innerHTML = bodyHTML;

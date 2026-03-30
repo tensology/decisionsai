@@ -326,7 +326,6 @@ function openGoogleSetupModal(jsOrigin, redirectUri) {
     modal.classList.remove('hidden');
 
     modal.querySelectorAll('.google_modal_close').forEach(function (btn) { btn.onclick = function () { modal.classList.add('hidden'); }; });
-    modal.querySelector('.google_modal_backdrop').onclick = function () { modal.classList.add('hidden'); };
 
     var dropZone = document.getElementById('google_drop_zone');
     var fileInput = document.getElementById('google_file_input');
@@ -396,7 +395,6 @@ function connectJira() {
     listModal.classList.remove('hidden');
     loadJiraAccounts();
     listModal.querySelectorAll('.jira_modal_close').forEach(function (btn) { btn.onclick = function () { listModal.classList.add('hidden'); }; });
-    listModal.querySelector('.jira_modal_backdrop').onclick = function () { listModal.classList.add('hidden'); };
     document.getElementById('jira_add_btn').onclick = function () {
         window._jira_editing_name = null;
         document.getElementById('jira_form_title').textContent = 'Add Jira Account';
@@ -408,7 +406,6 @@ function connectJira() {
         formModal.classList.remove('hidden');
     };
     formModal.querySelectorAll('.jira_form_modal_close').forEach(function (btn) { btn.onclick = function () { formModal.classList.add('hidden'); }; });
-    if (formModal.querySelector('.jira_form_modal_backdrop')) formModal.querySelector('.jira_form_modal_backdrop').onclick = function () { formModal.classList.add('hidden'); };
     document.getElementById('jira_form_cancel').onclick = function () { formModal.classList.add('hidden'); };
     document.getElementById('jira_validate_save_btn').onclick = function () { jiraValidateAndSave(); };
 }
@@ -499,7 +496,6 @@ function connectTrello() {
     listModal.classList.remove('hidden');
     loadTrelloAccounts();
     listModal.querySelectorAll('.trello_modal_close').forEach(function (btn) { btn.onclick = function () { listModal.classList.add('hidden'); }; });
-    listModal.querySelector('.trello_modal_backdrop').onclick = function () { listModal.classList.add('hidden'); };
     document.getElementById('trello_add_btn').onclick = function () {
         window._trello_editing_name = null;
         document.getElementById('trello_form_title').textContent = 'Add Trello Account';
@@ -510,7 +506,6 @@ function connectTrello() {
         formModal.classList.remove('hidden');
     };
     formModal.querySelectorAll('.trello_form_modal_close').forEach(function (btn) { btn.onclick = function () { formModal.classList.add('hidden'); }; });
-    if (formModal.querySelector('.trello_form_modal_backdrop')) formModal.querySelector('.trello_form_modal_backdrop').onclick = function () { formModal.classList.add('hidden'); };
     document.getElementById('trello_form_cancel').onclick = function () { formModal.classList.add('hidden'); };
     document.getElementById('trello_generate_token_btn').onclick = function () {
         var apiKey = (document.getElementById('trello_api_key').value || '').trim();
@@ -606,7 +601,6 @@ function connectTelegram() {
     document.getElementById('telegram_status').textContent = 'Requesting QR code...';
     document.getElementById('telegram_link').classList.add('hidden');
     modal.querySelectorAll('.telegram_modal_close').forEach(function (btn) { btn.onclick = function () { clearInterval(telegramPollInterval); modal.classList.add('hidden'); }; });
-    modal.querySelector('.telegram_modal_backdrop').onclick = function () { clearInterval(telegramPollInterval); modal.classList.add('hidden'); };
     fetch(settingsBase + '/api/advanced/telegram/request', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}' }).then(function (r) { return r.json(); }).then(function (data) {
         if (data.error) {
             document.getElementById('telegram_status').textContent = data.error;

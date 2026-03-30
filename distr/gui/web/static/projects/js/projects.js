@@ -737,7 +737,6 @@
         document.getElementById("create-project-save").addEventListener("click", saveNewProject);
         document.getElementById("create-project-browse").addEventListener("click", browseForNewProject);
         document.getElementById("create-project-modal").addEventListener("click", function(e) {
-            if (e.target === this) closeCreateProjectModal();
         });
         document.getElementById("create-project-name").addEventListener("keydown", function(e) {
             if (e.key === "Enter") { e.preventDefault(); saveNewProject(); }

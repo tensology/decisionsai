@@ -170,7 +170,7 @@
         snippetModal.classList.remove('hidden');
         document.body.style.overflow = 'hidden';
     }
-    snippetModal.addEventListener('click', function(e) { if (e.target === snippetModal) closeSnippetModal(); });
+    snippetModal.addEventListener('click', function(e) { });
     document.addEventListener('keydown', function(e) {
         if (e.key === 'Escape' && !snippetModal.classList.contains('hidden')) closeSnippetModal();
     });

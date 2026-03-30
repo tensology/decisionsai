@@ -14,7 +14,6 @@
 
   // Close modal
   document.getElementById('try-modal-close').onclick = closeModal;
-  document.getElementById('try-modal-backdrop').onclick = closeModal;
   function closeModal() {
     tryModal.classList.add('hidden');
     currentEndpoint = null;

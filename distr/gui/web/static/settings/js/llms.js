@@ -366,11 +366,9 @@ function initOllamaBrowserModal() {
     const modal = document.getElementById('ollama_browser_modal');
     if (!modal) return;
     document.getElementById('ollama_browser_modal_close').addEventListener('click', closeOllamaBrowserModal);
-    document.getElementById('ollama_browser_modal_backdrop').addEventListener('click', closeOllamaBrowserModal);
     const downloadModalClose = document.getElementById('ollama_download_modal_close');
     const downloadModalBackdrop = document.querySelector('.ollama_download_modal_backdrop');
     if (downloadModalClose) downloadModalClose.addEventListener('click', closeOllamaDownloadModal);
-    if (downloadModalBackdrop) downloadModalBackdrop.addEventListener('click', closeOllamaDownloadModal);
     document.getElementById('ollama_browser_refresh').addEventListener('click', function () {
         fetch('/api/ollama/refresh-library', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (data) {
             if (data.success) {
