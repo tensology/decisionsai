@@ -526,22 +526,36 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if chat:
                 self.chat_manager.add_assistant_message(chat, content)
 
+        # For Telegram requests, store as fallback since TextFrames aren't pushed to TTS
+        if getattr(self, '_is_telegram_request', False):
+            self._telegram_fallback_text = content
+
         if should_suppress:
             threading.current_thread().suppress_tts_for_tool_chain = False
 
     async def _send_done_after_tools(self):
         """Send 'Done' TTS frame and save to history. Returns True (end_frame sent)."""
-        if not getattr(self, '_is_telegram_request', False):
-            await self.push_frame(TextFrame(text="Done"))
+        # For Telegram, try to include the last tool result as context instead of just "Done"
+        fallback = "Done"
+        if getattr(self, '_is_telegram_request', False):
+            # Find the last tool result that has meaningful content
+            for msg in reversed(self._messages):
+                if msg.get("role") == "tool":
+                    content = msg.get("content", "")
+                    if content and len(content) > 5 and "[ACTION REQUIRED" not in content:
+                        fallback = content[:2000]  # Cap at 2000 chars
+                        break
+            self._telegram_fallback_text = fallback
         else:
-            self._telegram_fallback_text = "Done"
+            await self.push_frame(TextFrame(text="Done"))
+
         await self.push_frame(LLMFullResponseEndFrame())
 
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
             if chat:
-                self.chat_manager.add_assistant_message(chat, "Done")
-        self._messages.append({"role": "assistant", "content": "Done"})
+                self.chat_manager.add_assistant_message(chat, fallback if fallback != "Done" else "Done")
+        self._messages.append({"role": "assistant", "content": fallback if fallback != "Done" else "Done"})
         return True
 
     async def _handle_empty_response(self):
