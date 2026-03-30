@@ -33,7 +33,7 @@ class LifecycleMixin:
             self.save_hands_free_state()
 
         # Get the base directory (project root)
-        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../..'))
+        base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
 
         try:
             if getattr(sys, 'frozen', False):
