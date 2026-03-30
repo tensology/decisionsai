@@ -345,6 +345,32 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add kilo_key column: {e}")
     
+    # Handle database migration for gemini_enabled column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT gemini_enabled FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN gemini_enabled BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added gemini_enabled column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add gemini_enabled column: {e}")
+    
+    # Handle database migration for gemini_key column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT gemini_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN gemini_key VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added gemini_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add gemini_key column: {e}")
+    
     # Handle database migration for model_name column in chats table
     try:
         with Session() as session:
