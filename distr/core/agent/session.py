@@ -361,7 +361,8 @@ class AgentSession:
                     chat_model = chat.model_name
                     self.logger.debug(f"Using chat provider from database: {chat_provider}, model: {chat_model}")
                 if getattr(chat, 'voice_provider', None) or getattr(chat, 'voice_model', None):
-                    chat_voice_provider = (chat.voice_provider or "").strip().lower() if chat.voice_provider else None
+                    from .constants import normalize_voice_provider as _nvp
+                    chat_voice_provider = _nvp(chat.voice_provider) if chat.voice_provider else None
                     chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
                     if chat_voice_provider or chat_voice_model:
                         self.logger.debug(f"Using chat voice from database: provider={chat_voice_provider}, model={chat_voice_model} (TTS will use this voice)")
@@ -383,7 +384,7 @@ class AgentSession:
                             chat_model = chat.model_name
                             self.logger.debug(f"Using chat provider from ChatManager: {chat_provider}, model: {chat_model}")
                         if not chat_voice_provider and (getattr(chat, 'voice_provider', None) or getattr(chat, 'voice_model', None)):
-                            chat_voice_provider = (chat.voice_provider or "").strip().lower() if chat.voice_provider else None
+                            chat_voice_provider = _nvp(chat.voice_provider) if chat.voice_provider else None
                             chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
                             if chat_voice_provider or chat_voice_model:
                                 self.logger.debug(f"Using chat voice from ChatManager: provider={chat_voice_provider}, model={chat_voice_model}")

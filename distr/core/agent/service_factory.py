@@ -285,7 +285,8 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
     ElevenLabs stores voice IDs (e.g. EOWOXNvpbg3D1ZJDPJCF); we resolve via API to name.
     Returns the display name for UI and agent identity.
     """
-    vp = (voice_provider or '').strip().lower()
+    from .constants import normalize_voice_provider as _nvp
+    vp = _nvp(voice_provider)
     vm = (voice_model or '').strip()
     if not vm:
         if 'kokoro' in vp:

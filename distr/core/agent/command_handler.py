@@ -663,8 +663,9 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
     (an ElevenLabs voice). Returns the corrected provider (lowercase).
     """
     from .constants import KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME
+    from .constants import normalize_voice_provider as _nvp
 
-    vp = (voice_provider or '').strip().lower()
+    vp = _nvp(voice_provider)
     vm = (voice_model or '').strip()
     if not vm:
         return vp
@@ -810,7 +811,7 @@ def _cmd_current_chat_changed(session, params):
     """
     from distr.core.db import get_session, Chat, Settings as SettingsModel
     from distr.core.llm_factory import normalize_provider
-    from .constants import PROVIDER_TO_ENGINE
+    from .constants import PROVIDER_TO_ENGINE, normalize_voice_provider as _nvp
 
     chat_id = params.get('chat_id')
     if not chat_id:
@@ -835,7 +836,7 @@ def _cmd_current_chat_changed(session, params):
                 chat_provider = normalize_provider(raw) if raw else None
                 chat_model = (chat.model_name or "").strip() or None
 
-                chat_voice_provider = (chat.voice_provider or "").strip().lower() if chat.voice_provider else None
+                chat_voice_provider = _nvp(chat.voice_provider) if chat.voice_provider else None
                 chat_voice_model = (chat.voice_model or "").strip() if chat.voice_model else None
 
             # Fill gaps from settings (so agent matches what the UI shows)
@@ -848,7 +849,7 @@ def _cmd_current_chat_changed(session, params):
                     chat_model = (getattr(settings_row, 'conversational_llm_model', None)
                                   or getattr(settings_row, 'agent_model', None) or "").strip() or None
                 if not chat_voice_provider:
-                    chat_voice_provider = (getattr(settings_row, 'tts_provider', None) or "").strip().lower() or "kokoro"
+                    chat_voice_provider = _nvp(getattr(settings_row, 'tts_provider', None) or "kokoro")
                 if not chat_voice_model:
                     vp = chat_voice_provider or ""
                     if "kokoro" in vp:

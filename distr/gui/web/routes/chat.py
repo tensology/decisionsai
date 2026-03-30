@@ -23,6 +23,7 @@ from distr.core.chat import ChatService
 from distr.core.llm_factory import normalize_provider as _normalize_provider
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
+from distr.core.agent.constants import normalize_voice_provider
 from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
@@ -42,8 +43,8 @@ def _voice_model_to_display_name(
     voice_provider: Optional[str], voice_model: Optional[str], settings: dict
 ) -> str:
     """Derive assistant display name from voice (chat or settings). Resolves ElevenLabs IDs to names."""
-    tts = (settings.get("tts_provider") or "").strip().lower()
-    vp = (voice_provider or "").strip().lower() or tts
+    tts = (settings.get("tts_provider") or "").strip()
+    vp = normalize_voice_provider(voice_provider or tts)
     return resolve_voice_to_display_name(vp, voice_model or "", settings)
 
 
@@ -308,13 +309,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             settings = load_settings_from_db()
             provider = (settings.get("conversational_llm_provider") or "Ollama").strip()
             model_name = (settings.get("conversational_llm_model") or "").strip() or "—"
-            voice_provider = (settings.get("tts_provider") or "Kokoro").strip()
-            if "kokoro" in voice_provider.lower():
-                voice_provider = "Kokoro"
-            elif "openai" in voice_provider.lower():
-                voice_provider = "OpenAI"
-            elif "elevenlabs" in voice_provider.lower():
-                voice_provider = "ElevenLabs"
+            voice_provider_raw = (settings.get("tts_provider") or "Kokoro").strip()
+            voice_provider_id = normalize_voice_provider(voice_provider_raw)
+            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs"}
+            voice_provider = _display_map.get(voice_provider_id, voice_provider_id.title())
             voice_model_raw = (
                 settings.get("kokoro_voice")
                 or settings.get("openai_voice")
@@ -524,7 +522,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Normalize voice provider to lowercase before validation
             if voice_provider:
-                from distr.core.agent.constants import normalize_voice_provider
                 voice_provider = normalize_voice_provider(voice_provider)
 
             # Validate voice provider
@@ -787,8 +784,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
             # Validate voice provider if provided
             valid_voice_providers = ["kokoro", "openai", "elevenlabs", "", None]
-            from distr.core.agent.constants import normalize_voice_provider as _nvp
-            vp_normalized = _nvp(voice_provider) if voice_provider else voice_provider
+            vp_normalized = normalize_voice_provider(voice_provider) if voice_provider else voice_provider
             if (
                 vp_normalized is not None
                 and vp_normalized.strip()

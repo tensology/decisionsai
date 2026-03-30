@@ -894,8 +894,11 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
             settings = load_settings_from_db()
             provider = (settings.get("llm_provider") or settings.get("conversational_llm_provider") or "ollama")
             model_name = (settings.get("llm_model") or settings.get("conversational_llm_model") or "").strip() or None
-            vp = (settings.get("tts_provider") or "kokoro").strip().lower()
-            voice_provider = "Kokoro" if "kokoro" in vp else "OpenAI" if "openai" in vp else "ElevenLabs" if "elevenlabs" in vp else vp or "Kokoro"
+            vp = (settings.get("tts_provider") or "kokoro").strip()
+            from distr.core.agent.constants import normalize_voice_provider
+            vp_id = normalize_voice_provider(vp)
+            _display = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs"}
+            voice_provider = _display.get(vp_id, vp_id.title())
             voice_model = (settings.get("kokoro_voice") or settings.get("openai_voice") or settings.get("elevenlabs_voice") or "").strip() or None
             ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New Chat", starting_question=None)
             logger.info("Created default chat on launch (no chats existed)")
