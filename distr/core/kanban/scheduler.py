@@ -213,6 +213,7 @@ def check_kanban_schedules() -> None:
         boards = (
             db.query(KanbanBoard)
             .filter(KanbanBoard.default_workflow_id.isnot(None))
+            .filter(KanbanBoard.agent_enabled == True)
             .all()
         )
         board_infos = []

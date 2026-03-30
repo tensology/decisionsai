@@ -78,7 +78,10 @@
                 <div class="mb-3">
                     <div class="flex items-center justify-between mb-2">
                         <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Boards</span>
-                        <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
+                        <div class="flex items-center gap-1">
+                            <button type="button" id="kb-checkin-btn" class="text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                            <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
+                        </div>
                     </div>
                     <div id="kb-db-boards" class="space-y-1"></div>
                 </div>
@@ -115,9 +118,6 @@
                         <span id="kb-board-source-badge" class="text-xs px-2 py-0.5 rounded"></span>
                     </div>
                     <div class="flex items-center gap-2" id="kb-board-actions">
-                        <span id="kb-agent-icon" class="hidden text-[#f97316] cursor-pointer" title="Agent check-in enabled" onclick="document.getElementById('kb-settings-cog').click()">
-                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/><circle cx="8" cy="16" r="1" fill="currentColor"/><circle cx="16" cy="16" r="1" fill="currentColor"/></svg>
-                        </span>
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
                         <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
                         <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Edit</button>
@@ -286,6 +286,13 @@
                     <span id="kb-board-modal-color-hex" class="text-xs text-gray-400 font-mono">#f97316</span>
                     <button type="button" id="kb-board-modal-color-reset" class="text-xs text-gray-500 hover:text-white underline">Reset</button>
                 </div>
+            </div>
+            <div class="flex items-center justify-between pt-2">
+                <div>
+                    <label class="text-sm text-gray-300">Agent check-in</label>
+                    <p class="text-xs text-gray-500">Allow the agent to check in and work tickets on this board</p>
+                </div>
+                <input type="checkbox" id="kb-board-modal-agent-enabled" class="accent-[#f97316] w-5 h-5">
             </div>
         </div>
         <!-- Advanced tab (board defaults for new tickets) -->

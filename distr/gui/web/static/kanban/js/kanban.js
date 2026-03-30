@@ -85,7 +85,7 @@
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
             div.draggable = true;
             div.dataset.boardId = b.id;
-            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>';
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + (b.agent_enabled ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>' : '');
             div.onclick = function() { selectBoard("database", b.id); };
             div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
             div.ondragend = function() { div.classList.remove("dragging"); };
@@ -641,6 +641,7 @@
         } else {
             document.getElementById("kb-board-modal-name").value = "";
             document.getElementById("kb-board-modal-desc").value = "";
+            document.getElementById("kb-board-modal-agent-enabled").checked = false;
             var colorInput = document.getElementById("kb-board-modal-color");
             var colorHex = document.getElementById("kb-board-modal-color-hex");
             colorInput.value = "#f97316";
@@ -654,6 +655,7 @@
     function populateBoardModal(data) {
         document.getElementById("kb-board-modal-name").value = data.name || "";
         document.getElementById("kb-board-modal-desc").value = data.description || "";
+        document.getElementById("kb-board-modal-agent-enabled").checked = !!data.agent_enabled;
         var colorInput = document.getElementById("kb-board-modal-color");
         var colorHex = document.getElementById("kb-board-modal-color-hex");
         var c = data.color || "#f97316";
@@ -703,6 +705,7 @@
             default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value) || 0,
             default_project_id: parseInt(document.getElementById("kb-board-def-project").value) || 0,
             color: boardColor,
+            agent_enabled: document.getElementById("kb-board-modal-agent-enabled").checked,
         };
         if (editingBoardId) {
             apiFetch("/api/kanban/boards/" + editingBoardId, {
@@ -868,9 +871,6 @@
             srcSel.value = srcVal;
             doneSel.value = doneVal;
 
-            // Show/hide robot icon on board header
-            var agentIcon = document.getElementById("kb-agent-icon");
-            if (agentIcon) agentIcon.classList.toggle("hidden", !s.kanban_agent_enabled);
         }).catch(function(e) { showSnackbar("Failed to load settings: " + e.message, "error"); });
     }
 
@@ -912,9 +912,6 @@
             body: JSON.stringify(payload)
         }).then(function() {
             showSnackbar("Settings saved");
-            // Update robot icon visibility
-            var agentIcon = document.getElementById("kb-agent-icon");
-            if (agentIcon) agentIcon.classList.toggle("hidden", !payload.kanban_agent_enabled);
             closeGlobalSettingsModal();
         }).catch(function(e) { showSnackbar("Save failed: " + e.message, "error"); });
     }
@@ -956,6 +953,18 @@
         // Board sidebar
         document.getElementById("kb-add-board").addEventListener("click", function() { openBoardModal(null); });
         document.getElementById("kb-create-big").addEventListener("click", function() { openBoardModal(null); });
+        document.getElementById("kb-checkin-btn").addEventListener("click", function() {
+            var btn = this;
+            btn.disabled = true; btn.textContent = "Running…";
+            apiFetch("/api/kanban/agent/checkin", { method: "POST" }).then(function(data) {
+                showSnackbar(data.message || "Check-in complete");
+                if (currentBoard) selectBoard(currentBoard.source, currentBoard.id);
+            }).catch(function(e) {
+                showSnackbar("Check-in failed: " + e.message, "error");
+            }).finally(function() {
+                btn.disabled = false; btn.textContent = "Check-in";
+            });
+        });
         document.getElementById("kb-search").addEventListener("input", function() { loadBoards(); });
 
         // Global settings modal

@@ -40,6 +40,7 @@ class BoardUpdate(BaseModel):
     send_to_cli: Optional[bool] = None
     color: Optional[str] = None
     position: Optional[int] = None
+    agent_enabled: Optional[bool] = None
 
 class TicketCreate(BaseModel):
     lane_id: int
@@ -169,6 +170,29 @@ def create_routes():
         save_settings_to_db(settings)
         return JSONResponse({"success": True})
 
+    # ── Agent check-in ──
+
+    @router.post("/kanban/agent/checkin")
+    async def manual_agent_checkin():
+        """Manually trigger an agent check-in on all boards with agent_enabled=true."""
+        import threading
+        from distr.core.db.kanban import KanbanBoard
+        from distr.core.kanban.agent import KanbanAgentCheckIn
+
+        fired = 0
+        with get_session() as s:
+            boards = s.query(KanbanBoard).filter(KanbanBoard.agent_enabled == True).all()
+            board_ids = [b.id for b in boards]
+
+        for bid in board_ids:
+            agent = KanbanAgentCheckIn(bid)
+            threading.Thread(target=agent.run, daemon=True).start()
+            fired += 1
+
+        if fired == 0:
+            return JSONResponse({"message": "No boards have agent check-in enabled."})
+        return JSONResponse({"message": f"Agent check-in started for {fired} board(s)."})
+
     # ── Boards ──
 
     @router.get("/kanban/boards")
@@ -186,6 +210,7 @@ def create_routes():
                     "external_url": b.external_url, "color": b.color or "",
                     "position": b.position or 0,
                     "archived": getattr(b, 'archived', False) or False,
+                    "agent_enabled": getattr(b, 'agent_enabled', False) or False,
                 })
             return JSONResponse(result)
 
@@ -224,6 +249,8 @@ def create_routes():
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
                 board.position = payload.position
+            if payload.agent_enabled is not None:
+                board.agent_enabled = payload.agent_enabled
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -300,6 +327,7 @@ def create_routes():
                 "default_action_id": board.default_action_id,
                 "send_to_cli": getattr(board, 'send_to_cli', False) or False,
                 "color": board.color or "",
+                "agent_enabled": getattr(board, 'agent_enabled', False) or False,
             })
 
     # ── Tickets ──
