@@ -1132,10 +1132,24 @@ class KokoroTTSService(TTSService):
             # Clear Telegram request flag and analyzed image after sending
             # This is LLMFullResponseEndFrame, so we're at the end of the response - always clear
             import threading
-            if hasattr(threading.current_thread(), 'telegram_send_raw_screenshot'):
-                delattr(threading.current_thread(), 'telegram_send_raw_screenshot')
-            logger.debug(f"TTS: Cleared telegram_request flag (LLMFullResponseEndFrame received)")
-            logger.debug(f"[Telegram TTS] 🧹 Cleared telegram_request flag (response complete)")
+            for _tg_attr in ('telegram_send_raw_screenshot', 'telegram_analyzed_image', 'telegram_request', 'telegram_file_sent'):
+                if hasattr(threading.current_thread(), _tg_attr):
+                    try:
+                        delattr(threading.current_thread(), _tg_attr)
+                    except Exception:
+                        pass
+            # Also clear class-level screenshot references
+            try:
+                from distr.core.agent.tools.vision.screenshot_analyzer import ScreenshotAnalyzerTool
+                ScreenshotAnalyzerTool._last_telegram_screenshot = None
+            except Exception:
+                pass
+            try:
+                from distr.core.agent.tools.vision.vision_analyzer import VisionAnalyzerTool
+                VisionAnalyzerTool._last_telegram_image = None
+            except Exception:
+                pass
+            logger.debug(f"[Telegram TTS] 🧹 Cleared ALL telegram flags (response complete)")
             
             await self.push_frame(frame, direction)
             return
