@@ -1,4 +1,4 @@
-from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey
+from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, text as sa_text
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, backref
 from sqlalchemy.dialects.sqlite import CHAR
@@ -433,9 +433,9 @@ def on_checkin(dbapi_conn, connection_record):
 # Add missing kanban columns to existing settings table before create_all
 try:
     with engine.connect() as _conn:
-        _result = _conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
+        _result = _conn.execute(sa_text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
         if _result.fetchone():
-            _existing = {row[1] for row in _conn.execute(text("PRAGMA table_info(settings)"))}
+            _existing = {row[1] for row in _conn.execute(sa_text("PRAGMA table_info(settings)"))}
             for _col, _def in [
                 ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
                 ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
@@ -467,7 +467,7 @@ try:
             ]:
                 if _col not in _existing:
                     try:
-                        _conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} {_def}"))
+                        _conn.execute(sa_text(f"ALTER TABLE settings ADD COLUMN {_col} {_def}"))
                         _conn.commit()
                     except Exception:
                         pass
