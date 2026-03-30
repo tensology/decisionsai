@@ -471,8 +471,8 @@ try:
                         _conn.commit()
                     except Exception:
                         pass
-except Exception:
-    pass
+except Exception as _mig_err:
+    logging.getLogger(__name__).warning(f"Column migration block failed: {_mig_err}")
 
 # Create the table
 Base.metadata.create_all(engine)
