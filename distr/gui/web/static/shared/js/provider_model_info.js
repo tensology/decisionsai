@@ -124,7 +124,15 @@
             var parent = sel.parentElement;
             if (!parent) continue;
             if (parent.querySelector('.model-info-btn')) continue;
-            parent.insertBefore(createInfoButton(sel), sel);
+            // Wrap select and info button in a flex row so they appear as a joined widget
+            var wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display:flex;align-items:center;width:100%';
+            var btn = createInfoButton(sel);
+            btn.style.cssText += ';border-right:none;border-radius:4px 0 0 4px;margin-right:0';
+            sel.style.borderRadius = '0 4px 4px 0';
+            parent.replaceChild(wrapper, sel);
+            wrapper.appendChild(btn);
+            wrapper.appendChild(sel);
         }
     }
 
