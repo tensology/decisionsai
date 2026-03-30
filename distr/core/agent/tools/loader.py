@@ -82,6 +82,7 @@ TOOL_REGISTRY = {
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "ExitAppTool":             ("system.exit_app", "ExitAppTool"),
+    "RestartAppTool":          ("system.restart_app", "RestartAppTool"),
     "WakeUpTool":              ("system.wake_up", "WakeUpTool"),
     "ExecuteCodeTool":         ("system.execute_code", "ExecuteCodeTool"),
     "ListProjectsTool":        ("system.project_tools", "ListProjectsTool"),
@@ -167,6 +168,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             ("SaveAudioTool", dict(tts_service=tts_service)),
             # Exit Application
             ("ExitAppTool", dict(llm_service=llm_service)),
+            ("RestartAppTool", dict(llm_service=llm_service)),
             # Rework Clipboard
             ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
             # Summarize Clipboard

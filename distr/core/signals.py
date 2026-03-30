@@ -64,6 +64,7 @@ class SignalManager(QObject):
     agent_context_updated = pyqtSignal(int)  # Chat ID when agent context (model/voice/persona) should sync
 
     exit_app = pyqtSignal()
+    restart_app = pyqtSignal()
 
     # Telegram connection signals
     telegram_connected = pyqtSignal(str, str, int)  # (short_code, app_user_id, telegram_user_id)

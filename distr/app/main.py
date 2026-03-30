@@ -454,6 +454,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         
         # Set up application behavior
         signal_manager.exit_app.connect(self.quit)
+        signal_manager.restart_app.connect(lambda: self.oracle_window.restart_app() if hasattr(self, 'oracle_window') and self.oracle_window else None)
         signal_manager.reload_agent.connect(self.reload_agent_session)
         signal_manager.audio_devices_changed.connect(self.update_agent_audio_devices)
         signal_manager.stt_model_changed.connect(self.update_agent_stt_model)
