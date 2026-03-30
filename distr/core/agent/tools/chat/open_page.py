@@ -114,7 +114,7 @@ class OpenPageTool(BaseTool):
         return self._open_url(path, page_lower)
 
     def _open_url(self, path: str, label: str) -> str:
-        """Open a path on the unified web server."""
+        """Open a path on the unified web server. Takes a screenshot for Telegram."""
         try:
             from distr.gui.web.server import get_unified_server
             server = get_unified_server()
@@ -123,6 +123,22 @@ class OpenPageTool(BaseTool):
             url = f"{server.get_url()}{path}"
             webbrowser.open(url)
             logger.info(f"OpenPageTool: Opened {url}")
+
+            # If this is a Telegram request, take a screenshot after a short delay
+            import threading
+            if hasattr(threading.current_thread(), 'telegram_request'):
+                import time
+                time.sleep(2)  # Wait for page to render
+                try:
+                    import tempfile
+                    from distr.core.agent.tools.vision.screen_capture import capture_screenshot
+                    screenshot_path = tempfile.mktemp(suffix='.png', prefix='open_page_')
+                    if capture_screenshot(screenshot_path):
+                        threading.current_thread().telegram_send_raw_screenshot = screenshot_path
+                        logger.info(f"OpenPageTool: Screenshot captured for Telegram: {screenshot_path}")
+                except Exception as e:
+                    logger.warning(f"OpenPageTool: Could not capture screenshot: {e}")
+
             return json.dumps({"status": "success", "page": label, "url": url, "silent": True})
         except Exception as e:
             logger.error(f"OpenPageTool: Error opening page: {e}", exc_info=True)
