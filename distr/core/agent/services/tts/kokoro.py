@@ -151,18 +151,25 @@ class KokoroTTSService(TTSService):
         sentences = []
         remaining = text
         
+        # First, protect decimal/version numbers from being split on their periods.
+        # Replace "digit.digit" periods with a placeholder, split sentences, then restore.
+        _DECIMAL_PLACEHOLDER = '\x00DEC\x00'
+        protected = re.sub(r'(\d)\.(\d)', r'\1' + _DECIMAL_PLACEHOLDER + r'\2', remaining)
+        
         # Require at least one word character before terminal punctuation to avoid matching
         # single-char fragments like "g." from mid-stream tokens (e.g. "ing." split mid-word).
         while True:
-            match = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', remaining)
+            match = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', protected)
             if not match:
                 break
             
-            sentence = match.group(1).strip()
+            sentence = match.group(1).strip().replace(_DECIMAL_PLACEHOLDER, '.')
             if sentence:
                 sentences.append(sentence)
             
-            remaining = remaining[len(match.group(0)):]
+            protected = protected[len(match.group(0)):]
+        
+        remaining = protected.replace(_DECIMAL_PLACEHOLDER, '.')
             
         return sentences, remaining
 
