@@ -807,11 +807,7 @@
             // CLI Tool
             document.getElementById("kb-gs-cli-tool").value = s.kanban_cli_tool || "";
 
-            // Store real auth value and apply mask
-            _cliAuthRealValue = s.kanban_cli_auth || "";
-            applyAuthMask();
-
-            // Update CLI tool visibility (auth wrap, install status)
+            // Update CLI tool visibility (install status)
             handleCliToolChange();
 
             // LLM Configuration — populate provider dropdowns then load models
@@ -900,7 +896,6 @@
 
         var payload = {
             kanban_cli_tool: document.getElementById("kb-gs-cli-tool").value,
-            kanban_cli_auth: _cliAuthRealValue,
             kanban_agent_orchestrator_provider: document.getElementById("kb-gs-orch-provider").value,
             kanban_agent_orchestrator_model: document.getElementById("kb-gs-orch-model").value,
             kanban_agent_coder_provider: document.getElementById("kb-gs-coder-provider").value,
@@ -959,33 +954,17 @@
         timePicker.classList.toggle("hidden", freq === "hourly" || isMinuteBased);
     }
 
-    // ── CLI Tool Selection & Auth Masking ──
-
-    var _cliAuthRealValue = "";  // stores the actual unmasked auth value
-
-    function maskApiKey(value) {
-        if (!value) return "";
-        var v = value.replace(/^\s+|\s+$/g, "");
-        if (!v) return "";
-        if (v.length <= 4) return Array(v.length + 1).join("\u2022");
-        return Array(v.length - 3).join("\u2022") + v.slice(-4);
-    }
+    // ── CLI Tool Selection ──
 
     function handleCliToolChange() {
         var tool = document.getElementById("kb-gs-cli-tool").value;
-        var authWrap = document.getElementById("kb-gs-cli-auth-wrap");
         var statusEl = document.getElementById("kb-gs-cli-install-status");
 
         if (!tool) {
-            authWrap.classList.add("hidden");
             statusEl.textContent = "";
             return;
         }
 
-        // Show auth fields when a tool is selected
-        authWrap.classList.remove("hidden");
-
-        // Show install status check
         statusEl.textContent = "Checking\u2026";
         statusEl.className = "text-xs text-gray-500 flex-shrink-0";
 
@@ -998,34 +977,9 @@
                 statusEl.className = "text-xs text-red-400 flex-shrink-0";
             }
         }).catch(function() {
-            // If the endpoint doesn't exist yet, show a neutral status
             statusEl.textContent = "\u2014";
             statusEl.className = "text-xs text-gray-500 flex-shrink-0";
         });
-    }
-
-    function applyAuthMask() {
-        var authInput = document.getElementById("kb-gs-cli-auth");
-        if (_cliAuthRealValue) {
-            authInput.value = maskApiKey(_cliAuthRealValue);
-            authInput.type = "text";
-        } else {
-            authInput.value = "";
-            authInput.type = "password";
-        }
-    }
-
-    function onAuthFocus() {
-        var authInput = document.getElementById("kb-gs-cli-auth");
-        authInput.type = "password";
-        authInput.value = _cliAuthRealValue;
-    }
-
-    function onAuthBlur() {
-        var authInput = document.getElementById("kb-gs-cli-auth");
-        // Capture whatever the user typed as the real value
-        _cliAuthRealValue = authInput.value;
-        applyAuthMask();
     }
 
     // ── Event bindings ──
@@ -1053,10 +1007,6 @@
 
         // CLI tool selection change
         document.getElementById("kb-gs-cli-tool").addEventListener("change", handleCliToolChange);
-
-        // Auth input masking — focus shows real value, blur re-masks
-        document.getElementById("kb-gs-cli-auth").addEventListener("focus", onAuthFocus);
-        document.getElementById("kb-gs-cli-auth").addEventListener("blur", onAuthBlur);
 
         // Global settings hour picker toggles
         document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
