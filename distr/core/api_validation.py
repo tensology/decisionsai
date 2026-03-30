@@ -205,27 +205,19 @@ def validate_kilocode(api_key: str) -> tuple[bool, str]:
 def validate_gemini(api_key: str) -> tuple[bool, str]:
     """Validate Google Gemini API key."""
     try:
-        data = json.dumps({
-            "model": "gemini-2.0-flash",
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "hi"}]
-        }).encode('utf-8')
         req = urllib.request.Request(
-            "https://generativelanguage.googleapis.com/v1beta/openai/chat/completions",
-            data=data,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            }
+            "https://generativelanguage.googleapis.com/v1beta/openai/models",
+            headers={"Authorization": f"Bearer {api_key}"}
         )
         with urllib.request.urlopen(req, timeout=10) as response:
             if response.status == 200:
                 return True, ""
         return False, "Invalid API key"
     except urllib.error.HTTPError as e:
-        if e.code == 401:
+        if e.code in (401, 403):
             return False, "Invalid API key"
-        elif e.code == 400:
+        # Any other HTTP error likely means the key authenticated but something else went wrong
+        if e.code == 400:
             return True, ""
         return False, f"HTTP Error: {e.code}"
     except Exception as e:

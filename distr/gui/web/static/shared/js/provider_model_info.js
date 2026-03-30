@@ -32,8 +32,9 @@
         if (styleInjected) return;
         styleInjected = true;
         var css = [
-            '.model-info-btn{width:26px;height:26px;background:transparent;border:1px solid #565869;border-radius:4px;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;font-size:13px;flex-shrink:0;transition:border-color .2s;padding:0;margin-right:4px;vertical-align:middle;line-height:1}',
-            '.model-info-btn:hover{border-color:#f97316}',
+            '.model-info-btn{background:#1a1f3a;border:1px solid #565869;border-right:none;border-radius:6px 0 0 6px;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:border-color .2s,color .2s;padding:0 8px;color:#6b7280;height:100%}',
+            '.model-info-btn:hover{border-color:#10a37f;color:#10a37f}',
+            '.model-info-btn svg{width:16px;height:16px;pointer-events:none}',
             '.mr-overlay{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:9999;display:flex;align-items:center;justify-content:center;animation:mrFadeIn .15s ease}',
             '@keyframes mrFadeIn{from{opacity:0}to{opacity:1}}',
             '.mr-modal{background:#1a1f3a;border:1px solid rgba(255,255,255,.2);border-radius:.75rem;width:780px;max-width:95vw;max-height:85vh;overflow-y:auto;color:#ececf1;font-family:Quicksand,sans-serif;animation:mrSlideUp .2s ease}',
@@ -108,7 +109,7 @@
         btn.type = 'button';
         btn.className = 'model-info-btn';
         btn.title = 'Model recommendations';
-        btn.textContent = 'ℹ️';
+        btn.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="12" y1="16" x2="12" y2="12"/><line x1="12" y1="8" x2="12.01" y2="8"/></svg>';
         btn.addEventListener('click', function () {
             openRecommendationModal(selectEl.value);
         });
@@ -124,12 +125,12 @@
             var parent = sel.parentElement;
             if (!parent) continue;
             if (parent.querySelector('.model-info-btn')) continue;
-            // Wrap select and info button in a flex row so they appear as a joined widget
+            // Wrap select and info button in a flex row that stretches both to equal height
             var wrapper = document.createElement('div');
-            wrapper.style.cssText = 'display:flex;align-items:center;width:100%';
+            wrapper.style.cssText = 'display:flex;align-items:stretch;width:100%';
             var btn = createInfoButton(sel);
-            btn.style.cssText += ';border-right:none;border-radius:4px 0 0 4px;margin-right:0';
-            sel.style.borderRadius = '0 4px 4px 0';
+            sel.style.borderRadius = '0 6px 6px 0';
+            sel.style.borderLeft = 'none';
             parent.replaceChild(wrapper, sel);
             wrapper.appendChild(btn);
             wrapper.appendChild(sel);
