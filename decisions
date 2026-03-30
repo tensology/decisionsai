@@ -84,12 +84,16 @@ if ps -p $PID > /dev/null 2>&1; then
             echo "                      DECISIONSAI HAS QUIT"
             echo "================================================================================"
             echo ""
-            echo "✅ ✅ ✅  IT IS NOW SAFE TO CLOSE THIS TERMINAL  ✅ ✅ ✅"
-            echo ""
             echo "DecisionsAI has shut down cleanly."
             echo "Log file saved to: $LOG_FILE"
             echo ""
             echo "================================================================================"
+            echo "This terminal will close in 3 seconds..."
+            sleep 3
+            # Close the terminal window on macOS
+            if [[ "$OSTYPE" == "darwin"* ]]; then
+                osascript -e 'tell application "Terminal" to close front window' 2>/dev/null &
+            fi
             break
         fi
     done
