@@ -52,11 +52,18 @@ class ExitAppTool(BaseTool):
     def _run(self, text: str = "", **kwargs) -> str:
         try:
             logger.info("Exit app: requesting exit")
-            # Use event_queue (works from agent subprocess) with signal fallback
             eq = self._event_queue
             if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):
                 eq = self._llm_service.event_queue
             if eq:
+                # Notify Telegram/chat that we're shutting down
+                eq.put(('send_to_telegram', {
+                    'text': 'Goodbye! Shutting down DecisionsAI now.',
+                    'is_done': True,
+                    'analyzed_image_path': None,
+                }), block=False)
+                import time
+                time.sleep(0.5)
                 eq.put(('exit_app', {}), block=False)
             else:
                 from distr.core.signals import signal_manager

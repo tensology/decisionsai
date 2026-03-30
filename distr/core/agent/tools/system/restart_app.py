@@ -45,11 +45,18 @@ class RestartAppTool(BaseTool):
     def _run(self, text: str = "", **kwargs) -> str:
         try:
             logger.info("Restart app: requesting restart")
-            # Use event_queue (works from agent subprocess) with signal fallback
             eq = self._event_queue
             if not eq and self._llm_service and hasattr(self._llm_service, 'event_queue'):
                 eq = self._llm_service.event_queue
             if eq:
+                # Notify Telegram/chat that we're restarting
+                eq.put(('send_to_telegram', {
+                    'text': 'Restarting the application now. I\'ll be back in a moment.',
+                    'is_done': True,
+                    'analyzed_image_path': None,
+                }), block=False)
+                import time
+                time.sleep(0.5)  # Give the message time to send
                 eq.put(('restart_app', {}), block=False)
             else:
                 from distr.core.signals import signal_manager

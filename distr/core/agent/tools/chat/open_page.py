@@ -114,21 +114,29 @@ class OpenPageTool(BaseTool):
         return self._open_url(path, page_lower)
 
     def _open_url(self, path: str, label: str) -> str:
-        """Open a path on the unified web server. Takes a screenshot for Telegram."""
+        """Open a path on the web server. Takes a screenshot for Telegram."""
         try:
-            from distr.gui.web.server import get_unified_server
-            server = get_unified_server()
-            if not server or not server.is_ready():
-                return "Error: Web server is not ready yet. Try again in a moment."
-            url = f"{server.get_url()}{path}"
+            import time
+
+            # Build URL — try server object first, fall back to default port
+            url = None
+            try:
+                from distr.gui.web.server import get_unified_server
+                server = get_unified_server()
+                if server and server.is_ready():
+                    url = f"{server.get_url()}{path}"
+            except Exception:
+                pass
+            if not url:
+                url = f"http://localhost:8765{path}"
+
             webbrowser.open(url)
             logger.info(f"OpenPageTool: Opened {url}")
 
             # If this is a Telegram request, take a screenshot after a short delay
             import threading
             if hasattr(threading.current_thread(), 'telegram_request'):
-                import time
-                time.sleep(2)  # Wait for page to render
+                time.sleep(2)
                 try:
                     import tempfile
                     from distr.core.agent.tools.vision.screen_capture import capture_screenshot
