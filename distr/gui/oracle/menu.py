@@ -143,6 +143,10 @@ class MenuTrayMixin:
         self.log_activity_action.triggered.connect(lambda: self._open_web_url("/settings#logs"))
         self.menu.addAction(self.log_activity_action)
 
+        self.restart_action = QAction("Restart", self.menu)
+        self.restart_action.triggered.connect(self.restart_app)
+        self.menu.addAction(self.restart_action)
+
         self.exit_action = QAction("Quit", self.menu)
         self.exit_action.triggered.connect(self.exit_app)
         self.menu.addAction(self.exit_action)
