@@ -460,6 +460,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 except Exception:
                     pass
             self._emit_interruption_cleanup()
+            # Don't emit telegram response or cleanup flags for cancelled tasks
+            return
         except Exception as e:
             logger.error("LLM Error (%.3fs): %s", time.time() - start_time, e, exc_info=True)
             await self.push_frame(ErrorFrame(error=str(e)))

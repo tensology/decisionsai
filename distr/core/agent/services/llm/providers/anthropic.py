@@ -377,6 +377,9 @@ class AnthropicLLMService(BaseLLMService):
                     if cid:
                         self.chat_manager.add_assistant_message(cid, done_text)
 
+        except asyncio.CancelledError:
+            logger.warning("Anthropic: _generate_response cancelled (%.3fs)", _time.time() - _t0)
+            return
         except Exception as e:
             logger.error("Error in AnthropicLLMService._generate_response (%.3fs): %s",
                          _time.time() - _t0, e, exc_info=True)
