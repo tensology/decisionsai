@@ -115,9 +115,17 @@ class TelegramMixin:
         """
         import threading
 
+        # Clear telegram_request on ALL threads — _propagate_telegram_flags
+        # sets it on every thread, so cleanup must mirror that.
+        for t in threading.enumerate():
+            if getattr(t, 'telegram_request', False):
+                t.telegram_request = False
+            if getattr(t, 'telegram_analyzed_image', None):
+                t.telegram_analyzed_image = None
+            if getattr(t, 'telegram_send_raw_screenshot', None):
+                t.telegram_send_raw_screenshot = None
+
         cur = threading.current_thread()
-        if hasattr(cur, 'telegram_request'):
-            cur.telegram_request = False
         if hasattr(cur, 'telegram_uploaded_image'):
             cur.telegram_uploaded_image = None
         self._is_telegram_request = False

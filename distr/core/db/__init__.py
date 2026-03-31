@@ -153,6 +153,10 @@ class Settings(Base):
 
     # Kanban Agent Settings (global, migrated from per-board)
     kanban_agent_enabled = Column(Boolean, default=False)
+
+    # Telegram response format settings
+    telegram_text_only_override = Column(Boolean, default=False)
+    telegram_auto_match_mode = Column(Boolean, default=True)
     kanban_agent_frequency = Column(String, default='daily')
     kanban_agent_time = Column(String, default='09:00')
     kanban_agent_hours = Column(String, default='[]')
@@ -464,6 +468,9 @@ try:
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),
+                # Telegram response format settings
+                ("telegram_text_only_override", "BOOLEAN DEFAULT 0"),
+                ("telegram_auto_match_mode", "BOOLEAN DEFAULT 1"),
             ]:
                 if _col not in _existing:
                     try:
