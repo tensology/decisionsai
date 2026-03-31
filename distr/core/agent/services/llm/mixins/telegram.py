@@ -98,9 +98,13 @@ class TelegramMixin:
                 analyzed_image_path = img
                 break
 
+        # Skip screenshot for simple "Done" confirmations with no visual context
+        skip_screenshot = is_done and not analyzed_image_path
+
         self.event_queue.put(('send_to_telegram', {
             'text': response_text,
             'is_done': is_done,
+            'skip_screenshot': skip_screenshot,
             'provider': 'kokoro',
             'analyzed_image_path': analyzed_image_path,
         }), block=False)

@@ -581,10 +581,14 @@ class EventHandlerMixin:
                                          audio_path_from_event, screenshot_path_from_event,
                                          analyzed_image_path):
         """Prepare text + screenshot for a 'Done' / tool-completion response."""
+        # Skip screenshot if explicitly requested (e.g. speak_on_desktop tool)
+        skip_screenshot = data.get('skip_screenshot', False)
+
         # Voice notes don't need screenshots
         if audio_path_from_event and os.path.exists(audio_path_from_event):
             logger.info("[Telegram] 🎵 Voice note detected - skipping screenshot")
             screenshot_file = None
+            skip_screenshot = True
 
         # Check if file was already sent
         file_already_sent = self._telegram_check_file_already_sent(screenshot_path_from_event)
@@ -598,16 +602,18 @@ class EventHandlerMixin:
 
         text_to_send = text
 
-        # Resolve screenshot
-        if not screenshot_file and screenshot_path_from_event and os.path.exists(screenshot_path_from_event):
+        # Resolve screenshot (skip if flagged)
+        if skip_screenshot:
+            screenshot_file = None
+        elif not screenshot_file and screenshot_path_from_event and os.path.exists(screenshot_path_from_event):
             screenshot_file = Path(screenshot_path_from_event)
         elif not screenshot_file and analyzed_image_path and os.path.exists(analyzed_image_path):
             screenshot_file = Path(analyzed_image_path)
         elif not screenshot_file:
             screenshot_file = self._telegram_capture_screenshot()
 
-        # Fallback screenshot for Done messages
-        if not screenshot_file or not screenshot_file.exists():
+        # Fallback screenshot for Done messages (skip if flagged)
+        if not skip_screenshot and (not screenshot_file or not screenshot_file.exists()):
             logger.warning("[Telegram] ⚠️ 'Done' message but no screenshot - attempting fallback capture")
             screenshot_file = self._telegram_capture_screenshot_fallback()
 

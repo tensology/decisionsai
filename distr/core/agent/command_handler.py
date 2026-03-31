@@ -634,10 +634,9 @@ def _cmd_speak_text_directly(session, params):
         session.logger.debug(f"Speaking text directly via TTS: '{text[:50]}...'")
         if session.runner and session.runner._loop:
             async def speak_directly():
-                # Temporarily clear telegram flags so TTS speaks on desktop speakers.
-                # We need to keep them cleared until the TTS pipeline has fully
-                # processed the frames, then restore so the follow-up "Done"
-                # response routes to Telegram.
+                # Clear ONLY thread-level telegram flags so TTS speaks on desktop.
+                # Do NOT touch session.llm_service._is_telegram_request — that needs
+                # to stay True so the follow-up "Done" response routes to Telegram.
                 import threading
 
                 saved_flags = {}
@@ -645,12 +644,6 @@ def _cmd_speak_text_directly(session, params):
                     if hasattr(t, 'telegram_request') and t.telegram_request:
                         saved_flags[t] = True
                         t.telegram_request = False
-
-                saved_is_telegram = getattr(session.llm_service, '_is_telegram_request', False)
-                saved_current = getattr(session.llm_service, '_current_telegram_request', False)
-                session.llm_service._is_telegram_request = False
-                if hasattr(session.llm_service, '_current_telegram_request'):
-                    session.llm_service._current_telegram_request = False
 
                 pipeline_dir = session.llm_service._pipeline_direction
 
@@ -664,22 +657,15 @@ def _cmd_speak_text_directly(session, params):
                 await session.llm_service.push_frame(TextFrame(text=text), pipeline_dir)
                 await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
 
-                # Wait for the TTS pipeline to process the frames before restoring
-                # telegram flags. The Kokoro TTS checks flags when it receives the
-                # TextFrame, so we need them cleared until it's done.
+                # Wait for TTS to process, then restore thread flags
                 await asyncio.sleep(0.5)
-
-                # Restore telegram flags so the follow-up response goes to Telegram
-                session.llm_service._is_telegram_request = saved_is_telegram
-                if hasattr(session.llm_service, '_current_telegram_request'):
-                    session.llm_service._current_telegram_request = saved_current
                 for t, val in saved_flags.items():
                     try:
                         t.telegram_request = val
                     except Exception:
                         pass
 
-                session.logger.debug("Direct TTS speech completed, telegram flags restored")
+                session.logger.debug("Direct TTS speech completed, thread flags restored")
 
             asyncio.run_coroutine_threadsafe(speak_directly(), session.runner._loop)
         else:
