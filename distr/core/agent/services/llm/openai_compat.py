@@ -62,6 +62,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
             self._refresh_system_prompt_for_generation()
             logger.info("%s: [1] refresh_system_prompt: %.3fs", self.SERVICE_NAME, _time.time() - _t0)
 
+            # Fast action detection — bypass LLM for simple commands
+            fast_action = self._check_fast_actions()
+            if fast_action:
+                current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                if await self._execute_fast_action(fast_action, current_chat_id):
+                    return
+
             await self.push_frame(LLMFullResponseStartFrame())
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
