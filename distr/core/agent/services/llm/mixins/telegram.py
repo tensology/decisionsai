@@ -89,6 +89,7 @@ class TelegramMixin:
         )
 
         analyzed_image_path = None
+        skip_screenshot = False
         for t in threading.enumerate():
             img = (
                 getattr(t, 'telegram_analyzed_image', None)
@@ -96,10 +97,9 @@ class TelegramMixin:
             )
             if img:
                 analyzed_image_path = img
-                break
-
-        # Skip screenshot for simple "Done" confirmations with no visual context
-        skip_screenshot = is_done and not analyzed_image_path
+            if getattr(t, 'skip_telegram_screenshot', False):
+                skip_screenshot = True
+                t.skip_telegram_screenshot = False
 
         self.event_queue.put(('send_to_telegram', {
             'text': response_text,

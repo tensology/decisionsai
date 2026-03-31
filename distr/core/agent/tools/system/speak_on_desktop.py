@@ -40,10 +40,13 @@ class SpeakOnDesktopTool(BaseTool):
         if not text:
             return "No text provided to speak."
         try:
+            # Set thread flag so _emit_telegram_response knows to skip screenshot
+            import threading
+            threading.current_thread().skip_telegram_screenshot = True
+
             if self.event_queue:
                 self.event_queue.put(("speak_on_desktop", {"text": text}), block=False)
             else:
-                # Fallback: try direct signal (may fail in non-Qt threads)
                 from distr.core.signals import signal_manager
                 signal_manager.speak_text_directly.emit(text)
             return "Done"
