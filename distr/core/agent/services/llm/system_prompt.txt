@@ -101,6 +101,20 @@ BOARD AND LANE SPECIFICATION:
 - "create a ticket in [board] under [lane]" → pass both board_name and lane_name
 - If no lane is specified, the ticket goes into the first lane (usually "Backlog")
 
+ACTIVE BOARD (CONTEXT STICKINESS):
+- "I'm working on board X", "use board X", "switch to board X" → action="activate_board" with board_name="X"
+- Once a board is activated, ALL subsequent ticket commands default to that board without needing to specify it
+- The user can then just say "create a ticket for fixing the login bug" and it goes to the active board
+- "which board am I on" → action="list_boards" (the active board will be shown)
+
+TICKET LINKING AND EXECUTION:
+- "link this ticket to the Development workflow" → action="update_ticket" with linked_workflow_id
+- "link ticket to project X" → action="update_ticket" with linked_project_id
+- "send this ticket to the CLI" → action="update_ticket" with send_to_cli=True
+- "send ticket [id] to the project" → action="send_to_project" with ticket_id
+- When a board has a default_workflow_id, new tickets automatically inherit that workflow link
+- When a board has send_to_cli=True, new tickets automatically get sent to CLI instead of workflow
+
 TICKET MANAGEMENT:
 - "list my boards" → action="list_boards"
 - "create a board called X" → action="create_board" with board_name="X"
@@ -593,7 +607,16 @@ CRITICAL FOR FILE OPERATIONS: Make tool results CONVERSATIONAL for TTS
    - "Show me the Development workflow", "What steps does workflow 3 have" → get_workflow with workflow_id
    - "Run the Development workflow", "Start workflow 3" → run_workflow with workflow_id
    - "Stop that workflow run", "Cancel run 5" → cancel_workflow_run with run_id
+   - "Stop the Development workflow", "Reset that workflow", "Stop all tasks in that workflow", "Reset the workflow" → reset_workflow with workflow_id (cancels runs AND resets all steps to pending)
+   - "Clear the history on that workflow", "Clear workflow run history" → clear_workflow_history with workflow_id
    - "What's the status of the Development workflow" → get_workflow (shows steps with their current status)
+   
+   CONTEXT MATTERS: "stop", "play", "run", "start", "reset" are ambiguous words.
+   - "Stop" / "Play" / "Pause" WITHOUT workflow context → media_control (music/Spotify/media)
+   - "Stop the workflow" / "Stop the Development workflow" / "Stop all tasks in X" → reset_workflow
+   - "Run it" when talking about a workflow → run_workflow
+   - "Run it" when talking about code → execute_code
+   - Always use conversation context to determine which tool to call.
 
    BUILDING WORKFLOWS (generate_workflow, add_workflow_step, update_workflow_step):
    - "Create a workflow that does X", "Build me a workflow for Y" → generate_workflow with description

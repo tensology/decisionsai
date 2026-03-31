@@ -94,6 +94,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
         "Use action='create_board' with board_name to create a new board. "
+        "Use action='activate_board' with board_name to set a board as the active/default board. "
         "Use action='delete_ticket' with ticket_id to delete a ticket. "
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
         "Use action='attach_file' with ticket_id and file_path to attach files. "
@@ -106,6 +107,9 @@ class KanbanTicketTool(BaseTool):
         "and the user hasn't specified one, call action='list_boards' first and "
         "ASK the user which board to use. If there is only one board, use it "
         "automatically but ALWAYS tell the user which board the ticket was added to. "
+        "ACTIVE BOARD: When user says 'I'm working on board X' or 'use board X', "
+        "call action='activate_board' with board_name. After that, all ticket "
+        "commands default to this board without needing to specify it again. "
         "LINKING: You can link a ticket to a project via linked_project_id or "
         "to a workflow via linked_workflow_id when creating or updating a ticket."
     )
@@ -534,12 +538,14 @@ class KanbanTicketTool(BaseTool):
                 return self._action_delete_link(ticket_id or self._last_ticket_id, url)
             elif action == "send_to_project":
                 return self._action_send_to_project(ticket_id or self._last_ticket_id)
+            elif action in ("activate_board", "set_board", "use_board"):
+                return self._action_activate_board(board_id or None, board_name or text)
             else:
                 return (
                     f"Unknown action '{action}'. Valid actions: list_boards, create_board, delete_board, "
-                    "list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, move_ticket, "
-                    "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, delete_todo, "
-                    "add_link, delete_link, send_to_project"
+                    "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
+                    "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
+                    "delete_todo, add_link, delete_link, send_to_project"
                 )
 
         except Exception as e:
@@ -1175,3 +1181,24 @@ class KanbanTicketTool(BaseTool):
             project_name = project.name
 
         return f"Sent ticket #{ticket_id} to project '{project_name}' → {ticket_path}"
+
+    # ── Activate board ────────────────────────────────────────────────────
+
+    def _action_activate_board(self, board_id=None, board_name=None) -> str:
+        """Set a board as the active/in-use board. Future ticket commands default to this board."""
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return f"Board '{board_name or board_id}' not found."
+
+        from distr.core.db.kanban import KanbanBoard as KB
+        with self._get_session() as s:
+            # Deactivate all boards
+            s.query(KB).filter(KB.in_use == True).update({"in_use": False})
+            b = s.query(KB).get(board["id"])
+            if not b:
+                return f"Board '{board['name']}' not found."
+            b.in_use = True
+            s.commit()
+
+        self._last_board_id = board["id"]
+        return f"Board '{board['name']}' is now your active board. All ticket commands will default to this board."

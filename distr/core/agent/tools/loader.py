@@ -76,6 +76,8 @@ TOOL_REGISTRY = {
     "AddWorkflowStepTool":        ("step_runner.workflow_tools", "AddWorkflowStepTool"),
     "UpdateWorkflowStepTool":     ("step_runner.workflow_tools", "UpdateWorkflowStepTool"),
     "GenerateWorkflowTool":       ("step_runner.workflow_tools", "GenerateWorkflowTool"),
+    "ResetWorkflowTool":          ("step_runner.workflow_tools", "ResetWorkflowTool"),
+    "ClearWorkflowHistoryTool":   ("step_runner.workflow_tools", "ClearWorkflowHistoryTool"),
     "StartRecordingTool":      ("actions.start_recording", "StartRecordingTool"),
     "StopRecordingTool":       ("actions.stop_recording", "StopRecordingTool"),
     "PlayActionTool":          ("actions.play_action", "PlayActionTool"),
@@ -208,6 +210,8 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             ("AddWorkflowStepTool", {}),
             ("UpdateWorkflowStepTool", {}),
             ("GenerateWorkflowTool", {}),
+            ("ResetWorkflowTool", {}),
+            ("ClearWorkflowHistoryTool", {}),
             # Play Action
             ("PlayActionTool", dict(event_queue=event_queue)),
             ("ListActionsTool", {}),

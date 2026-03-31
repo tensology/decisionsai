@@ -85,7 +85,8 @@
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
             div.draggable = true;
             div.dataset.boardId = b.id;
-            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + (b.agent_enabled ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>' : '');
+            var inUseTag = b.in_use ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#f97316;color:#fff;margin-left:4px;flex-shrink:0">IN USE</span>' : '';
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + inUseTag + (b.agent_enabled ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>' : '');
             div.onclick = function() { selectBoard("database", b.id); };
             div.ondblclick = function() { openBoardModal(b.id); };
             div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
@@ -205,6 +206,23 @@
             }
             loadBoards(true);
         }).catch(function(e) { showSnackbar("Delete failed: " + e.message, "error"); });
+    }
+
+    function ctxActivateBoard() {
+        if (!ctxMenuBoardId) return;
+        var boardId = ctxMenuBoardId;
+        hideBoardContextMenu();
+        apiFetch("/api/kanban/boards/" + boardId + "/use", { method: "POST" }).then(function(data) {
+            showSnackbar("Board set as active");
+            loadBoards(true);
+            if (data && data.linked_project) {
+                if (confirm('This board is linked to project "' + data.linked_project.name + '". Activate that project too?')) {
+                    apiFetch("/api/projects/" + data.linked_project.id + "/use", { method: "POST" }).then(function() {
+                        showSnackbar("Project activated");
+                    }).catch(function() {});
+                }
+            }
+        }).catch(function(e) { showSnackbar("Activate failed: " + e.message, "error"); });
     }
 
     // ── Select board ──
@@ -1093,6 +1111,7 @@
         });
 
         // Context menu
+        document.querySelector(".kb-ctx-activate").addEventListener("click", ctxActivateBoard);
         document.querySelector(".kb-ctx-edit").addEventListener("click", ctxEditBoard);
         document.querySelector(".kb-ctx-rename").addEventListener("click", ctxRenameBoard);
         document.querySelector(".kb-ctx-archive").addEventListener("click", ctxArchiveBoard);

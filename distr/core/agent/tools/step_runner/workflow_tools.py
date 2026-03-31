@@ -569,3 +569,76 @@ class GenerateWorkflowTool(BaseTool):
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)
+
+
+
+# --- Reset / stop a workflow ---
+class ResetWorkflowInput(BaseModel):
+    workflow_id: int = Field(description="Workflow ID to reset")
+
+
+class ResetWorkflowTool(BaseTool):
+    name: str = "reset_workflow"
+    description: str = (
+        "Stop and reset a workflow. Cancels any active runs, shuts down agents, "
+        "and resets ALL step statuses back to pending. "
+        "ONLY use when user explicitly refers to a workflow by name or context. "
+        "Use when user says 'stop the Development workflow', 'reset that workflow', "
+        "'stop all tasks in workflow X', 'cancel everything on that workflow', "
+        "'reset the workflow'. Do NOT use for 'stop' without workflow context "
+        "(that's media control)."
+    )
+    args_schema: Type[BaseModel] = ResetWorkflowInput
+
+    def _run(self, workflow_id: int, **kwargs) -> str:
+        try:
+            from distr.core.workflow.service import reset_workflow_steps
+            result = reset_workflow_steps(workflow_id)
+            if "error" in result:
+                return f"Failed: {result['error']}"
+            cancelled = result.get("cancelled_runs", 0)
+            reset = result.get("steps_reset", 0)
+            parts = [f"Workflow reset. {reset} step(s) set back to pending."]
+            if cancelled:
+                parts.append(f"{cancelled} active run(s) cancelled.")
+            return " ".join(parts)
+        except Exception as e:
+            logger.error("reset_workflow failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+
+# --- Clear workflow history ---
+class ClearWorkflowHistoryInput(BaseModel):
+    workflow_id: int = Field(description="Workflow ID to clear history for")
+
+
+class ClearWorkflowHistoryTool(BaseTool):
+    name: str = "clear_workflow_history"
+    description: str = (
+        "Clear all run history and step results for a workflow. "
+        "Deletes all past runs, step results, and resets steps to pending. "
+        "Use when user says 'clear the history on that workflow', "
+        "'clear workflow history', 'wipe the run history', "
+        "'delete all runs for the Development workflow'."
+    )
+    args_schema: Type[BaseModel] = ClearWorkflowHistoryInput
+
+    def _run(self, workflow_id: int, **kwargs) -> str:
+        try:
+            from distr.core.workflow.service import clear_workflow_history
+            result = clear_workflow_history(workflow_id)
+            if "error" in result:
+                return f"Failed: {result['error']}"
+            runs = result.get("deleted_runs", 0)
+            results = result.get("deleted_results", 0)
+            return f"Cleared workflow history. Deleted {runs} run(s) and {results} step result(s). All steps reset to pending."
+        except Exception as e:
+            logger.error("clear_workflow_history failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)

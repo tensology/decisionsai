@@ -598,6 +598,119 @@ def cancel_step(step_id: int) -> bool:
         return True
 
 
+def reset_workflow_steps(workflow_id: int) -> Dict[str, Any]:
+    """Cancel any active run and reset all step statuses to pending.
+
+    Use when the user wants to stop everything and start fresh.
+    """
+    with get_session() as db:
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        if not wf:
+            return {"error": "Workflow not found"}
+
+        # Cancel any active runs
+        cancelled_runs = 0
+        active_runs = (
+            db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                AutoWorkflowRun.status.in_(["running", "waiting"]),
+            )
+            .all()
+        )
+        run_ids = []
+        for run in active_runs:
+            run.status = "cancelled"
+            run.completed_at = datetime.utcnow()
+            run_ids.append(run.id)
+            cancelled_runs += 1
+        db.commit()
+
+    # Clean up agents outside the DB session
+    for rid in run_ids:
+        _cleanup_run(rid)
+
+    # Reset all steps to pending
+    with get_session() as db:
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        if wf:
+            for step in wf.steps:
+                step.status = "pending"
+                step.result = None
+            db.commit()
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id,
+        "cancelled_runs": cancelled_runs,
+        "steps_reset": len(wf.steps) if wf else 0,
+    }
+
+
+def clear_workflow_history(workflow_id: int) -> Dict[str, Any]:
+    """Delete all run history and step results for a workflow."""
+    with get_session() as db:
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        if not wf:
+            return {"error": "Workflow not found"}
+
+        # Cancel any active runs first
+        active_runs = (
+            db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                AutoWorkflowRun.status.in_(["running", "waiting"]),
+            )
+            .all()
+        )
+        active_run_ids = []
+        for run in active_runs:
+            run.status = "cancelled"
+            run.completed_at = datetime.utcnow()
+            active_run_ids.append(run.id)
+        db.commit()
+
+    # Clean up agents outside DB session
+    for rid in active_run_ids:
+        _cleanup_run(rid)
+
+    with get_session() as db:
+        # Delete all step results for this workflow's runs
+        run_ids = [
+            r.id for r in
+            db.query(AutoWorkflowRun)
+            .filter(AutoWorkflowRun.workflow_id == workflow_id)
+            .all()
+        ]
+        deleted_results = 0
+        if run_ids:
+            deleted_results = (
+                db.query(AutoWorkflowStepResult)
+                .filter(AutoWorkflowStepResult.run_id.in_(run_ids))
+                .delete(synchronize_session=False)
+            )
+        # Delete all runs
+        deleted_runs = (
+            db.query(AutoWorkflowRun)
+            .filter(AutoWorkflowRun.workflow_id == workflow_id)
+            .delete(synchronize_session=False)
+        )
+        # Reset step statuses
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        if wf:
+            for step in wf.steps:
+                step.status = "pending"
+                step.result = None
+        db.commit()
+
+    return {
+        "success": True,
+        "workflow_id": workflow_id,
+        "deleted_runs": deleted_runs,
+        "deleted_results": deleted_results,
+    }
+
+
 def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, Any]:
     """Resume a workflow run that is in 'waiting' status."""
     with get_session() as db:
