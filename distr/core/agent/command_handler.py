@@ -634,6 +634,16 @@ def _cmd_speak_text_directly(session, params):
         session.logger.debug(f"Speaking text directly via TTS: '{text[:50]}...'")
         if session.runner and session.runner._loop:
             async def speak_directly():
+                # Clear telegram flags so TTS speaks on desktop, not to Telegram
+                import threading
+                for t in threading.enumerate():
+                    if hasattr(t, 'telegram_request'):
+                        t.telegram_request = False
+                if hasattr(session.llm_service, '_is_telegram_request'):
+                    session.llm_service._is_telegram_request = False
+                if hasattr(session.llm_service, '_current_telegram_request'):
+                    session.llm_service._current_telegram_request = False
+
                 pipeline_dir = session.llm_service._pipeline_direction
 
                 is_started = getattr(session.llm_service, '_FrameProcessor__started', False)

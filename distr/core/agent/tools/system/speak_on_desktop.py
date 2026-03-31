@@ -46,7 +46,7 @@ class SpeakOnDesktopTool(BaseTool):
                 # Fallback: try direct signal (may fail in non-Qt threads)
                 from distr.core.signals import signal_manager
                 signal_manager.speak_text_directly.emit(text)
-            return "Done, I've said it on the desktop."
+            return "Done"
         except Exception as e:
             logger.error("speak_on_desktop failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
