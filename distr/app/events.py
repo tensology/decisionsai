@@ -331,6 +331,9 @@ class EventHandlerMixin:
             if orch:
                 orch_chat_id = orch.get("chat_id")
                 if (orch_chat_id is None) or (orch_chat_id == chat_id):
+                    # Mark that the event-queue path handled advancement for this
+                    # chat_id so the signal-based handler doesn't double-advance.
+                    self._last_advance_chat_id = chat_id
                     self._advance_step_runner_orchestration(chat_id=chat_id, response_text=response_text)
         elif event == 'chat_stream_error':
             error = data.get('error')

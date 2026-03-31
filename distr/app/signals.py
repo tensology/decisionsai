@@ -243,6 +243,29 @@ class SignalBridgeMixin:
             _post_chat_event(evt)
         signal_manager.chat_stream_finished.connect(on_chat_stream_finished_web)
 
+        # Step Runner advancement for providers that emit chat_stream_finished
+        # directly via signal (Ollama, fast actions) instead of the event queue.
+        # The event queue path in _evt_chat_stream already handles advancement
+        # for OpenAI-compatible providers, so we use a flag to avoid double-advancing.
+        def on_chat_stream_finished_step_runner(chat_id):
+            try:
+                orch = getattr(self, "_step_runner_orchestration", None)
+                if not orch:
+                    return
+                # Skip if the event queue already triggered advancement for this
+                # chat_stream_finished (it sets _last_advance_chat_id).
+                last_advanced = getattr(self, "_last_advance_chat_id", None)
+                if last_advanced == chat_id:
+                    self._last_advance_chat_id = None  # reset for next time
+                    return
+                orch_chat_id = orch.get("chat_id")
+                if (orch_chat_id is None) or (orch_chat_id == chat_id):
+                    response_text = self._get_last_assistant_message(chat_id)
+                    self._advance_step_runner_orchestration(chat_id=chat_id, response_text=response_text)
+            except Exception as e:
+                logger.error("Step Runner signal-based advancement failed: %s", e, exc_info=True)
+        signal_manager.chat_stream_finished.connect(on_chat_stream_finished_step_runner)
+
         def on_chat_stream_error_web(error):
             cid = getattr(self, "_web_stream_chat_id", None)
             # Flush any buffered tokens before sending error
