@@ -46,7 +46,7 @@ class SpeakOnDesktopTool(BaseTool):
                 # Fallback: try direct signal (may fail in non-Qt threads)
                 from distr.core.signals import signal_manager
                 signal_manager.speak_text_directly.emit(text)
-            return f"Speaking on desktop: '{text[:80]}...'" if len(text) > 80 else f"Speaking on desktop: '{text}'"
+            return "Done, I've said it on the desktop."
         except Exception as e:
             logger.error("speak_on_desktop failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
