@@ -634,9 +634,12 @@ def _cmd_speak_text_directly(session, params):
         session.logger.debug(f"Speaking text directly via TTS: '{text[:50]}...'")
         if session.runner and session.runner._loop:
             async def speak_directly():
-                # Temporarily clear telegram flags so TTS speaks on desktop speakers,
-                # not to Telegram. We restore them after pushing frames.
+                # Temporarily clear telegram flags so TTS speaks on desktop speakers.
+                # We need to keep them cleared until the TTS pipeline has fully
+                # processed the frames, then restore so the follow-up "Done"
+                # response routes to Telegram.
                 import threading
+
                 saved_flags = {}
                 for t in threading.enumerate():
                     if hasattr(t, 'telegram_request') and t.telegram_request:
@@ -649,26 +652,34 @@ def _cmd_speak_text_directly(session, params):
                 if hasattr(session.llm_service, '_current_telegram_request'):
                     session.llm_service._current_telegram_request = False
 
-                try:
-                    pipeline_dir = session.llm_service._pipeline_direction
+                pipeline_dir = session.llm_service._pipeline_direction
 
-                    is_started = getattr(session.llm_service, '_FrameProcessor__started', False)
-                    if not is_started:
-                        session.logger.warning("LLM service not started yet - sending StartFrame first")
-                        await session.llm_service.push_frame(StartFrame(), pipeline_dir)
-                        await asyncio.sleep(0.01)
+                is_started = getattr(session.llm_service, '_FrameProcessor__started', False)
+                if not is_started:
+                    session.logger.warning("LLM service not started yet - sending StartFrame first")
+                    await session.llm_service.push_frame(StartFrame(), pipeline_dir)
+                    await asyncio.sleep(0.01)
 
-                    await session.llm_service.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
-                    await session.llm_service.push_frame(TextFrame(text=text), pipeline_dir)
-                    await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
-                    session.logger.debug("Direct TTS speech completed")
-                finally:
-                    # Restore telegram flags so the follow-up response goes to Telegram
-                    session.llm_service._is_telegram_request = saved_is_telegram
-                    if hasattr(session.llm_service, '_current_telegram_request'):
-                        session.llm_service._current_telegram_request = saved_current
-                    for t, val in saved_flags.items():
+                await session.llm_service.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
+                await session.llm_service.push_frame(TextFrame(text=text), pipeline_dir)
+                await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
+
+                # Wait for the TTS pipeline to process the frames before restoring
+                # telegram flags. The Kokoro TTS checks flags when it receives the
+                # TextFrame, so we need them cleared until it's done.
+                await asyncio.sleep(0.5)
+
+                # Restore telegram flags so the follow-up response goes to Telegram
+                session.llm_service._is_telegram_request = saved_is_telegram
+                if hasattr(session.llm_service, '_current_telegram_request'):
+                    session.llm_service._current_telegram_request = saved_current
+                for t, val in saved_flags.items():
+                    try:
                         t.telegram_request = val
+                    except Exception:
+                        pass
+
+                session.logger.debug("Direct TTS speech completed, telegram flags restored")
 
             asyncio.run_coroutine_threadsafe(speak_directly(), session.runner._loop)
         else:
