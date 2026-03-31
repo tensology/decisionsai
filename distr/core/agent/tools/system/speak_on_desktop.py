@@ -5,7 +5,7 @@ Used when the user (especially from Telegram) wants the agent to
 announce something, say something, or speak text on the desktop.
 """
 import logging
-from typing import Type
+from typing import Any, Type
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -28,14 +28,24 @@ class SpeakOnDesktopTool(BaseTool):
         "This is especially useful from Telegram as a remote intercom."
     )
     args_schema: Type[BaseModel] = SpeakOnDesktopInput
+    event_queue: Any = Field(default=None, exclude=True)
+
+    def __init__(self, event_queue=None, **data):
+        super().__init__(**data)
+        if event_queue:
+            self.event_queue = event_queue
 
     def _run(self, text: str = "", **kwargs) -> str:
         text = (text or "").strip()
         if not text:
             return "No text provided to speak."
         try:
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit(text)
+            if self.event_queue:
+                self.event_queue.put(("speak_on_desktop", {"text": text}), block=False)
+            else:
+                # Fallback: try direct signal (may fail in non-Qt threads)
+                from distr.core.signals import signal_manager
+                signal_manager.speak_text_directly.emit(text)
             return f"Speaking on desktop: '{text[:80]}...'" if len(text) > 80 else f"Speaking on desktop: '{text}'"
         except Exception as e:
             logger.error("speak_on_desktop failed: %s", e, exc_info=True)

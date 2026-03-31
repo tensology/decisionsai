@@ -99,6 +99,7 @@ class EventHandlerMixin:
         elif event in ('action_created', 'start_action_recording',
                         'stop_action_recording', 'play_action_by_name',
                         'stop_action', 'send_text_input', 'speak_text_directly',
+                        'speak_on_desktop',
                         'transcription_for_action_name', 'set_action_name'):
             self._evt_actions(event, data)
 
@@ -387,6 +388,10 @@ class EventHandlerMixin:
         elif event == 'speak_text_directly':
             text = data.get('text', '')
             logger.info(f"[EVENT QUEUE] Received speak_text_directly event: {text}")
+            signal_manager.speak_text_directly.emit(text)
+        elif event == 'speak_on_desktop':
+            text = data.get('text', '')
+            logger.info(f"[EVENT QUEUE] Received speak_on_desktop event: {text}")
             signal_manager.speak_text_directly.emit(text)
         elif event == 'transcription_for_action_name':
             text = data.get('text', '').strip()

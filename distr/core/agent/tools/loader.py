@@ -262,7 +262,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             # Wake Up
             ("WakeUpTool", {}),
             # Speak on Desktop (remote intercom from Telegram)
-            ("SpeakOnDesktopTool", {}),
+            ("SpeakOnDesktopTool", dict(event_queue=event_queue)),
             # Send File to Telegram
             ("SendFileToTelegramTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
             # Send Voice Note to Telegram
