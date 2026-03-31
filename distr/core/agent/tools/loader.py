@@ -96,6 +96,7 @@ TOOL_REGISTRY = {
     "ExitAppTool":             ("system.exit_app", "ExitAppTool"),
     "RestartAppTool":          ("system.restart_app", "RestartAppTool"),
     "WakeUpTool":              ("system.wake_up", "WakeUpTool"),
+    "SpeakOnDesktopTool":      ("system.speak_on_desktop", "SpeakOnDesktopTool"),
     "ExecuteCodeTool":         ("system.execute_code", "ExecuteCodeTool"),
     "ListProjectsTool":        ("system.project_tools", "ListProjectsTool"),
     "GetProjectDetailsTool":   ("system.project_tools", "GetProjectDetailsTool"),
@@ -260,6 +261,8 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             ("ImageGeneratorTool", {}),
             # Wake Up
             ("WakeUpTool", {}),
+            # Speak on Desktop (remote intercom from Telegram)
+            ("SpeakOnDesktopTool", {}),
             # Send File to Telegram
             ("SendFileToTelegramTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
             # Send Voice Note to Telegram
