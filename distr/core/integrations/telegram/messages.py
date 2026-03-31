@@ -50,8 +50,9 @@ class TelegramMessagesMixin:
         # 2. Content Hash Deduplication
         import hashlib
 
-        # Create a hash of the critical content
-        content_str = f"{inner_data.get('text')}{inner_data.get('date')}{inner_data.get('from', {}).get('id')}"
+        # Create a hash of the critical content — include message_id to avoid
+        # false deduplication of voice notes (which have no text and similar dates)
+        content_str = f"{msg_id}{inner_data.get('text')}{inner_data.get('date')}{inner_data.get('from', {}).get('id')}"
         msg_hash = hashlib.md5(content_str.encode()).hexdigest()
 
         if msg_hash in self._processed_message_hashes:
