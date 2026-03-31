@@ -379,6 +379,9 @@ class AnthropicLLMService(BaseLLMService):
 
         except asyncio.CancelledError:
             logger.warning("Anthropic: _generate_response cancelled (%.3fs)", _time.time() - _t0)
+            # Don't emit telegram response for cancelled tasks, but stop typing indicator
+            if self.event_queue:
+                self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             return
         except Exception as e:
             logger.error("Error in AnthropicLLMService._generate_response (%.3fs): %s",

@@ -119,8 +119,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         except asyncio.CancelledError:
             logger.warning("%s: _generate_response cancelled (%.3fs)", self.SERVICE_NAME, _time.time() - _t0)
-            # Don't emit telegram response or cleanup flags for cancelled tasks —
-            # a new generation is about to start and will handle its own telegram state
+            # Don't emit telegram response for cancelled tasks —
+            # a new generation is about to start and will handle its own telegram state.
+            # But DO stop the typing indicator so Telegram doesn't get stuck.
+            if self.event_queue:
+                self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             return
         except Exception as e:
             logger.error("Error in %s generation (%.3fs): %s", self.SERVICE_NAME, _time.time() - _t0, e, exc_info=True)

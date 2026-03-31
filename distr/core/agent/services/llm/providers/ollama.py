@@ -460,7 +460,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 except Exception:
                     pass
             self._emit_interruption_cleanup()
-            # Don't emit telegram response or cleanup flags for cancelled tasks
+            # Don't emit telegram response for cancelled tasks, but stop typing indicator
+            if self.event_queue:
+                self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             return
         except Exception as e:
             logger.error("LLM Error (%.3fs): %s", time.time() - start_time, e, exc_info=True)

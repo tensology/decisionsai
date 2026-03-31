@@ -343,7 +343,14 @@ class EventHandlerMixin:
                         pass
                     self._pending_single_step = None
         elif event == 'typing_indicator_changed':
-            signal_manager.typing_indicator_changed.emit(data.get('show'))
+            show = data.get('show')
+            signal_manager.typing_indicator_changed.emit(show)
+            # Also stop the Telegram typing loop when typing indicator is turned off
+            if not show and hasattr(self, 'telegram_manager') and self.telegram_manager:
+                try:
+                    self.telegram_manager._stop_typing_loop()
+                except Exception:
+                    pass
         elif event == 'chat_message_added':
             signal_manager.chat_message_added.emit(data.get('chat_id'), data.get('role'), data.get('content'))
 
