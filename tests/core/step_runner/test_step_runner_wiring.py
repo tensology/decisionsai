@@ -15,7 +15,8 @@ from distr.app.step_runner import StepRunnerMixin
 
 def _make_orch(session_id=1, steps_data=None, prior_results=None, session_instruction="Do stuff"):
     """Build a minimal orchestration dict matching what _start_step_runner_orchestration creates."""
-    signal = MagicMock()
+    mock_agent = MagicMock()
+    mock_loop = MagicMock()
     if steps_data is None:
         steps_data = [{"id": 10, "title": "Step 1", "instruction": "Run something"}]
     return {
@@ -23,7 +24,8 @@ def _make_orch(session_id=1, steps_data=None, prior_results=None, session_instru
         "steps_data": steps_data,
         "prior_results": prior_results or [],
         "session_instruction": session_instruction,
-        "signal_send_text_input": signal,
+        "workflow_agent": mock_agent,
+        "agent_loop": mock_loop,
     }
 
 
@@ -54,17 +56,17 @@ def _make_db_step(step_id=10, step_type="run_command", config=None):
 class TestSendStepRunnerInstructionWiring:
     """Verify that _send_step_runner_instruction uses assemble_step_context."""
 
+    @patch("asyncio.run_coroutine_threadsafe")
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.step_runner.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
-    def test_calls_assemble_step_context(self, mock_get_session, mock_build, mock_assemble):
+    def test_calls_assemble_step_context(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """assemble_step_context is called with session, step, and prior_results."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
         db_session = _make_db_session(context_rules="Be concise.")
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
 
-        # Mock the DB context manager to return our objects
         mock_db = MagicMock()
         mock_db.query.return_value.filter.return_value.first.side_effect = [db_session, db_step]
         mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
@@ -77,17 +79,17 @@ class TestSendStepRunnerInstructionWiring:
         orch = _make_orch(prior_results=[{"title": "S1", "result": "ok"}])
         mixin._send_step_runner_instruction(orch, 0)
 
-        # assemble_step_context was called
         mock_assemble.assert_called_once()
         call_kwargs = mock_assemble.call_args
         assert call_kwargs.kwargs["session"] is db_session
         assert call_kwargs.kwargs["step"] is db_step
         assert call_kwargs.kwargs["prior_results"] == [{"title": "S1", "result": "ok"}]
 
+    @patch("asyncio.run_coroutine_threadsafe")
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.step_runner.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
-    def test_uses_workflow_rules_from_assembled_context(self, mock_get_session, mock_build, mock_assemble):
+    def test_uses_workflow_rules_from_assembled_context(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """build_step_context_prompt receives workflow_rules from the assembled context."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
@@ -106,14 +108,14 @@ class TestSendStepRunnerInstructionWiring:
         orch = _make_orch()
         mixin._send_step_runner_instruction(orch, 0)
 
-        # build_step_context_prompt was called with context_rules from assembled context
         mock_build.assert_called_once()
         assert mock_build.call_args.kwargs["context_rules"] == "My rules"
 
+    @patch("asyncio.run_coroutine_threadsafe")
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.step_runner.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
-    def test_stores_step_input_context_on_orch(self, mock_get_session, mock_build, mock_assemble):
+    def test_stores_step_input_context_on_orch(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """The assembled StepInputContext is stored on orch['step_input_context']."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
@@ -134,21 +136,23 @@ class TestSendStepRunnerInstructionWiring:
 
         assert orch["step_input_context"] is mock_ctx
 
-    def test_prompt_override_skips_assembly(self):
+    @patch("asyncio.run_coroutine_threadsafe")
+    def test_prompt_override_skips_assembly(self, mock_run_coro):
         """When prompt is provided, assemble_step_context is NOT called."""
         mixin = StepRunnerMixin()
         orch = _make_orch()
         mixin._send_step_runner_instruction(orch, 0, prompt="custom prompt")
 
-        # Signal was emitted with the custom prompt
-        orch["signal_send_text_input"].emit.assert_called_once_with("custom prompt", False, None, None)
+        # WorkflowAgent.execute was scheduled via run_coroutine_threadsafe
+        mock_run_coro.assert_called_once()
         # step_input_context should not be set (no assembly happened)
         assert "step_input_context" not in orch
 
+    @patch("asyncio.run_coroutine_threadsafe")
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.step_runner.service.build_step_context_prompt", return_value="fallback prompt")
     @patch("distr.core.db.get_session")
-    def test_fallback_on_db_error(self, mock_get_session, mock_build, mock_assemble):
+    def test_fallback_on_db_error(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """If DB access fails, context_rules falls back to empty string."""
         mock_get_session.side_effect = Exception("DB down")
 
@@ -156,10 +160,7 @@ class TestSendStepRunnerInstructionWiring:
         orch = _make_orch()
         mixin._send_step_runner_instruction(orch, 0)
 
-        # assemble was not called (DB failed before it)
         mock_assemble.assert_not_called()
-        # step_input_context is None
         assert orch["step_input_context"] is None
-        # build_step_context_prompt was called with empty context_rules
         mock_build.assert_called_once()
         assert mock_build.call_args.kwargs["context_rules"] == ""

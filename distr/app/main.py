@@ -503,7 +503,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         logger.info("Started Step Runner scheduler (interval: 60 seconds)")
 
         # Step Runner orchestration: run steps in sequence, wait for completion, retry on failure
-        self._step_runner_orchestration = None
+        self._step_runner_orchestrations: dict[int, dict] = {}
         self._pending_single_step = None
         signal_manager.step_runner_run_all_requested.connect(self._on_step_runner_run_all_requested)
         signal_manager.step_runner_execute_requested.connect(self._on_step_runner_execute_requested)

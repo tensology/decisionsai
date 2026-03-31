@@ -2,9 +2,12 @@
 Workflow Service — CRUD + execution engine for workflows and steps.
 Each step is a single action with validation and routing.
 """
+import asyncio
 import json
 import logging
 import os
+import threading
+from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
@@ -14,8 +17,81 @@ from distr.core.db.workflow import (
     AutoWorkflowVariable, AutoWorkflowRun,
     AutoWorkflowStepResult,
 )
+from distr.core.workflow_agent import WorkflowAgent
+from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class _RunContext:
+    """Per-run state for the WorkflowAgent lifecycle."""
+    run_id: int
+    workflow_agent: WorkflowAgent
+    event_loop: asyncio.AbstractEventLoop
+    thread: threading.Thread
+    context_prefix: str = ""  # Optional ticket context for first step
+
+
+_active_runs: Dict[int, _RunContext] = {}
+_runs_lock = threading.Lock()
+
+
+def _cleanup_run(run_id: int) -> None:
+    """Clean up a workflow run's WorkflowAgent and event loop when it reaches terminal status."""
+    with _runs_lock:
+        ctx = _active_runs.pop(run_id, None)
+    if ctx is None:
+        return
+    try:
+        ctx.workflow_agent.shutdown()
+    except Exception:
+        pass
+    try:
+        ctx.event_loop.call_soon_threadsafe(ctx.event_loop.stop)
+    except Exception:
+        pass
+
+
+def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
+    """Clean up resources and notify the bridge when a run reaches terminal status.
+
+    Called after the DB commit that sets the run to a terminal status
+    (completed, failed, cancelled).
+    """
+    _cleanup_run(run_id)
+
+    # Build steps_summary from the run's step results
+    steps_summary = []
+    try:
+        with get_session() as db:
+            step_results = (
+                db.query(AutoWorkflowStepResult)
+                .filter(AutoWorkflowStepResult.run_id == run_id)
+                .order_by(AutoWorkflowStepResult.created_at)
+                .all()
+            )
+            for sr in step_results:
+                step_obj = sr.step
+                steps_summary.append({
+                    "title": step_obj.name if step_obj else f"Step {sr.step_id}",
+                    "status": sr.status,
+                })
+    except Exception:
+        logger.debug("Could not load step results for run %d", run_id)
+
+    run_result = {
+        "session_id": workflow_id,
+        "run_id": run_id,
+        "success": status == "completed",
+        "cancelled": status == "cancelled",
+        "steps_summary": steps_summary,
+    }
+
+    try:
+        WorkflowAgentBridge().on_workflow_completed(workflow_id, run_result)
+    except Exception:
+        logger.error("WorkflowAgentBridge notification failed for run %d", run_id, exc_info=True)
 
 
 # ── Workflow CRUD ──
@@ -338,13 +414,57 @@ def _dispatch_step(step_id: int, step_name: str, action_type: str,
             update_step(step_id, status="failed", result="No instruction provided.")
             return {"error": "No instruction provided"}
         prompt = f"[{context_prefix} — {step_name}]\n{instruction}"
-        try:
-            from distr.core.signals import signal_manager
-            signal_manager.send_text_input.emit(prompt, False, None, None)
-            return {"success": True, "message": "Step sent to agent."}
-        except Exception as e:
-            update_step(step_id, status="failed", result=str(e))
-            return {"error": str(e)}
+
+        # Look up the active run's _RunContext for this step
+        run_ctx = None
+        with get_session() as db:
+            step_obj = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+            if step_obj:
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.workflow_id == step_obj.workflow_id,
+                    AutoWorkflowRun.current_step_id == step_id,
+                    AutoWorkflowRun.status == "running",
+                ).first()
+                if run:
+                    with _runs_lock:
+                        run_ctx = _active_runs.get(run.id)
+
+        if run_ctx is not None:
+            # Dispatch via WorkflowAgent in the run's background event loop
+            try:
+                future = asyncio.run_coroutine_threadsafe(
+                    run_ctx.workflow_agent.execute(prompt),
+                    run_ctx.event_loop,
+                )
+
+                def _on_agent_done(fut):
+                    try:
+                        response_text = fut.result()
+                        # Check wait_for_continue before completing
+                        wait_result = _check_and_enter_wait(step_id, response_text, True)
+                        if wait_result:
+                            return
+                        complete_step(step_id, response_text, passed=True)
+                    except Exception as exc:
+                        error_message = str(exc)
+                        logger.error("WorkflowAgent.execute() failed for step %s: %s", step_id, error_message)
+                        complete_step(step_id, error_message, passed=False)
+
+                future.add_done_callback(_on_agent_done)
+                return {"success": True, "message": "Step dispatched to WorkflowAgent."}
+            except Exception as e:
+                logger.error("Failed to dispatch step %s to WorkflowAgent: %s", step_id, e)
+                update_step(step_id, status="failed", result=str(e))
+                return {"error": str(e)}
+        else:
+            # Fallback: isolated step execution via signal (no active run context)
+            try:
+                from distr.core.signals import signal_manager
+                signal_manager.send_text_input.emit(prompt, False, None, None)
+                return {"success": True, "message": "Step sent to agent."}
+            except Exception as e:
+                update_step(step_id, status="failed", result=str(e))
+                return {"error": str(e)}
 
 
 def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
@@ -370,10 +490,10 @@ def execute_step(step_id: int, isolated: bool = False) -> Dict[str, Any]:
                           recording_filename, "Step Runner", step_action_id, code=step_code)
 
 
-def start_workflow_run(workflow_id: int) -> Dict[str, Any]:
+def start_workflow_run(workflow_id: int, context: Optional[str] = None) -> Dict[str, Any]:
     """
     Start a full workflow run. Creates a run record, resets all step statuses,
-    and kicks off the first step.
+    creates a dedicated WorkflowAgent + event loop, and kicks off the first step.
     """
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
@@ -392,10 +512,31 @@ def start_workflow_run(workflow_id: int) -> Dict[str, Any]:
         db.add(run)
         db.flush()
 
+        run_id = run.id
+
+        # Create a dedicated WorkflowAgent and background event loop for this run
+        workflow_agent = WorkflowAgent()
+        agent_loop = asyncio.new_event_loop()
+
+        def _run_loop():
+            asyncio.set_event_loop(agent_loop)
+            agent_loop.run_forever()
+
+        agent_thread = threading.Thread(target=_run_loop, daemon=True)
+        agent_thread.start()
+
+        with _runs_lock:
+            _active_runs[run_id] = _RunContext(
+                run_id=run_id,
+                workflow_agent=workflow_agent,
+                event_loop=agent_loop,
+                thread=agent_thread,
+                context_prefix=context or "",
+            )
+
         first_step = sorted(wf.steps, key=lambda s: s.position)[0]
         run.current_step_id = first_step.id
         first_step.status = "running"
-        run_id = run.id
         first_step_id = first_step.id
         first_step_name = first_step.name
         first_action_type = first_step.action_type or "agent_instruction"
@@ -404,6 +545,10 @@ def start_workflow_run(workflow_id: int) -> Dict[str, Any]:
         first_action_id = first_step.action_id
         first_code = first_step.code or ""
         db.commit()
+
+    # Prepend context to the first agent_instruction step if context is provided
+    if context and first_action_type == "agent_instruction":
+        first_instruction = f"{context}\n\n{first_instruction}"
 
     # Set workflow run context env vars so agent tools (e.g. CreateCursorTicketTool)
     # can detect they are running inside a workflow and include metadata.
@@ -435,8 +580,10 @@ def cancel_run(run_id: int) -> bool:
             if step and step.status == "running":
                 step.status = "cancelled"
                 step.result = "Cancelled by user."
+        _run_id, _wf_id = run.id, run.workflow_id
         db.commit()
-        return True
+    _finalize_terminal_run(_run_id, _wf_id, "cancelled")
+    return True
 
 
 def cancel_step(step_id: int) -> bool:
@@ -555,24 +702,30 @@ def complete_step(step_id: int, result: str, passed: bool, _from_continue: bool 
             if next_step_id is None or next_step_id == -1:
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id}
+                return {"done": True, "status": "completed", "run_id": _run_id}
             next_step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == next_step_id).first()
             if not next_step:
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id}
+                return {"done": True, "status": "completed", "run_id": _run_id}
             # Safety: prevent routing to self
             if next_step.id == step_id:
                 logger.warning("Agent routed step %d to itself. Ending workflow.", step_id)
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id, "warning": "Infinite loop prevented"}
+                return {"done": True, "status": "completed", "run_id": _run_id, "warning": "Infinite loop prevented"}
         else:
             # Static routing: null = END workflow (safety: no infinite loops)
             goto = step.on_pass_goto if verified_passed else step.on_fail_goto
@@ -581,9 +734,11 @@ def complete_step(step_id: int, result: str, passed: bool, _from_continue: bool 
                 # Default: END workflow
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id}
+                return {"done": True, "status": "completed", "run_id": _run_id}
 
             # Go to specific step by ID
             next_step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == goto).first()
@@ -591,18 +746,22 @@ def complete_step(step_id: int, result: str, passed: bool, _from_continue: bool 
             if not next_step:
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id}
+                return {"done": True, "status": "completed", "run_id": _run_id}
 
             # Safety: prevent routing to self (infinite loop)
             if next_step.id == step_id:
                 logger.warning("Infinite loop detected: step %d routes to itself. Ending workflow.", step_id)
                 run.status = "completed"
                 run.completed_at = datetime.utcnow()
+                _run_id, _wf_id = run.id, step.workflow_id
                 db.commit()
+                _finalize_terminal_run(_run_id, _wf_id, "completed")
                 _speak_result(result)
-                return {"done": True, "status": "completed", "run_id": run.id, "warning": "Infinite loop prevented"}
+                return {"done": True, "status": "completed", "run_id": _run_id, "warning": "Infinite loop prevented"}
 
         # Advance to next step
         next_step.status = "running"
@@ -651,7 +810,9 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             return False
         run.status = status
         run.completed_at = datetime.utcnow()
+        workflow_id = run.workflow_id
         db.commit()
+    _finalize_terminal_run(run_id, workflow_id, status)
     # Clear workflow run context env vars when run reaches terminal status
     _clear_workflow_env()
     return True

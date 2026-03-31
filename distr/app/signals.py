@@ -243,29 +243,6 @@ class SignalBridgeMixin:
             _post_chat_event(evt)
         signal_manager.chat_stream_finished.connect(on_chat_stream_finished_web)
 
-        # Step Runner advancement for providers that emit chat_stream_finished
-        # directly via signal (Ollama, fast actions) instead of the event queue.
-        # The event queue path in _evt_chat_stream already handles advancement
-        # for OpenAI-compatible providers, so we use a flag to avoid double-advancing.
-        def on_chat_stream_finished_step_runner(chat_id):
-            try:
-                orch = getattr(self, "_step_runner_orchestration", None)
-                if not orch:
-                    return
-                # Skip if the event queue already triggered advancement for this
-                # chat_stream_finished (it sets _last_advance_chat_id).
-                last_advanced = getattr(self, "_last_advance_chat_id", None)
-                if last_advanced == chat_id:
-                    self._last_advance_chat_id = None  # reset for next time
-                    return
-                orch_chat_id = orch.get("chat_id")
-                if (orch_chat_id is None) or (orch_chat_id == chat_id):
-                    response_text = self._get_last_assistant_message(chat_id)
-                    self._advance_step_runner_orchestration(chat_id=chat_id, response_text=response_text)
-            except Exception as e:
-                logger.error("Step Runner signal-based advancement failed: %s", e, exc_info=True)
-        signal_manager.chat_stream_finished.connect(on_chat_stream_finished_step_runner)
-
         def on_chat_stream_error_web(error):
             cid = getattr(self, "_web_stream_chat_id", None)
             # Flush any buffered tokens before sending error
@@ -353,18 +330,54 @@ class SignalBridgeMixin:
             try:
                 from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
                 reports = WorkflowAgentBridge.get_pending_reports()
-                # Use the most recent report for this session, or fall back to the signal summary
+                # Use the most recent report for this session, or fall back to the signal summary.
+                # Re-queue reports that belong to other sessions so they are not lost.
                 report_text = summary
                 for r in reports:
                     if r.get("session_id") == session_id:
                         report_text = r.get("report", summary)
-                if report_text:
-                    self._send_command_to_agent('process_text_input', {
-                        'text': f"[Workflow Report]\n{report_text}",
-                        'speak': False,
-                    })
-                    logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
+                    else:
+                        # Re-queue reports belonging to other sessions
+                        WorkflowAgentBridge().queue_report_to_agent(
+                            r.get("session_id", 0), r.get("report", "")
+                        )
+                if not report_text:
+                    logger.warning(
+                        "Workflow finished: no report text for session %d, skipping agent delivery",
+                        session_id,
+                    )
+                    return
+
+                # Check if the agent command queue is available before sending
+                has_queue = (
+                    hasattr(self, 'agent_command_queue')
+                    and self.agent_command_queue is not None
+                )
+                agent_alive = (
+                    hasattr(self, 'agent_process')
+                    and self.agent_process is not None
+                    and self.agent_process.is_alive()
+                )
+                if not has_queue:
+                    logger.warning(
+                        "Workflow finished: agent command queue unavailable for session %d, "
+                        "report not delivered",
+                        session_id,
+                    )
+                    return
+                if not agent_alive:
+                    logger.warning(
+                        "Workflow finished: agent process not running for session %d, "
+                        "attempting delivery anyway (agent may restart)",
+                        session_id,
+                    )
+
+                self._send_command_to_agent('process_text_input', {
+                    'text': f"[Workflow Report]\n{report_text}",
+                    'speak': False,
+                })
+                logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
             except Exception as e:
-                logger.error("Workflow finished handler failed: %s", e, exc_info=True)
+                logger.error("Workflow finished handler failed for session %d: %s", session_id, e, exc_info=True)
         signal_manager.workflow_finished.connect(on_workflow_finished)
         logger.info("Connected workflow_finished signal to agent report forwarding")

@@ -436,25 +436,22 @@ class OpenAndStartProjectTool(BaseTool):
                     except Exception as e:
                         logger.error(f"Error creating startup file: {e}", exc_info=True)
 
-                # Build response - guide LLM to ask about changes, not presume actions
+                # Build response - keep it minimal so the LLM doesn't over-explain
                 response = f"PROJECT ACTIVATED: {project.name}\n"
-                response += f"Folder: {folder_location}\n"
-                
                 if editor_opened:
-                    response += f"Editor: Opened in {editor_used}\n"
-                
+                    response += f"Opened in {editor_used}.\n"
                 if startup_created:
-                    response += f"Startup: Created {startup_path}\n"
+                    response += f"Startup file created.\n"
                 
                 # Instructions for LLM behavior
                 response += "\n---\n"
-                response += "INSTRUCTIONS FOR RESPONSE:\n"
-                response += "- Tell the user the project is now open and ready\n"
-                response += "- Ask: 'What changes would you like to make?' or similar\n"
-                response += "- DO NOT presume specific actions like 'run the website' or 'start the server'\n"
-                response += "- DO NOT ask about running/starting specific systems\n"
-                response += "- Simply ask what they want to work on\n"
-                response += "- Optionally mention: 'If you want to switch away from this project, just say deactivate project mode'\n"
+                response += "INSTRUCTIONS FOR YOUR RESPONSE TO THE USER:\n"
+                response += "- Keep it SHORT. One or two sentences max.\n"
+                response += "- Just say the project is started and ready to go.\n"
+                response += "- DO NOT list files you created or break down what happened.\n"
+                response += "- DO NOT describe the startup file contents or structure.\n"
+                response += "- DO NOT presume specific actions like 'run the website' or 'start the server'.\n"
+                response += "- Ask what they'd like to work on, nothing more.\n"
 
                 return response
 
@@ -1274,15 +1271,22 @@ class StartProjectTool(BaseTool):
 
                 logger.info(f"Created startup file: {startup_path}")
 
-                response = f"Started project '{project['name']}':"
-
-                # Add editor info
+                response = f"PROJECT STARTED: {project['name']}\n"
                 if editor_opened:
-                    response += f"\n✓ Opened project folder in {editor_used}"
+                    response += f"Opened in {editor_used}.\n"
                 else:
-                    response += f"\n⚠ Could not find Cursor or VS Code in system PATH"
+                    response += f"Warning: Could not find Cursor or VS Code in system PATH.\n"
+                response += f"Startup file created.\n"
 
-                response += f"\n✓ Created startup file: {startup_path}"
+                # Instructions for LLM behavior
+                response += "\n---\n"
+                response += "INSTRUCTIONS FOR YOUR RESPONSE TO THE USER:\n"
+                response += "- Keep it SHORT. One or two sentences max.\n"
+                response += "- Just say the project is started and ready to go.\n"
+                response += "- DO NOT list files you created or break down what happened.\n"
+                response += "- DO NOT describe the startup file contents or structure.\n"
+                response += "- DO NOT presume specific actions like 'run the website' or 'start the server'.\n"
+                response += "- Ask what they'd like to work on, nothing more.\n"
 
                 return response
 

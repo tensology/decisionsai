@@ -212,7 +212,17 @@ class KanbanAgentCheckIn:
             logger.error("Agent check-in: no workflow and send_to_cli is off for ticket %s", ticket["id"])
             return "failed"
 
-        run_result = start_workflow_run(board.default_workflow_id)
+        # Build context from ticket title and description
+        context = f"Ticket: {ticket['title']}"
+        try:
+            with get_session() as db:
+                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                if tk and tk.description:
+                    context += f"\n\nDescription: {tk.description}"
+        except Exception:
+            pass
+
+        run_result = start_workflow_run(board.default_workflow_id, context=context)
         if "error" in run_result:
             logger.error("Agent check-in: failed to start workflow for ticket %s: %s", ticket["id"], run_result["error"])
             return "failed"
