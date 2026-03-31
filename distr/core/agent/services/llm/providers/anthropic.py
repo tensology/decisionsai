@@ -212,20 +212,18 @@ class AnthropicLLMService(BaseLLMService):
                 if current_chat_id:
                     self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
 
-            # Fast action check
-            if self._messages:
-                last_msg = self._messages[-1].get("content", "")
-                fast_action = detect_fast_action(last_msg)
-                if fast_action and fast_action.action_type not in [ActionType.CONVERSATIONAL, ActionType.UNKNOWN]:
-                    handled = await self._execute_fast_action(fast_action, None)
-                    if handled:
-                        await self.push_frame(LLMFullResponseEndFrame(), self._pipeline_direction)
-                        if self.event_queue:
-                            self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
-                            cid = self.chat_manager.get_current_chat() if self.chat_manager else None
-                            if cid:
-                                self.event_queue.put(('chat_stream_finished', {'chat_id': cid, 'response_text': ''}), block=False)
-                        return
+            # Fast action check (uses shared base method)
+            fast_action = self._check_fast_actions()
+            if fast_action:
+                handled = await self._execute_fast_action(fast_action, None)
+                if handled:
+                    await self.push_frame(LLMFullResponseEndFrame(), self._pipeline_direction)
+                    if self.event_queue:
+                        self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
+                        cid = self.chat_manager.get_current_chat() if self.chat_manager else None
+                        if cid:
+                            self.event_queue.put(('chat_stream_finished', {'chat_id': cid, 'response_text': ''}), block=False)
+                    return
 
             # Build Anthropic messages (system is separate)
             anthropic_messages = self._build_anthropic_messages()

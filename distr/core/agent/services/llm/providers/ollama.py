@@ -305,19 +305,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     last_user_message = msg.get('content', '')
                     break
             if last_user_message and not is_processing_tool_result:
-                if not self._should_skip_fast_action(last_user_message):
-                    t1 = time.time()
-                    has_clipboard = any(
-                        'CLIPBOARD CONTENT:' in m.get('content', '')
-                        for m in self._messages[-5:] if m.get('role') == 'tool'
-                    )
-                    fast_action = detect_fast_action(last_user_message, has_clipboard)
-                    logger.info("LLM: [2] fast_action_detect: %.3fs (action=%s conf=%.2f)",
-                                time.time() - t1, fast_action.action_type.name, fast_action.confidence)
-                    if (fast_action.confidence >= 0.9
-                            and fast_action.action_type not in (ActionType.UNKNOWN, ActionType.CONVERSATIONAL)):
-                        if await self._execute_fast_action(fast_action, current_chat_id):
-                            return
+                fast_action = self._check_fast_actions()
+                if fast_action:
+                    logger.info("LLM: ⚡ Fast action detected: %s (conf=%.2f)",
+                                fast_action.action_type.name, fast_action.confidence)
+                    if await self._execute_fast_action(fast_action, current_chat_id):
+                        return
 
             # 3. Prepare tools via semantic router (single source of truth)
             t2 = time.time()

@@ -649,19 +649,6 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         return not end_frame_sent
 
-    def _check_fast_actions(self):
-        """Check if the last message triggers a fast action."""
-        from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
-        if not self._messages:
-            return None
-        last_message = self._messages[-1].get("content", "")
-        if not isinstance(last_message, str):
-            return None
-        fast_action = detect_fast_action(last_message)
-        if fast_action and fast_action.action_type not in [ActionType.CONVERSATIONAL, ActionType.UNKNOWN]:
-            return fast_action
-        return None
-
     async def _generate_conversation_summary(self, conversation_messages: list) -> str:
         """Generate conversation summary using the OpenAI-compatible client."""
         if not conversation_messages:

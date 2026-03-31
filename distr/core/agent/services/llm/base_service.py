@@ -118,6 +118,26 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         """Generate LLM response. Override in subclass for provider-specific API calls."""
         raise NotImplementedError(f"{self.SERVICE_NAME} must implement _generate_response()")
 
+    def _check_fast_actions(self):
+        """Check if the last user message triggers a fast action (bypasses LLM).
+
+        Returns a DetectedAction if a fast action is found, or None.
+        Shared across all providers.
+        """
+        from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+        if not self._messages:
+            return None
+        last_message = self._messages[-1].get("content", "")
+        if not isinstance(last_message, str):
+            return None
+        # Skip if we already processed this exact message as a fast action
+        if last_message in self._processed_fast_actions:
+            return None
+        fast_action = detect_fast_action(last_message)
+        if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
+            return fast_action
+        return None
+
     async def _execute_tool_calls(self, tool_calls: list) -> list:
         """Execute tool calls and return results. Works for OpenAI-compatible format."""
         results = []
