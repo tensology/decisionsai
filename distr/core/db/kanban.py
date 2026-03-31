@@ -86,6 +86,8 @@ class KanbanTicket(Base):
     linked_snippet_id = Column(Integer, nullable=True)
     linked_action_id = Column(Integer, nullable=True)
 
+    send_to_cli = Column(Boolean, default=False)  # if True, send directly to project CLI instead of workflow
+
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

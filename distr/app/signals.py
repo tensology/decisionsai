@@ -323,3 +323,25 @@ class SignalBridgeMixin:
                 logger.error("Web load-in-agent slot failed: %s", e, exc_info=True)
         signal_manager.web_load_chat_in_agent_requested.connect(on_web_load_chat_in_agent_requested)
         logger.info("Connected web_load_chat_in_agent_requested (direct command sends, no process restart)")
+
+        # Workflow completion → forward summary to agent so it can report back
+        def on_workflow_finished(session_id, summary):
+            """When a workflow finishes, drain the report queue and send the summary to the agent."""
+            try:
+                from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+                reports = WorkflowAgentBridge.get_pending_reports()
+                # Use the most recent report for this session, or fall back to the signal summary
+                report_text = summary
+                for r in reports:
+                    if r.get("session_id") == session_id:
+                        report_text = r.get("report", summary)
+                if report_text:
+                    self._send_command_to_agent('process_text_input', {
+                        'text': f"[Workflow Report]\n{report_text}",
+                        'speak': False,
+                    })
+                    logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
+            except Exception as e:
+                logger.error("Workflow finished handler failed: %s", e, exc_info=True)
+        signal_manager.workflow_finished.connect(on_workflow_finished)
+        logger.info("Connected workflow_finished signal to agent report forwarding")

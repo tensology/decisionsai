@@ -348,6 +348,16 @@
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
             loadLinkableEntities(t);
+            // Push to CLI checkbox
+            var cliCb = document.getElementById("kb-modal-send-to-cli");
+            var wfSel = document.getElementById("kb-modal-link-workflow");
+            cliCb.checked = !!t.send_to_cli;
+            wfSel.disabled = !!t.send_to_cli;
+            if (t.send_to_cli) wfSel.value = "";
+            cliCb.onchange = function() {
+                wfSel.disabled = cliCb.checked;
+                if (cliCb.checked) wfSel.value = "";
+            };
             // Show "Send to project" button if ticket or board has a linked project
             var sendBtn = document.getElementById("kb-modal-send-project");
             var hasProject = !!t.linked_project_id || (currentBoardData && !!currentBoardData.default_project_id);
@@ -376,12 +386,13 @@
 
     function saveTicket() {
         if (!modalTicketId) return;
+        var sendToCli = document.getElementById("kb-modal-send-to-cli").checked;
         var payload = {
             title: document.getElementById("kb-modal-ticket-title").value.trim(),
             description: document.getElementById("kb-modal-ticket-desc").value.trim(),
             priority: getSelectedPriority(),
-            linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value) || null,
-            linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value) || null,
+            linked_workflow_id: sendToCli ? null : (parseInt(document.getElementById("kb-modal-link-workflow").value) || null),
+            send_to_cli: sendToCli,
             linked_snippet_id: null,
             linked_action_id: null,
         };
@@ -543,7 +554,6 @@
     function loadLinkableEntities(ticket) {
         apiFetch("/api/kanban/linkable").then(function(data) {
             populateSelect("kb-modal-link-workflow", data.workflows, "id", "title", ticket.linked_workflow_id);
-            populateSelect("kb-modal-link-project", data.projects, "id", "name", ticket.linked_project_id);
         }).catch(function() {});
     }
 

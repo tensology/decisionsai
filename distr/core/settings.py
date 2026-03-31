@@ -76,6 +76,9 @@ DEFAULT_SETTINGS = {
     'kanban_agent_sub_model': '',
     'kanban_cli_tool': '',
     'kanban_cli_auth': '',
+    # Telegram response format settings
+    'telegram_text_only_override': False,
+    'telegram_auto_match_mode': True,
 }
 
 def load_settings_from_db() -> Dict[str, Any]:

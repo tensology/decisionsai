@@ -58,6 +58,7 @@ class TicketUpdate(BaseModel):
     linked_project_id: Optional[int] = None
     linked_snippet_id: Optional[int] = None
     linked_action_id: Optional[int] = None
+    send_to_cli: Optional[bool] = None
 
 class TicketMove(BaseModel):
     lane_id: int
@@ -377,6 +378,7 @@ def create_routes():
                 linked_project_id=board.default_project_id if board else None,
                 linked_snippet_id=board.default_snippet_id if board else None,
                 linked_action_id=board.default_action_id if board else None,
+                send_to_cli=board.send_to_cli if board else False,
             )
             s.add(ticket)
             s.flush()
@@ -398,6 +400,7 @@ def create_routes():
                 "linked_project_id": t.linked_project_id,
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
+                "send_to_cli": t.send_to_cli or False,
                 "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
                 "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                 "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
@@ -423,6 +426,10 @@ def create_routes():
                 t.linked_snippet_id = payload.linked_snippet_id
             if payload.linked_action_id is not None:
                 t.linked_action_id = payload.linked_action_id
+            if payload.send_to_cli is not None:
+                t.send_to_cli = payload.send_to_cli
+                if payload.send_to_cli:
+                    t.linked_workflow_id = None  # CLI and workflow are mutually exclusive
             if payload.lane_id is not None:
                 t.lane_id = payload.lane_id
             if payload.position is not None:

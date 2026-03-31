@@ -18,6 +18,10 @@ from PyQt6 import QtWidgets
 
 from distr.core.signals import signal_manager
 from distr.core.settings import load_settings_from_db, save_settings_to_db
+from distr.core.integrations.telegram.response_format import (
+    determine_response_format,
+    load_response_format_settings,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -438,6 +442,7 @@ class EventHandlerMixin:
         success = data.get('success', False)
         transcript = data.get('transcript')
         error = data.get('error')
+        input_type = data.get('input_type', 'voice')
         if success and transcript:
             logger.info("[EVENT QUEUE] ✅ Telegram voice transcription successful (request_id: %s): '%s'", request_id, transcript[:200])
             try:
@@ -447,8 +452,14 @@ class EventHandlerMixin:
                 pass
             try:
                 threading.current_thread().telegram_request = True
-                signal_manager.send_text_input.emit(str(transcript), True, None, None)
-                logger.info("[EVENT QUEUE] 📤 Forwarded Telegram voice transcription to agent: '%s'", transcript[:100])
+                # Route through the batch buffer so input_type="voice" is
+                # propagated to _flush_telegram_batch → _current_input_type,
+                # which downstream consumers read to decide text vs voice response.
+                if hasattr(self, 'telegram_manager') and self.telegram_manager:
+                    self.telegram_manager._enqueue_telegram_batch(str(transcript), input_type=input_type)
+                else:
+                    signal_manager.send_text_input.emit(str(transcript), True, None, None)
+                logger.info("[EVENT QUEUE] 📤 Forwarded Telegram voice transcription to agent (input_type=%s): '%s'", input_type, transcript[:100])
             except Exception as e:
                 logger.error("[EVENT QUEUE] ❌ Failed to forward Telegram transcription to agent: %s", e, exc_info=True)
         else:
@@ -492,6 +503,19 @@ class EventHandlerMixin:
 
     def _send_to_telegram_worker(self, data):
         """Heavy lifting for send_to_telegram — runs in a background thread."""
+        # Inject input_type from telegram_manager if not already in event data.
+        # The LLM service / TTS emitters don't have access to the manager, so
+        # the event dict may arrive without input_type.  We read it here once
+        # before any downstream logic needs it.
+        if 'input_type' not in data:
+            try:
+                if hasattr(self, 'telegram_manager') and self.telegram_manager:
+                    data['input_type'] = getattr(
+                        self.telegram_manager, '_current_input_type', 'voice'
+                    )
+            except Exception:
+                pass  # leave default in _telegram_prepare_llm_response
+
         text = data.get('text', '')
         is_done = data.get('is_done', False)
         analyzed_image_path = data.get('analyzed_image_path')
@@ -595,14 +619,26 @@ class EventHandlerMixin:
                                         audio_path_from_event, screenshot_path_from_event,
                                         analyzed_image_path):
         """Prepare audio (voice note) or text for an LLM response."""
-        wants_text_response = self._telegram_check_wants_text(data)
+        # Read input_type from the event data dict (set by message handler)
+        input_type = data.get('input_type', 'voice')
+
+        # Load response format settings from the Settings_Store
+        try:
+            settings = load_settings_from_db()
+            text_only_override, auto_match_mode = load_response_format_settings(settings)
+        except Exception:
+            # Fallback: auto_match_mode enabled (match input format)
+            text_only_override, auto_match_mode = False, True
+
+        response_format = determine_response_format(input_type, text_only_override, auto_match_mode)
+        wants_text_response = response_format == "text"
 
         if wants_text_response:
-            logger.info(f"[Telegram] 📝 Sending LLM response as TEXT (user requested)")
+            logger.info(f"[Telegram] 📝 Sending LLM response as TEXT (input_type={input_type}, text_only_override={text_only_override}, auto_match={auto_match_mode})")
             text_to_send = text
             audio_file = None
         else:
-            logger.info(f"[Telegram] 🎤 Sending LLM response: audio only")
+            logger.info(f"[Telegram] 🎤 Sending LLM response: audio only (input_type={input_type}, text_only_override={text_only_override}, auto_match={auto_match_mode})")
             text_to_send = None
 
         # Include analyzed image if available
@@ -632,6 +668,11 @@ class EventHandlerMixin:
         else:
             if not text or not text.strip():
                 logger.warning(f"[Telegram] ⚠️ No text provided for TTS generation")
+
+        # Fallback: if voice mode produced no audio, send text instead of nothing.
+        if not wants_text_response and audio_file is None and text and text.strip():
+            logger.info("[Telegram] 🔄 Voice mode but no audio generated — falling back to text response")
+            text_to_send = text
 
         return text_to_send, audio_file, screenshot_file
 
@@ -668,30 +709,6 @@ class EventHandlerMixin:
         except Exception:
             pass
         return file_from_tool or thread_file_sent or tts_file_sent
-
-    def _telegram_check_wants_text(self, data):
-        """Check if user wants text response instead of voice note."""
-        wants_text = hasattr(threading.current_thread(), 'telegram_wants_text_response') and threading.current_thread().telegram_wants_text_response
-        if not wants_text:
-            for thread in threading.enumerate():
-                if hasattr(thread, 'telegram_wants_text_response') and thread.telegram_wants_text_response:
-                    wants_text = True
-                    threading.current_thread().telegram_wants_text_response = True
-                    break
-        # Also check LLM service instance
-        try:
-            from PyQt6.QtWidgets import QApplication
-            app = QApplication.instance()
-            if app and hasattr(app, 'agent_session') and app.agent_session:
-                if hasattr(app.agent_session, 'llm_service') and app.agent_session.llm_service:
-                    llm_has_flag = getattr(app.agent_session.llm_service, '_telegram_wants_text_response', False)
-                    if llm_has_flag and not wants_text:
-                        app.agent_session.llm_service._telegram_wants_text_response = False
-                    elif llm_has_flag:
-                        wants_text = True
-        except Exception:
-            pass
-        return wants_text
 
     def _telegram_capture_screenshot(self):
         """Capture a screenshot of the screen where the mouse is."""

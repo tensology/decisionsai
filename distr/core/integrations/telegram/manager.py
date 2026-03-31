@@ -167,7 +167,8 @@ class TelegramWebSocketManager(
         # Buffer incoming private-chat messages for a short window so the agent
         # receives a single combined message instead of responding to each one
         # individually.  After BATCH_DELAY_MS of silence the buffer is flushed.
-        self._telegram_batch_buffer: list = []  # list of (text, is_media, image_path)
+        self._telegram_batch_buffer: list = []  # list of (text, is_media, image_path, input_type)
+        self._current_input_type: str = "text"  # last flushed input type ("text" or "voice")
 
         # Sleep prevention — keep the machine awake while Telegram is connected
         self._sleep_inhibit_proc = None  # subprocess handle (macOS caffeinate) or ctypes ref (Windows)

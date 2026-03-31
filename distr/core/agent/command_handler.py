@@ -733,6 +733,7 @@ def _update_agent_identity_from_chat_voice(session, voice_provider, voice_model)
 def _cmd_transcribe_file(session, params):
     audio_file_path = params.get('audio_file_path')
     request_id = params.get('request_id')
+    input_type = params.get('input_type', 'voice')
 
     def _send_result(success, error, transcript):
         if session.event_queue:
@@ -741,6 +742,7 @@ def _cmd_transcribe_file(session, params):
                 'success': success,
                 'error': error,
                 'transcript': transcript,
+                'input_type': input_type,
             }), block=False)
 
     if not audio_file_path:

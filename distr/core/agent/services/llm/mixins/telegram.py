@@ -30,7 +30,10 @@ class TelegramMixin:
     def _propagate_telegram_flags(self):
         """Propagate telegram flags from instance vars to the current asyncio thread.
 
-        Returns (is_telegram, wants_text_response).
+        Returns is_telegram.  Response-format preference is now determined by
+        ``determine_response_format()`` in the event handler using
+        Settings_Store-backed settings, so thread-local text-response flags
+        are no longer propagated here.
         """
         import threading
 
@@ -53,20 +56,7 @@ class TelegramMixin:
             if hasattr(self, '_uploaded_image_path') and self._uploaded_image_path and os.path.exists(self._uploaded_image_path):
                 threading.current_thread().telegram_uploaded_image = self._uploaded_image_path
 
-        # Text-response preference
-        wants_text = False
-        if not is_telegram:
-            if getattr(threading.current_thread(), 'telegram_wants_text_response', False):
-                wants_text = True
-            else:
-                for t in threading.enumerate():
-                    if getattr(t, 'telegram_wants_text_response', False):
-                        wants_text = True
-                        threading.current_thread().telegram_wants_text_response = True
-                        break
-            self._telegram_wants_text_response = wants_text
-
-        return is_telegram, wants_text
+        return is_telegram
 
     def _emit_telegram_response(self, full_content: str = "", follow_up_content: str = ""):
         """Emit send_to_telegram event from the LLM service finally-block.

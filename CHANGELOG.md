@@ -2,6 +2,28 @@
 
 ---
 
+## [2.6.9] - 2026-03-31
+
+### Google Gemini, Kiro CLI Pipeline, Telegram Overhaul, Windows Polish
+
+**Google Gemini Support** – You can now use Google Gemini as an LLM provider. Add your API key in the providers UI, pick a Gemini or Gemma model, and you're good to go. API errors like quota limits, rate limits, and bad keys now show up clearly in the chat instead of silently failing.
+
+**Kiro CLI as an Agent Tool** – The orchestrator can now send coding tasks to Kiro CLI directly. When a kanban ticket is linked to a project, the agent routes it to Kiro CLI for execution instead of trying to do it itself. Tickets flow through lanes automatically — from Current to QA/Assess instead of jumping straight to Done — so there's an actual review step. You can create multiple tickets from a single voice command, and the agent logs everything it does in a real-time audit trail that streams to the UI.
+
+**Kanban Boards Got Smarter** – Boards now link to projects, so the agent knows which codebase a ticket belongs to. Each board has its own agent check-in toggle (the robot icon in the sidebar) and configurable lane routing. You can set how often the agent checks in — down to every few minutes if you want. Trello and Jira boards show up alongside local boards, and you can archive/unarchive boards from the context menu.
+
+**Telegram Response Format** – Telegram responses now match your input format by default. Send a text message, get text back. Send a voice note, get a voice note back. There's a persistent "text only" mode you can toggle by just telling the agent "respond in text" — it remembers across messages and restarts. The old thread-local flag system that was causing responses to randomly disappear has been completely replaced with database-backed settings.
+
+**Telegram Tool Results** – Previously, when the agent used a tool during a Telegram conversation, you'd sometimes get an empty "Done" message instead of the actual result. Fixed. Tool results now get forwarded properly, and stale screenshot flags get cleared between responses so you don't get yesterday's screenshot attached to today's message.
+
+**Windows Experience** – A bunch of work went into making Windows feel less janky. The app now gets Start Menu shortcuts, a desktop shortcut, and a proper uninstaller. Console windows no longer flash on screen when the app launches background processes. The player window hides from the taskbar. Sound playback uses the right backend. And if you try to launch the app twice, it catches that instead of running two copies.
+
+**Restart & Exit** – The restart and exit tools were rewritten to use the event queue instead of Qt signals, which fixes crashes when they were called from background threads. Restart actually works now — it does a clean `sleep + exec` instead of the old approach that would sometimes just kill the app without coming back. There's a new "Restart" option in the oracle's right-click menu too.
+
+**Voice & TTS Fixes** – Voice provider names like "Kokoro (Offline)" no longer confuse the system — they get normalized properly everywhere. The TTS sentence splitter stopped breaking on version numbers (like "2.5" getting split into two sentences). All LLM providers now get the full tool list instead of having tools stripped based on provider — the model decides what to use.
+
+---
+
 ## [2.6.8] - 2026-03-27
 
 ### Security & Windows Installer Fixes

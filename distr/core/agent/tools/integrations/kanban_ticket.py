@@ -37,6 +37,7 @@ class KanbanTicketInput(BaseModel):
     todo_text: str = Field(default="", description="Text for add_todo/toggle_todo action")
     linked_project_id: int = Field(default=0, description="Link ticket to a project by ID")
     linked_workflow_id: int = Field(default=0, description="Link ticket to a workflow by ID")
+    send_to_cli: bool = Field(default=False, description="If True, send ticket directly to project CLI instead of running a workflow")
 
 
 class KanbanTicketTool(BaseTool):
@@ -459,6 +460,7 @@ class KanbanTicketTool(BaseTool):
         todo_text: str = "",
         linked_project_id: int = 0,
         linked_workflow_id: int = 0,
+        send_to_cli: bool = False,
         **kwargs,
     ) -> str:
         try:
@@ -481,6 +483,7 @@ class KanbanTicketTool(BaseTool):
                     priority=priority,
                     linked_project_id=linked_project_id or None,
                     linked_workflow_id=linked_workflow_id or None,
+                    send_to_cli=send_to_cli,
                 )
             elif action == "list_tickets":
                 return self._action_list_tickets(board_id or None, board_name or None, lane_name or None)
@@ -509,6 +512,7 @@ class KanbanTicketTool(BaseTool):
                     description=description, priority=priority, lane_name=lane_name,
                     linked_project_id=linked_project_id or None,
                     linked_workflow_id=linked_workflow_id or None,
+                    send_to_cli=send_to_cli,
                 )
             elif action == "move_ticket":
                 return self._action_move_ticket(ticket_id or self._last_ticket_id, lane_name)
@@ -693,7 +697,8 @@ class KanbanTicketTool(BaseTool):
     def _action_create_ticket(self, text="", board_name="", board_id=None,
                                lane_name="", title="", description="",
                                priority="medium",
-                               linked_project_id=None, linked_workflow_id=None) -> str:
+                               linked_project_id=None, linked_workflow_id=None,
+                               send_to_cli=False) -> str:
         # Resolve board
         board = self._find_board(board_id, board_name)
         if not board:
@@ -752,6 +757,9 @@ class KanbanTicketTool(BaseTool):
             board_obj = s.query(KB).get(board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
             effective_workflow_id = linked_workflow_id or None
+            effective_send_to_cli = send_to_cli or (board_obj.send_to_cli if board_obj else False)
+            if effective_send_to_cli:
+                effective_workflow_id = None  # CLI and workflow are mutually exclusive
 
             ticket = KanbanTicket(
                 lane_id=lane["id"],
@@ -761,6 +769,7 @@ class KanbanTicketTool(BaseTool):
                 position=max_pos + 1,
                 linked_project_id=effective_project_id,
                 linked_workflow_id=effective_workflow_id,
+                send_to_cli=effective_send_to_cli,
             )
             s.add(ticket)
             s.flush()
@@ -794,6 +803,9 @@ class KanbanTicketTool(BaseTool):
             board_obj = s.query(KB).get(board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
             effective_workflow_id = linked_workflow_id or None
+            effective_send_to_cli = board_obj.send_to_cli if board_obj else False
+            if effective_send_to_cli:
+                effective_workflow_id = None
 
             for item in tickets_data:
                 if not isinstance(item, dict):
@@ -809,6 +821,7 @@ class KanbanTicketTool(BaseTool):
                     priority=t_priority, position=max_pos,
                     linked_project_id=effective_project_id,
                     linked_workflow_id=effective_workflow_id,
+                    send_to_cli=effective_send_to_cli,
                 )
                 s.add(ticket)
                 s.flush()
@@ -862,6 +875,7 @@ class KanbanTicketTool(BaseTool):
                 f"Lane: {t.lane.name if t.lane else '?'}",
                 f"Priority: {t.priority}",
                 f"Description: {t.description or '(none)'}",
+                f"Send to CLI: {'Yes' if t.send_to_cli else 'No'}",
             ]
             if files:
                 parts.append(f"Files: {', '.join(files)}")
@@ -873,7 +887,8 @@ class KanbanTicketTool(BaseTool):
 
     def _action_update_ticket(self, ticket_id, title="", description="",
                                priority="", lane_name="",
-                               linked_project_id=None, linked_workflow_id=None) -> str:
+                               linked_project_id=None, linked_workflow_id=None,
+                               send_to_cli=False) -> str:
         if not ticket_id:
             return "No ticket ID provided."
         from distr.core.db.kanban import KanbanTicket, KanbanLane
@@ -889,8 +904,12 @@ class KanbanTicketTool(BaseTool):
                 t.priority = priority
             if linked_project_id:
                 t.linked_project_id = linked_project_id
-            if linked_workflow_id:
+            if send_to_cli:
+                t.send_to_cli = True
+                t.linked_workflow_id = None  # CLI and workflow are mutually exclusive
+            elif linked_workflow_id:
                 t.linked_workflow_id = linked_workflow_id
+                t.send_to_cli = False
                 t.priority = priority
             if lane_name:
                 # Move to different lane
@@ -1012,7 +1031,8 @@ class KanbanTicketTool(BaseTool):
             max_pos = max([tk.position for tk in new_lane.tickets], default=-1)
             t.lane_id = new_lane.id
             t.position = max_pos + 1
-        return f"Moved ticket #{ticket_id} to lane '{new_lane.name}'"
+            moved_lane_name = new_lane.name
+        return f"Moved ticket #{ticket_id} to lane '{moved_lane_name}'"
 
     # ── Sub-resource deletes ──────────────────────────────────────────────
 

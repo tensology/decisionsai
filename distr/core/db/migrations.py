@@ -1325,3 +1325,16 @@ def run_migrations():
                     logger.debug(f"Could not add archived to kanban_boards: {e}")
     except Exception as e:
         logger.debug(f"Kanban board archived migration: {e}")
+
+    # ── Kanban ticket send_to_cli ──
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE kanban_tickets ADD COLUMN send_to_cli BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added send_to_cli column to kanban_tickets table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.debug(f"Could not add send_to_cli to kanban_tickets: {e}")
+    except Exception as e:
+        logger.debug(f"Kanban ticket send_to_cli migration: {e}")

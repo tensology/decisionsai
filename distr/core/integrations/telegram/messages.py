@@ -216,13 +216,17 @@ class TelegramMessagesMixin:
         # 4. Handle Media
         media = inner_data.get("media")
         media_handled = False
+        # Determine input_type: "voice" for voice/audio media, "text" for everything else
+        input_type = "text"
         if media:
             media_type = media.get("type")
             logger.info("Received media message (type: %s)", media_type)
             if media_type == "voice":
+                input_type = "voice"
                 self._handle_voice_message(media.get("download_url"), "voice", message_id=msg_id)
                 media_handled = True
             elif media_type == "audio":
+                input_type = "voice"
                 self._handle_voice_message(media.get("download_url"), "audio", message_id=msg_id)
                 media_handled = True
             elif media_type in ("photo", "document", "video"):
@@ -288,143 +292,20 @@ class TelegramMessagesMixin:
                     self.send_to_telegram(error_text)
                     return
 
-            # Check if user wants text response instead of voice note
-            # Patterns: "send your response back as text", "respond with text", "write up a...", "write a...", "type...", etc.
-            text_response_patterns = [
-                "send your response back as text",
-                "send response as text",
-                "respond with text",
-                "respond as text",
-                "reply with text",
-                "reply as text",
-                "send text",
-                "write up a",
-                "write a",
-                "write an",
-                "write the",
-                "type up",
-                "type a",
-                "type the",
-                "text response",
-                "text reply",
-                "no voice",
-                "no audio",
-                "dont use voice",
-                "don't use voice",
-            ]
+            # Detect mode-switch intent and persist to Settings_Store
+            from distr.core.integrations.telegram.response_format import detect_mode_switch_intent
+            from distr.core.services.settings_service import update_setting
 
-            # Check if user wants voice response (to override text preference)
-            voice_response_patterns = [
-                "send your response back as voice",
-                "send response as voice",
-                "respond with voice",
-                "respond as voice",
-                "reply with voice",
-                "reply as voice",
-                "send voice",
-                "use voice",
-                "voice response",
-                "voice reply",
-                "send audio",
-                "use audio",
-                "read this out loud",
-                "read out loud",
-                "read it out loud",
-                "read that out loud",
-                "read aloud",
-                "read it aloud",
-                "read that aloud",
-                "read this",
-                "read it",
-                "read that",
-            ]
-
-            wants_text_response = any(
-                pattern in text_lower for pattern in text_response_patterns
-            )
-            wants_voice_response = any(
-                pattern in text_lower for pattern in voice_response_patterns
-            )
-
-            # Debug logging to see which patterns matched
-            if wants_text_response:
-                matched_patterns = [
-                    p for p in text_response_patterns if p in text_lower
-                ]
+            mode_intent = detect_mode_switch_intent(text)
+            if mode_intent == "text_only":
+                update_setting("telegram_text_only_override", True)
                 logger.info(
-                    f"[Telegram] ✅ Matched text-only patterns: {matched_patterns}"
+                    "[Telegram] ✅ Detected text-only intent — persisted telegram_text_only_override=True"
                 )
-            if wants_voice_response:
-                matched_patterns = [
-                    p for p in voice_response_patterns if p in text_lower
-                ]
-                logger.info(f"[Telegram] ✅ Matched voice patterns: {matched_patterns}")
-
-            # Store flag in thread-local storage so TTS service can check it
-            import threading
-
-            if wants_voice_response:
-                # User explicitly wants voice - clear text preference on ALL threads
-                # Clear on current thread
-                if hasattr(threading.current_thread(), "telegram_wants_text_response"):
-                    delattr(threading.current_thread(), "telegram_wants_text_response")
-
-                # Clear on all other threads too (for thread pool scenarios)
-                for thread in threading.enumerate():
-                    if hasattr(thread, "telegram_wants_text_response"):
-                        delattr(thread, "telegram_wants_text_response")
-
-                # Also clear the LLM service instance variable if we can access it
-                try:
-                    from PyQt6.QtWidgets import QApplication
-
-                    app = QApplication.instance()
-                    if app and hasattr(app, "agent_session") and app.agent_session:
-                        if (
-                            hasattr(app.agent_session, "llm_service")
-                            and app.agent_session.llm_service
-                        ):
-                            if hasattr(
-                                app.agent_session.llm_service,
-                                "_telegram_wants_text_response",
-                            ):
-                                app.agent_session.llm_service._telegram_wants_text_response = False
-                                logger.info(
-                                    f"[Telegram] ✅ Cleared _telegram_wants_text_response on LLM service"
-                                )
-                except Exception as e:
-                    logger.debug(f"Could not clear LLM service flag: {e}")
-
+            elif mode_intent == "voice":
+                update_setting("telegram_text_only_override", False)
                 logger.info(
-                    f"Detected voice response request in Telegram message - will send voice note"
-                )
-            elif wants_text_response:
-                # User wants text response
-                threading.current_thread().telegram_wants_text_response = True
-
-                # Also set on all other threads (for thread pool scenarios)
-                for thread in threading.enumerate():
-                    thread.telegram_wants_text_response = True
-
-                # Also set the LLM service instance variable
-                try:
-                    from PyQt6.QtWidgets import QApplication
-
-                    app = QApplication.instance()
-                    if app and hasattr(app, "agent_session") and app.agent_session:
-                        if (
-                            hasattr(app.agent_session, "llm_service")
-                            and app.agent_session.llm_service
-                        ):
-                            app.agent_session.llm_service._telegram_wants_text_response = True
-                            logger.info(
-                                f"[Telegram] ✅ Set _telegram_wants_text_response on LLM service (text-only mode)"
-                            )
-                except Exception as e:
-                    logger.debug(f"Could not set LLM service flag: {e}")
-
-                logger.info(
-                    f"Detected text response request in Telegram message - will send text instead of voice note"
+                    "[Telegram] ✅ Detected voice intent — persisted telegram_text_only_override=False"
                 )
 
         # Always log incoming messages for visibility with chat_id
@@ -734,7 +615,7 @@ class TelegramMessagesMixin:
         if text:
             # Start persistent typing loop so user sees dots while we wait for agent
             self._start_typing_loop("typing")
-            self._telegram_batch_buffer.append((str(text), False, None))
+            self._telegram_batch_buffer.append((str(text), False, None, input_type))
             # Reset the timer — every new message restarts the 3-second window
             self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
             logger.info(
@@ -847,33 +728,44 @@ class TelegramMessagesMixin:
         # Separate text messages and media messages
         texts = []
         image_path = None
-        for text, is_media, img_path in items:
+        input_type = "text"  # default; last voice item wins
+        for item in items:
+            text, is_media, img_path = item[0], item[1], item[2]
+            # Extract input_type from 4-element tuples (new format)
+            item_input_type = item[3] if len(item) > 3 else "text"
             if text:
                 texts.append(text)
             if img_path and not image_path:
                 image_path = img_path  # Use first image path for vision
+            if item_input_type == "voice":
+                input_type = "voice"
 
         combined = "\n".join(texts) if texts else ""
         if not combined:
             return
 
+        # Store input_type on the instance so downstream consumers
+        # (event handlers, LLM service) can read it when building the
+        # send_to_telegram event data dict.
+        self._current_input_type = input_type
+
         try:
             from distr.core.signals import signal_manager
             logger.info(
-                "[Telegram] 📤 Flushing batch (%d messages) to agent: '%s'",
-                len(items), combined[:80],
+                "[Telegram] 📤 Flushing batch (%d messages, input_type=%s) to agent: '%s'",
+                len(items), input_type, combined[:80],
             )
             signal_manager.send_text_input.emit(combined, True, image_path, None)
-            logger.info("[Telegram] ✅ Batch flushed to agent")
+            logger.info("[Telegram] ✅ Batch flushed to agent (input_type=%s)", input_type)
         except Exception as e:
             logger.error("Failed to flush Telegram batch: %s", e, exc_info=True)
             # Stop typing on error — otherwise the loop runs forever
             self._stop_typing_loop()
 
-    def _enqueue_telegram_batch(self, text: str, image_path: str = None):
+    def _enqueue_telegram_batch(self, text: str, image_path: str = None, input_type: str = "text"):
         """Add a message to the batch buffer and (re)start the flush timer."""
         self._start_typing_loop("typing")  # Keep dots alive while batching
-        self._telegram_batch_buffer.append((text, bool(image_path), image_path))
+        self._telegram_batch_buffer.append((text, bool(image_path), image_path, input_type))
         self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
 
     @pyqtSlot(str, str)
@@ -961,7 +853,7 @@ class TelegramMessagesMixin:
                 app.agent_command_queue.put(
                     (
                         "transcribe_file",
-                        {"audio_file_path": str(fpath), "request_id": req_id},
+                        {"audio_file_path": str(fpath), "request_id": req_id, "input_type": "voice"},
                     ),
                     block=False,
                 )

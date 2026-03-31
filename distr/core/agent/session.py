@@ -1630,8 +1630,6 @@ class AgentSession:
                                 del threading.current_thread().telegram_request
                             if hasattr(threading.current_thread(), 'telegram_file_sent'):
                                 del threading.current_thread().telegram_file_sent
-                            if hasattr(threading.current_thread(), 'telegram_wants_text_response'):
-                                del threading.current_thread().telegram_wants_text_response
                         except Exception as e:
                             self.logger.error(f"Error clearing thread flags: {e}")
                             
