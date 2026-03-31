@@ -642,3 +642,38 @@ class ClearWorkflowHistoryTool(BaseTool):
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)
+
+
+
+# --- Continue a waiting workflow ---
+class ContinueWorkflowInput(BaseModel):
+    run_id: int = Field(description="Workflow run ID that is in waiting state")
+    user_input: str = Field(default="", description="Optional user input/feedback to pass to the next step")
+
+
+class ContinueWorkflowTool(BaseTool):
+    name: str = "continue_workflow"
+    description: str = (
+        "Resume a workflow that is waiting for user input. "
+        "When a workflow step has wait_for_continue=True, the workflow pauses "
+        "and waits for the user to respond. Use this tool to pass the user's "
+        "response back and resume execution. "
+        "Use when user says 'continue', 'go ahead', 'looks good, continue', "
+        "'yes proceed', or provides feedback after a workflow pause. "
+        "The user's input is appended to the step result before advancing."
+    )
+    args_schema: Type[BaseModel] = ContinueWorkflowInput
+
+    def _run(self, run_id: int, user_input: str = "", **kwargs) -> str:
+        try:
+            from distr.core.workflow.service import continue_waiting_step
+            result = continue_waiting_step(run_id, user_input)
+            if "error" in result:
+                return f"Failed: {result['error']}"
+            return "Workflow resumed with your input. Execution continuing."
+        except Exception as e:
+            logger.error("continue_workflow failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)

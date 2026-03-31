@@ -611,6 +611,14 @@ CRITICAL FOR FILE OPERATIONS: Make tool results CONVERSATIONAL for TTS
    - "Clear the history on that workflow", "Clear workflow run history" → clear_workflow_history with workflow_id
    - "What's the status of the Development workflow" → get_workflow (shows steps with their current status)
    
+   WAITING WORKFLOWS (continue_workflow):
+   When a workflow step has wait_for_continue=True, the workflow pauses after that step executes.
+   The result is spoken back to {username} via TTS asking for input.
+   - "Continue", "Go ahead", "Looks good", "Yes proceed" → continue_workflow with run_id
+   - If {username} provides feedback like "change X to Y and continue" → continue_workflow with run_id and user_input containing their feedback
+   - The agent LLM receives a queued report when a workflow enters waiting state — use this to know which run_id to continue
+   - "What's waiting?" → get_project_status or get_workflow (shows runs in waiting state)
+   
    CONTEXT MATTERS: "stop", "play", "run", "start", "reset" are ambiguous words.
    - "Stop" / "Play" / "Pause" WITHOUT workflow context → media_control (music/Spotify/media)
    - "Stop the workflow" / "Stop the Development workflow" / "Stop all tasks in X" → reset_workflow

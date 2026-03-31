@@ -321,21 +321,46 @@ def _check_and_enter_wait(step_id: int, action_result: str, passed: bool) -> Opt
         if not step or not step.wait_for_continue:
             return None
         step.status = "waiting"
+        step_name = step.name
+        workflow_id = step.workflow_id
         # Find active run and set it to waiting too
         run = db.query(AutoWorkflowRun).filter(
             AutoWorkflowRun.workflow_id == step.workflow_id,
             AutoWorkflowRun.current_step_id == step_id,
             AutoWorkflowRun.status == "running",
         ).first()
+        run_id = None
         if run:
             run.status = "waiting"
+            run_id = run.id
             # Store action result in run_data for later complete_step() call
             run_data = json.loads(run.run_data or "{}")
             run_data["waiting_result"] = action_result
             run_data["waiting_passed"] = passed
             run.run_data = json.dumps(run_data)
         db.commit()
-    return {"success": True, "waiting": True, "message": "Step waiting for continue signal."}
+
+    # Notify the voice agent that the workflow is waiting for input
+    # Speak the result via TTS so the user knows what happened
+    try:
+        from distr.core.signals import signal_manager
+        # Truncate for TTS
+        speak_text = action_result.strip()
+        if len(speak_text) > 400:
+            speak_text = speak_text[:400] + "..."
+        notification = f"Step '{step_name}' is done and waiting for your input. Here's what happened: {speak_text}"
+        signal_manager.speak_text_directly.emit(notification)
+    except Exception as e:
+        logger.debug("Could not speak wait notification: %s", e)
+
+    # Also queue a report so the agent LLM knows about the waiting state
+    try:
+        bridge = WorkflowAgentBridge()
+        bridge.queue_report_to_agent(workflow_id, f"Workflow step '{step_name}' completed and is now WAITING for your input. Run ID: {run_id}. Result: {action_result[:500]}")
+    except Exception as e:
+        logger.debug("Could not queue wait report: %s", e)
+
+    return {"success": True, "waiting": True, "run_id": run_id, "message": "Step waiting for continue signal."}
 
 
 def _dispatch_step(step_id: int, step_name: str, action_type: str,
