@@ -84,6 +84,18 @@ class TelegramMixin:
         if not response_text:
             return
 
+        # Sanitize: strip leaked tool call formatting from the response.
+        # Some models hallucinate raw tool call syntax (to=functions.X, json{...})
+        # in their text output after executing tool calls.
+        import re
+        response_text = re.sub(r'to=functions\.\S+', '', response_text)
+        response_text = re.sub(r'json\s*\{[^}]*\}', '', response_text)
+        response_text = re.sub(r'[^\x00-\x7F\u00C0-\u024F\u0400-\u04FF]{3,}', '', response_text)  # strip long non-latin runs
+        response_text = re.sub(r'\s{2,}', ' ', response_text).strip()
+
+        if not response_text:
+            return
+
         is_done = response_text.lower() in (
             'done', 'done.', 'complete', 'completed', 'finished', 'finished.',
         )
