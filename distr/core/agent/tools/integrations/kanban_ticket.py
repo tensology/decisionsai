@@ -99,6 +99,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
+        "Use action='send_to_cli' with ticket_id to send ticket to Kiro CLI for execution. "
         "The tool automatically gathers conversation context and attaches any "
         "images/documents from the chat thread to the ticket. "
         "IMPORTANT: When user says 'create a ticket', call this tool with "
@@ -540,12 +541,14 @@ class KanbanTicketTool(BaseTool):
                 return self._action_send_to_project(ticket_id or self._last_ticket_id)
             elif action in ("activate_board", "set_board", "use_board"):
                 return self._action_activate_board(board_id or None, board_name or text)
+            elif action in ("send_to_cli", "push_to_cli", "run_cli"):
+                return self._action_send_to_cli(ticket_id or self._last_ticket_id)
             else:
                 return (
                     f"Unknown action '{action}'. Valid actions: list_boards, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
                     "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
-                    "delete_todo, add_link, delete_link, send_to_project"
+                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli"
                 )
 
         except Exception as e:
@@ -1202,3 +1205,118 @@ class KanbanTicketTool(BaseTool):
 
         self._last_board_id = board["id"]
         return f"Board '{board['name']}' is now your active board. All ticket commands will default to this board."
+
+    # ── Send ticket to CLI ────────────────────────────────────────────────
+
+    def _action_send_to_cli(self, ticket_id) -> str:
+        """Send a ticket's instruction to Kiro CLI for the linked project. Creates an audit trail."""
+        if not ticket_id:
+            return "No ticket ID provided."
+
+        import shutil
+        import subprocess
+
+        from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+        from distr.core.db.projects import Project
+
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            return "Kiro CLI is not installed. Install it with: curl -fsSL https://cli.kiro.dev/install | bash"
+
+        with self._get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                return f"Ticket #{ticket_id} not found."
+
+            title = t.title
+            description = t.description or ""
+            ticket_id_val = t.id
+
+            # Resolve project
+            project_id = t.linked_project_id
+            if not project_id and t.lane:
+                board = s.query(KB).get(t.lane.board_id)
+                if board:
+                    project_id = board.default_project_id
+
+            if not project_id:
+                return "No project linked to this ticket or its board. Link a project first."
+
+            project = s.query(Project).get(project_id)
+            if not project:
+                return "Linked project not found."
+            if not project.folder_location:
+                return f"Project '{project.name}' has no folder location set."
+
+            folder = project.folder_location
+            project_name = project.name
+
+        instruction = f"{title}\n\n{description}".strip() if description else title
+
+        # Create audit trail
+        audit_id = None
+        step_id = None
+        try:
+            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            with self._get_session() as s:
+                audit = StepRunnerSession(
+                    instruction=f"[Project: {project_name}] Ticket #{ticket_id_val}: {title}",
+                    status="in_progress",
+                    session_type="kiro_cli",
+                )
+                s.add(audit)
+                s.flush()
+                step = StepRunnerStep(
+                    session_id=audit.id, position=0,
+                    title=f"Ticket #{ticket_id_val}", instruction=instruction[:500],
+                    status="running", tool_used="kiro-cli",
+                )
+                s.add(step)
+                s.commit()
+                audit_id = audit.id
+                step_id = step.id
+        except Exception as e:
+            logger.debug("Could not create audit for send_to_cli: %s", e)
+
+        if self.event_queue:
+            try:
+                self.event_queue.put(("step_runner_updated", {}), block=False)
+            except Exception:
+                pass
+
+        # Execute Kiro CLI
+        try:
+            result = subprocess.run(
+                [kiro_path, "chat", "--message", instruction],
+                capture_output=True, text=True, timeout=600,
+                cwd=folder,
+            )
+            output = (result.stdout + result.stderr).strip()[:3000]
+            status = "completed" if result.returncode == 0 else "failed"
+        except subprocess.TimeoutExpired:
+            output = "Kiro CLI timed out after 10 minutes"
+            status = "failed"
+        except Exception as e:
+            output = f"Kiro CLI error: {e}"
+            status = "failed"
+
+        # Update audit trail
+        if audit_id and step_id:
+            try:
+                from distr.core.step_runner.service import update_step_status, update_session_status
+                update_step_status(step_id, status=status, result=output[:2000])
+                update_session_status(audit_id, status)
+            except Exception:
+                pass
+
+        if self.event_queue:
+            try:
+                self.event_queue.put(("step_runner_updated", {}), block=False)
+            except Exception:
+                pass
+
+        if not output:
+            return f"Kiro CLI completed for ticket #{ticket_id_val} (exit code: {result.returncode})"
+
+        preview = output[:500] + "..." if len(output) > 500 else output
+        return f"[Kiro CLI — {project_name}] Ticket #{ticket_id_val}:\n{preview}"

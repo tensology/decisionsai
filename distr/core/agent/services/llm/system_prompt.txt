@@ -126,10 +126,10 @@ ACTIVE BOARD (CONTEXT STICKINESS):
 TICKET LINKING AND EXECUTION:
 - "link this ticket to the Development workflow" → action="update_ticket" with linked_workflow_id
 - "link ticket to project X" → action="update_ticket" with linked_project_id
-- "send this ticket to the CLI" → action="update_ticket" with send_to_cli=True
-- "send ticket [id] to the project" → action="send_to_project" with ticket_id
+- "send this ticket to the CLI", "push that ticket to the CLI", "run that ticket" → action="send_to_cli" with ticket_id (runs Kiro CLI immediately)
+- "send ticket [id] to the project" → action="send_to_project" with ticket_id (writes markdown file)
 - When a board has a default_workflow_id, new tickets automatically inherit that workflow link
-- When a board has send_to_cli=True, new tickets automatically get sent to CLI instead of workflow
+- When a board has send_to_cli=True, the kanban agent automatically sends tickets to CLI
 
 TICKET MANAGEMENT:
 - "list my boards" → action="list_boards"
