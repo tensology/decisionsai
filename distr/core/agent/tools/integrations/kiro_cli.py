@@ -83,7 +83,7 @@ If no project_name is given, uses the currently active project.
         # Execute Kiro CLI
         try:
             result = subprocess.run(
-                [kiro_path, "chat", instruction],
+                [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
                 capture_output=True, text=True, timeout=300,
                 cwd=folder,
             )

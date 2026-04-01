@@ -636,7 +636,7 @@ def register_routes(router, templates):
                 import subprocess as _sp
                 try:
                     result = _sp.run(
-                        [kiro_path, "chat", instruction],
+                        [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
                         capture_output=True, text=True, timeout=300,
                         cwd=folder,
                     )
