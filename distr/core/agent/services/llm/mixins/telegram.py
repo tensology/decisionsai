@@ -85,13 +85,19 @@ class TelegramMixin:
             return
 
         # Sanitize: strip leaked tool call formatting from the response.
-        # Some models hallucinate raw tool call syntax (to=functions.X, json{...})
-        # in their text output after executing tool calls.
+        # Some models hallucinate raw tool call syntax, JSON blocks, and random
+        # non-Latin characters in their text output after executing tool calls.
         import re
         response_text = re.sub(r'to=functions\.\S+', '', response_text)
-        response_text = re.sub(r'[^\x00-\x7F\u00C0-\u024F\u0400-\u04FF]{3,}', '', response_text)  # strip long non-latin runs first
-        response_text = re.sub(r'json\s*[\n\r]*\s*\{[^}]*\}', '', response_text)  # json{...} blocks
-        response_text = re.sub(r'\bjson\b', '', response_text)  # stray "json" keyword
+        # Strip any JSON-like blocks: {"key": "value"} or {key: value}
+        response_text = re.sub(r'\{[^}]*"action"[^}]*\}', '', response_text)
+        response_text = re.sub(r'\{[^}]*"ticket_id"[^}]*\}', '', response_text)
+        response_text = re.sub(r'json\s*[\n\r]*\s*\{[^}]*\}', '', response_text)
+        response_text = re.sub(r'\bjson\b', '', response_text)
+        # Strip non-ASCII characters that aren't common Latin/Cyrillic
+        response_text = re.sub(r'[^\x00-\x7F\u00C0-\u024F\u0400-\u04FF]+', ' ', response_text)
+        # Strip repeated filler words (e.g. "code code code code")
+        response_text = re.sub(r'\b(\w{2,})\s+(?:\1\s*){2,}', r'\1', response_text)
         response_text = re.sub(r'\s{2,}', ' ', response_text).strip()
 
         if not response_text:
