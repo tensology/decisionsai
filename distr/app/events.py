@@ -647,6 +647,11 @@ class EventHandlerMixin:
             logger.info(f"[Telegram] 📝 Sending LLM response as TEXT (input_type={input_type}, text_only_override={text_only_override}, auto_match={auto_match_mode})")
             text_to_send = text
             audio_file = None
+            # For text responses, capture a screenshot so the user sees what happened
+            if not screenshot_file and not analyzed_image_path:
+                screenshot_file = self._telegram_capture_screenshot()
+                if screenshot_file and screenshot_file.exists():
+                    self._telegram_draw_cursor_if_needed(screenshot_file)
         else:
             logger.info(f"[Telegram] 🎤 Sending LLM response: audio only (input_type={input_type}, text_only_override={text_only_override}, auto_match={auto_match_mode})")
             text_to_send = None
