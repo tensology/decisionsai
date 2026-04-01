@@ -648,7 +648,9 @@ class EventHandlerMixin:
             text_to_send = text
             audio_file = None
             # For text responses, capture a screenshot so the user sees what happened
-            if not screenshot_file and not analyzed_image_path:
+            # (skip if the tool explicitly opted out, e.g. speak_on_desktop)
+            skip_screenshot = data.get('skip_screenshot', False)
+            if not skip_screenshot and not screenshot_file and not analyzed_image_path:
                 screenshot_file = self._telegram_capture_screenshot()
                 if screenshot_file and screenshot_file.exists():
                     self._telegram_draw_cursor_if_needed(screenshot_file)
