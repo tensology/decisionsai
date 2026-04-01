@@ -89,8 +89,9 @@ class TelegramMixin:
         # in their text output after executing tool calls.
         import re
         response_text = re.sub(r'to=functions\.\S+', '', response_text)
-        response_text = re.sub(r'json\s*\{[^}]*\}', '', response_text)
-        response_text = re.sub(r'[^\x00-\x7F\u00C0-\u024F\u0400-\u04FF]{3,}', '', response_text)  # strip long non-latin runs
+        response_text = re.sub(r'[^\x00-\x7F\u00C0-\u024F\u0400-\u04FF]{3,}', '', response_text)  # strip long non-latin runs first
+        response_text = re.sub(r'json\s*[\n\r]*\s*\{[^}]*\}', '', response_text)  # json{...} blocks
+        response_text = re.sub(r'\bjson\b', '', response_text)  # stray "json" keyword
         response_text = re.sub(r'\s{2,}', ' ', response_text).strip()
 
         if not response_text:
