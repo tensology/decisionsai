@@ -252,7 +252,16 @@ class PlayerWindow(QtWidgets.QWidget):
         # Stop any ongoing fade animation
         if self.fade_animation.state() == QPropertyAnimation.State.Running:
             self.fade_animation.stop()
-        
+
+        # Reset hide guards — a new TTS session is starting so any in-flight
+        # hide operation from the previous session is no longer relevant.
+        # Without this, _fade_finished_processing (set True when the previous
+        # fade-out completed) can block the upcoming hide_window() call for
+        # this new session, leaving the player open permanently.
+        self._hide_window_processing = False
+        self._fade_finished_processing = False
+        self._hide_processing = False
+
         # Set opacity to fully visible
         self.setWindowOpacity(1.0)
         

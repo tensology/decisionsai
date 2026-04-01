@@ -52,6 +52,8 @@
 /* Ticket modal tab active */
 .kb-tm-tab { cursor: pointer; }
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
+/* Confirm dialog above ticket / board modals */
+.kb-confirm-overlay { z-index: 120; }
 </style>
 {% endblock %}
 
@@ -238,6 +240,18 @@
                 <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
                 <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirm dialog (replaces native confirm() for ticket delete) -->
+<div id="kb-confirm-modal" class="kb-modal-overlay kb-confirm-overlay hidden" role="dialog" aria-modal="true" aria-labelledby="kb-confirm-title">
+    <div class="kb-modal p-6" style="width: 420px;">
+        <h3 id="kb-confirm-title" class="text-lg font-semibold text-white mb-3">Confirm</h3>
+        <p id="kb-confirm-message" class="text-sm text-gray-300 mb-6 whitespace-pre-wrap"></p>
+        <div class="flex justify-end gap-2">
+            <button type="button" id="kb-confirm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-confirm-ok" class="px-4 py-2 rounded text-white text-sm bg-[#f97316] hover:bg-[#ea580c]">OK</button>
         </div>
     </div>
 </div>

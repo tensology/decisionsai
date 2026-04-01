@@ -165,7 +165,18 @@ class FastActionMixin:
         return True
 
     async def _fa_handle_done(self, fast_action, chat_id, result, tool) -> bool:
+        import json as _json
         from distr.core.agent.services.llm.fast_action_detector import ActionType
+
+        # Check if the tool result explicitly requests silence (e.g. open_page returns {"silent": True})
+        is_silent = False
+        if result and isinstance(result, str):
+            try:
+                parsed = _json.loads(result)
+                if isinstance(parsed, dict) and parsed.get("silent"):
+                    is_silent = True
+            except (ValueError, TypeError):
+                pass
 
         is_error = result and isinstance(result, str) and (
             result.startswith("Error") or "error" in result.lower()
@@ -180,7 +191,12 @@ class FastActionMixin:
             response_text = "A new conversation has been created"
         elif fast_action.action_type == ActionType.CURSOR_TICKET:
             if result and isinstance(result, str) and not is_error:
-                response_text = "Ticket created successfully" if "Successfully created" in result else (result[:100] if len(result) <= 100 else "Ticket created")
+                if "Successfully created" in result and "under .tickets)" in result:
+                    response_text = "Ticket saved in your active project's tickets folder"
+                elif "Successfully created" in result:
+                    response_text = "Ticket created successfully"
+                else:
+                    response_text = result[:100] if len(result) <= 100 else "Ticket created"
             else:
                 response_text = "Ticket created"
         else:
@@ -189,7 +205,14 @@ class FastActionMixin:
                 if len(result) < 100 and "pasted" not in result.lower() and "Playing" in result:
                     response_text = result
 
-        await self._fa_push_tts(response_text)
+        if is_silent and not is_error:
+            # Tool requested silence — push end frame without speaking so the
+            # pipeline stays clean but no audio (and no player) is triggered.
+            from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame
+            await self.push_frame(LLMFullResponseStartFrame())
+            await self.push_frame(LLMFullResponseEndFrame())
+        else:
+            await self._fa_push_tts(response_text)
         self._fa_save_to_history(chat_id, response_text)
         return True
 

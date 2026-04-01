@@ -155,6 +155,13 @@ class AgentLifecycleMixin:
             effective_chat_id = chat_id
             if not effective_chat_id:
                 effective_chat_id = getattr(self, '_pending_chat_id_for_agent', None)
+            # Fall back to the last known chat from DB so the agent starts with
+            # the correct per-chat voice/model instead of global defaults.
+            if not effective_chat_id:
+                effective_chat_id = (
+                    self.settings.get('agent_current_chat_id')
+                    or self.settings.get('last_chat_id')
+                )
             logger.info(f"start_agent_session: effective_chat_id={effective_chat_id}")
 
             self.agent_process = self.mp_context.Process(

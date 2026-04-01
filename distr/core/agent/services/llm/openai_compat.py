@@ -548,6 +548,22 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
     async def _send_done_after_tools(self):
         """Send 'Done' TTS frame and save to history. Returns True (end_frame sent)."""
+        import json as _json
+
+        # Check if the last tool result requested silence (e.g. open_page returns {"silent": True})
+        is_silent = False
+        for msg in reversed(self._messages):
+            if msg.get("role") == "tool":
+                content = msg.get("content", "")
+                if content:
+                    try:
+                        parsed = _json.loads(content)
+                        if isinstance(parsed, dict) and parsed.get("silent"):
+                            is_silent = True
+                    except (ValueError, TypeError):
+                        pass
+                break  # Only check the most recent tool result
+
         # For Telegram, try to include the last tool result as context instead of just "Done"
         fallback = "Done"
         if getattr(self, '_is_telegram_request', False):
@@ -559,7 +575,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         fallback = content[:2000]  # Cap at 2000 chars
                         break
             self._telegram_fallback_text = fallback
-        else:
+        elif not is_silent:
             await self.push_frame(TextFrame(text="Done"))
 
         await self.push_frame(LLMFullResponseEndFrame())

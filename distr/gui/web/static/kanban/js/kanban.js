@@ -16,6 +16,30 @@
     var apiFetch = window.DecisionsAPI.fetch;
     function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "kb-snackbar" }); }
 
+    /** In-app confirm modal (matches Kanban styling). opts: { title, message, confirmLabel, danger, onConfirm } */
+    var _kbConfirmCallback = null;
+    function showKanbanConfirm(opts) {
+        opts = opts || {};
+        document.getElementById("kb-confirm-title").textContent = opts.title || "Confirm";
+        document.getElementById("kb-confirm-message").textContent = opts.message || "";
+        var okBtn = document.getElementById("kb-confirm-ok");
+        okBtn.textContent = opts.confirmLabel || "OK";
+        okBtn.className = opts.danger
+            ? "px-4 py-2 rounded text-white text-sm bg-red-600 hover:bg-red-700"
+            : "px-4 py-2 rounded text-white text-sm bg-[#f97316] hover:bg-[#ea580c]";
+        _kbConfirmCallback = typeof opts.onConfirm === "function" ? opts.onConfirm : null;
+        document.getElementById("kb-confirm-modal").classList.remove("hidden");
+    }
+    function hideKanbanConfirm() {
+        _kbConfirmCallback = null;
+        document.getElementById("kb-confirm-modal").classList.add("hidden");
+    }
+    function reloadCurrentDatabaseBoard() {
+        if (currentBoard && currentBoard.source === "database" && currentBoard.id) {
+            selectBoard("database", currentBoard.id);
+        }
+    }
+
     // ── Load boards sidebar ──
 
     var _boardsCache = null;
@@ -295,7 +319,7 @@
                 body.addEventListener("drop", function(e) {
                     e.preventDefault(); body.classList.remove("drag-over");
                     var ticketId = e.dataTransfer.getData("text/plain");
-                    if (ticketId) moveTicket(parseInt(ticketId), lane.id, body);
+                    if (ticketId) moveTicket(parseInt(ticketId, 10), lane.id, body, e.clientY);
                 });
             }
             (lane.tickets || []).forEach(function(ticket) { body.appendChild(createTicketCard(ticket, isLocal)); });
@@ -351,6 +375,7 @@
     function createTicketCard(ticket, isLocal) {
         var card = document.createElement("div");
         card.className = "kb-card bg-[#1a1f3a] rounded-lg border border-white/20 p-3 cursor-pointer hover:border-[#f97316]/50 transition-colors relative";
+        card.dataset.ticketId = String(ticket.id);
         if (isLocal) {
             card.draggable = true;
             card.addEventListener("dragstart", function(e) {
@@ -428,19 +453,56 @@
             var delBtn = card.querySelector(".kb-act-delete");
             if (delBtn) delBtn.addEventListener("click", function(e) {
                 e.stopPropagation();
-                if (!confirm("Delete ticket \"" + ticket.title + "\"?")) return;
-                apiFetch("/api/kanban/tickets/" + ticket.id, { method: "DELETE" })
-                    .then(function() { showSnackbar("Ticket deleted"); loadBoard(); })
-                    .catch(function(err) { showSnackbar("Delete failed: " + err.message, "error"); });
+                var tid = ticket.id;
+                showKanbanConfirm({
+                    title: "Delete ticket",
+                    message: "Delete \"" + ticket.title + "\"? This cannot be undone.",
+                    confirmLabel: "Delete",
+                    danger: true,
+                    onConfirm: function() {
+                        hideKanbanConfirm();
+                        apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" })
+                            .then(function() {
+                                showSnackbar("Ticket deleted");
+                                reloadCurrentDatabaseBoard();
+                            })
+                            .catch(function(err) { showSnackbar("Delete failed: " + err.message, "error"); });
+                    }
+                });
             });
         }
         return card;
     }
 
     // ── Drag & drop move ──
+    /**
+     * 0-based index where the ticket should land in the target lane, from pointer Y.
+     * Skips the dragged card in the same lane so reordering within a lane is not always "append".
+     */
+    function computeTicketDropPosition(bodyEl, ticketId, clientY) {
+        var cards = Array.prototype.slice.call(bodyEl.querySelectorAll(".kb-card"));
+        var dragEl = null;
+        for (var i = 0; i < cards.length; i++) {
+            if (cards[i].dataset.ticketId === String(ticketId)) {
+                dragEl = cards[i];
+                break;
+            }
+        }
+        var pos = 0;
+        for (var j = 0; j < cards.length; j++) {
+            var c = cards[j];
+            if (c === dragEl) continue;
+            var r = c.getBoundingClientRect();
+            if (clientY < r.top + r.height / 2) break;
+            pos++;
+        }
+        return pos;
+    }
 
-    function moveTicket(ticketId, laneId, bodyEl) {
-        var position = bodyEl.querySelectorAll(".kb-card").length;
+    function moveTicket(ticketId, laneId, bodyEl, clientY) {
+        var position = typeof clientY === "number"
+            ? computeTicketDropPosition(bodyEl, ticketId, clientY)
+            : bodyEl.querySelectorAll(".kb-card").length;
         apiFetch("/api/kanban/tickets/" + ticketId + "/move", {
             method: "PUT", headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ lane_id: laneId, position: position })
@@ -518,11 +580,21 @@
 
     function deleteTicket() {
         if (!modalTicketId) return;
-        if (!confirm("Delete this ticket?")) return;
-        apiFetch("/api/kanban/tickets/" + modalTicketId, { method: "DELETE" }).then(function() {
-            showSnackbar("Ticket deleted"); closeTicketModal();
-            selectBoard("database", currentBoard.id);
-        }).catch(function(e) { showSnackbar("Delete failed: " + e.message, "error"); });
+        var tid = modalTicketId;
+        showKanbanConfirm({
+            title: "Delete ticket",
+            message: "Delete this ticket? This cannot be undone.",
+            confirmLabel: "Delete",
+            danger: true,
+            onConfirm: function() {
+                hideKanbanConfirm();
+                apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" }).then(function() {
+                    showSnackbar("Ticket deleted");
+                    closeTicketModal();
+                    reloadCurrentDatabaseBoard();
+                }).catch(function(e) { showSnackbar("Delete failed: " + e.message, "error"); });
+            }
+        });
     }
 
     function sendTicketToProject() {
@@ -1225,6 +1297,20 @@
         document.getElementById("kb-modal-add-todo").addEventListener("click", addTodo);
         document.getElementById("kb-modal-todo-input").addEventListener("keydown", function(e) {
             if (e.key === "Enter") addTodo();
+        });
+
+        // Confirm modal (ticket delete)
+        document.getElementById("kb-confirm-cancel").addEventListener("click", hideKanbanConfirm);
+        document.getElementById("kb-confirm-ok").addEventListener("click", function() {
+            if (_kbConfirmCallback) _kbConfirmCallback();
+        });
+        document.getElementById("kb-confirm-modal").addEventListener("click", function(e) {
+            if (e.target === this) hideKanbanConfirm();
+        });
+        document.addEventListener("keydown", function(e) {
+            if (e.key === "Escape" && !document.getElementById("kb-confirm-modal").classList.contains("hidden")) {
+                hideKanbanConfirm();
+            }
         });
 
         // Copy modal

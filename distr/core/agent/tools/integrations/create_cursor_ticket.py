@@ -1,9 +1,10 @@
 """
 Create Cursor Ticket Tool for LangChain.
 
-This tool creates a ticket file in ~/.cursor/decisionsai/tickets/ when the user says
-"can you tell cursor" followed by their message. It uses an LLM to clean up and summarize
-the user's message into a well-formatted ticket.
+When the user says "tell cursor …" (voice fast-action or LLM), this tool writes a cleaned
+ticket markdown file. If a project is active with a folder_location, the file goes to
+``<project>/.tickets/`` (same as create_project_ticket and the VS Code extension). Otherwise
+it falls back to ``~/.cursor/decisionsai/tickets/``.
 """
 
 from typing import Any, Optional
@@ -69,11 +70,13 @@ def get_clipboard_content() -> Optional[str]:
         return None
 
 class CreateCursorTicketTool(BaseTool):
-    """Tool for creating a ticket file in Cursor's tickets folder."""
-    
+    """Tool for creating a ticket file in the active project's .tickets or Cursor's tickets folder."""
+
     name: str = "create_cursor_ticket"
-    description: str = """Create a ticket file in ~/.cursor/decisionsai/tickets/ when user says 'can you tell cursor', 'create a ticket', 'tell cursor what's in the clipboard', or 'tell cursor that instruction'.
-    The tool will clean up and summarize the content into a well-formatted ticket.
+    description: str = """Create a ticket file when user says 'can you tell cursor', 'create a ticket', 'tell cursor what's in the clipboard', or 'tell cursor that instruction'.
+    If a project is active (in use) with a folder path, the file is written to that project's .tickets/ folder.
+    Otherwise the file is written under ~/.cursor/decisionsai/tickets/.
+    The tool cleans up and summarizes the content into a well-formatted ticket.
     
     Usage:
     - "can you tell cursor [message]" -> Creates a cleaned up ticket file with the message content
@@ -472,11 +475,26 @@ Cleaned ticket:"""
                 if not description:
                     description = ticket_content  # Fallback if removal left nothing
             
-            # Get the tickets directory path
-            home_dir = os.path.expanduser("~")
-            tickets_dir = os.path.join(home_dir, ".cursor", "decisionsai", "tickets")
-            
-            # Create directory if it doesn't exist
+            # Prefer active project's .tickets (same as create_project_ticket / extension watchers)
+            tickets_dir = None
+            project_label = None
+            try:
+                from distr.core.agent.services.rag.project import get_active_project
+                ap = get_active_project()
+                folder = (ap or {}).get("folder_location") or ""
+                folder = folder.strip()
+                if folder:
+                    tickets_dir = os.path.join(folder, ".tickets")
+                    project_label = (ap or {}).get("name") or "project"
+                    logger.info("CreateCursorTicket: using active project .tickets at %s", tickets_dir)
+            except Exception as e:
+                logger.warning("CreateCursorTicket: could not resolve active project: %s", e)
+
+            if not tickets_dir:
+                home_dir = os.path.expanduser("~")
+                tickets_dir = os.path.join(home_dir, ".cursor", "decisionsai", "tickets")
+                logger.info("CreateCursorTicket: using global Cursor tickets dir %s", tickets_dir)
+
             os.makedirs(tickets_dir, exist_ok=True)
             
             # Generate filename with timestamp
@@ -525,14 +543,16 @@ Cleaned ticket:"""
                 f.write(formatted_content)
             
             logger.info(f"Created cursor ticket: {filepath}")
-            
+
             # Store paths for later opening
             self._last_ticket_path = filepath
             self._last_tickets_folder = tickets_dir
-            
+
             # Return success message with option to open file or folder
             result = f"Successfully created ticket file: {filename}\n"
             result += f"Location: {filepath}\n"
+            if project_label:
+                result += f"(In active project \"{project_label}\" under .tickets)\n"
             result += f"\nWould you like me to:\n"
             result += f"  • Open the ticket file (say 'open the ticket' or 'open that file')\n"
             result += f"  • Open the tickets folder (say 'open the tickets folder' or 'open that folder')"
