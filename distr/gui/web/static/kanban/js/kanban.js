@@ -415,10 +415,7 @@
                 wfSel.disabled = cliCb.checked;
                 if (cliCb.checked) wfSel.value = "";
             };
-            // Show "Send to project" button if ticket or board has a linked project
-            var sendBtn = document.getElementById("kb-modal-send-project");
-            var hasProject = !!t.linked_project_id || (currentBoardData && !!currentBoardData.default_project_id);
-            sendBtn.classList.toggle("hidden", !hasProject);
+            // Modal action buttons are always visible (wired up in init)
             document.getElementById("kb-ticket-modal").classList.remove("hidden");
         }).catch(function(e) { showSnackbar("Failed to load ticket: " + e.message, "error"); });
     }
@@ -1114,7 +1111,27 @@
         document.getElementById("kb-modal-close").addEventListener("click", closeTicketModal);
         document.getElementById("kb-modal-save").addEventListener("click", saveTicket);
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
-        document.getElementById("kb-modal-send-project").addEventListener("click", sendTicketToProject);
+        // Modal action buttons (copy, CLI, cursor)
+        document.getElementById("kb-modal-act-copy").addEventListener("click", function() {
+            if (!modalTicketId) return;
+            apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
+                var text = t.title + (t.description ? "\n\n" + t.description : "");
+                navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
+            });
+        });
+        document.getElementById("kb-modal-act-cli").addEventListener("click", function() {
+            if (!modalTicketId) return;
+            if (!confirm("Push ticket #" + modalTicketId + " to the project CLI?")) return;
+            apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-cli", { method: "POST" })
+                .then(function(r) { showSnackbar(r.message || "Sent to CLI"); })
+                .catch(function(e) { showSnackbar("CLI error: " + e.message, "error"); });
+        });
+        document.getElementById("kb-modal-act-cursor").addEventListener("click", function() {
+            if (!modalTicketId) return;
+            apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
+                .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
+                .catch(function(e) { showSnackbar("Error: " + e.message, "error"); });
+        });
         document.getElementById("kb-ticket-modal").addEventListener("click", function(e) {
         });
 

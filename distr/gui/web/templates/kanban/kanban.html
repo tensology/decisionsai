@@ -222,12 +222,20 @@
             </div>
         </div>
         <!-- Modal footer -->
-        <div class="flex justify-between px-6 pb-5 pt-2 border-t border-white/20">
-            <div>
-                <button type="button" id="kb-modal-send-project" class="hidden px-4 py-2 rounded border border-[#f97316]/50 text-[#f97316] text-sm hover:bg-[#f97316]/20" title="Create a .tickets file in the linked project folder">Send to project</button>
+        <div class="flex justify-between items-center px-6 pb-5 pt-2 border-t border-white/20">
+            <div class="flex items-center gap-4" id="kb-modal-actions">
+                <button type="button" id="kb-modal-act-copy" class="text-gray-400 hover:text-white transition-colors" title="Copy title &amp; description">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                </button>
+                <button type="button" id="kb-modal-act-cli" class="text-gray-400 hover:text-orange-400 transition-colors" title="Push to CLI">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+                </button>
+                <button type="button" id="kb-modal-act-cursor" class="text-gray-400 hover:text-blue-400 transition-colors" title="Send to Cursor (.ticket)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </button>
             </div>
             <div class="flex gap-2">
-                <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete Ticket</button>
+                <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
                 <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
             </div>
         </div>
