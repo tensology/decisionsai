@@ -907,7 +907,7 @@ source: kanban_ticket_{t.id}
         def _run_cli():
             try:
                 result = sp.run(
-                    [kiro_path, "chat", "--message", instruction],
+                    [kiro_path, "chat", instruction],
                     capture_output=True, text=True, timeout=600, cwd=folder,
                 )
                 output = (result.stdout + result.stderr).strip()[:3000]

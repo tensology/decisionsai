@@ -304,6 +304,50 @@
         });
     }
 
+    function _pollCliStatus(ticketId, btnEl) {
+        // Poll the step runner audit log for the CLI session to complete
+        var attempts = 0;
+        var maxAttempts = 120; // 10 minutes at 5s intervals
+        var interval = setInterval(function() {
+            attempts++;
+            if (attempts > maxAttempts) {
+                clearInterval(interval);
+                showSnackbar("CLI still running — check the audit log", "warning");
+                if (btnEl) {
+                    btnEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+                    btnEl.classList.remove("text-orange-400");
+                    btnEl.disabled = false;
+                }
+                return;
+            }
+            apiFetch("/api/step-runner/sessions?session_type=kiro_cli&limit=1&search=Ticket%20%23" + ticketId)
+                .then(function(sessions) {
+                    if (sessions && sessions.length > 0) {
+                        var s = sessions[0];
+                        if (s.status === "completed" || s.status === "failed") {
+                            clearInterval(interval);
+                            var icon = s.status === "completed"
+                                ? '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#22c55e" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>'
+                                : '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#ef4444" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+                            if (btnEl) {
+                                btnEl.innerHTML = icon;
+                                btnEl.classList.remove("text-orange-400");
+                                btnEl.disabled = false;
+                            }
+                            showSnackbar("CLI " + s.status + " for ticket #" + ticketId, s.status === "completed" ? "success" : "error");
+                            // Reset icon after 5 seconds
+                            setTimeout(function() {
+                                if (btnEl) {
+                                    btnEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+                                }
+                            }, 5000);
+                        }
+                    }
+                })
+                .catch(function() {}); // silently ignore poll errors
+        }, 5000);
+    }
+
     function createTicketCard(ticket, isLocal) {
         var card = document.createElement("div");
         card.className = "kb-card bg-[#1a1f3a] rounded-lg border border-white/20 p-3 cursor-pointer hover:border-[#f97316]/50 transition-colors relative";
@@ -358,9 +402,21 @@
             if (cliBtn) cliBtn.addEventListener("click", function(e) {
                 e.stopPropagation();
                 if (!confirm("Push ticket #" + ticket.id + " to the project CLI?")) return;
+                cliBtn.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
+                cliBtn.classList.add("text-orange-400");
+                cliBtn.disabled = true;
                 apiFetch("/api/kanban/tickets/" + ticket.id + "/send-to-cli", { method: "POST" })
-                    .then(function(r) { showSnackbar(r.message || "Sent to CLI"); })
-                    .catch(function(err) { showSnackbar("CLI error: " + err.message, "error"); });
+                    .then(function(r) {
+                        showSnackbar(r.message || "Sent to CLI");
+                        // Poll for completion
+                        _pollCliStatus(ticket.id, cliBtn);
+                    })
+                    .catch(function(err) {
+                        showSnackbar("CLI error: " + err.message, "error");
+                        cliBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+                        cliBtn.classList.remove("text-orange-400");
+                        cliBtn.disabled = false;
+                    });
             });
             var cursorBtn = card.querySelector(".kb-act-cursor");
             if (cursorBtn) cursorBtn.addEventListener("click", function(e) {
@@ -1122,9 +1178,20 @@
         document.getElementById("kb-modal-act-cli").addEventListener("click", function() {
             if (!modalTicketId) return;
             if (!confirm("Push ticket #" + modalTicketId + " to the project CLI?")) return;
-            apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-cli", { method: "POST" })
-                .then(function(r) { showSnackbar(r.message || "Sent to CLI"); })
-                .catch(function(e) { showSnackbar("CLI error: " + e.message, "error"); });
+            var btn = document.getElementById("kb-modal-act-cli");
+            btn.innerHTML = '<svg class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
+            btn.classList.add("text-orange-400");
+            var tid = modalTicketId;
+            apiFetch("/api/kanban/tickets/" + tid + "/send-to-cli", { method: "POST" })
+                .then(function(r) {
+                    showSnackbar(r.message || "Sent to CLI");
+                    _pollCliStatus(tid, btn);
+                })
+                .catch(function(e) {
+                    showSnackbar("CLI error: " + e.message, "error");
+                    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
+                    btn.classList.remove("text-orange-400");
+                });
         });
         document.getElementById("kb-modal-act-cursor").addEventListener("click", function() {
             if (!modalTicketId) return;

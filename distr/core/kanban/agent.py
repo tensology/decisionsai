@@ -293,7 +293,7 @@ class KanbanAgentCheckIn:
         try:
             import subprocess
             result = subprocess.run(
-                [kiro_path, "chat", "--message", instruction],
+                [kiro_path, "chat", instruction],
                 capture_output=True, text=True, timeout=600,
                 cwd=folder,
             )
