@@ -324,6 +324,12 @@
             '<span class="' + priClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium flex-shrink-0">' + esc(ticket.priority || "medium") + '</span>' +
             '</div>' +
             (ticket.description ? '<p class="text-xs text-gray-500 mt-1 line-clamp-2">' + esc(ticket.description).substring(0, 100) + '</p>' : '') +
+            (isLocal ? '<div class="flex items-center justify-center gap-3 mt-2 kb-card-actions">' +
+                '<button class="kb-act-copy text-gray-500 hover:text-white transition-colors" title="Copy title &amp; description"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>' +
+                '<button class="kb-act-cli text-gray-500 hover:text-orange-400 transition-colors" title="Push to CLI"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>' +
+                '<button class="kb-act-cursor text-gray-500 hover:text-blue-400 transition-colors" title="Send to Cursor (.ticket)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>' +
+                '<button class="kb-act-delete text-gray-500 hover:text-red-400 transition-colors" title="Delete ticket"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>' +
+            '</div>' : '') +
             '<div class="flex items-center mt-2">' + todoHtml + '</div>';
         if (!isLocal) {
             var copyBtn = document.createElement("button");
@@ -336,9 +342,42 @@
         }
         card.addEventListener("click", function(e) {
             if (e.target.closest(".kb-copy-btn")) return;
+            if (e.target.closest(".kb-card-actions")) return;
             if (isLocal) { openTicketModal(ticket.id); }
             else if (ticket.url) { window.open(ticket.url, "_blank"); }
         });
+        // Wire up action buttons for local tickets
+        if (isLocal) {
+            var copyBtn2 = card.querySelector(".kb-act-copy");
+            if (copyBtn2) copyBtn2.addEventListener("click", function(e) {
+                e.stopPropagation();
+                var text = ticket.title + (ticket.description ? "\n\n" + ticket.description : "");
+                navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
+            });
+            var cliBtn = card.querySelector(".kb-act-cli");
+            if (cliBtn) cliBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                if (!confirm("Push ticket #" + ticket.id + " to the project CLI?")) return;
+                apiFetch("/api/kanban/tickets/" + ticket.id + "/send-to-cli", { method: "POST" })
+                    .then(function(r) { showSnackbar(r.message || "Sent to CLI"); })
+                    .catch(function(err) { showSnackbar("CLI error: " + err.message, "error"); });
+            });
+            var cursorBtn = card.querySelector(".kb-act-cursor");
+            if (cursorBtn) cursorBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                apiFetch("/api/kanban/tickets/" + ticket.id + "/send-to-project", { method: "POST" })
+                    .then(function(r) { showSnackbar(r.message || "Sent to project"); })
+                    .catch(function(err) { showSnackbar("Error: " + err.message, "error"); });
+            });
+            var delBtn = card.querySelector(".kb-act-delete");
+            if (delBtn) delBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                if (!confirm("Delete ticket \"" + ticket.title + "\"?")) return;
+                apiFetch("/api/kanban/tickets/" + ticket.id, { method: "DELETE" })
+                    .then(function() { showSnackbar("Ticket deleted"); loadBoard(); })
+                    .catch(function(err) { showSnackbar("Delete failed: " + err.message, "error"); });
+            });
+        }
         return card;
     }
 

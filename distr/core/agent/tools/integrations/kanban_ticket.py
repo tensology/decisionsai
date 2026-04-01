@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project")
+    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")

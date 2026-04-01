@@ -839,6 +839,99 @@ source: kanban_ticket_{t.id}
                 "project_name": project.name,
             })
 
+    # ── Send ticket to CLI ──
+
+    @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
+    async def send_ticket_to_cli(ticket_id: int):
+        """Send a ticket's instruction to Kiro CLI for the linked project."""
+        import shutil
+        import subprocess as sp
+
+        kiro_path = shutil.which("kiro-cli")
+        if not kiro_path:
+            raise HTTPException(400, "Kiro CLI is not installed")
+
+        with get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+
+            title = t.title
+            description = t.description or ""
+            tid = t.id
+
+            project_id = t.linked_project_id
+            if not project_id:
+                lane = s.query(KanbanLane).get(t.lane_id)
+                if lane:
+                    board = s.query(KanbanBoard).get(lane.board_id)
+                    if board:
+                        project_id = board.default_project_id
+
+            if not project_id:
+                raise HTTPException(400, "No project linked to this ticket or its board")
+
+            from distr.core.db.projects import Project
+            project = s.query(Project).get(project_id)
+            if not project or not project.folder_location:
+                raise HTTPException(400, "Project has no folder location set")
+
+            folder = project.folder_location
+            project_name = project.name
+
+        instruction = f"{title}\n\n{description}".strip() if description else title
+
+        # Create audit trail
+        from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+        audit_id = step_id = None
+        try:
+            with get_session() as s:
+                audit = StepRunnerSession(
+                    instruction=f"[Project: {project_name}] Ticket #{tid}: {title}",
+                    status="in_progress", session_type="kiro_cli",
+                )
+                s.add(audit)
+                s.flush()
+                step = StepRunnerStep(
+                    session_id=audit.id, position=0,
+                    title=f"Ticket #{tid}", instruction=instruction[:500],
+                    status="running", tool_used="kiro-cli",
+                )
+                s.add(step)
+                s.commit()
+                audit_id, step_id = audit.id, step.id
+        except Exception:
+            pass
+
+        # Run CLI in background thread so the API returns immediately
+        def _run_cli():
+            try:
+                result = sp.run(
+                    [kiro_path, "chat", "--message", instruction],
+                    capture_output=True, text=True, timeout=600, cwd=folder,
+                )
+                output = (result.stdout + result.stderr).strip()[:3000]
+                status = "completed" if result.returncode == 0 else "failed"
+            except sp.TimeoutExpired:
+                output, status = "Kiro CLI timed out after 10 minutes", "failed"
+            except Exception as e:
+                output, status = f"Kiro CLI error: {e}", "failed"
+
+            if audit_id and step_id:
+                try:
+                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    update_step_status(step_id, status=status, result=output[:2000])
+                    update_session_status(audit_id, status)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_run_cli, daemon=True).start()
+
+        return JSONResponse({
+            "success": True,
+            "message": f"Ticket #{tid} sent to CLI for project '{project_name}'. Check the audit log for progress.",
+        })
+
     # ── Agent run / cancel / restart ──
 
     @router.post("/kanban/boards/{board_id}/run-agent")
