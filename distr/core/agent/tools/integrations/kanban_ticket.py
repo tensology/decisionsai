@@ -1211,7 +1211,21 @@ class KanbanTicketTool(BaseTool):
     def _action_send_to_cli(self, ticket_id) -> str:
         """Send a ticket's instruction to Kiro CLI for the linked project. Creates an audit trail."""
         if not ticket_id:
-            return "No ticket ID provided."
+            # Try to find the most recent ticket from the in_use board
+            try:
+                from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
+                with self._get_session() as s:
+                    board = s.query(KB).filter(KB.in_use == True).first()
+                    if board:
+                        for lane in sorted(board.lanes, key=lambda l: l.position):
+                            tickets = sorted(lane.tickets, key=lambda t: t.position)
+                            if tickets:
+                                ticket_id = tickets[0].id
+                                break
+            except Exception:
+                pass
+            if not ticket_id:
+                return "No ticket ID provided and no tickets found on the active board."
 
         import shutil
         import subprocess
