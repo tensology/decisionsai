@@ -803,6 +803,42 @@ check_kiro_cli() {
 
 check_kiro_cli
 
+# ── Start sidecar (machine control agent) ────────────────────────────────────
+SIDECAR_BIN="$SCRIPT_DIR/sidecar/dist/decisionsai-sidecar"
+SIDECAR_PID=""
+
+start_sidecar() {
+    if [ ! -f "$SIDECAR_BIN" ]; then
+        if command -v go &>/dev/null && [ -d "$SCRIPT_DIR/sidecar" ]; then
+            echo -e "${YELLOW}Building sidecar...${NC}"
+            mkdir -p "$SCRIPT_DIR/sidecar/dist"
+            (cd "$SCRIPT_DIR/sidecar" && go mod tidy -q && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) && \
+                echo -e "${GREEN}✓${NC} Sidecar built" || \
+                echo -e "${YELLOW}⚠  Sidecar build failed — accessibility tree tools unavailable${NC}"
+        fi
+    fi
+
+    if [ -f "$SIDECAR_BIN" ]; then
+        mkdir -p "$HOME/.decisionsai/logs"
+        # Run in local-only mode — no relay server needed, just the HTTP tool API
+        "$SIDECAR_BIN" --local \
+            > "$HOME/.decisionsai/logs/sidecar.log" 2>&1 &
+        SIDECAR_PID=$!
+        echo -e "${GREEN}✓${NC} Sidecar started (PID: $SIDECAR_PID, HTTP port: 11435)"
+    fi
+}
+
+stop_sidecar() {
+    if [ -n "$SIDECAR_PID" ] && kill -0 "$SIDECAR_PID" 2>/dev/null; then
+        kill "$SIDECAR_PID" 2>/dev/null
+        wait "$SIDECAR_PID" 2>/dev/null
+    fi
+}
+
+trap stop_sidecar EXIT
+mkdir -p "$HOME/.decisionsai/logs"
+start_sidecar
+
 # Run the application
 echo ""
 echo -e "${GREEN}Starting DecisionsAI...${NC}"

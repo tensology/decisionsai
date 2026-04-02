@@ -455,7 +455,12 @@ def _cmd_process_text_input(session, params):
     speaker_override = _parse_bool(speaker_val, default=True) if speaker_val is not None else None
     session.logger.debug(f"process_text_input: speak param={speaker_val}, parsed={speaker_override}, current _speaker_enabled={getattr(session.llm_service, '_speaker_enabled', None) if hasattr(session, 'llm_service') and session.llm_service else 'N/A'}")
 
+    # Save current speaker state so we can restore it after a speak=False request.
+    # Without this, speak=False (e.g. workflow reports) permanently silences the
+    # agent for all subsequent user requests.
+    prev_speaker_enabled = None
     if speaker_override is not None and hasattr(session, 'llm_service') and session.llm_service:
+        prev_speaker_enabled = getattr(session.llm_service, '_speaker_enabled', True)
         session.llm_service.set_speaker_enabled(speaker_override)
         session.logger.debug(f"Speaker set to {speaker_override} (from request) before processing text. After set: _speaker_enabled={session.llm_service._speaker_enabled}")
 
@@ -470,15 +475,29 @@ def _cmd_process_text_input(session, params):
         if _loop is None:
             _loop = getattr(session, '_main_loop', None)
         if _loop and _loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                session.llm_service.process_chat_input(
-                    text,
-                    is_telegram=is_telegram,
-                    uploaded_image_path=uploaded_image_path or None,
-                    speaker_enabled=speaker_override,
-                ),
-                _loop,
-            )
+            # Capture prev_speaker_enabled for the restore callback
+            _prev = prev_speaker_enabled
+            _llm = session.llm_service
+
+            async def _run_and_restore():
+                try:
+                    await _llm.process_chat_input(
+                        text,
+                        is_telegram=is_telegram,
+                        uploaded_image_path=uploaded_image_path or None,
+                        speaker_enabled=speaker_override,
+                    )
+                finally:
+                    # Restore speaker state after a speak-override request so
+                    # subsequent user requests are not silenced.
+                    if _prev is not None and speaker_override is not None:
+                        _llm.set_speaker_enabled(_prev)
+                        session.logger.debug(
+                            "process_text_input: restored _speaker_enabled=%s after speak=%s request",
+                            _prev, speaker_override,
+                        )
+
+            asyncio.run_coroutine_threadsafe(_run_and_restore(), _loop)
         else:
             session.logger.warning(
                 "Cannot process text input: event loop not available (runner=%s, _main_loop=%s)",

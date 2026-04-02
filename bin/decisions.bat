@@ -499,6 +499,35 @@ echo [33mChecking shortcuts...[0m
 echo.
 echo [32mStarting DecisionsAI...[0m
 echo ================================
+
+:: ── Start sidecar (machine control agent) ────────────────────────────────────
+set "SIDECAR_BIN=%SCRIPT_DIR%\sidecar\dist\decisionsai-sidecar.exe"
+
+if not exist "!SIDECAR_BIN!" (
+    where go >nul 2>&1
+    if !errorlevel! equ 0 (
+        if exist "%SCRIPT_DIR%\sidecar" (
+            echo [33mBuilding sidecar...[0m
+            if not exist "%SCRIPT_DIR%\sidecar\dist" mkdir "%SCRIPT_DIR%\sidecar\dist"
+            pushd "%SCRIPT_DIR%\sidecar"
+            go mod tidy -q >nul 2>&1
+            go build -ldflags="-s -w" -o dist\decisionsai-sidecar.exe . >nul 2>&1
+            popd
+            if exist "!SIDECAR_BIN!" (
+                echo [32m√[0m Sidecar built
+            ) else (
+                echo [33m⚠  Sidecar build failed — accessibility tree tools unavailable[0m
+            )
+        )
+    )
+)
+
+if exist "!SIDECAR_BIN!" (
+    if not exist "%USERPROFILE%\.decisionsai\logs" mkdir "%USERPROFILE%\.decisionsai\logs"
+    start /b "" "!SIDECAR_BIN!" --local > "%USERPROFILE%\.decisionsai\logs\sidecar.log" 2>&1
+    echo [32m√[0m Sidecar started ^(HTTP port: 11435^)
+)
+
 start "" "%VENV_DIR%\Scripts\pythonw.exe" bin\start.py 2>nul
 
 endlocal

@@ -342,5 +342,22 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
     else:
         logger.warning(f"use_navigation_tools is False - skipping specialized tools!")
 
+    # Accessibility tree tools (sidecar-powered, optional — only if sidecar is running)
+    accessibility_tools = [
+        ("GetWindowTreeTool",  ("input.accessibility_tree", "GetWindowTreeTool"),  {}),
+        ("FindElementTool",    ("input.accessibility_tree", "FindElementTool"),    {}),
+        ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
+        ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
+    ]
+    for tool_name, (submodule, class_name), kwargs in accessibility_tools:
+        try:
+            import importlib as _il
+            mod = _il.import_module(f"{_BASE_PACKAGE}.{submodule}")
+            cls = getattr(mod, class_name)
+            tools.append(cls(**kwargs))
+            logger.debug("Loaded accessibility tool: %s", tool_name)
+        except Exception as e:
+            logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
+
     logger.info(f"Loaded {len(tools)} total tools")
     return tools
