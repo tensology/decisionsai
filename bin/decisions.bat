@@ -524,11 +524,19 @@ if not exist "!SIDECAR_BIN!" (
 
 if exist "!SIDECAR_BIN!" (
     if not exist "%USERPROFILE%\.decisionsai\logs" mkdir "%USERPROFILE%\.decisionsai\logs"
+    :: Kill any stale sidecar from a previous run before starting a new one
+    taskkill /f /im decisionsai-sidecar.exe >nul 2>&1
     start /b "" "!SIDECAR_BIN!" --local > "%USERPROFILE%\.decisionsai\logs\sidecar.log" 2>&1
+    :: Capture PID so we can kill it when the app exits
+    for /f "tokens=2" %%p in ('tasklist /fi "imagename eq decisionsai-sidecar.exe" /fo list 2^>nul ^| findstr /i "PID:"') do set "SIDECAR_PID=%%p"
     echo [32m√[0m Sidecar started ^(HTTP port: 11435^)
 )
 
-start "" "%VENV_DIR%\Scripts\pythonw.exe" bin\start.py 2>nul
+"%VENV_DIR%\Scripts\pythonw.exe" bin\start.py
 
-endlocal
-exit
+:: App has exited — shut down the sidecar
+if defined SIDECAR_PID (
+    taskkill /pid !SIDECAR_PID! /f >nul 2>&1
+) else (
+    taskkill /f /im decisionsai-sidecar.exe >nul 2>&1
+)
