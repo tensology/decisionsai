@@ -4,23 +4,21 @@
 
 ## [2.7.0] - 2026-04-09
 
-### Workflow Unification, Chat Setup Overhaul, Web UI Remote Controls, Performance
+### New Chat Setup, Skin Picker, Remote Controls, Speed Boost
 
-**Workflow–StepRunner Unification** – The two parallel automation systems (AutoWorkflow and StepRunner) are now one. StepRunner's LLM planning, scheduler, audit trail, and context assembly got absorbed into the Workflow system. Legacy `/api/step-runner/*` endpoints redirect to `/api/workflows/*` with HTTP 301. The migration runs automatically on startup — existing StepRunner sessions, steps, and runs get copied into the unified tables. Import/export handles both the new v2.0 format and legacy v1.0 StepRunner exports. 13 property-based tests validate the whole thing.
+**New Chat Setup Screen** – When you open the chat page with no conversations, you now get a clean setup form that loads everything in the background first (no more "Loading..." dropdowns). Pick your LLM, voice, and skin all in one place before you start chatting. The "Configure New Chat" modal got the same upgrade.
 
-**Chat Setup Form** – The empty state on the chat page got a full redesign. There's now a loading spinner while providers, models, voices, and skins load — then the form appears with everything ready. Skin picker shows all your oracle and avatar skins with a big pop-out hover effect. Kilo logo links to free model signup with a tooltip explaining how to get your API key. Manage Providers button links to the third-party settings. Ollama download button opens the model browser. The "Configure New Chat" modal got the same treatment — wider layout, skin picker, Kilo promo, and default starting question.
+**Skin Picker** – You can now preview and choose your oracle or avatar skin right from the chat setup screen. Hover over a skin and it pops out big so you can actually see what it looks like. Your skin choice only applies when you start the conversation — browsing doesn't change anything.
 
-**Web UI Remote Controls** – Dictation and agent input buttons added to the remote web UI. New signals and buttons for window swapping. Keyboard controls expanded with new shortcuts and input modes. The entire remote control interface got a polish pass.
+**Free Models Shortcut** – There's a Kilo logo button in the chat setup that links you straight to signing up for free billion-parameter models. Hover over "Place Your Key Here" for step-by-step instructions on how to set it up. No more digging through docs.
 
-**Ollama Performance** – For local Ollama models, the system prompt is now condensed automatically — REST API reference stripped, tool descriptions removed (Ollama gets tool schemas via the API already), decorative separators cleaned up. Saves ~2,700 tokens per request. Conversational and coding model dropdowns now filter to only show models that support tool calling.
+**Remote Web UI Controls** – The web UI now has dictation and agent input buttons, a window swapping tool, and a bunch of new keyboard controls. You can do way more from the browser without touching the desktop app.
 
-**Third-Party Provider Order** – KiloCode moved to the top of the providers list, followed by Google Gemini and ElevenLabs. Makes it easier to find the free option.
+**Faster Ollama Responses** – If you're running a local Ollama model, responses are noticeably faster now. We trimmed the system prompt by about 15% and stopped sending duplicate tool info. The model dropdown also only shows models that actually support tool calling, so you won't accidentally pick one that can't do anything useful.
 
-**Llama Backdrop** – The chat area now has the llama mascot as a subtle bottom-right backdrop image. Click it to open the About window and play the startup sound.
+**Workflows Unified** – The old "Step Runner" and "Workflows" were basically two systems doing the same thing. Now it's just Workflows. Everything got merged — your old Step Runner sessions migrate automatically. One UI, one set of API endpoints, no confusion.
 
-**OpenPage Tool** – The agent can now navigate directly to any settings section — "open skins", "open LLMs", "open audio", "open providers", "open advanced" all work. Previously it could only open top-level pages.
-
-**Bug Fixes** – Fixed `UserStoppedSpeakingFrame` import missing in Vosk STT. Fixed Vosk JSON parse crash on malformed `FinalResult()`. Fixed `_check_fast_actions` missing from `OllamaLLMService` (was only on `BaseLLMService`). Fixed tool description warnings for accessibility tree tools. Fixed startup timing warnings for STT/LLM services. Fixed `pywhispercpp` native extension broken from dev build. Fixed sidebar text wrapping vertically when chat form was wide. Added DB migration for new workflow columns on existing databases.
+**Voice & Bug Fixes** – Fixed Whisper speech-to-text failing to load on some setups. Fixed the agent crashing when trying to detect fast actions. Fixed a bunch of startup warnings that were cluttering the logs. The agent can now navigate directly to any settings page by voice — "open skins", "open audio", "open providers" all work.
 
 ---
 
