@@ -1,6 +1,6 @@
 {% extends "base.html" %}
 
-{% block title %}Step Runner{% endblock %}
+{% block title %}Workflows{% endblock %}
 
 {% block head_styles %}
 {{ super() }}
@@ -60,6 +60,10 @@
                 <textarea id="wf-builder-desc" rows="2" placeholder="Describe your workflow..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-none"></textarea>
                 <div class="flex items-center gap-2 mt-2">
                     <button type="button" id="wf-builder-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Generate Workflow</button>
+                    <button type="button" id="wf-plan-btn" class="px-4 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20">Plan Steps</button>
+                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="p-2 rounded border border-white/20 text-gray-400 hover:text-white hover:border-[#f97316] transition-colors">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                    </button>
                     <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Generating...</span>
                 </div>
                 <p id="wf-builder-error" class="hidden text-xs text-red-400 mt-2"></p>
@@ -97,6 +101,7 @@
                 <div class="border-b border-white/20 px-6 flex gap-1">
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="steps">Steps</button>
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="schedule">Schedule</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Context & Rules</button>
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="variables">Variables</button>
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Run History</button>
                 </div>
@@ -106,7 +111,10 @@
                     <div id="wf-tab-steps" class="wf-tab-content">
                         <div class="flex justify-between items-center mb-4">
                             <p class="text-xs text-gray-500">Click a step to expand and edit it.</p>
-                            <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Step</button>
+                            <div class="flex gap-2">
+                                <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Generate Steps</button>
+                                <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Step</button>
+                            </div>
                         </div>
                         <div id="wf-steps-list" class="space-y-2"></div>
                     </div>
@@ -144,6 +152,14 @@
                             <button type="button" id="wf-sched-save" class="px-4 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] mt-3">Save Schedule</button>
                         </div>
                     </div>
+                    <!-- Context & Rules tab -->
+                    <div id="wf-tab-context" class="wf-tab-content hidden">
+                        <div class="max-w-2xl">
+                            <p class="text-xs text-gray-500 mb-3">Context rules are prepended to every step's prompt as a [CONTEXT AND RULES] section. Use this to set global instructions, constraints, or persona for the workflow agent.</p>
+                            <textarea id="wf-context-rules" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm font-mono placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="e.g., Always respond in JSON format. Never delete files without confirmation."></textarea>
+                            <p id="wf-context-save-status" class="text-xs text-gray-500 mt-2"></p>
+                        </div>
+                    </div>
                     <!-- Variables tab -->
                     <div id="wf-tab-variables" class="wf-tab-content hidden">
                         <div class="flex justify-between items-center mb-4">
@@ -166,4 +182,124 @@
 
 {% block extra_scripts %}
 <script src="/workflows/static/js/workflows.js"></script>
+<script>
+(function() {
+    var modalHtml = [
+        '<div id="sr-llm-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60">',
+        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-6 w-full max-w-md shadow-2xl">',
+        '<div class="flex items-center justify-between mb-4">',
+        '<h3 class="text-white font-semibold text-base">Workflow LLM</h3>',
+        '<button id="sr-llm-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>',
+        '</div>',
+        '<p class="text-xs text-gray-400 mb-5">Choose which LLM the workflow engine uses for planning and executing steps. Leave on "Use global setting" to follow your Conversational LLM.</p>',
+        '<div class="flex items-center gap-3 mb-3">',
+        '<label class="text-sm font-medium text-[#ececf1] w-20 text-right flex-shrink-0">Provider:</label>',
+        '<select id="sr-llm-provider" class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] hover:border-[#7a7c8c] cursor-pointer">',
+        '<option value="">— Use global setting —</option>',
+        '</select>',
+        '</div>',
+        '<div class="flex items-center gap-3 mb-6">',
+        '<label class="text-sm font-medium text-[#ececf1] w-20 text-right flex-shrink-0">Model:</label>',
+        '<select id="sr-llm-model-select" class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] hover:border-[#7a7c8c] cursor-pointer">',
+        '<option value="">Select model...</option>',
+        '</select>',
+        '</div>',
+        '<div class="flex gap-2 justify-end">',
+        '<button id="sr-llm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>',
+        '<button id="sr-llm-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Save</button>',
+        '</div>',
+        '</div>',
+        '</div>'
+    ].join('');
+    document.body.insertAdjacentHTML('beforeend', modalHtml);
+
+    var modal = document.getElementById('sr-llm-modal');
+    var providerEl = document.getElementById('sr-llm-provider');
+    var modelEl = document.getElementById('sr-llm-model-select');
+    var savedModel = '';
+
+    function loadProviders(callback) {
+        fetch('/api/llms/available-providers')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var opts = '<option value="">— Use global setting —</option>';
+                (data.providers || []).forEach(function(p) {
+                    opts += '<option value="' + p.id + '">' + p.name + '</option>';
+                });
+                providerEl.innerHTML = opts;
+                if (callback) callback();
+            })
+            .catch(function() { if (callback) callback(); });
+    }
+
+    function loadModels(provider, currentModel) {
+        if (!provider) {
+            modelEl.innerHTML = '<option value="">— follows global setting —</option>';
+            modelEl.disabled = true;
+            return;
+        }
+        modelEl.innerHTML = '<option value="">Loading...</option>';
+        modelEl.disabled = true;
+        fetch('/api/llms/models?type=conversational&provider=' + encodeURIComponent(provider))
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                var models = data.models || [];
+                modelEl.innerHTML = '<option value="">Select model...</option>';
+                models.forEach(function(m) {
+                    var val = (typeof m === 'object' && m.id != null) ? m.id : m;
+                    var label = (typeof m === 'object' && m.name != null) ? m.name : m;
+                    var opt = document.createElement('option');
+                    opt.value = val; opt.textContent = label;
+                    modelEl.appendChild(opt);
+                });
+                if (currentModel) {
+                    modelEl.value = currentModel;
+                    if (!modelEl.value) {
+                        var opt = document.createElement('option');
+                        opt.value = currentModel; opt.textContent = currentModel;
+                        modelEl.appendChild(opt);
+                        modelEl.value = currentModel;
+                    }
+                }
+                modelEl.disabled = false;
+            })
+            .catch(function() { modelEl.innerHTML = '<option value="">Error loading models</option>'; modelEl.disabled = false; });
+    }
+
+    function openModal() {
+        fetch('/api/workflows/llm-settings')
+            .then(function(r) { return r.json(); })
+            .then(function(data) {
+                savedModel = data.model || '';
+                loadProviders(function() {
+                    providerEl.value = data.provider || '';
+                    loadModels(data.provider || '', savedModel);
+                });
+                modal.classList.remove('hidden');
+                modal.classList.add('flex');
+            });
+    }
+
+    function closeModal() { modal.classList.add('hidden'); modal.classList.remove('flex'); }
+
+    providerEl.addEventListener('change', function() { loadModels(this.value, ''); });
+    document.getElementById('wf-sr-llm-btn').addEventListener('click', openModal);
+    document.getElementById('sr-llm-close').addEventListener('click', closeModal);
+    document.getElementById('sr-llm-cancel').addEventListener('click', closeModal);
+    modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
+
+    document.getElementById('sr-llm-save').addEventListener('click', function() {
+        fetch('/api/workflows/llm-settings', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ provider: providerEl.value.trim(), model: modelEl.value.trim() })
+        })
+        .then(function(r) { return r.json(); })
+        .then(function() {
+            closeModal();
+            window.DecisionsAPI && window.DecisionsAPI.snackbar('Workflow LLM saved', 'success');
+        });
+    });
+})();
+</script>
 {% endblock %}

@@ -413,6 +413,19 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add openai_voice column: {e}")
 
+    # Handle database migration for f5tts_voice column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT f5tts_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN f5tts_voice VARCHAR DEFAULT 'default'"))
+                conn.commit()
+                logger.info("Added f5tts_voice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add f5tts_voice column: {e}")
+
     # Handle database migration for qwen3_voice/replicate settings columns (Qwen3-TTS)
     for col, dtype, default in [
         ("qwen3_voice", "VARCHAR", "'aiden'"),
@@ -506,7 +519,21 @@ def run_migrations():
                 logger.info("Added coding_llm_model column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add coding_llm_model column: {e}")
-    
+
+    # Handle database migration for step_runner_llm_provider/model columns
+    for _col, _default in [("step_runner_llm_provider", "''"), ("step_runner_llm_model", "''")]:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {_col} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} VARCHAR DEFAULT {_default}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", _col)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", _col, e)
+
     # Handle database migration for vision_llm_provider column
     try:
         with Session() as session:
@@ -1077,6 +1104,13 @@ def run_migrations():
                 except Exception as e:
                     if "duplicate column" not in str(e).lower():
                         logger.warning(f"Could not add current_step_id column: {e}")
+                try:
+                    conn.execute(text("ALTER TABLE auto_workflow_runs ADD COLUMN step_results TEXT"))
+                    conn.commit()
+                    logger.info("Added step_results column to auto_workflow_runs table")
+                except Exception as e:
+                    if "duplicate column" not in str(e).lower():
+                        logger.warning(f"Could not add step_results column: {e}")
     except Exception as e:
         logger.debug(f"AutoWorkflow migration: {e}")
 
@@ -1338,3 +1372,65 @@ def run_migrations():
                     logger.debug(f"Could not add send_to_cli to kanban_tickets: {e}")
     except Exception as e:
         logger.debug(f"Kanban ticket send_to_cli migration: {e}")
+
+    # ── skin_sizes table ──
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "CREATE TABLE IF NOT EXISTS skin_sizes ("
+                "id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                "skin_slug VARCHAR NOT NULL UNIQUE, "
+                "size_px INTEGER NOT NULL DEFAULT 180"
+                ")"
+            ))
+            conn.commit()
+            logger.info("Ensured skin_sizes table exists")
+    except Exception as e:
+        logger.debug(f"skin_sizes table migration: {e}")
+
+    # ── Workflow–StepRunner Unification: add new columns to auto_workflow* tables ──
+    # These columns were added to the SQLAlchemy models but existing databases
+    # need ALTER TABLE to pick them up.
+
+    # auto_workflows: workflow_type, chat_id, context_rules, workflow_input
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_workflows'"))
+            if result.fetchone():
+                for col, col_def in [
+                    ("workflow_type", "VARCHAR DEFAULT 'manual'"),
+                    ("chat_id", "INTEGER"),
+                    ("context_rules", "TEXT"),
+                    ("workflow_input", "TEXT"),
+                ]:
+                    try:
+                        conn.execute(text(f"ALTER TABLE auto_workflows ADD COLUMN {col} {col_def}"))
+                        conn.commit()
+                        logger.info(f"Added {col} column to auto_workflows table")
+                    except Exception as e:
+                        if "duplicate column" not in str(e).lower():
+                            logger.warning(f"Could not add {col} column to auto_workflows: {e}")
+    except Exception as e:
+        logger.debug(f"Workflow unification migration (auto_workflows): {e}")
+
+    # auto_workflow_steps: verification, step_type, config, tool_used, routing_path
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_workflow_steps'"))
+            if result.fetchone():
+                for col, col_def in [
+                    ("verification", "TEXT"),
+                    ("step_type", "VARCHAR DEFAULT 'agent_instruction'"),
+                    ("config", "TEXT"),
+                    ("tool_used", "VARCHAR"),
+                    ("routing_path", "TEXT"),
+                ]:
+                    try:
+                        conn.execute(text(f"ALTER TABLE auto_workflow_steps ADD COLUMN {col} {col_def}"))
+                        conn.commit()
+                        logger.info(f"Added {col} column to auto_workflow_steps table")
+                    except Exception as e:
+                        if "duplicate column" not in str(e).lower():
+                            logger.warning(f"Could not add {col} column to auto_workflow_steps: {e}")
+    except Exception as e:
+        logger.debug(f"Workflow unification migration (auto_workflow_steps): {e}")

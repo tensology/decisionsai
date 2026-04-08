@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QObject, pyqtSignal
 import time
 import threading
+import warnings
 
 class SignalManager(QObject):
 
@@ -20,6 +21,7 @@ class SignalManager(QObject):
     hide_oracle = pyqtSignal()
     show_oracle = pyqtSignal()
     change_oracle = pyqtSignal()
+    change_oracle_previous = pyqtSignal()
     direct_oracle_change = pyqtSignal(str)
     oracle_position_changed = pyqtSignal(str)  # Emits position name (e.g., "Top Left")
     oracle_size_changed = pyqtSignal(int)
@@ -65,6 +67,7 @@ class SignalManager(QObject):
 
     exit_app = pyqtSignal()
     restart_app = pyqtSignal()
+    show_about_window = pyqtSignal()
 
     # Telegram connection signals
     telegram_connected = pyqtSignal(str, str, int)  # (short_code, app_user_id, telegram_user_id)
@@ -84,13 +87,17 @@ class SignalManager(QObject):
     # (text, is_telegram, uploaded_image_path, speak=None)
     send_text_input = pyqtSignal(str, bool, str, object)
 
-    # Step Runner signals
-    step_runner_run_all_requested = pyqtSignal(int, object, object, str)  # session_id, steps_data, run_id, session_type
-    step_runner_execute_requested = pyqtSignal(int, int, str, object)     # step_id, session_id, instruction, chat_id
-    step_runner_cancel_requested = pyqtSignal(int)                        # session_id
-    step_runner_skip_step_requested = pyqtSignal(int)                     # session_id
-    step_runner_continue_requested = pyqtSignal(int, str)                 # session_id, optional_input
+    # Workflow execution signals
     workflow_finished = pyqtSignal(int, str)                              # session_id, summary
+    workflow_run_all_requested = pyqtSignal(int, object, object, str)     # session_id, steps_data, run_id, session_type
+    workflow_execute_step_requested = pyqtSignal(int, int, str, object)   # step_id, session_id, instruction, chat_id
+    workflow_cancel_requested = pyqtSignal(int)                           # session_id
+    workflow_skip_step_requested = pyqtSignal(int)                        # session_id
+    workflow_continue_requested = pyqtSignal(int, str)                    # session_id, optional_input
+
+    # Deprecated step_runner_* signal names are forwarded to the workflow_*
+    # signals above via __getattr__. They will be removed after one release cycle.
+    # See _DEPRECATED_SIGNAL_ALIASES below.
     set_speaker_enabled = pyqtSignal(bool)
 
     # Web routes -> main thread
@@ -104,6 +111,10 @@ class SignalManager(QObject):
     # Action recording signals
     action_recording_started = pyqtSignal(int)       # action_id when recording starts
     action_recording_stopped = pyqtSignal(int)       # action_id when recording stops
+
+    # Action playback signals
+    action_playback_finished = pyqtSignal()          # playback completed naturally
+    action_playback_stopped = pyqtSignal(str)        # playback stopped/failed (reason)
     start_action_recording = pyqtSignal()            # Request to start recording
     start_action_recording_with_id = pyqtSignal(int)
     stop_action_recording = pyqtSignal()             # Request to stop recording
@@ -149,6 +160,28 @@ class SignalManager(QObject):
 
     # Files indexed notification
     files_indexed = pyqtSignal(str)
+
+    # Mapping of deprecated step_runner_* signal names to their workflow_* replacements.
+    # Kept for one release cycle to allow consumers to migrate.
+    _DEPRECATED_SIGNAL_ALIASES = {
+        "step_runner_run_all_requested": "workflow_run_all_requested",
+        "step_runner_execute_requested": "workflow_execute_step_requested",
+        "step_runner_cancel_requested": "workflow_cancel_requested",
+        "step_runner_skip_step_requested": "workflow_skip_step_requested",
+        "step_runner_continue_requested": "workflow_continue_requested",
+    }
+
+    def __getattr__(self, name: str):
+        new_name = SignalManager._DEPRECATED_SIGNAL_ALIASES.get(name)
+        if new_name is not None:
+            warnings.warn(
+                f"Signal '{name}' is deprecated, use '{new_name}' instead. "
+                "This alias will be removed in the next release.",
+                DeprecationWarning,
+                stacklevel=2,
+            )
+            return getattr(self, new_name)
+        raise AttributeError(f"'{type(self).__name__}' object has no attribute '{name}'")
 
     def __init__(self):
         super().__init__()

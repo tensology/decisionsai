@@ -51,37 +51,129 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
         """Return the provider name for chat persistence. Inferred from class name."""
         return self.__class__.__name__.replace("LLMService", "")
 
-    def _build_tool_router_async(self):
-        """Build the semantic tool router index in a background thread."""
-        import threading
+    def _build_tool_index_async(self):
+        """Build the semantic tool retriever index in a background thread."""
+        from distr.core.agent.tool_retriever import build_index_async
 
         tools = getattr(self, '_tools', None)
         if not tools:
             return
 
-        def _build():
-            try:
-                from distr.core.agent.services.llm.tool_router import get_tool_router
-                router = get_tool_router()
-                router.build_index(tools)
-            except Exception as e:
-                logger.debug("ToolRouter build skipped: %s", e)
+        build_index_async(list(tools))
 
-        threading.Thread(target=_build, daemon=True, name="tool-router-build").start()
+        # Wire RequestToolTool callback now that _tools_dict is populated
+        self._wire_request_tool_callback()
+
+    def _wire_request_tool_callback(self):
+        """Set the RequestToolTool injection callback on the cached instance.
+
+        The callback fuzzy-matches the query against TOOL_REGISTRY keys and
+        TOOL_DESCRIPTIONS values, then injects the matched tool into the
+        session's active tool set (``self._tools`` / ``self._tools_dict``).
+        """
+        rtt = self._tools_dict.get("request_tool")
+        if rtt is None:
+            return
+
+        def _on_tool_requested(query: str) -> tuple:
+            from distr.core.agent.tools.loader import TOOL_REGISTRY, TOOL_DESCRIPTIONS, get_cached_tool
+            try:
+                from thefuzz import fuzz
+            except ImportError:
+                try:
+                    from fuzzywuzzy import fuzz
+                except ImportError:
+                    return (False, "Fuzzy matching library not available.")
+
+            # Score against registry keys and description values
+            scores: list[tuple[str, int]] = []
+            for class_name in TOOL_REGISTRY:
+                name_score = fuzz.token_set_ratio(query.lower(), class_name.lower())
+                desc = TOOL_DESCRIPTIONS.get(class_name, "")
+                desc_score = fuzz.token_set_ratio(query.lower(), desc.lower()) if desc else 0
+                best = max(name_score, desc_score)
+                scores.append((class_name, best))
+
+            scores.sort(key=lambda x: x[1], reverse=True)
+
+            if scores and scores[0][1] >= 75:
+                matched_class = scores[0][0]
+                # Find the cached tool instance by iterating the cache
+                from distr.core.agent.tools.loader import _tool_cache
+                matched_tool = None
+                for tool in _tool_cache.values():
+                    if type(tool).__name__ == matched_class:
+                        matched_tool = tool
+                        break
+
+                if matched_tool is None:
+                    return (False, f"Tool '{matched_class}' found in registry but not in cache.")
+
+                # Inject into session active set
+                if matched_tool.name not in self._tools_dict:
+                    self._tools.append(matched_tool)
+                    self._tools_dict[matched_tool.name] = matched_tool
+
+                return (True, f"Tool '{matched_tool.name}' is now available. Please retry your task.")
+
+            # No match — return top 5 candidates
+            top_5 = [name for name, _ in scores[:5]]
+            return (False, f"Tool not found. Closest matches: {', '.join(top_5)}")
+
+        object.__setattr__(rtt, "_on_tool_requested", _on_tool_requested)
 
     def _get_filtered_tools(self, last_user_message: str = None):
-        """Return tools filtered by semantic router + request type detection.
+        """Return tools filtered by semantic retriever with sticky-tools support.
 
         This is the single entry point for tool filtering across ALL providers.
+
+        The sticky set contains only tools that were injected via RequestToolTool
+        during this session (i.e. tools in self._tools_dict that are NOT in the
+        original tool cache).  This ensures retrieval actually reduces the tool
+        count while preserving on-demand injections.
         """
         if not last_user_message:
             return self._tools
         try:
-            from distr.core.agent.services.llm.tool_routing import filter_tools_by_context
-            return filter_tools_by_context(last_user_message, self._tools, self._messages)
+            from distr.core.agent.tool_retriever import get_tool_retriever
+            names = get_tool_retriever().retrieve(last_user_message, self._model_name)
+            if names is None:  # kill switch active or index not ready
+                return self._tools
+            # Resolve retrieved names to tool instances from this session
+            retrieved = [self._tools_dict[n] for n in names if n in self._tools_dict]
+            retrieved_names = {t.name for t in retrieved}
+
+            # Sticky: only preserve tools that were injected via RequestToolTool
+            # (i.e. tools on self._tools that are NOT in the original tool cache
+            # and NOT already in the retrieved set).
+            from distr.core.agent.tools.loader import _tool_cache
+            sticky = [
+                t for t in self._tools
+                if t.name not in retrieved_names and t.name not in _tool_cache
+            ]
+            return retrieved + sticky
         except Exception as e:
-            logger.debug("_get_filtered_tools fallback to all tools: %s", e)
+            logger.debug("_get_filtered_tools fallback: %s", e)
             return self._tools
+
+    def _check_fast_actions(self):
+        """Check if the last user message triggers a fast action (bypasses LLM).
+
+        Returns a DetectedAction if a fast action is found, or None.
+        Shared across all providers.
+        """
+        from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+        if not self._messages:
+            return None
+        last_message = self._messages[-1].get("content", "")
+        if not isinstance(last_message, str):
+            return None
+        if last_message in self._processed_fast_actions:
+            return None
+        fast_action = detect_fast_action(last_message)
+        if fast_action and fast_action.confidence >= 0.9 and fast_action.action_type not in (ActionType.CONVERSATIONAL, ActionType.UNKNOWN):
+            return fast_action
+        return None
 
     def _get_username(self) -> str:
         """Extract OS username (first name if available)."""
@@ -487,12 +579,44 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
     def _build_system_message(self, chat_id=None, include_tools_description=True):
         """Build the full system message dict (persona + template)."""
+        # Ollama receives tool schemas via the API — skip embedding them in the prompt
+        provider = self._get_provider_name().lower() if hasattr(self, '_get_provider_name') else ''
+        if provider == 'ollama':
+            include_tools_description = False
+
         template = self._build_system_prompt_template(chat_id=chat_id, include_tools_description=include_tools_description)
         self.default_template = template
+
+        # Condense for local models (Ollama) to reduce token count
+        if provider == 'ollama':
+            template = self._condense_for_local(template)
 
         persona = getattr(self, '_persona', None)
         content = f"{persona}\n\n{template}" if persona else template
         return {"role": "system", "content": content}
+
+    @staticmethod
+    def _condense_for_local(text: str) -> str:
+        """Strip verbose sections from the system prompt for local models.
+
+        Removes the REST API reference (available at /docs/) and trims
+        excessive per-tool examples while keeping all behavioral rules.
+        """
+        import re
+
+        # Remove the REST API REFERENCE section entirely (7-8K chars, available at /docs/)
+        text = re.sub(
+            r'═+\s*\nREST API REFERENCE\s*\n═+.*?(?=═{3,}|\Z)',
+            '', text, flags=re.DOTALL,
+        )
+
+        # Remove the decorative ═══ separator lines (saves ~1.5K chars)
+        text = re.sub(r'═{10,}\n?', '', text)
+
+        # Collapse runs of 3+ blank lines into 2
+        text = re.sub(r'\n{4,}', '\n\n\n', text)
+
+        return text
 
     # ------------------------------------------------------------------ #
     #  One-liner setters                                                  #
@@ -522,18 +646,29 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
         logger.info(f"LLM agent name updated: '{old_name}' -> '{agent_name}'")
 
     def set_tts_service(self, tts_service):
-        """Set TTS service after initialization and reload tools."""
+        """Set TTS service after initialization and reload tools.
+
+        Uses the tool cache when available so tools are not re-instantiated.
+        Re-wires the RequestToolTool callback since self._tools_dict changed.
+        """
         from distr.core.agent.tools import load_tools
+        from distr.core.agent.tools.loader import _tool_cache
         self._tts_service = tts_service
         try:
-            self._tools = load_tools(
-                chat_manager=self.chat_manager, use_navigation_tools=True,
-                llm_service=self, tts_service=tts_service,
-                llm_model=self._model_name, event_queue=self.event_queue,
-                command_queue=self.command_queue,
-                confirmation_results_dict=self.confirmation_results_dict,
-            )
+            if _tool_cache:
+                # Cache is warm — reuse cached instances (fast path)
+                self._tools = list(_tool_cache.values())
+            else:
+                # Cache not warm — fall back to full instantiation
+                self._tools = load_tools(
+                    chat_manager=self.chat_manager, use_navigation_tools=True,
+                    llm_service=self, tts_service=tts_service,
+                    llm_model=self._model_name, event_queue=self.event_queue,
+                    command_queue=self.command_queue,
+                    confirmation_results_dict=self.confirmation_results_dict,
+                )
             self._tools_dict = {tool.name: tool for tool in self._tools}
+            self._wire_request_tool_callback()
             logger.debug(f"Reloaded {len(self._tools)} tools with TTS service")
         except Exception as e:
             logger.warning(f"Failed to reload tools with TTS service: {e}")

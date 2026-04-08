@@ -184,6 +184,56 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     if not _chat_ws_connections[subscribed_chat_id]:
                         del _chat_ws_connections[subscribed_chat_id]
 
+    @router.websocket("/ws/step-runner")
+    async def step_runner_websocket(websocket: WebSocket):
+        """WebSocket for real-time Step Runner updates. Local-only, no auth required."""
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        await websocket.accept()
+        loop = asyncio.get_event_loop()
+        from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
+        register_wf_websocket(websocket, loop)
+        logger.info("Step Runner WS: client connected")
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"type":"ping"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            unregister_wf_websocket(websocket)
+
+    @router.websocket("/ws/workflows")
+    async def workflows_websocket(websocket: WebSocket):
+        """WebSocket for real-time Workflow updates (unified). Local-only, no auth required."""
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        await websocket.accept()
+        loop = asyncio.get_event_loop()
+        from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
+        register_wf_websocket(websocket, loop)
+        logger.info("Workflow WS: client connected")
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"type":"ping"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            unregister_wf_websocket(websocket)
+
     @router.post("/internal/notify-chat-updated")
     async def notify_chat_updated(req: Request):
         """Called by the desktop app when a chat is updated (e.g. PTT/voice). Only accepts from localhost. Body: {"chat_id": int}."""
@@ -311,7 +361,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             model_name = (settings.get("conversational_llm_model") or "").strip() or "—"
             voice_provider_raw = (settings.get("tts_provider") or "Kokoro").strip()
             voice_provider_id = normalize_voice_provider(voice_provider_raw)
-            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs"}
+            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "f5tts": "F5-TTS"}
             voice_provider = _display_map.get(voice_provider_id, voice_provider_id.title())
             voice_model_raw = (
                 settings.get("kokoro_voice")
@@ -421,6 +471,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("openai_voice") or "")
                 elif "elevenlabs" in vp_lower:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("elevenlabs_voice") or "")
+                elif "f5tts" in vp_lower:
+                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("f5tts_voice") or "default")
                 else:
                     voice_model_raw = (root_chat.voice_model or "").strip() or ""
                 # Persist to chat row when we used fallback so this thread has its own LLM/voice stored (normal chat behaviour)
@@ -525,7 +577,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 voice_provider = normalize_voice_provider(voice_provider)
 
             # Validate voice provider
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", ""]
+            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "f5tts", ""]
             if voice_provider and voice_provider not in valid_voice_providers:
                 raise HTTPException(
                     status_code=400,
@@ -783,7 +835,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
 
             # Validate voice provider if provided
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "", None]
+            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "f5tts", "", None]
             vp_normalized = normalize_voice_provider(voice_provider) if voice_provider else voice_provider
             if (
                 vp_normalized is not None

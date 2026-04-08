@@ -2,6 +2,28 @@
 
 ---
 
+## [2.7.0] - 2026-04-09
+
+### Workflow Unification, Chat Setup Overhaul, Web UI Remote Controls, Performance
+
+**Workflow–StepRunner Unification** – The two parallel automation systems (AutoWorkflow and StepRunner) are now one. StepRunner's LLM planning, scheduler, audit trail, and context assembly got absorbed into the Workflow system. Legacy `/api/step-runner/*` endpoints redirect to `/api/workflows/*` with HTTP 301. The migration runs automatically on startup — existing StepRunner sessions, steps, and runs get copied into the unified tables. Import/export handles both the new v2.0 format and legacy v1.0 StepRunner exports. 13 property-based tests validate the whole thing.
+
+**Chat Setup Form** – The empty state on the chat page got a full redesign. There's now a loading spinner while providers, models, voices, and skins load — then the form appears with everything ready. Skin picker shows all your oracle and avatar skins with a big pop-out hover effect. Kilo logo links to free model signup with a tooltip explaining how to get your API key. Manage Providers button links to the third-party settings. Ollama download button opens the model browser. The "Configure New Chat" modal got the same treatment — wider layout, skin picker, Kilo promo, and default starting question.
+
+**Web UI Remote Controls** – Dictation and agent input buttons added to the remote web UI. New signals and buttons for window swapping. Keyboard controls expanded with new shortcuts and input modes. The entire remote control interface got a polish pass.
+
+**Ollama Performance** – For local Ollama models, the system prompt is now condensed automatically — REST API reference stripped, tool descriptions removed (Ollama gets tool schemas via the API already), decorative separators cleaned up. Saves ~2,700 tokens per request. Conversational and coding model dropdowns now filter to only show models that support tool calling.
+
+**Third-Party Provider Order** – KiloCode moved to the top of the providers list, followed by Google Gemini and ElevenLabs. Makes it easier to find the free option.
+
+**Llama Backdrop** – The chat area now has the llama mascot as a subtle bottom-right backdrop image. Click it to open the About window and play the startup sound.
+
+**OpenPage Tool** – The agent can now navigate directly to any settings section — "open skins", "open LLMs", "open audio", "open providers", "open advanced" all work. Previously it could only open top-level pages.
+
+**Bug Fixes** – Fixed `UserStoppedSpeakingFrame` import missing in Vosk STT. Fixed Vosk JSON parse crash on malformed `FinalResult()`. Fixed `_check_fast_actions` missing from `OllamaLLMService` (was only on `BaseLLMService`). Fixed tool description warnings for accessibility tree tools. Fixed startup timing warnings for STT/LLM services. Fixed `pywhispercpp` native extension broken from dev build. Fixed sidebar text wrapping vertically when chat form was wide. Added DB migration for new workflow columns on existing databases.
+
+---
+
 ## [2.6.9] - 2026-03-31
 
 ### Google Gemini, Kiro CLI Pipeline, Telegram Overhaul, Windows Polish

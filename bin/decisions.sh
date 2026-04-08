@@ -62,51 +62,74 @@ fi
 echo ""
 
 # Require python3.12 - PyTorch and PyQt6 need 3.12 (3.13+ not supported)
-if ! command -v python3.12 &> /dev/null; then
-    echo -e "${YELLOW}python3.12 not found. Installing...${NC}"
-    if [[ "$OSTYPE" == "darwin"* ]]; then
+# IMPORTANT: On macOS, prefer the python.org framework build over Homebrew.
+# PyTorch wheels on PyPI are compiled against the python.org framework which
+# exports _PyDict_GetItemRef. Homebrew's build does NOT export this symbol,
+# causing every torch version to fail with "symbol not found in flat namespace".
+PYTHON_CMD=""
+
+if [[ "$OSTYPE" == "darwin"* ]]; then
+    # macOS: prefer python.org framework build (required for PyTorch)
+    FRAMEWORK_PYTHON="/Library/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+    if [ -x "$FRAMEWORK_PYTHON" ]; then
+        # Verify it's 3.12.8+ (has _PyDict_GetItemRef backport)
+        FRAMEWORK_VER=$("$FRAMEWORK_PYTHON" -c "import sys; print(f'{sys.version_info.minor}.{sys.version_info.micro}')" 2>/dev/null)
+        FRAMEWORK_MICRO=$(echo "$FRAMEWORK_VER" | cut -d. -f2)
+        if [ "$FRAMEWORK_MICRO" -ge 8 ] 2>/dev/null; then
+            PYTHON_CMD="$FRAMEWORK_PYTHON"
+            echo -e "${GREEN}✓${NC} Python found (framework): $($PYTHON_CMD --version)"
+        else
+            echo -e "${YELLOW}python.org Python 3.12 found but version too old ($FRAMEWORK_VER). Need 3.12.8+${NC}"
+            echo -e "${YELLOW}Download from: https://www.python.org/downloads/release/python-31210/${NC}"
+        fi
+    fi
+
+    # Fallback: try Homebrew python3.12 (may not work with torch)
+    if [ -z "$PYTHON_CMD" ] && command -v python3.12 &> /dev/null; then
+        PYTHON_CMD="python3.12"
+        echo -e "${YELLOW}⚠${NC}  Using Homebrew Python ($($PYTHON_CMD --version))"
+        echo -e "${YELLOW}   PyTorch/F5-TTS may not work. For full support, install python.org Python 3.12.10+:${NC}"
+        echo -e "${YELLOW}   https://www.python.org/downloads/release/python-31210/${NC}"
+    fi
+
+    # Not found at all — install via Homebrew as last resort
+    if [ -z "$PYTHON_CMD" ]; then
+        echo -e "${YELLOW}python3.12 not found. Installing via Homebrew...${NC}"
         if command -v brew &> /dev/null; then
             brew install python@3.12
-            # Refresh PATH to pick up newly installed python3.12
             if [ -d "/opt/homebrew/bin" ]; then
                 export PATH="/opt/homebrew/bin:/opt/homebrew/opt/python@3.12/bin:$PATH"
             fi
-            if [ -d "/usr/local/bin" ]; then
-                export PATH="/usr/local/bin:/usr/local/opt/python@3.12/bin:$PATH"
-            fi
             hash -r 2>/dev/null
+            if command -v python3.12 &> /dev/null; then
+                PYTHON_CMD="python3.12"
+                echo -e "${GREEN}✓${NC} Python installed: $($PYTHON_CMD --version)"
+                echo -e "${YELLOW}⚠${NC}  Homebrew Python installed. PyTorch may not work."
+                echo -e "${YELLOW}   For full support, install python.org Python 3.12.10+:${NC}"
+                echo -e "${YELLOW}   https://www.python.org/downloads/release/python-31210/${NC}"
+            fi
         else
-            echo -e "${RED}Error: Homebrew not found. Install it first:${NC}"
-            echo '  /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"'
-            echo "Then re-run this script."
+            echo -e "${RED}Error: Homebrew not found. Install Python 3.12.10+ from:${NC}"
+            echo "  https://www.python.org/downloads/release/python-31210/"
             exit 1
         fi
+    fi
+else
+    # Linux/other: use python3.12 from PATH
+    if command -v python3.12 &> /dev/null; then
+        PYTHON_CMD="python3.12"
+        echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
     else
         echo -e "${RED}Error: python3.12 not found. Please install Python 3.12:${NC}"
-        echo "  # Use pyenv: curl https://pyenv.run | bash && pyenv install 3.12.0"
+        echo "  # Use pyenv: curl https://pyenv.run | bash && pyenv install 3.12.10"
         echo "  # Or download from: https://www.python.org/downloads/"
         exit 1
     fi
+fi
 
-    # Verify it installed successfully
-    if ! command -v python3.12 &> /dev/null; then
-        # Try the direct Homebrew path as last resort
-        if [ -x "/opt/homebrew/bin/python3.12" ]; then
-            PYTHON_CMD="/opt/homebrew/bin/python3.12"
-        elif [ -x "/usr/local/bin/python3.12" ]; then
-            PYTHON_CMD="/usr/local/bin/python3.12"
-        else
-            echo -e "${RED}Error: python3.12 still not found after install. Check your PATH.${NC}"
-            exit 1
-        fi
-        echo -e "${GREEN}✓${NC} Python found at: $PYTHON_CMD"
-    else
-        PYTHON_CMD="python3.12"
-        echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
-    fi
-else
-    PYTHON_CMD="python3.12"
-    echo -e "${GREEN}✓${NC} Python found: $(python3.12 --version)"
+if [ -z "$PYTHON_CMD" ]; then
+    echo -e "${RED}Error: Could not find or install Python 3.12. Exiting.${NC}"
+    exit 1
 fi
 
 # Check and install system dependencies
@@ -639,6 +662,44 @@ check_numpy_torch_compatibility() {
 
 check_numpy_torch_compatibility
 
+# Verify PyTorch actually loads (catches _PyDict_GetItemRef symbol issue)
+echo -e "${YELLOW}Verifying PyTorch...${NC}"
+TORCH_OK=$("$VENV_DIR/bin/python" -c "
+try:
+    import torch
+    print(f'ok {torch.__version__}')
+except ImportError as e:
+    if '_PyDict_GetItemRef' in str(e):
+        print('symbol_error')
+    else:
+        print('missing')
+except Exception:
+    print('error')
+" 2>/dev/null || echo "error")
+
+case "$TORCH_OK" in
+    ok*)
+        TORCH_VER=$(echo "$TORCH_OK" | cut -d' ' -f2)
+        echo -e "${GREEN}✓${NC} PyTorch $TORCH_VER loaded successfully"
+        ;;
+    symbol_error)
+        echo -e "${YELLOW}⚠${NC}  PyTorch cannot load (_PyDict_GetItemRef symbol missing)"
+        echo -e "${YELLOW}   F5-TTS and sentence-transformers will be unavailable.${NC}"
+        echo -e "${YELLOW}   Tool retrieval will use TF-IDF fallback (still works, less accurate).${NC}"
+        if [[ "$OSTYPE" == "darwin"* ]]; then
+            echo -e "${YELLOW}   FIX: Install python.org Python 3.12.10+:${NC}"
+            echo -e "${YELLOW}   https://www.python.org/downloads/release/python-31210/${NC}"
+            echo -e "${YELLOW}   Then: rm -rf ~/.virtualenvs/decisions && ./bin/decisions.sh${NC}"
+        fi
+        ;;
+    missing)
+        echo -e "${YELLOW}⚠${NC}  PyTorch not installed"
+        ;;
+    *)
+        echo -e "${YELLOW}⚠${NC}  PyTorch verification failed"
+        ;;
+esac
+
 # Clean up Python cache files to avoid stale bytecode issues
 echo -e "${YELLOW}Cleaning Python cache...${NC}"
 find "$SCRIPT_DIR" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null
@@ -812,7 +873,7 @@ start_sidecar() {
         if command -v go &>/dev/null && [ -d "$SCRIPT_DIR/sidecar" ]; then
             echo -e "${YELLOW}Building sidecar...${NC}"
             mkdir -p "$SCRIPT_DIR/sidecar/dist"
-            (cd "$SCRIPT_DIR/sidecar" && go mod tidy -q && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) && \
+            (cd "$SCRIPT_DIR/sidecar" && go mod tidy && go build -ldflags="-s -w" -o dist/decisionsai-sidecar . 2>/dev/null) && \
                 echo -e "${GREEN}✓${NC} Sidecar built" || \
                 echo -e "${YELLOW}⚠  Sidecar build failed — accessibility tree tools unavailable${NC}"
         fi
@@ -843,5 +904,6 @@ start_sidecar
 echo ""
 echo -e "${GREEN}Starting DecisionsAI...${NC}"
 echo "================================"
-"$VENV_DIR/bin/python" bin/start.py
+# Filter macOS dylib duplicate class warnings from stderr (harmless noise from cv2/av FFmpeg conflict)
+"$VENV_DIR/bin/python" bin/start.py 2> >(grep -v "^objc\[" >&2)
 

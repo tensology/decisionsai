@@ -94,21 +94,32 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         logger.info("%s initialized with model: %s", self.SERVICE_NAME, self._model_name)
 
     def _load_tools(self, chat_manager, tts_service, model_name, event_queue, command_queue, confirmation_results_dict):
-        """Load tools for the LLM service."""
+        """Load tools for the LLM service.
+
+        Uses the module-level tool cache when available (populated by
+        ``warm_tool_cache`` at startup) to avoid re-instantiating all tools.
+        Falls back to full instantiation if the cache is empty.
+        """
         try:
-            self._tools = load_tools(
-                chat_manager=chat_manager,
-                use_navigation_tools=True,
-                llm_service=self,
-                tts_service=tts_service,
-                llm_model=model_name,
-                event_queue=event_queue,
-                command_queue=command_queue,
-                confirmation_results_dict=confirmation_results_dict
-            )
+            from distr.core.agent.tools.loader import _tool_cache
+            if _tool_cache:
+                self._tools = list(_tool_cache.values())
+            else:
+                self._tools = load_tools(
+                    chat_manager=chat_manager,
+                    use_navigation_tools=True,
+                    llm_service=self,
+                    tts_service=tts_service,
+                    llm_model=model_name,
+                    event_queue=event_queue,
+                    command_queue=command_queue,
+                    confirmation_results_dict=confirmation_results_dict
+                )
+            # dict[str, BaseTool] keyed by tool.name — used by _get_filtered_tools
+            # and tool execution lookups across all provider subclasses.
             self._tools_dict = {tool.name: tool for tool in self._tools}
             logger.debug("%s: Loaded %d tools", self.SERVICE_NAME, len(self._tools))
-            self._build_tool_router_async()
+            self._build_tool_index_async()
         except Exception as e:
             logger.error("Error loading tools for %s: %s", self.SERVICE_NAME, e)
             self._tools = []

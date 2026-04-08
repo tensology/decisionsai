@@ -9,7 +9,6 @@ Structure:
   prompt         — System prompt loading and tool description building
   text_utils     — TTS text cleaning, normalize_text, parse_tool_calls_from_content
   tool_routing   — detect_request_type, filter_tools_by_context, clipboard helpers
-  tool_router    — Semantic ToolRouter (embedding-based tool selection)
   tool_format    — convert_tools_to_openai_format
   fast_action_detector — Regex-based fast action detection
   image_utils    — Vision/image helpers

@@ -176,6 +176,12 @@ class AgentLifecycleMixin:
             try:
                 self.agent_process.start()
                 logger.info(f"Agent process started with PID: {self.agent_process.pid}")
+                # Track this PID so it gets killed on restart/crash
+                try:
+                    from distr.core.process_tracker import register_child_pid
+                    register_child_pid(self.agent_process.pid)
+                except Exception:
+                    pass
             except (FileNotFoundError, OSError) as e:
                 if "No such file or directory" in str(e) or "semaphore" in str(e).lower():
                     logger.warning(f"Suppressed multiprocessing semaphore error during agent start: {e}")
@@ -358,6 +364,14 @@ class AgentLifecycleMixin:
                     self.agent_process.close()
                 except Exception:
                     pass
+
+            # Unregister from process tracker now it's confirmed dead
+            try:
+                from distr.core.process_tracker import unregister_child_pid
+                if hasattr(self, 'agent_process') and self.agent_process:
+                    unregister_child_pid(self.agent_process.pid)
+            except Exception:
+                pass
 
             self.agent_process = None
             logger.info("Agent process cleanup completed")

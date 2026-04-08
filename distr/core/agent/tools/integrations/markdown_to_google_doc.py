@@ -19,6 +19,7 @@ from datetime import datetime
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+from distr.core.agent.tools.base import LazyToolMixin
 
 logger = logging.getLogger(__name__)
 
@@ -282,7 +283,7 @@ class MarkdownToGoogleDocInput(BaseModel):
     use_fallback: bool = Field(default=False, description="Force use of fallback path (DOCX conversion) instead of direct creation")
 
 
-class MarkdownToGoogleDocTool(BaseTool):
+class MarkdownToGoogleDocTool(LazyToolMixin, BaseTool):
     """Tool for converting markdown from clipboard to Google Doc with automatic fallback."""
     
     name: str = "markdown_to_google_doc"
@@ -307,10 +308,13 @@ class MarkdownToGoogleDocTool(BaseTool):
     
     def __init__(self):
         super().__init__()
+
+    def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
     
     def _run(self, open_in_brave: bool = True, use_fallback: bool = False, **kwargs) -> str:
         """Execute markdown to Google Doc conversion workflow"""
+        self._ensure_initialized()
         try:
             # Step 1: Get clipboard content
             logger.info("Getting clipboard content...")
@@ -432,5 +436,6 @@ class MarkdownToGoogleDocTool(BaseTool):
     
     async def _arun(self, open_in_brave: bool = True, use_fallback: bool = False, **kwargs) -> str:
         """Async run method"""
+        self._ensure_initialized()
         return self._run(open_in_brave=open_in_brave, use_fallback=use_fallback, **kwargs)
 

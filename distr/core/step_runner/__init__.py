@@ -1,1 +1,1 @@
-"""Step runner — scheduling and orchestration of multi-step sessions."""
+"""Step runner — shared utility modules for workflow execution."""

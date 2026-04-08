@@ -10,7 +10,9 @@
     "image_offset_x": 0,
     "image_offset_y": 0,
     "chroma_key": null,
-    "chroma_threshold": 30
+    "chroma_threshold": 30,
+    "unfocused_opacity_enabled": false,
+    "unfocused_opacity": 0.5
   },
   "events": {
     "idle": {
@@ -26,7 +28,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "hands_free_listening": {
       "animation": "10.webm",

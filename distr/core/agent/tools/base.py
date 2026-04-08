@@ -1,11 +1,48 @@
 import re
 import logging
 import platform
+import threading
 from typing import List, Dict, Any, Optional, Tuple
 from langchain_core.tools import BaseTool
 from pydantic import BaseModel, Field, ConfigDict
 
 logger = logging.getLogger(__name__)
+
+
+class LazyToolMixin:
+    """
+    Mixin for tools whose __init__ has expensive side effects.
+
+    Subclasses declare _lazy_init() instead of putting expensive work
+    in __init__. The mixin calls _lazy_init() on first _run()/_arun() call,
+    protected by a threading.Lock.
+
+    Usage:
+        class MyTool(LazyToolMixin, BaseTool):
+            def _lazy_init(self):
+                self._client = ExpensiveClient()
+
+            def _run(self, ...):
+                self._ensure_initialized()
+                return self._client.do_something()
+    """
+    _lazy_initialized: bool = False
+    _lazy_lock: threading.Lock
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        cls._lazy_lock = threading.Lock()
+
+    def _ensure_initialized(self):
+        if not self._lazy_initialized:
+            with self._lazy_lock:
+                if not self._lazy_initialized:
+                    self._lazy_init()
+                    self._lazy_initialized = True
+
+    def _lazy_init(self):
+        """Override in subclass to perform expensive initialization."""
+        pass
 
 
 class BaseActionInput(BaseModel):

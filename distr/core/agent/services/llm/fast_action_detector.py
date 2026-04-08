@@ -984,6 +984,40 @@ class FastActionDetector:
                         final_args[key] = fmt
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")
+                
+                # If this is a mouse-to-element screenshot_analyze match AND the sidecar
+                # is running, let the LLM handle it — it can use find_element/move_to_element
+                # which are faster and more accurate than vision analysis.
+                if action_type == ActionType.SCREENSHOT_ANALYZE and tool_name == "screenshot_analyzer":
+                    # Only defer to LLM for mouse-targeting patterns (not pure "what's on screen" queries)
+                    _mouse_target_patterns = (
+                        r'\b(?:move|put|hover)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\b',
+                        r'\b(?:click|press|tap|double[- ]?click|right[- ]?click)\s+(?:on\s+)?(?:the\s+)?',
+                    )
+                    import re as _re
+                    is_mouse_target = any(_re.search(p, text, _re.IGNORECASE) for p in _mouse_target_patterns)
+                    if is_mouse_target:
+                        try:
+                            import requests as _req
+                            _sidecar_port = __import__('os').environ.get('DECISIONSAI_SIDECAR_HTTP_PORT', '11435')
+                            _req.get(f"http://127.0.0.1:{_sidecar_port}/health", timeout=0.3)
+                            # Sidecar is up — let LLM use find_element/move_to_element
+                            logger.info(
+                                "FastActionDetector: sidecar available, deferring '%s' to LLM for accessibility-tree routing",
+                                text[:80],
+                            )
+                            return DetectedAction(
+                                action_type=ActionType.UNKNOWN,
+                                tool_name="",
+                                tool_args={},
+                                needs_copy_first=False,
+                                response_type="llm_response",
+                                confidence=0.0,
+                                original_text=text,
+                            )
+                        except Exception:
+                            pass  # Sidecar not running — fall through to screenshot_analyzer
+
                 return DetectedAction(
                     action_type=action_type,
                     tool_name=tool_name,

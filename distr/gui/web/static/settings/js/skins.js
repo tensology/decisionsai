@@ -14,6 +14,53 @@ var EVENT_HOOKS = [
 ];
 var PLAYBACK_MODES = ["loop", "pingpong"];
 
+function _getOraclePlaybackMode() {
+    if (_editingSkinConfig && _editingSkinConfig.events && _editingSkinConfig.events.idle) {
+        return _editingSkinConfig.events.idle.playback || 'loop';
+    }
+    return 'loop';
+}
+
+function _applyPingPongToVideo(vid, isPingPong) {
+    // Clean up any previous ping-pong state
+    if (vid._ppEndHandler) vid.removeEventListener('ended', vid._ppEndHandler);
+    if (vid._ppRafId) cancelAnimationFrame(vid._ppRafId);
+    vid._ppEndHandler = null;
+    vid._ppRafId = null;
+    vid._ppForward = true;
+
+    if (!isPingPong) {
+        vid.loop = true;
+        return;
+    }
+
+    vid.loop = false;
+
+    var endHandler = function() {
+        // Video finished playing forward — now step backward frame by frame
+        vid._ppForward = false;
+        var fps = 24;
+        var stepTime = 1.0 / fps;
+
+        function stepBack() {
+            if (vid._ppForward || vid.paused) return;
+            vid.currentTime = Math.max(0, vid.currentTime - stepTime);
+            if (vid.currentTime <= 0.01) {
+                // Reached the start — play forward again
+                vid._ppForward = true;
+                vid.currentTime = 0;
+                vid.play().catch(function(){});
+                return;
+            }
+            vid._ppRafId = requestAnimationFrame(stepBack);
+        }
+        vid._ppRafId = requestAnimationFrame(stepBack);
+    };
+
+    vid._ppEndHandler = endHandler;
+    vid.addEventListener('ended', endHandler);
+}
+
 async function loadSkinsSettings() {
     try {
         var resp = await fetch('/api/skins');
@@ -57,8 +104,9 @@ function renderSkinsGrid() {
             if (isVideo) {
                 previewEl = document.createElement('video');
                 previewEl.src = previewUrl;
-                previewEl.autoplay = true; previewEl.muted = true; previewEl.loop = true;
+                previewEl.autoplay = true; previewEl.muted = true;
                 previewEl.setAttribute('playsinline', '');
+                _applyPingPongToVideo(previewEl, skin.idle_playback === 'pingpong');
             } else {
                 previewEl = document.createElement('img');
                 previewEl.src = previewUrl;
@@ -118,6 +166,18 @@ async function selectSkin(folderName) {
         _selectedSkin = folderName;
         renderSkinsGrid();
         showEditorForSkin(folderName);
+        // Update slider to the saved size for this skin
+        try {
+            var sizeResp = await fetch('/api/skins');
+            if (sizeResp.ok) {
+                var sizeData = await sizeResp.json();
+                var rawSize = sizeData.sphere_size !== undefined ? sizeData.sphere_size : 180;
+                var scale = rawSize > 10 ? Math.max(4, Math.min(10, Math.round(rawSize / 20))) : Math.max(4, Math.min(10, parseInt(rawSize, 10) || 9));
+                var slider = document.getElementById('skins_oracle_size');
+                if (slider) slider.value = scale;
+                updateSkinsOracleSizeLabel(scale);
+            }
+        } catch (_) {}
     } catch (e) {
         console.error('Error selecting skin:', e);
     }
@@ -182,6 +242,38 @@ async function loadOracleEditor(folderName) {
             sel.appendChild(o);
         });
         sel.onchange = function() { previewOracleGif(this.value); saveOracleGif(this.value); };
+
+        // Ping-pong checkbox
+        var ppCb = document.getElementById('oracle_pingpong_checkbox');
+        var curPlayback = (_editingSkinConfig.events && _editingSkinConfig.events.idle) ? (_editingSkinConfig.events.idle.playback || 'loop') : 'loop';
+        if (ppCb) {
+            ppCb.checked = (curPlayback === 'pingpong');
+            ppCb.onchange = function() { saveOraclePlayback(this.checked ? 'pingpong' : 'loop'); previewOracleGif(sel.value); renderSkinsGrid(); };
+        }
+
+        // Unfocused opacity controls
+        var uoCb = document.getElementById('oracle_unfocused_opacity_checkbox');
+        var uoSlider = document.getElementById('oracle_unfocused_opacity_slider');
+        var uoWrap = document.getElementById('oracle_unfocused_opacity_slider_wrap');
+        var uoLabel = document.getElementById('oracle_unfocused_opacity_value');
+        var rendering = _editingSkinConfig.rendering || {};
+        var uoEnabled = rendering.unfocused_opacity_enabled || false;
+        var uoVal = rendering.unfocused_opacity !== undefined ? rendering.unfocused_opacity : 0.5;
+        if (uoCb) {
+            uoCb.checked = uoEnabled;
+            if (uoWrap) uoWrap.classList.toggle('hidden', !uoEnabled);
+            uoCb.onchange = function() {
+                if (uoWrap) uoWrap.classList.toggle('hidden', !this.checked);
+                saveOracleUnfocusedOpacity(this.checked, parseFloat(uoSlider.value) / 100);
+            };
+        }
+        if (uoSlider) {
+            uoSlider.value = Math.round(uoVal * 100);
+            if (uoLabel) uoLabel.textContent = Math.round(uoVal * 100) + '%';
+            uoSlider.oninput = function() { if (uoLabel) uoLabel.textContent = this.value + '%'; };
+            uoSlider.onchange = function() { saveOracleUnfocusedOpacity(uoCb.checked, parseFloat(this.value) / 100); };
+        }
+
         previewOracleGif(cur);
     } catch (e) { console.error('Error loading oracle editor:', e); }
 }
@@ -195,18 +287,24 @@ function previewOracleGif(filename) {
     var oldImg = container.querySelector('img');
     var oldVid = container.querySelector('video');
     if (oldImg) oldImg.remove();
-    if (oldVid) oldVid.remove();
+    if (oldVid) {
+        if (oldVid._ppEndHandler) oldVid.removeEventListener('ended', oldVid._ppEndHandler);
+        if (oldVid._ppRafId) cancelAnimationFrame(oldVid._ppRafId);
+        oldVid.remove();
+    }
     if (ph) ph.style.display = 'none';
 
     var url = '/api/skins/' + encodeURIComponent(_editingSkin) + '/preview/' + encodeURIComponent(filename);
     var ext = filename.split('.').pop().toLowerCase();
+    var isPingPong = (_getOraclePlaybackMode() === 'pingpong');
 
     if (ext === 'webm') {
         var vid = document.createElement('video');
         vid.src = url;
-        vid.autoplay = true; vid.muted = true; vid.loop = true;
+        vid.autoplay = true; vid.muted = true;
         vid.setAttribute('playsinline', '');
         vid.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
+        _applyPingPongToVideo(vid, isPingPong);
         container.appendChild(vid);
         vid.play().catch(function(){});
     } else {
@@ -220,6 +318,39 @@ function previewOracleGif(filename) {
 async function saveOracleGif(filename) {
     if (!_editingSkinConfig) return;
     for (var h in _editingSkinConfig.events) _editingSkinConfig.events[h].animation = filename;
+    try {
+        await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(_editingSkinConfig)
+        });
+        await fetch('/api/skins/select', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({skin_name: _editingSkin})
+        });
+    } catch (e) { console.error(e); }
+}
+
+async function saveOraclePlayback(mode) {
+    if (!_editingSkinConfig) return;
+    for (var h in _editingSkinConfig.events) _editingSkinConfig.events[h].playback = mode;
+    // Update local skins list so grid re-renders correctly
+    _skinsList.forEach(function(s) { if (s.folder_name === _editingSkin) s.idle_playback = mode; });
+    try {
+        await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
+            method: 'PUT', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(_editingSkinConfig)
+        });
+        await fetch('/api/skins/select', {
+            method: 'POST', headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({skin_name: _editingSkin})
+        });
+    } catch (e) { console.error(e); }
+}
+
+async function saveOracleUnfocusedOpacity(enabled, value) {
+    if (!_editingSkinConfig || !_editingSkinConfig.rendering) return;
+    _editingSkinConfig.rendering.unfocused_opacity_enabled = enabled;
+    _editingSkinConfig.rendering.unfocused_opacity = value;
     try {
         await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},

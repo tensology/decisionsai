@@ -134,13 +134,35 @@ func handleGetWindowTree(params map[string]any) (any, error) {
 	if v, ok := params["depth"].(float64); ok {
 		depth = int(v)
 	}
+	appName, _ := params["app_name"].(string)
 
 	if pid == 0 {
-		pidOut, err := runOsascript(`tell application "System Events" to unix id of first process whose frontmost is true`, 5*time.Second)
-		if err != nil {
-			return nil, fmt.Errorf("get frontmost pid: %w", err)
+		if appName != "" {
+			// Look up PID by app name across all processes
+			script := fmt.Sprintf(`tell application "System Events" to unix id of first process whose name contains %q`, appName)
+			pidOut, err := runOsascript(script, 5*time.Second)
+			if err != nil {
+				// Try case-insensitive partial match
+				script2 := fmt.Sprintf(`
+tell application "System Events"
+	repeat with proc in (every process whose background only is false)
+		if name of proc contains %q then return unix id of proc
+	end repeat
+	return 0
+end tell`, appName)
+				pidOut, err = runOsascript(script2, 5*time.Second)
+				if err != nil {
+					return nil, fmt.Errorf("find app '%s': %w", appName, err)
+				}
+			}
+			pid, _ = strconv.Atoi(strings.TrimSpace(pidOut))
+		} else {
+			pidOut, err := runOsascript(`tell application "System Events" to unix id of first process whose frontmost is true`, 5*time.Second)
+			if err != nil {
+				return nil, fmt.Errorf("get frontmost pid: %w", err)
+			}
+			pid, _ = strconv.Atoi(strings.TrimSpace(pidOut))
 		}
-		pid, _ = strconv.Atoi(strings.TrimSpace(pidOut))
 	}
 
 	js := fmt.Sprintf(`
@@ -382,18 +404,56 @@ end tell`, pid)
 // ── find_element ──────────────────────────────────────────────────────────────
 
 func handleFindElement(params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	controlType, _ := params["control_type"].(string)
+	appName, _ := params["app_name"].(string)
+
+	// First search: frontmost window (or named app if specified)
 	if _, err := handleGetWindowTree(params); err != nil {
 		return nil, err
 	}
-	name, _ := params["name"].(string)
-	controlType, _ := params["control_type"].(string)
 
 	elementCache.mu.Lock()
-	defer elementCache.mu.Unlock()
+	matches := findInCache(name, controlType)
+	elementCache.mu.Unlock()
 
+	// If nothing found and no specific app was requested, search all visible apps
+	if len(matches) == 0 && appName == "" {
+		allAppsScript := `tell application "System Events" to get unix id of every process whose background only is false`
+		out, err := runOsascript(allAppsScript, 10*time.Second)
+		if err == nil {
+			for _, pidStr := range strings.Split(out, ",") {
+				pidStr = strings.TrimSpace(pidStr)
+				pid, err := strconv.Atoi(pidStr)
+				if err != nil || pid == 0 {
+					continue
+				}
+				p := map[string]any{"pid": float64(pid), "depth": float64(3)}
+				if _, err := handleGetWindowTree(p); err != nil {
+					continue
+				}
+				elementCache.mu.Lock()
+				m := findInCache(name, controlType)
+				elementCache.mu.Unlock()
+				if len(m) > 0 {
+					matches = m
+					break
+				}
+			}
+		}
+	}
+
+	return map[string]any{"match_count": len(matches), "elements": matches}, nil
+}
+
+// findInCache returns elements matching name and/or controlType from the cache.
+// Caller must hold elementCache.mu.
+func findInCache(name, controlType string) []map[string]any {
 	var matches []map[string]any
+	nameLower := strings.ToLower(name)
 	for _, el := range elementCache.elements {
-		if name != "" && el["name"] != name {
+		elName := strings.ToLower(fmt.Sprintf("%v", el["name"]))
+		if name != "" && !strings.Contains(elName, nameLower) {
 			continue
 		}
 		if controlType != "" && el["control_type"] != controlType {
@@ -401,7 +461,7 @@ func handleFindElement(params map[string]any) (any, error) {
 		}
 		matches = append(matches, el)
 	}
-	return map[string]any{"match_count": len(matches), "elements": matches}, nil
+	return matches
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

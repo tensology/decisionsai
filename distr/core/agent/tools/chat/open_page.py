@@ -24,6 +24,29 @@ _PAGE_MAP = {
     # Settings / Preferences
     "settings":       "/settings",
     "preferences":    "/settings",
+    # Settings sections
+    "general":        "/settings#general",
+    "general settings": "/settings#general",
+    "initiative":     "/settings#initiative",
+    "audio":          "/settings#audio",
+    "audio settings": "/settings#audio",
+    "third party":    "/settings#thirdparty",
+    "third-party":    "/settings#thirdparty",
+    "thirdparty":     "/settings#thirdparty",
+    "providers":      "/settings#thirdparty",
+    "api keys":       "/settings#thirdparty",
+    "llms":           "/settings#llms",
+    "llm":            "/settings#llms",
+    "language models": "/settings#llms",
+    "models":         "/settings#llms",
+    "skins":          "/settings#skins",
+    "skin":           "/settings#skins",
+    "skin settings":  "/settings#skins",
+    "oracle skin":    "/settings#skins",
+    "avatar":         "/settings#skins",
+    "avatars":        "/settings#skins",
+    "advanced":       "/settings#advanced",
+    "advanced settings": "/settings#advanced",
     # Actions
     "actions":        "/actions/",
     # Snippets
@@ -32,6 +55,7 @@ _PAGE_MAP = {
     "projects":       "/projects/",
     # Workflows / Step Runner
     "workflows":      "/workflows/",
+    "workflow":       "/workflows/",
     "step runner":    "/workflows/",
     "step-runner":    "/workflows/",
     "steprunner":     "/workflows/",
@@ -54,7 +78,9 @@ _PAGE_MAP = {
 
 # Build a nice list for the tool description
 _KNOWN_PAGES = ", ".join(sorted({
-    "chat", "settings/preferences", "actions", "snippets", "projects",
+    "chat", "settings/preferences", "general", "initiative", "audio",
+    "third party/providers/api keys", "llms/models", "skins/avatar",
+    "advanced", "actions", "snippets", "projects",
     "workflows/step runner", "kanban/board", "docs/api docs",
     "activity log", "about",
 }))

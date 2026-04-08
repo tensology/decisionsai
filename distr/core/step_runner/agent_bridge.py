@@ -92,12 +92,26 @@ class WorkflowAgentBridge:
         step_lines = []
         for i, s in enumerate(steps_summary, 1):
             title = s.get("title") or f"Step {i}"
-            step_lines.append(f"  {i}. {title}")
+            result = (s.get("result") or "").strip()
+            status = s.get("status", "")
+            status_tag = f" [{status}]" if status and status not in ("completed", "passed") else ""
+            if result:
+                # Truncate long results for readability
+                short = result[:200] + ("..." if len(result) > 200 else "")
+                step_lines.append(f"  {i}. {title}{status_tag}: {short}")
+            else:
+                step_lines.append(f"  {i}. {title}{status_tag}")
 
         steps_block = "\n".join(step_lines) if step_lines else "  (no steps)"
+
+        if total == 1:
+            speak_instruction = "Give a brief spoken response about what this single step did."
+        else:
+            speak_instruction = "Give a brief spoken overview of the entire workflow run — what was accomplished across all steps."
 
         return (
             f"Workflow run {status_label} "
             f"(session {session_id}, run {run_id})\n"
-            f"Steps ({total}):\n{steps_block}"
+            f"Steps ({total}):\n{steps_block}\n\n"
+            f"[Instruction: {speak_instruction}]"
         )

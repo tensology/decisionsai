@@ -21,6 +21,15 @@ class AutoWorkflow(Base):
     description = Column(Text, nullable=True)
     status = Column(String, default='draft')  # draft, active, paused, archived
 
+    # Workflow type (replaces StepRunnerSession.session_type)
+    workflow_type = Column(String, default='manual')  # manual, instruction, scheduled, audit
+    # Chat link (replaces StepRunnerSession.chat_id)
+    chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
+    # Context rules (replaces StepRunnerSession.context_rules)
+    context_rules = Column(Text, nullable=True)
+    # Workflow input (replaces StepRunnerSession.workflow_input)
+    workflow_input = Column(Text, nullable=True)
+
     # Scheduling
     schedule_enabled = Column(Boolean, default=False)
     schedule_preset = Column(String, nullable=True)  # hourly, daily, weekly, custom
@@ -62,6 +71,17 @@ class AutoWorkflowStep(Base):
     # The action itself (one action per step)
     action_type = Column(String, default='agent_instruction')  # agent_instruction, run_command, set_variable, http_request
     instruction = Column(Text, nullable=True)  # The main instruction / action config
+
+    # Step type for typed execution (replaces StepRunnerStep.step_type)
+    step_type = Column(String, default='agent_instruction')
+    # Type-specific config JSON (replaces StepRunnerStep.config)
+    config = Column(Text, nullable=True)
+    # Verification criteria (replaces StepRunnerStep.verification)
+    verification = Column(Text, nullable=True)
+    # Tool name from agent execution (replaces StepRunnerStep.tool_used)
+    tool_used = Column(String, nullable=True)
+    # Routing telemetry for audit steps
+    routing_path = Column(Text, nullable=True)
 
     # Validation
     validation_type = Column(String, default='none')  # none, text_match, screenshot_compare, llm_judgment, rule_based
@@ -126,7 +146,7 @@ class AutoWorkflowStepResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     step = relationship("AutoWorkflowStep", backref="results")
-    run = relationship("AutoWorkflowRun", backref="step_results")
+    run = relationship("AutoWorkflowRun", backref="step_result_records")
 
 
 class AutoWorkflowRun(Base):
@@ -140,6 +160,7 @@ class AutoWorkflowRun(Base):
     status = Column(String, default='running')  # running, completed, failed, cancelled, waiting
     current_step_id = Column(Integer, nullable=True)  # Which step is currently executing
     run_data = Column(Text, nullable=True)  # JSON: step results
+    step_results = Column(Text, nullable=True)  # JSON: [{step_id, status, result}, ...]
     variable_values = Column(Text, nullable=True)  # JSON: variable values at end
 
     workflow = relationship("AutoWorkflow", back_populates="runs")

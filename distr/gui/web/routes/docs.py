@@ -52,7 +52,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "title": {"type": "string", "required": False, "description": "Chat title (auto-generated from question if omitted)"},
                             "provider": {"type": "string", "required": False, "description": "LLM provider: ollama, openai, anthropic, groq, openrouter, kilocode, gemini"},
                             "model_name": {"type": "string", "required": False, "description": "Model name (e.g. qwen3:8b, gpt-4o)"},
-                            "voice_provider": {"type": "string", "required": False, "description": "TTS provider: kokoro, openai, elevenlabs"},
+                            "voice_provider": {"type": "string", "required": False, "description": "TTS provider: kokoro, openai, elevenlabs, f5tts"},
                             "voice_model": {"type": "string", "required": False, "description": "Voice model (e.g. af_heart, alloy)"},
                             "starting_question": {"type": "string", "required": False, "description": "First message to send to the agent"},
                             "speak": {"type": "boolean", "required": False, "description": "Whether agent should speak the reply (default: true)"},
@@ -285,54 +285,54 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                 ],
             },
-            # ── Step Runner ────────────────────────────────────────
+            # ── Workflows (unified, replaces Step Runner) ─────────────
             {
-                "section": "Step Runner",
+                "section": "Workflows",
                 "endpoints": [
                     {
                         "method": "GET",
-                        "path": "/api/step-runner/sessions",
-                        "summary": "List all step runner sessions",
-                        "description": "Returns all step runner sessions. Filter by session_type (instruction/scheduled) or search text.",
-                        "curl": f'curl -s {base}/api/step-runner/sessions',
+                        "path": "/api/workflows",
+                        "summary": "List all workflows",
+                        "description": "Returns all workflows. Excludes audit type by default. Filter by type or search text.",
+                        "curl": f'curl -s {base}/api/workflows',
                         "params": [
                             {"name": "limit", "type": "int", "required": False, "description": "Max results (default 50)"},
-                            {"name": "session_type", "type": "string", "required": False, "description": "Filter: instruction or scheduled"},
+                            {"name": "type", "type": "string", "required": False, "description": "Filter: manual, instruction, scheduled, or audit"},
                             {"name": "search", "type": "string", "required": False, "description": "Search text"},
                         ],
                         "body": None,
-                        "response_example": '[{"id": 1, "instruction": "Deploy pipeline", "status": "planned", "session_type": "instruction", "steps": [...]}]',
+                        "response_example": '[{"id": 1, "name": "Deploy pipeline", "status": "draft", "workflow_type": "instruction", "steps": [...]}]',
                     },
                     {
                         "method": "GET",
-                        "path": "/api/step-runner/sessions/{session_id}",
-                        "summary": "Get session details",
-                        "description": "Returns a specific session with all its steps.",
-                        "curl": f'curl -s {base}/api/step-runner/sessions/1',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "path": "/api/workflows/{workflow_id}",
+                        "summary": "Get workflow details",
+                        "description": "Returns a specific workflow with all its steps.",
+                        "curl": f'curl -s {base}/api/workflows/1',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
-                        "response_example": '{"id": 1, "instruction": "Deploy pipeline", "status": "planned", "steps": [{"id": 1, "title": "Build", "instruction": "Run npm build", "status": "pending"}]}',
+                        "response_example": '{"id": 1, "name": "Deploy pipeline", "status": "draft", "steps": [{"id": 1, "name": "Build", "instruction": "Run npm build", "status": "pending"}]}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/plan",
-                        "summary": "Plan a session from instruction",
-                        "description": "Break down an instruction into steps using the LLM and create a session.",
-                        "curl": f"""curl -s -X POST {base}/api/step-runner/plan \\
+                        "path": "/api/workflows/plan",
+                        "summary": "Plan a workflow from instruction",
+                        "description": "Break down an instruction into steps using the LLM and create a workflow.",
+                        "curl": f"""curl -s -X POST {base}/api/workflows/plan \\
   -H 'Content-Type: application/json' \\
   -d '{{"instruction": "Deploy the app to production", "chat_id": null}}'""",
                         "body": {
                             "instruction": {"type": "string", "required": True, "description": "Instruction to break into steps"},
                             "chat_id": {"type": "int", "required": False, "description": "Optional chat ID to link"},
                         },
-                        "response_example": '{"id": 3, "instruction": "Deploy the app to production", "status": "planned", "steps": [...]}',
+                        "response_example": '{"id": 3, "name": "Deploy the app to production", "status": "draft", "steps": [...]}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/scheduled",
-                        "summary": "Create a scheduled session",
-                        "description": "Creates a recurring session (e.g. daily calendar check). Schedule can be a preset (daily, hourly, weekly) or cron expression.",
-                        "curl": f"""curl -s -X POST {base}/api/step-runner/scheduled \\
+                        "path": "/api/workflows/scheduled",
+                        "summary": "Create a scheduled workflow",
+                        "description": "Creates a recurring workflow (e.g. daily calendar check). Schedule can be a preset (daily, hourly, weekly) or cron expression.",
+                        "curl": f"""curl -s -X POST {base}/api/workflows/scheduled \\
   -H 'Content-Type: application/json' \\
   -d '{{"instruction": "Check my calendar", "schedule": "daily", "schedule_time": "09:00"}}'""",
                         "body": {
@@ -343,57 +343,59 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "schedule_days": {"type": "string", "required": False, "description": "For weekly: comma-separated days (1=Mon, 5=Fri)"},
                             "timezone": {"type": "string", "required": False, "description": "Timezone (e.g. America/New_York)"},
                         },
-                        "response_example": '{"id": 4, "instruction": "Check my calendar", "session_type": "scheduled", "schedule": "daily"}',
+                        "response_example": '{"id": 4, "name": "Check my calendar", "workflow_type": "scheduled", "schedule_preset": "daily"}',
                     },
                     {
                         "method": "DELETE",
-                        "path": "/api/step-runner/sessions/{session_id}",
-                        "summary": "Delete a session",
-                        "description": "Permanently deletes a step runner session and its steps.",
-                        "curl": f'curl -s -X DELETE {base}/api/step-runner/sessions/1',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "path": "/api/workflows/{workflow_id}",
+                        "summary": "Delete a workflow",
+                        "description": "Permanently deletes a workflow and its steps.",
+                        "curl": f'curl -s -X DELETE {base}/api/workflows/1',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
                         "response_example": '{"success": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/sessions/{session_id}/run-all",
-                        "summary": "Run all steps in a session",
+                        "path": "/api/workflows/{workflow_id}/run",
+                        "summary": "Run all steps in a workflow",
                         "description": "Starts executing all steps sequentially. The agent processes each step and advances automatically. Resets all steps to pending first.",
-                        "curl": f'curl -s -X POST {base}/api/step-runner/sessions/1/run-all',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
-                        "body": None,
+                        "curl": f'curl -s -X POST {base}/api/workflows/1/run',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
+                        "body": {
+                            "start_step_id": {"type": "int", "required": False, "description": "Optional step ID to start from"},
+                        },
                         "response_example": '{"success": true, "message": "Running all steps in sequence"}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/sessions/{session_id}/cancel",
-                        "summary": "Cancel a running session",
-                        "description": "Cancels the currently running step runner orchestration.",
-                        "curl": f'curl -s -X POST {base}/api/step-runner/sessions/1/cancel',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "path": "/api/workflows/{workflow_id}/cancel",
+                        "summary": "Cancel a running workflow",
+                        "description": "Cancels the currently running workflow orchestration.",
+                        "curl": f'curl -s -X POST {base}/api/workflows/1/cancel',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
                         "response_example": '{"success": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/sessions/{session_id}/skip-step",
+                        "path": "/api/workflows/{workflow_id}/skip-step",
                         "summary": "Skip current step",
                         "description": "Skips the currently running step and advances to the next one.",
-                        "curl": f'curl -s -X POST {base}/api/step-runner/sessions/1/skip-step',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "curl": f'curl -s -X POST {base}/api/workflows/1/skip-step',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
                         "response_example": '{"success": true}',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/sessions/{session_id}/continue",
+                        "path": "/api/workflows/runs/{run_id}/continue",
                         "summary": "Continue a waiting step",
-                        "description": "Resumes a step that is in 'waiting' status. If a step includes [WAIT] in its response, orchestration pauses until this endpoint is called. Optionally pass 'input' to provide additional context.",
-                        "curl": f"""curl -s -X POST {base}/api/step-runner/sessions/1/continue \\
+                        "description": "Resumes a step that is in 'waiting' status. Optionally pass 'input' to provide additional context.",
+                        "curl": f"""curl -s -X POST {base}/api/workflows/runs/1/continue \\
   -H 'Content-Type: application/json' \\
   -d '{{"input": "The deployment finished successfully"}}'""",
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "params": [{"name": "run_id", "type": "int", "required": True, "description": "Run ID"}],
                         "body": {
                             "input": {"type": "string", "required": False, "description": "Optional context/data to resume with"},
                         },
@@ -401,23 +403,23 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/sessions/{session_id}/duplicate",
-                        "summary": "Duplicate a session",
-                        "description": "Creates a copy of the session and its steps as a one-time session.",
-                        "curl": f'curl -s -X POST {base}/api/step-runner/sessions/1/duplicate',
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "path": "/api/workflows/{workflow_id}/duplicate",
+                        "summary": "Duplicate a workflow",
+                        "description": "Creates a copy of the workflow and its steps.",
+                        "curl": f'curl -s -X POST {base}/api/workflows/1/duplicate',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
-                        "response_example": '{"id": 5, "instruction": "...", "status": "planned"}',
+                        "response_example": '{"id": 5, "name": "...", "status": "draft"}',
                     },
                     {
                         "method": "PATCH",
-                        "path": "/api/step-runner/sessions/{session_id}/reorder",
+                        "path": "/api/workflows/{workflow_id}/steps/reorder",
                         "summary": "Reorder steps",
-                        "description": "Reorder steps within a session by providing the new order of step IDs.",
-                        "curl": f"""curl -s -X PATCH {base}/api/step-runner/sessions/1/reorder \\
+                        "description": "Reorder steps within a workflow by providing the new order of step IDs.",
+                        "curl": f"""curl -s -X PATCH {base}/api/workflows/1/steps/reorder \\
   -H 'Content-Type: application/json' \\
   -d '{{"step_ids": [3, 1, 2]}}'""",
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": {
                             "step_ids": {"type": "array", "required": True, "description": "Ordered list of step IDs"},
                         },
@@ -425,13 +427,13 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "PATCH",
-                        "path": "/api/step-runner/sessions/{session_id}/schedule",
+                        "path": "/api/workflows/{workflow_id}/schedule",
                         "summary": "Update schedule",
-                        "description": "Update a scheduled session's enabled state, schedule, time, days, or timezone.",
-                        "curl": f"""curl -s -X PATCH {base}/api/step-runner/sessions/1/schedule \\
+                        "description": "Update a workflow's schedule configuration.",
+                        "curl": f"""curl -s -X PATCH {base}/api/workflows/1/schedule \\
   -H 'Content-Type: application/json' \\
   -d '{{"enabled": false}}'""",
-                        "params": [{"name": "session_id", "type": "int", "required": True, "description": "Session ID"}],
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": {
                             "enabled": {"type": "bool", "required": False, "description": "Enable/disable"},
                             "schedule": {"type": "string", "required": False, "description": "New schedule"},
@@ -443,23 +445,23 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "GET",
-                        "path": "/api/step-runner/sessions/{session_id}/runs",
+                        "path": "/api/workflows/{workflow_id}/runs",
                         "summary": "Get run history",
-                        "description": "Returns run history for a scheduled session.",
-                        "curl": f'curl -s {base}/api/step-runner/sessions/1/runs',
+                        "description": "Returns run history for a workflow.",
+                        "curl": f'curl -s {base}/api/workflows/1/runs',
                         "params": [
-                            {"name": "session_id", "type": "int", "required": True, "description": "Session ID"},
+                            {"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"},
                             {"name": "limit", "type": "int", "required": False, "description": "Max results (default 10)"},
                         ],
                         "body": None,
-                        "response_example": '[{"id": 1, "session_id": 1, "status": "completed", "started_at": "...", "completed_at": "..."}]',
+                        "response_example": '[{"id": 1, "workflow_id": 1, "status": "completed", "started_at": "...", "completed_at": "..."}]',
                     },
                     {
                         "method": "POST",
-                        "path": "/api/step-runner/execute",
+                        "path": "/api/workflows/execute",
                         "summary": "Execute a single step",
                         "description": "Execute a single step via the agent. The step is sent to the agent for processing.",
-                        "curl": f"""curl -s -X POST {base}/api/step-runner/execute \\
+                        "curl": f"""curl -s -X POST {base}/api/workflows/execute \\
   -H 'Content-Type: application/json' \\
   -d '{{"step_id": 1}}'""",
                         "body": {
@@ -469,15 +471,15 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "PATCH",
-                        "path": "/api/step-runner/steps/{step_id}",
+                        "path": "/api/workflows/steps/{step_id}",
                         "summary": "Update a step",
-                        "description": "Update a step's title, instruction, status, result, or tool_used.",
-                        "curl": f"""curl -s -X PATCH {base}/api/step-runner/steps/1 \\
+                        "description": "Update a step's name, instruction, status, result, or tool_used.",
+                        "curl": f"""curl -s -X PATCH {base}/api/workflows/steps/1 \\
   -H 'Content-Type: application/json' \\
-  -d '{{"title": "Updated Step", "instruction": "New instruction"}}'""",
+  -d '{{"name": "Updated Step", "instruction": "New instruction"}}'""",
                         "params": [{"name": "step_id", "type": "int", "required": True, "description": "Step ID"}],
                         "body": {
-                            "title": {"type": "string", "required": False, "description": "New title"},
+                            "name": {"type": "string", "required": False, "description": "New name"},
                             "instruction": {"type": "string", "required": False, "description": "New instruction"},
                             "status": {"type": "string", "required": False, "description": "Status: pending, approved, running, waiting, completed, failed, skipped"},
                             "result": {"type": "string", "required": False, "description": "Step result text"},
@@ -487,10 +489,10 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "GET",
-                        "path": "/api/step-runner/version",
+                        "path": "/api/workflows/version",
                         "summary": "Get version counter",
-                        "description": "Returns a version counter that increments when Step Runner data changes. UI polls this to know when to refresh.",
-                        "curl": f'curl -s {base}/api/step-runner/version',
+                        "description": "Returns a version counter that increments when workflow data changes. UI polls this to know when to refresh.",
+                        "curl": f'curl -s {base}/api/workflows/version',
                         "body": None,
                         "response_example": '{"version": 42}',
                     },

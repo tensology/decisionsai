@@ -421,15 +421,15 @@ class AnthropicLLMService(BaseLLMService):
         return anthropic_messages
 
     def _get_anthropic_tools(self, last_user_msg=""):
-        """Get tools in Anthropic format, or None.
-        
-        Always provides tools to Anthropic — Claude is capable of deciding
-        when to use them. Aggressive filtering causes missed tool calls
-        (e.g. model wants to search but tools were stripped).
+        """Get tools in Anthropic format, filtered by semantic retrieval.
+
+        Uses the shared _get_filtered_tools to narrow the tool set per query,
+        then converts to Anthropic's expected format.
         """
-        if not self._tools:
+        filtered = self._get_filtered_tools(last_user_msg)
+        if not filtered:
             return None
-        anthropic_tools = convert_tools_to_anthropic_format(self._tools)
+        anthropic_tools = convert_tools_to_anthropic_format(filtered)
         if not isinstance(anthropic_tools, list) or not anthropic_tools:
             return None
         return anthropic_tools

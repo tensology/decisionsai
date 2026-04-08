@@ -159,27 +159,27 @@ class TestOnWorkflowCompleted:
 class TestFinishOrchestrationBridgeIntegration:
     """Verify _finish_step_runner_orchestration calls WorkflowAgentBridge."""
 
-    def _make_mixin(self, session_id=1, run_id=5, steps_data=None):
-        from distr.app.step_runner import StepRunnerMixin
-        mixin = StepRunnerMixin()
-        mixin._step_runner_timeout_timers = {}
-        mixin._step_runner_orchestrations = {
-            session_id: {
-                "session_id": session_id,
+    def _make_mixin(self, workflow_id=1, run_id=5, steps_data=None):
+        from distr.app.workflow import WorkflowOrchestrationMixin
+        mixin = WorkflowOrchestrationMixin()
+        mixin._workflow_timeout_timers = {}
+        mixin._workflow_orchestrations = {
+            workflow_id: {
+                "workflow_id": workflow_id,
                 "run_id": run_id,
                 "steps_data": steps_data or [{"id": 10, "title": "Step 1"}],
                 "workflow_agent": None,
                 "agent_loop": None,
             },
         }
-        return mixin, session_id
+        return mixin, workflow_id
 
     @patch("distr.core.signals.signal_manager")
-    @patch("distr.app.step_runner.StepRunnerMixin._cancel_step_runner_timeout")
+    @patch("distr.app.workflow.WorkflowOrchestrationMixin._cancel_workflow_timeout")
     def test_bridge_called_on_success(self, mock_cancel, mock_sm):
-        mixin, session_id = self._make_mixin()
-        with patch("distr.core.step_runner.scheduler._finish_run"):
-            mixin._finish_step_runner_orchestration(session_id=session_id, success=True)
+        mixin, workflow_id = self._make_mixin()
+        with patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run"):
+            mixin._finish_workflow_orchestration(workflow_id=workflow_id, success=True)
 
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
@@ -188,10 +188,10 @@ class TestFinishOrchestrationBridgeIntegration:
         mock_sm.workflow_finished.emit.assert_called_once()
 
     @patch("distr.core.signals.signal_manager")
-    @patch("distr.app.step_runner.StepRunnerMixin._cancel_step_runner_timeout")
+    @patch("distr.app.workflow.WorkflowOrchestrationMixin._cancel_workflow_timeout")
     def test_bridge_called_on_cancel(self, mock_cancel, mock_sm):
-        mixin, session_id = self._make_mixin()
-        with patch("distr.core.step_runner.scheduler._finish_run"), \
+        mixin, workflow_id = self._make_mixin()
+        with patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run"), \
              patch("distr.core.db.get_session") as mock_db:
             mock_sess = MagicMock()
             mock_db.return_value.__enter__ = MagicMock(return_value=MagicMock(
@@ -201,21 +201,21 @@ class TestFinishOrchestrationBridgeIntegration:
                 commit=MagicMock(),
             ))
             mock_db.return_value.__exit__ = MagicMock(return_value=False)
-            mixin._finish_step_runner_orchestration(session_id=session_id, success=False, cancelled=True)
+            mixin._finish_workflow_orchestration(workflow_id=workflow_id, success=False, cancelled=True)
 
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
         assert "Cancelled" in reports[0]["report"]
 
     @patch("distr.core.signals.signal_manager")
-    @patch("distr.app.step_runner.StepRunnerMixin._cancel_step_runner_timeout")
+    @patch("distr.app.workflow.WorkflowOrchestrationMixin._cancel_workflow_timeout")
     def test_bridge_failure_does_not_break_finish(self, mock_cancel, mock_sm):
-        """If the bridge itself raises, _finish_step_runner_orchestration still completes."""
-        mixin, session_id = self._make_mixin()
-        with patch("distr.core.step_runner.scheduler._finish_run"), \
+        """If the bridge itself raises, _finish_workflow_orchestration still completes."""
+        mixin, workflow_id = self._make_mixin()
+        with patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run"), \
              patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge.on_workflow_completed",
                    side_effect=RuntimeError("bridge exploded")):
             # Should not raise
-            mixin._finish_step_runner_orchestration(session_id=session_id, success=True)
+            mixin._finish_workflow_orchestration(workflow_id=workflow_id, success=True)
         # Orchestration state was still cleared
-        assert session_id not in mixin._step_runner_orchestrations
+        assert workflow_id not in mixin._workflow_orchestrations

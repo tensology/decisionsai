@@ -12,6 +12,7 @@ from distr.core.agent.libs import (
     AudioRawFrame, InputAudioRawFrame, TranscriptionFrame, ErrorFrame,
     InterruptionFrame,
     SpeakingStartedFrames, SpeakingStoppedFrames,
+    UserStoppedSpeakingFrame,
     vosk, VOSK_AVAILABLE
 )
 from distr.core.agent.services.stt.base import BaseSTTService
@@ -357,7 +358,10 @@ class VoskSTTService(BaseSTTService):
                             pass
                 
                 # Get final result
-                final_result = json.loads(self.recognizer.FinalResult())
+                try:
+                    final_result = json.loads(self.recognizer.FinalResult())
+                except (json.JSONDecodeError, ValueError):
+                    final_result = {}
                 if 'text' in final_result and final_result['text']:
                     text_parts.append(final_result['text'])
                 

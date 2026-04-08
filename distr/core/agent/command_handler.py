@@ -388,7 +388,7 @@ def _cmd_set_listening(session, params):
     if hasattr(session, 'llm_service') and session.llm_service:
         session.llm_service.set_listening(enabled)
     else:
-        session.logger.warning("No LLM service available to update listening state")
+        session.logger.debug("LLM service not yet available to update listening state (expected during startup)")
 
 
 def _cmd_set_hands_free(session, params):
@@ -399,7 +399,7 @@ def _cmd_set_hands_free(session, params):
     if hasattr(session, 'stt_service') and session.stt_service:
         session.stt_service.set_hands_free(enabled)
     else:
-        session.logger.warning("STT service not available - cannot update hands-free mode")
+        session.logger.debug("STT service not yet available - cannot update hands-free mode (expected during startup)")
     if hasattr(session, 'llm_service') and session.llm_service:
         session.llm_service.set_hands_free(enabled)
     if hasattr(session, 'tts_service') and session.tts_service:

@@ -131,6 +131,12 @@ class KokoroTTSService(TTSService):
         else:
             self._reference_voice_path = None
             self._voice_cloning_enabled = False
+            # Unload Kanade model from memory when voice cloning is disabled
+            try:
+                from distr.core.audio.voice_cloner import unload_model
+                unload_model()
+            except Exception:
+                pass
             if path:
                 logger.warning("Reference voice not found: %s", path)
             else:
@@ -537,6 +543,10 @@ class KokoroTTSService(TTSService):
             if is_done_text and already_has_done:
                 logger.debug(f"TTS: Skipping duplicate 'Done' text accumulation (session_text already contains 'Done')")
             else:
+                # Add a space separator between accumulated sentences so Telegram
+                # messages don't run together (e.g. "Hello!Welcome back!" → "Hello! Welcome back!")
+                if self._session_text and not self._session_text.endswith((' ', '\n')):
+                    self._session_text += ' '
                 self._session_text += frame.text
             
             # CRITICAL: Check cancellation before extracting sentences
@@ -770,6 +780,8 @@ class KokoroTTSService(TTSService):
                 text = self._text_buffer.strip()
                 # Add remaining text to session text for Telegram (avoid duplicates)
                 if text not in self._session_text:
+                    if self._session_text and not self._session_text.endswith((' ', '\n')):
+                        self._session_text += ' '
                     self._session_text += text
                     logger.debug(f"TTS: Added remaining buffer to session_text (len={len(self._session_text)})")
                 self._text_buffer = ""

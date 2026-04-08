@@ -7,12 +7,269 @@ circular imports and keep the module lightweight.
 
 import importlib
 import logging
+import threading
 from typing import List, Dict, Optional
 
 from distr.core.agent.tools.base import BaseActionTool
 from distr.core.utils import load_settings_from_db
 
 logger = logging.getLogger(__name__)
+
+# Module-level tool instance cache — populated by warm_tool_cache(),
+# keyed by tool.name (the string name attribute on each BaseTool instance).
+_tool_cache: dict[str, "BaseActionTool"] = {}
+_cache_lock: threading.Lock = threading.Lock()
+
+
+def get_cached_tool(name: str):
+    """Return a cached tool instance by name, or None if not cached."""
+    return _tool_cache.get(name)
+
+
+def _get_tool_definitions(
+    chat_manager=None,
+    llm_service=None,
+    tts_service=None,
+    llm_model=None,
+    event_queue=None,
+    command_queue=None,
+    confirmation_results_dict=None,
+) -> list:
+    """Return the canonical list of (tool_name, kwargs) tuples.
+
+    Shared by both ``load_tools`` and ``warm_tool_cache`` so the tool set
+    is defined in exactly one place.  Includes the Rube tool when enabled
+    in settings.
+    """
+    defs = [
+        # Smart Open - Handles URLs, applications, and files intelligently
+        ("SmartOpenTool", dict(chat_manager=chat_manager)),
+        # Navigation and Window Management
+        ("OpenWindowTool", dict(chat_manager=chat_manager)),
+        ("OpenFileMenuTool", dict(chat_manager=chat_manager)),
+        ("OracleControlTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
+        ("ModeControlTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
+        ("ShortcutTool", dict(chat_manager=chat_manager)),
+        # Text Editing
+        ("TextEditingTool", dict(chat_manager=chat_manager)),
+        # Caret Movement
+        ("CaretMovementTool", dict(chat_manager=chat_manager)),
+        # Mouse Control
+        ("MouseMovementTool", dict(chat_manager=chat_manager)),
+        ("MouseActionsTool", dict(chat_manager=chat_manager)),
+        # Media Control
+        ("MediaControlTool", dict(chat_manager=chat_manager)),
+        # Function Keys
+        ("FunctionKeyTool", dict(chat_manager=chat_manager)),
+        # Special Keys
+        ("SpecialKeyTool", dict(chat_manager=chat_manager)),
+        # Clipboard Actions
+        ("ClipboardActionTool", dict(chat_manager=chat_manager, llm_service=llm_service)),
+        # Save Audio
+        ("SaveAudioTool", dict(tts_service=tts_service)),
+        # Exit Application
+        ("ExitAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
+        ("RestartAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
+        # Rework Clipboard
+        ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
+        # Summarize Clipboard
+        ("SummarizeClipboardTool", dict(llm_model=llm_model or "qwen3:8b", llm_service=llm_service)),
+        # Create Snippet
+        ("CreateSnippetTool", dict(event_queue=event_queue)),
+        # Use Snippet
+        ("UseSnippetTool", {}),
+        # Create Action
+        ("CreateActionTool", dict(event_queue=event_queue)),
+        # Create Step Runner
+        ("CreateStepRunnerTool", dict(chat_manager=chat_manager)),
+        # Step Runner CRUD and execution
+        ("ListStepRunnerSessionsTool", {}),
+        ("GetStepRunnerSessionTool", {}),
+        ("DeleteStepRunnerSessionTool", dict(event_queue=event_queue)),
+        ("UpdateStepRunnerStepTool", dict(event_queue=event_queue)),
+        ("AddStepRunnerStepTool", dict(event_queue=event_queue)),
+        ("RemoveStepRunnerStepTool", dict(event_queue=event_queue)),
+        ("RunStepRunnerAllTool", dict(event_queue=event_queue)),
+        ("UpdateScheduleTool", dict(event_queue=event_queue)),
+        # Workflow Builder (AutoWorkflow) tools
+        ("ListWorkflowsTool", {}),
+        ("GetWorkflowTool", {}),
+        ("RunWorkflowTool", {}),
+        ("CancelWorkflowRunTool", {}),
+        ("GetProjectStatusTool", {}),
+        ("AddWorkflowStepTool", {}),
+        ("UpdateWorkflowStepTool", {}),
+        ("GenerateWorkflowTool", {}),
+        ("ResetWorkflowTool", {}),
+        ("ClearWorkflowHistoryTool", {}),
+        ("ContinueWorkflowTool", {}),
+        # Play Action
+        ("PlayActionTool", dict(event_queue=event_queue)),
+        ("ListActionsTool", {}),
+        # Stop Action
+        ("StopActionTool", dict(event_queue=event_queue)),
+        # Start Recording
+        ("StartRecordingTool", dict(event_queue=event_queue)),
+        # Stop Recording
+        ("StopRecordingTool", dict(event_queue=event_queue)),
+        # Oracle Globe Control
+        ("OracleGlobeTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
+        # New Chat
+        ("NewChatTool", dict(chat_manager=chat_manager)),
+        # Open Page (web UI navigation)
+        ("OpenPageTool", dict(chat_manager=chat_manager)),
+        # Clear Chat
+        ("ClearChatTool", dict(chat_manager=chat_manager)),
+        # Web Search
+        ("WebSearchTool", dict(llm_service=llm_service)),
+        # Web Fetch
+        ("WebFetchTool", dict(llm_service=llm_service)),
+        # Git Operations
+        ("GitOperationsTool", {}),
+        # Screenshot Analyzer
+        ("ScreenshotAnalyzerTool", dict(llm_service=llm_service)),
+        # Vision Analyzer
+        ("VisionAnalyzerTool", dict(llm_service=llm_service)),
+        # Open File
+        ("OpenFileTool", {}),
+        # Execute Code
+        ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        # Create Cursor Ticket (legacy — kept for backward compat)
+        ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
+        # Kanban Board Ticket (primary ticket tool)
+        ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
+        # Playwright Browser Automation
+        ("PlaywrightTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        # Kiro CLI — AI coding agent for project tasks
+        ("KiroCliTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
+        # Document Extractor
+        ("DocumentExtractorTool", {}),
+        # System Information
+        ("SystemInfoTool", dict(chat_manager=chat_manager)),
+        ("ImageGeneratorTool", {}),
+        # Wake Up
+        ("WakeUpTool", {}),
+        # Speak on Desktop (remote intercom from Telegram)
+        ("SpeakOnDesktopTool", dict(event_queue=event_queue)),
+        # Send File to Telegram
+        ("SendFileToTelegramTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
+        # Send Voice Note to Telegram
+        ("SendVoiceNoteToTelegramTool", dict(event_queue=event_queue)),
+        # PDF Page Extractor
+        ("PDFPageExtractorTool", {}),
+        # Audio Transcriber
+        ("AudioTranscriberTool", dict(chat_manager=chat_manager)),
+        # Video Transcriber
+        ("VideoTranscriberTool", {}),
+        # Transcription Doctor
+        ("TranscriptionDoctorTool", {}),
+        # File Converter
+        ("FileConverterTool", dict(chat_manager=chat_manager)),
+        # Type Text
+        ("TypeTextTool", dict(chat_manager=chat_manager, llm_service=llm_service)),
+        # File Operations
+        ("FileOperationsTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        # Index Folder
+        ("IndexFolderTool", dict(chat_manager=chat_manager, event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
+        # Convert Document (MD → PDF/DOCX/Google Doc)
+        ("ConvertDocumentTool", {}),
+        # Google Workspace
+        ("GoogleWorkspaceTool", {}),
+        # Markdown to Google Doc
+        ("MarkdownToGoogleDocTool", {}),
+        # Upload DOC/DOCX to Google Doc
+        ("UploadDocToGoogleTool", {}),
+        # Project Management Tools
+        ("ListProjectsTool", dict(event_queue=event_queue)),
+        ("GetProjectDetailsTool", dict(event_queue=event_queue)),
+        ("SwitchProjectTool", dict(event_queue=event_queue)),
+        ("QueryCurrentProjectTool", dict(event_queue=event_queue)),
+        ("DeactivateProjectTool", dict(event_queue=event_queue)),
+        ("CreateProjectFromFolderTool", dict(event_queue=event_queue)),
+        ("AddFilesToProjectTool", dict(event_queue=event_queue)),
+        ("CreateProjectTicketTool", dict(event_queue=event_queue)),
+        ("OpenProjectTool", dict(event_queue=event_queue)),
+        ("StartProjectTool", dict(event_queue=event_queue)),
+        ("OpenAndStartProjectTool", dict(event_queue=event_queue)),
+        # Meta-tool: RequestToolTool (callback wired separately in core_mixin.py)
+        ("RequestToolTool", {}),
+    ]
+
+    # Check if Rube is enabled before loading tools
+    settings = load_settings_from_db()
+    rube_enabled = settings.get('rube_enabled', False)
+    if rube_enabled:
+        defs.append(("RubeTool", {}))
+        logger.info("Rube is enabled - RubeTool will be loaded")
+    else:
+        logger.info("Rube is disabled - RubeTool will not be loaded")
+
+    return defs
+
+
+def warm_tool_cache(
+    chat_manager=None,
+    llm_service=None,
+    tts_service=None,
+    llm_model=None,
+    event_queue=None,
+    command_queue=None,
+    confirmation_results_dict=None,
+) -> None:
+    """Instantiate all tools once and populate ``_tool_cache``.
+
+    Called at startup so that retrieval-based loading can reuse cached
+    instances instead of re-instantiating tools on every LLM call.
+
+    After all tools are cached the embedding index is built in a
+    background thread via ``build_index_async``.
+
+    The ``RequestToolTool`` callback is NOT wired here — that is done
+    in ``core_mixin.py`` (task 8.3).
+    """
+    tool_definitions = _get_tool_definitions(
+        chat_manager=chat_manager,
+        llm_service=llm_service,
+        tts_service=tts_service,
+        llm_model=llm_model,
+        event_queue=event_queue,
+        command_queue=command_queue,
+        confirmation_results_dict=confirmation_results_dict,
+    )
+
+    with _cache_lock:
+        for tool_name, kwargs in tool_definitions:
+            try:
+                tool_class = _get_tool_class(tool_name)
+                tool = tool_class(**kwargs)
+                _tool_cache[tool.name] = tool
+                logger.debug("Cached %s: %s", tool_name, tool.name)
+            except Exception as e:
+                logger.error("FAILED to cache %s: %s", tool_name, e, exc_info=True)
+                # Continue — do not raise
+
+        # Accessibility tree tools (sidecar-powered, optional)
+        _accessibility_tools = [
+            ("GetWindowTreeTool",  ("input.accessibility_tree", "GetWindowTreeTool"),  {}),
+            ("FindElementTool",    ("input.accessibility_tree", "FindElementTool"),    {}),
+            ("MoveToElementTool",  ("input.accessibility_tree", "MoveToElementTool"),  {}),
+            ("ClickElementTool",   ("input.accessibility_tree", "ClickElementTool"),   {}),
+        ]
+        for tool_name, (submodule, class_name), kwargs in _accessibility_tools:
+            try:
+                mod = importlib.import_module(f"{_BASE_PACKAGE}.{submodule}")
+                cls = getattr(mod, class_name)
+                tool = cls(**kwargs)
+                _tool_cache[tool.name] = tool
+                logger.debug("Cached accessibility tool: %s", tool_name)
+            except Exception as e:
+                logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
+
+    # Trigger background embedding index build
+    from distr.core.agent.tool_retriever import build_index_async
+    build_index_async(list(_tool_cache.values()))
+    logger.info("warm_tool_cache complete — %d tools cached, index build started", len(_tool_cache))
+
 
 # Registry: (module_path, class_name) for each tool
 # module_path is relative to distr.core.agent.tools
@@ -121,9 +378,128 @@ TOOL_REGISTRY = {
     "KanbanTicketTool":        ("integrations.kanban_ticket", "KanbanTicketTool"),
     "PlaywrightTool":          ("integrations.playwright_tool", "PlaywrightTool"),
     "KiroCliTool":             ("integrations.kiro_cli", "KiroCliTool"),
+    # meta/
+    "RequestToolTool":         ("request_tool", "RequestToolTool"),
 }
 
 _BASE_PACKAGE = "distr.core.agent.tools"
+
+# Use-case descriptions for semantic retrieval — one sentence per tool.
+# Keys match TOOL_REGISTRY class names; values are verb-phrase sentences
+# describing what the tool does and when to use it.
+TOOL_DESCRIPTIONS: dict[str, str] = {
+    # input/
+    "SmartOpenTool": "Open a URL in the browser, launch a desktop application by name, or open a file with its default app.",
+    "OpenWindowTool": "Switch to or bring forward an already-running application window by name.",
+    "OpenFileMenuTool": "Open the File menu in the currently active application window.",
+    "OracleControlTool": "Show, hide, minimize, or restore the Oracle assistant overlay on the desktop.",
+    "ModeControlTool": "Switch the assistant between different interaction modes such as voice, chat, or silent.",
+    "ShortcutTool": "Execute a keyboard shortcut like Cmd+S, Ctrl+Z, or any multi-key combination in the active app.",
+    "TextEditingTool": "Perform text editing operations such as copy, paste, cut, select all, undo, redo, or delete.",
+    "CaretMovementTool": "Move the text cursor using arrow keys, page up/down, home, or end in the active editor.",
+    "MouseMovementTool": "Move the mouse pointer to a specific position, screen corner, or relative direction on the desktop.",
+    "MouseActionsTool": "Perform mouse clicks (left, right, double) and scroll up or down at the current cursor position.",
+    "FunctionKeyTool": "Press a function key from F1 through F12 in the active application.",
+    "SpecialKeyTool": "Press a special key such as Enter, Space, Tab, Escape, Alt, Control, or Command.",
+    "TypeTextTool": "Type out text character by character into the currently focused input field or editor.",
+    # input/accessibility_tree
+    "GetWindowTreeTool": "Get the accessibility tree of the frontmost window to inspect UI elements, buttons, text fields, and their hierarchy.",
+    "FindElementTool": "Find a specific UI element in the accessibility tree by role, title, or description.",
+    "MoveToElementTool": "Move the mouse cursor to a specific UI element identified by its accessibility tree ID.",
+    "ClickElementTool": "Click a specific UI element identified by its accessibility tree ID.",
+    # clipboard/
+    "ClipboardActionTool": "Explain, elaborate on, or read aloud the currently selected text or clipboard contents using the LLM.",
+    "ReworkClipboardTool": "Rewrite and improve the selected text or clipboard contents using an LLM and paste the result back.",
+    "SummarizeClipboardTool": "Summarize the selected text or clipboard contents using an LLM and optionally paste or read the summary.",
+    # media/
+    "MediaControlTool": "Control media playback: play, pause, stop, next track, previous track, skip song, adjust volume up or down, mute, unmute, or refresh the browser page.",
+    "SaveAudioTool": "Convert selected text or clipboard contents to speech and save the audio as a WAV file on the desktop.",
+    "AudioTranscriberTool": "Transcribe audio files like MP3, M4A, or WAV to text using AssemblyAI or Whisper.",
+    "VideoTranscriberTool": "Extract audio from a video file and transcribe it to text with speaker diarization support.",
+    "TranscriptionDoctorTool": "Run a health check on transcription backends to see which engines and models are available.",
+    "FileConverterTool": "Convert files between formats including audio, video-to-audio, image format conversion, and audio-to-text transcription.",
+    # files/
+    "FileOperationsTool": "Perform file system operations: list, create, write, read, delete, copy, move, or rename files and directories on the desktop, documents, downloads, or any folder path.",
+    "OpenFileTool": "Find a file by name across common folders using fuzzy matching and open it with the default application.",
+    "DocumentExtractorTool": "Extract and read text content from PDFs, Word documents, Excel spreadsheets, ZIP/RAR archives, and plain text files.",
+    "PDFPageExtractorTool": "Find a PDF by name and extract text from a specific page number.",
+    "IndexFolderTool": "Index a dropped folder into the RAG system for semantic search and querying of its contents.",
+    "ConvertDocumentTool": "Convert a Markdown file to PDF, DOCX, or Google Doc with proper formatting, tables, and Mermaid diagrams.",
+    # vision/
+    "ScreenshotAnalyzerTool": "Capture a screenshot of the desktop or a specific screen and analyze it using a vision LLM.",
+    "VisionAnalyzerTool": "Analyze a dropped or specified image file using a vision-enabled LLM to describe its contents.",
+    "ImageGeneratorTool": "Generate an image from a text description using an image generation LLM and save it to disk.",
+    # web/
+    "WebSearchTool": "Search the web for current information, news, or facts using a search engine.",
+    "WebFetchTool": "Fetch and extract the text content of a web page given its URL.",
+    # actions/
+    "CreateActionTool": "Record a new reusable macro action that can be replayed later to automate repetitive tasks.",
+    "CreateStepRunnerTool": "Break down a task into ordered steps and create a Step Runner session, optionally with a recurring schedule.",
+    "ListStepRunnerSessionsTool": "List all existing Step Runner sessions with their status and step counts.",
+    "GetStepRunnerSessionTool": "Retrieve the details and steps of a specific Step Runner session by its ID.",
+    "DeleteStepRunnerSessionTool": "Delete a Step Runner session and all of its associated steps.",
+    "UpdateStepRunnerStepTool": "Update the title, instruction, or status of an individual step within a Step Runner session.",
+    "AddStepRunnerStepTool": "Add a new step to an existing Step Runner session at a specified position.",
+    "RemoveStepRunnerStepTool": "Remove a specific step from a Step Runner session.",
+    "RunStepRunnerAllTool": "Execute all pending steps in a Step Runner session sequentially.",
+    "UpdateScheduleTool": "Update the schedule, time, or timezone of a recurring Step Runner session.",
+    # workflow builder (AutoWorkflow) tools
+    "ListWorkflowsTool": "List all saved workflows with optional filtering by status or search term.",
+    "GetWorkflowTool": "Retrieve the full details, steps, and run history of a specific workflow by its ID.",
+    "RunWorkflowTool": "Start a new run of a workflow, executing its steps in order.",
+    "CancelWorkflowRunTool": "Cancel an in-progress workflow run by its run ID.",
+    "GetProjectStatusTool": "Get the current status, recent activity, and health summary of a project.",
+    "AddWorkflowStepTool": "Add a new step to an existing workflow at a specified position.",
+    "UpdateWorkflowStepTool": "Update the configuration of an existing workflow step.",
+    "GenerateWorkflowTool": "Auto-generate a complete workflow from a natural language description of the desired process.",
+    "ResetWorkflowTool": "Reset a workflow to its initial state, clearing all step statuses and run data.",
+    "ClearWorkflowHistoryTool": "Clear the run history of a workflow while keeping its step definitions intact.",
+    "ContinueWorkflowTool": "Resume a paused or waiting workflow run, optionally providing user input.",
+    "StartRecordingTool": "Start recording user interactions to create a replayable macro action.",
+    "StopRecordingTool": "Stop the current macro recording session and save the recorded action.",
+    "PlayActionTool": "Play back a previously recorded macro action to repeat a sequence of interactions.",
+    "StopActionTool": "Stop a currently playing macro action mid-execution.",
+    "ListActionsTool": "List all saved macro actions available for playback.",
+    "CreateSnippetTool": "Create a reusable text snippet that can be quickly inserted later.",
+    "UseSnippetTool": "Insert a previously saved text snippet into the current input field.",
+    # chat/
+    "NewChatTool": "Start a new conversation session, clearing the current chat context.",
+    "ClearChatTool": "Clear all messages from the current chat conversation.",
+    "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
+    "OpenPageTool": "Navigate to a specific page or section within the application's web UI.",
+    # system/
+    "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
+    "ExitAppTool": "Quit and close the DecisionsAI desktop application.",
+    "RestartAppTool": "Restart the DecisionsAI desktop application to apply updates or recover from errors.",
+    "WakeUpTool": "Wake the computer from sleep or activate the display when the screen is off.",
+    "SpeakOnDesktopTool": "Speak a text message aloud on the desktop using text-to-speech, used as a remote intercom from Telegram.",
+    "ExecuteCodeTool": "Write and execute Python or shell code to perform complex tasks, calculations, or system automation.",
+    "ListProjectsTool": "List all registered projects with their names, paths, and active status.",
+    "GetProjectDetailsTool": "Get detailed information about a specific project including its files, settings, and configuration.",
+    "SwitchProjectTool": "Switch the active project context to a different registered project.",
+    "QueryCurrentProjectTool": "Query information about the currently active project and its configuration.",
+    "DeactivateProjectTool": "Deactivate the currently active project, returning to the default context.",
+    "CreateProjectFromFolderTool": "Register a new project from an existing folder on disk.",
+    "AddFilesToProjectTool": "Add files or directories to an existing project's tracked file set.",
+    "CreateProjectTicketTool": "Create a new task ticket within the current project's kanban board.",
+    "OpenProjectTool": "Open a project's folder in the system file manager or IDE.",
+    "StartProjectTool": "Start a project by running its configured start command or script.",
+    "OpenAndStartProjectTool": "Open a project folder and immediately run its start command in one step.",
+    # integrations/
+    "GoogleWorkspaceTool": "Interact with Google Workspace services to manage Gmail, Google Calendar, Google Drive, and Google Docs.",
+    "MarkdownToGoogleDocTool": "Convert Markdown content from the clipboard into a formatted Google Doc and open it in the browser.",
+    "UploadDocToGoogleTool": "Upload a local DOC or DOCX file to Google Drive as a Google Doc.",
+    "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",
+    "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
+    "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
+    "RubeTool": "Execute multi-step API workflows using the Rube integration platform for connected third-party services.",
+    "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
+    "KanbanTicketTool": "Create, update, list, or manage tickets on the project kanban board for task tracking.",
+    "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
+    "KiroCliTool": "Delegate coding tasks to the Kiro AI coding agent for project-level code generation and editing.",
+    # meta/
+    "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",
+}
 
 
 def _get_tool_class(name: str):
@@ -133,18 +509,43 @@ def _get_tool_class(name: str):
     return getattr(module, class_name)
 
 
-def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, use_navigation_tools: bool = True, llm_service=None, tts_service=None, llm_model=None, event_queue=None, command_queue=None, confirmation_results_dict=None) -> List:
+def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, use_navigation_tools: bool = True, llm_service=None, tts_service=None, llm_model=None, event_queue=None, command_queue=None, confirmation_results_dict=None, user_message: str | None = None, model_name: str | None = None) -> List:
     """
     Load all tools from actions.config.json and specialized navigation tools.
+
+    When *user_message* is provided and the tool cache is populated, the
+    function delegates to the semantic Tool_Retriever to select only the
+    most relevant tools.  Otherwise it falls back to instantiating all
+    tools (backward-compatible behaviour).
 
     Args:
         chat_manager: Optional chat manager instance to pass to tools
         filter_methods: Optional list of method prefixes to filter (e.g., ['windows.', 'shortcuts.'])
         use_navigation_tools: If True, include specialized navigation tools for better natural language handling
+        user_message: Optional user message for semantic retrieval-based tool selection
+        model_name: Optional model name for tier classification
 
     Returns:
         List of tool instances (mix of BaseActionTool and specialized tools)
     """
+    # --- Retrieval path: when user_message is provided and cache is warm ---
+    if user_message and _tool_cache:
+        from distr.core.agent.tool_retriever import get_tool_retriever
+
+        names = get_tool_retriever().retrieve(user_message, model_name or "")
+        if names is None:
+            # Kill switch active or index not ready — fall back to all cached tools
+            return list(_tool_cache.values())
+        # Resolve retrieved names to cached instances
+        resolved: List = []
+        for name in names:
+            tool = get_cached_tool(name)
+            if tool is not None:
+                resolved.append(tool)
+            else:
+                logger.error("Retriever returned tool name %r but it is not in the cache — skipping", name)
+        return resolved
+
     tools = []
     navigation_tools_count = 0
 
@@ -153,166 +554,15 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
     if use_navigation_tools:
         logger.info("Loading specialized tools...")
         specialized_tools = []
-        tool_definitions = [
-            # Smart Open - Handles URLs, applications, and files intelligently
-            ("SmartOpenTool", dict(chat_manager=chat_manager)),
-            # Navigation and Window Management
-            ("OpenWindowTool", dict(chat_manager=chat_manager)),
-            ("OpenFileMenuTool", dict(chat_manager=chat_manager)),
-            ("OracleControlTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
-            ("ModeControlTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
-            ("ShortcutTool", dict(chat_manager=chat_manager)),
-            # Text Editing
-            ("TextEditingTool", dict(chat_manager=chat_manager)),
-            # Caret Movement
-            ("CaretMovementTool", dict(chat_manager=chat_manager)),
-            # Mouse Control
-            ("MouseMovementTool", dict(chat_manager=chat_manager)),
-            ("MouseActionsTool", dict(chat_manager=chat_manager)),
-            # Media Control
-            ("MediaControlTool", dict(chat_manager=chat_manager)),
-            # Function Keys
-            ("FunctionKeyTool", dict(chat_manager=chat_manager)),
-            # Special Keys
-            ("SpecialKeyTool", dict(chat_manager=chat_manager)),
-            # Clipboard Actions
-            ("ClipboardActionTool", dict(chat_manager=chat_manager, llm_service=llm_service)),
-            # Save Audio
-            ("SaveAudioTool", dict(tts_service=tts_service)),
-            # Exit Application
-            ("ExitAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
-            ("RestartAppTool", dict(llm_service=llm_service, event_queue=event_queue)),
-            # Rework Clipboard
-            ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
-            # Summarize Clipboard
-            ("SummarizeClipboardTool", dict(llm_model=llm_model or "qwen3:8b", llm_service=llm_service)),
-            # Create Snippet
-            ("CreateSnippetTool", dict(event_queue=event_queue)),
-            # Use Snippet
-            ("UseSnippetTool", {}),
-            # Create Action
-            ("CreateActionTool", dict(event_queue=event_queue)),
-            # Create Step Runner
-            ("CreateStepRunnerTool", dict(chat_manager=chat_manager)),
-            # Step Runner CRUD and execution
-            ("ListStepRunnerSessionsTool", {}),
-            ("GetStepRunnerSessionTool", {}),
-            ("DeleteStepRunnerSessionTool", dict(event_queue=event_queue)),
-            ("UpdateStepRunnerStepTool", dict(event_queue=event_queue)),
-            ("AddStepRunnerStepTool", dict(event_queue=event_queue)),
-            ("RemoveStepRunnerStepTool", dict(event_queue=event_queue)),
-            ("RunStepRunnerAllTool", dict(event_queue=event_queue)),
-            ("UpdateScheduleTool", dict(event_queue=event_queue)),
-            # Workflow Builder (AutoWorkflow) tools
-            ("ListWorkflowsTool", {}),
-            ("GetWorkflowTool", {}),
-            ("RunWorkflowTool", {}),
-            ("CancelWorkflowRunTool", {}),
-            ("GetProjectStatusTool", {}),
-            ("AddWorkflowStepTool", {}),
-            ("UpdateWorkflowStepTool", {}),
-            ("GenerateWorkflowTool", {}),
-            ("ResetWorkflowTool", {}),
-            ("ClearWorkflowHistoryTool", {}),
-            ("ContinueWorkflowTool", {}),
-            # Play Action
-            ("PlayActionTool", dict(event_queue=event_queue)),
-            ("ListActionsTool", {}),
-            # Stop Action
-            ("StopActionTool", dict(event_queue=event_queue)),
-            # Start Recording
-            ("StartRecordingTool", dict(event_queue=event_queue)),
-            # Stop Recording
-            ("StopRecordingTool", dict(event_queue=event_queue)),
-            # Oracle Globe Control
-            ("OracleGlobeTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
-            # New Chat
-            ("NewChatTool", dict(chat_manager=chat_manager)),
-            # Open Page (web UI navigation)
-            ("OpenPageTool", dict(chat_manager=chat_manager)),
-            # Clear Chat
-            ("ClearChatTool", dict(chat_manager=chat_manager)),
-            # Web Search
-            ("WebSearchTool", dict(llm_service=llm_service)),
-            # Web Fetch
-            ("WebFetchTool", dict(llm_service=llm_service)),
-            # Git Operations
-            ("GitOperationsTool", {}),
-            # Screenshot Analyzer
-            ("ScreenshotAnalyzerTool", dict(llm_service=llm_service)),
-            # Vision Analyzer
-            ("VisionAnalyzerTool", dict(llm_service=llm_service)),
-            # Open File
-            ("OpenFileTool", {}),
-            # Execute Code
-            ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-            # Create Cursor Ticket (legacy — kept for backward compat)
-            ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
-            # Kanban Board Ticket (primary ticket tool)
-            ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
-            # Playwright Browser Automation
-            ("PlaywrightTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-            # Kiro CLI — AI coding agent for project tasks
-            ("KiroCliTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
-            # Document Extractor
-            ("DocumentExtractorTool", {}),
-            # System Information
-            ("SystemInfoTool", dict(chat_manager=chat_manager)),
-            ("ImageGeneratorTool", {}),
-            # Wake Up
-            ("WakeUpTool", {}),
-            # Speak on Desktop (remote intercom from Telegram)
-            ("SpeakOnDesktopTool", dict(event_queue=event_queue)),
-            # Send File to Telegram
-            ("SendFileToTelegramTool", dict(chat_manager=chat_manager, event_queue=event_queue)),
-            # Send Voice Note to Telegram
-            ("SendVoiceNoteToTelegramTool", dict(event_queue=event_queue)),
-            # PDF Page Extractor
-            ("PDFPageExtractorTool", {}),
-            # Audio Transcriber
-            ("AudioTranscriberTool", dict(chat_manager=chat_manager)),
-            # Video Transcriber
-            ("VideoTranscriberTool", {}),
-            # Transcription Doctor
-            ("TranscriptionDoctorTool", {}),
-            # File Converter
-            ("FileConverterTool", dict(chat_manager=chat_manager)),
-            # Type Text
-            ("TypeTextTool", dict(chat_manager=chat_manager, llm_service=llm_service)),
-            # File Operations
-            ("FileOperationsTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-            # Index Folder
-            ("IndexFolderTool", dict(chat_manager=chat_manager, event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-            # Convert Document (MD → PDF/DOCX/Google Doc)
-            ("ConvertDocumentTool", {}),
-            # Google Workspace
-            ("GoogleWorkspaceTool", {}),
-            # Markdown to Google Doc
-            ("MarkdownToGoogleDocTool", {}),
-            # Upload DOC/DOCX to Google Doc
-            ("UploadDocToGoogleTool", {}),
-            # Project Management Tools
-            ("ListProjectsTool", dict(event_queue=event_queue)),
-            ("GetProjectDetailsTool", dict(event_queue=event_queue)),
-            ("SwitchProjectTool", dict(event_queue=event_queue)),
-            ("QueryCurrentProjectTool", dict(event_queue=event_queue)),
-            ("DeactivateProjectTool", dict(event_queue=event_queue)),
-            ("CreateProjectFromFolderTool", dict(event_queue=event_queue)),
-            ("AddFilesToProjectTool", dict(event_queue=event_queue)),
-            ("CreateProjectTicketTool", dict(event_queue=event_queue)),
-            ("OpenProjectTool", dict(event_queue=event_queue)),
-            ("StartProjectTool", dict(event_queue=event_queue)),
-            ("OpenAndStartProjectTool", dict(event_queue=event_queue)),
-        ]
-
-        # Check if Rube is enabled before loading tools
-        settings = load_settings_from_db()
-        rube_enabled = settings.get('rube_enabled', False)
-        if rube_enabled:
-            tool_definitions.append(("RubeTool", {}))
-            logger.info("Rube is enabled - RubeTool will be loaded")
-        else:
-            logger.info("Rube is disabled - RubeTool will not be loaded")
+        tool_definitions = _get_tool_definitions(
+            chat_manager=chat_manager,
+            llm_service=llm_service,
+            tts_service=tts_service,
+            llm_model=llm_model,
+            event_queue=event_queue,
+            command_queue=command_queue,
+            confirmation_results_dict=confirmation_results_dict,
+        )
 
         # Load each tool individually to catch which one fails
         for tool_name, kwargs in tool_definitions:

@@ -6,8 +6,8 @@
     <meta name="decisionsai-internal-api-token" content="{{ internal_api_token or '' }}">
     <link rel="icon" href="/assets/icons/favicon.png" type="image/png">
     <title>{% block title %}Settings{% endblock %} - Decisions AI</title>
-    <link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@300;400;500;600;700&display=swap" rel="stylesheet">
-    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="/static/vendor/quicksand.css" rel="stylesheet">
+    <script src="/static/vendor/tailwind.min.js"></script>
     <style>
         :root { --color-primary: #f97316; --color-secondary: #dc2626; --color-accent: #fb923c; --color-primary-rgb: 249, 115, 22; --color-secondary-rgb: 220, 38, 38; }
     </style>
@@ -45,7 +45,7 @@
                             Actions
                         </a>
                         <a href="/workflows/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
-                            Step Runner
+                            Workflows
                         </a>
                         <a href="/snippets/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors">
                             Snippets

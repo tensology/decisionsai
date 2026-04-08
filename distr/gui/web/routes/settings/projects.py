@@ -644,7 +644,7 @@ def register_routes(router, templates):
                     status = "completed" if result.returncode == 0 else "failed"
 
                     # Update audit trail
-                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    from distr.core.workflow.service import update_step_status, update_session_status
                     update_step_status(step_id, status=status, result=output[:2000])
                     update_session_status(audit_id, status)
 
@@ -656,12 +656,12 @@ def register_routes(router, templates):
                         except Exception:
                             pass
                 except _sp.TimeoutExpired:
-                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    from distr.core.workflow.service import update_step_status, update_session_status
                     update_step_status(step_id, status="failed", result="Timed out after 5 minutes")
                     update_session_status(audit_id, "failed")
                 except Exception as e:
                     logger.error(f"Kiro CLI execution failed: {e}", exc_info=True)
-                    from distr.core.step_runner.service import update_step_status, update_session_status
+                    from distr.core.workflow.service import update_step_status, update_session_status
                     update_step_status(step_id, status="failed", result=str(e)[:2000])
                     update_session_status(audit_id, "failed")
 

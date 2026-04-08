@@ -44,6 +44,7 @@ def register_routes(router, templates):
             "elevenlabs_voice": settings.get("elevenlabs_voice", "default"),
             "openai_voice": settings.get("openai_voice", "alloy"),
             "coqui_voice": settings.get("coqui_voice", "p225"),
+            "f5tts_voice": settings.get("f5tts_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
             "vad_threshold": settings.get("vad_threshold", 50),
@@ -62,6 +63,14 @@ def register_routes(router, templates):
         from distr.core.services.settings_service import save_general_settings
         save_general_settings(settings_data)
         return JSONResponse({"success": True, "message": "Settings saved and oracle updated"})
+
+    @router.post("/about/show")
+    @route_handler("show about window")
+    async def show_about_window():
+        """Show the about window and play the splash sound via the desktop app."""
+        from distr.core.signals import signal_manager
+        signal_manager.show_about_window.emit()
+        return JSONResponse({"success": True})
 
     @router.post("/voice/playback-speed")
     @route_handler("update playback speed")

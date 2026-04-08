@@ -13,6 +13,7 @@ from typing import Optional
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+from distr.core.agent.tools.base import LazyToolMixin
 
 logger = logging.getLogger(__name__)
 
@@ -113,7 +114,7 @@ class UploadDocToGoogleInput(BaseModel):
     search_folders: Optional[str] = Field(default=None, description="Optional comma-separated list of folders to search (e.g., 'Downloads,Documents,Desktop'). Defaults to common folders if not specified.")
 
 
-class UploadDocToGoogleTool(BaseTool):
+class UploadDocToGoogleTool(LazyToolMixin, BaseTool):
     """Tool for uploading DOC/DOCX files to Google Drive, converting to Google Docs, and opening in browser."""
     
     name: str = "upload_doc_to_google"
@@ -143,6 +144,8 @@ class UploadDocToGoogleTool(BaseTool):
     
     def __init__(self):
         super().__init__()
+
+    def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
     
     def _get_last_dropped_file(self) -> Optional[str]:
@@ -204,6 +207,7 @@ class UploadDocToGoogleTool(BaseTool):
     
     def _run(self, file_path: str, open_in_brave: bool = True, search_folders: Optional[str] = None, **kwargs) -> str:
         """Execute upload DOC to Google Doc workflow"""
+        self._ensure_initialized()
         try:
             # Step 1: Resolve file path
             logger.info(f"Resolving file path: {file_path}")
@@ -290,5 +294,6 @@ class UploadDocToGoogleTool(BaseTool):
     
     async def _arun(self, file_path: str, open_in_brave: bool = True, search_folders: Optional[str] = None, **kwargs) -> str:
         """Async run method"""
+        self._ensure_initialized()
         return self._run(file_path=file_path, open_in_brave=open_in_brave, search_folders=search_folders, **kwargs)
 

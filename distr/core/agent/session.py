@@ -428,6 +428,7 @@ class AgentSession:
             'elevenlabs': ('elevenlabs', 'elevenlabs_voice', '',                   {'api_key': 'elevenlabs_key'}),
             'openai':     ('openai',     'openai_voice',     DEFAULT_OPENAI_VOICE, {'api_key': 'openai_key'}),
             'coqui':      ('coqui',      'coqui_voice',      DEFAULT_COQUI_VOICE,  {'device': 'coqui_device'}),
+            'f5tts':      ('f5tts',      'f5tts_voice',      'default',            {}),
         }
         vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
         tts_engine, voice_settings_key, voice_default, extra_keys = vp_entry
@@ -677,6 +678,24 @@ class AgentSession:
         self.agent_name = service_factory.resolve_agent_name_from_tts_config(tts_config, self.settings)
         self.logger.debug("Agent name set to '%s' (engine=%s)", self.agent_name, tts_config.get('engine'))
         
+        # Warm the tool cache and start background embedding index build.
+        # This populates _tool_cache so retrieval-based loading works, and
+        # kicks off build_index_async so the embedding index is ready by the
+        # time the first user message arrives.
+        try:
+            from distr.core.agent.tools.loader import warm_tool_cache
+            warm_tool_cache(
+                chat_manager=self.chat_manager,
+                llm_service=None,  # LLM service not created yet
+                tts_service=getattr(self, 'tts_service', None),
+                llm_model=self.config['llm'].get('model_name'),
+                event_queue=self.event_queue,
+                command_queue=self.command_queue,
+                confirmation_results_dict=self.confirmation_results_dict,
+            )
+        except Exception as e:
+            self.logger.warning("warm_tool_cache failed (tools will load on demand): %s", e)
+
         # Create LLM service (delegates to service_factory via _create_llm_service_only)
         self._create_llm_service_only()
         self.logger.debug(f"LLM service created: {self.config['llm']['engine']} / {self.config['llm'].get('model_name')}")
@@ -1166,12 +1185,59 @@ class AgentSession:
             self.config['tts']['engine'] = 'openai'
             self.config['tts']['voice_id'] = voice_model or DEFAULT_OPENAI_VOICE
             self.config['tts']['api_key'] = (self.settings.get('openai_key') or '').strip()
+            # Unload Kanade if we were using a custom Kokoro voice
+            try:
+                from distr.core.audio.voice_cloner import unload_model
+                unload_model()
+            except Exception:
+                pass
 
         # --- ElevenLabs ---
         elif vp == 'elevenlabs':
             self.config['tts']['engine'] = 'elevenlabs'
             self.config['tts']['voice_id'] = voice_model or ''
             self.config['tts']['api_key'] = (self.settings.get('elevenlabs_key') or '').strip()
+            # Unload Kanade if we were using a custom Kokoro voice
+            try:
+                from distr.core.audio.voice_cloner import unload_model
+                unload_model()
+            except Exception:
+                pass
+
+        # --- F5-TTS: in-place reference voice swap ---
+        elif vp == 'f5tts':
+            from .services.tts.f5tts import F5TTSTTSService
+            self.config['tts']['engine'] = 'f5tts'
+            self.config['tts']['voice_name'] = voice_model or 'default'
+            # If the service is already F5-TTS, hot-swap the reference voice in-place
+            if isinstance(old_service, F5TTSTTSService):
+                if voice_model and voice_model.startswith('custom_'):
+                    try:
+                        from distr.core.db import get_session as _gs, CustomVoice as _CV
+                        import os as _os
+                        _db_id = int(voice_model.split('_', 1)[1])
+                        _sess = _gs()
+                        try:
+                            _cv = _sess.query(_CV).filter(
+                                _CV.id == _db_id, _CV.provider == 'f5tts', _CV.status == 'ready'
+                            ).first()
+                            if _cv and _cv.audio_dir:
+                                for _fn in _os.listdir(_cv.audio_dir):
+                                    if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                                        _ref = _os.path.join(_cv.audio_dir, _fn)
+                                        old_service.set_reference_voice(_ref, getattr(_cv, 'system_prompt', None))
+                                        break
+                        finally:
+                            _sess.close()
+                    except Exception as _e:
+                        self.logger.warning("F5-TTS hot-swap custom voice failed: %s", _e)
+                else:
+                    # Reset to default reference audio
+                    from .services.tts.f5tts import _get_default_ref_audio, _DEFAULT_REF_TEXT
+                    old_service.set_reference_voice(_get_default_ref_audio() or '', _DEFAULT_REF_TEXT)
+                self._apply_agent_name(new_agent_name)
+                self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
+                return
 
         else:
             self.logger.warning("HOT-SWAP TTS: unknown provider %s, skipping", voice_provider)

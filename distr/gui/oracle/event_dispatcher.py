@@ -138,6 +138,8 @@ class EventHookDispatcher(QObject):
         _safe_connect(sm, "step_runner_run_all_requested", lambda *_: self.fire_hook("running_step_runner"))
         _safe_connect(sm, "action_recording_stopped", lambda _=None: self.revert_hook("recording_action"))
         _safe_connect(sm, "chat_stream_finished", lambda _=None: self.fire_hook("idle"))
+        _safe_connect(sm, "action_playback_finished", lambda: self.revert_hook("running_step_runner"))
+        _safe_connect(sm, "action_playback_stopped", lambda _=None: self.revert_hook("running_step_runner"))
 
         logger.debug("EventHookDispatcher connected to signal_manager signals")
 

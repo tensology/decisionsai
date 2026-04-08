@@ -38,6 +38,11 @@ let transcriptionStatusTimer = null;
 const newChatBtn = document.getElementById('newChatBtn');
 const chatSettingsHeader = document.getElementById('chatSettingsHeader');
 
+// Disable input until setup form is loaded
+messageInput.disabled = true;
+messageInput.placeholder = 'Loading...';
+sendButton.disabled = true;
+
 // Modal Elements
 const newChatModal = document.getElementById('newChatModal');
 const modalClose = document.getElementById('modalClose');
@@ -101,7 +106,7 @@ async function createDefaultChat() {
             const general = await generalRes.json();
             const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
             if (vp) voiceProvider = vp;
-            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
+            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
             const v = (general[key] || '').trim();
             if (v && v !== '—') voiceModel = v;
         }
@@ -139,6 +144,15 @@ document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     initTTSPlayer();
     loadDefaultSettings();
+
+    // Llama click → show about window + play splash sound
+    const llamaEl = document.getElementById('llamaClickTarget');
+    if (llamaEl) {
+        llamaEl.addEventListener('click', () => {
+            fetch('/api/about/show', { method: 'POST' }).catch(() => {});
+        });
+    }
+
     loadChats().then(async (data) => {
         const params = new URLSearchParams(window.location.search);
         const idParam = params.get('id');
@@ -176,14 +190,20 @@ function setupEventListeners() {
     modalClose.addEventListener('click', hideNewChatModal);
     modalCancel.addEventListener('click', hideNewChatModal);
     modalCreate.addEventListener('click', createNewChatWithSettings);
-    llmProviderSelect.addEventListener('change', () => loadLlmModels(llmProviderSelect.value));
+    llmProviderSelect.addEventListener('change', () => {
+        loadLlmModels(llmProviderSelect.value);
+        toggleModalOllamaPullBtn();
+    });
     voiceProviderSelect.addEventListener('change', () => loadVoiceModels(voiceProviderSelect.value));
 
     const emptyStateLlmProvider = document.getElementById('emptyStateLlmProvider');
     const emptyStateLlmModel = document.getElementById('emptyStateLlmModel');
     const emptyStateVoiceProvider = document.getElementById('emptyStateVoiceProvider');
     const emptyStateVoiceModel = document.getElementById('emptyStateVoiceModel');
-    if (emptyStateLlmProvider) emptyStateLlmProvider.addEventListener('change', () => loadEmptyStateLlmModels(emptyStateLlmProvider.value));
+    if (emptyStateLlmProvider) emptyStateLlmProvider.addEventListener('change', () => {
+        loadEmptyStateLlmModels(emptyStateLlmProvider.value);
+        toggleEmptyStateOllamaPullBtn();
+    });
     if (emptyStateVoiceProvider) emptyStateVoiceProvider.addEventListener('change', () => loadEmptyStateVoiceModels(emptyStateVoiceProvider.value));
 
     const modalPlayVoiceBtn = document.getElementById('modalPlayVoiceBtn');
@@ -898,6 +918,14 @@ function hideEmptyStateAgentLoading() {
 
 // Populate empty-state dropdowns (same sources as create-chat modal)
 async function loadEmptyStateDropdowns() {
+    // Show loader, hide form while loading
+    const loader = document.getElementById('emptyStateLoader');
+    const form = document.getElementById('emptyStateForm');
+    const prompt = document.getElementById('emptyStatePrompt');
+    if (loader) loader.style.display = '';
+    if (form) form.style.display = 'none';
+    if (prompt) prompt.style.display = 'none';
+
     const llmProviderEl = document.getElementById('emptyStateLlmProvider');
     const llmModelEl = document.getElementById('emptyStateLlmModel');
     const voiceProviderEl = document.getElementById('emptyStateVoiceProvider');
@@ -930,7 +958,7 @@ async function loadEmptyStateDropdowns() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderEl.value = voiceProvider;
         await loadEmptyStateVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelEl.options.length) {
             const opt = Array.from(voiceModelEl.options).find(o => o.value === defaultVoice);
@@ -941,6 +969,185 @@ async function loadEmptyStateDropdowns() {
     } catch (e) {
         console.error('Error loading empty-state dropdowns:', e);
     }
+    // Load skin picker
+    await loadEmptyStateSkins();
+    // Show/hide Ollama download button
+    toggleEmptyStateOllamaPullBtn();
+    // Reveal the form, hide the loader, enable input
+    revealEmptyStateForm();
+}
+
+function revealEmptyStateForm() {
+    const loader = document.getElementById('emptyStateLoader');
+    const form = document.getElementById('emptyStateForm');
+    const prompt = document.getElementById('emptyStatePrompt');
+    if (loader) loader.style.display = 'none';
+    if (form) form.style.display = '';
+    if (prompt) prompt.style.display = '';
+    // Enable the message input now that everything is ready
+    if (!loadedChatId && !currentChatId) {
+        messageInput.disabled = false;
+        messageInput.placeholder = 'Send message...';
+        sendButton.disabled = !messageInput.value.trim();
+    }
+}
+
+// ── Skin picker in empty state ──
+let _emptyStateSkinSelection = null;
+
+async function loadEmptyStateSkins() {
+    const grid = document.getElementById('emptyStateSkinGrid');
+    if (!grid) return;
+    try {
+        const res = await fetch('/api/skins');
+        if (!res.ok) return;
+        const data = await res.json();
+        const skins = data.skins || [];
+        const selected = data.selected_skin || 'oracle';
+        _emptyStateSkinSelection = selected;
+        grid.innerHTML = '';
+        skins.forEach(function(skin) {
+            const isSel = skin.folder_name === selected;
+            const card = document.createElement('div');
+            card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
+            card.dataset.folder = skin.folder_name;
+
+            const idleFile = skin.idle_animation || 'idle.webm';
+            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(idleFile);
+            const ext = idleFile.split('.').pop().toLowerCase();
+            const isOracle = skin.type === 'oracle';
+
+            const previewWrap = document.createElement('div');
+            previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
+
+            let previewEl;
+            if (ext === 'webm') {
+                previewEl = document.createElement('video');
+                previewEl.src = previewUrl;
+                previewEl.autoplay = true;
+                previewEl.muted = true;
+                previewEl.loop = true;
+                previewEl.setAttribute('playsinline', '');
+            } else {
+                previewEl = document.createElement('img');
+                previewEl.src = previewUrl;
+                previewEl.onerror = function() { this.style.display = 'none'; };
+            }
+            previewWrap.appendChild(previewEl);
+            card.appendChild(previewWrap);
+
+            const nameEl = document.createElement('span');
+            nameEl.className = 'empty-state-skin-name';
+            nameEl.textContent = skin.name || skin.folder_name;
+            card.appendChild(nameEl);
+
+            card.addEventListener('click', function() {
+                _emptyStateSkinSelection = skin.folder_name;
+                grid.querySelectorAll('.empty-state-skin-card').forEach(function(c) {
+                    c.classList.toggle('selected', c.dataset.folder === skin.folder_name);
+                });
+            });
+
+            grid.appendChild(card);
+        });
+    } catch (e) {
+        console.error('Error loading skins for empty state:', e);
+    }
+}
+
+function applySelectedSkin() {
+    if (!_emptyStateSkinSelection) return;
+    fetch('/api/skins/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skin_name: _emptyStateSkinSelection })
+    }).catch(function(e) { console.error('Failed to apply skin:', e); });
+}
+
+// ── Ollama model download button in empty state ──
+function toggleEmptyStateOllamaPullBtn() {
+    const btn = document.getElementById('emptyStateOllamaPullBtn');
+    const provider = document.getElementById('emptyStateLlmProvider');
+    if (!btn || !provider) return;
+    btn.style.display = (provider.value === 'ollama') ? '' : 'none';
+}
+
+async function pullOllamaModelFromEmptyState() {
+    window.open('/settings#llms', '_blank');
+}
+
+// ── Modal: Ollama download + skin picker ──
+let _modalSkinSelection = null;
+
+function toggleModalOllamaPullBtn() {
+    const btn = document.getElementById('modalOllamaPullBtn');
+    const provider = document.getElementById('llmProvider');
+    if (!btn || !provider) return;
+    btn.style.display = (provider.value === 'ollama') ? '' : 'none';
+}
+
+async function pullOllamaModelFromModal() {
+    window.open('/settings#llms', '_blank');
+}
+
+async function loadModalSkins() {
+    const grid = document.getElementById('modalSkinGrid');
+    if (!grid) return;
+    try {
+        const res = await fetch('/api/skins');
+        if (!res.ok) return;
+        const data = await res.json();
+        const skins = data.skins || [];
+        const selected = data.selected_skin || 'oracle';
+        _modalSkinSelection = selected;
+        grid.innerHTML = '';
+        skins.forEach(function(skin) {
+            const isSel = skin.folder_name === selected;
+            const card = document.createElement('div');
+            card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
+            card.dataset.folder = skin.folder_name;
+            const idleFile = skin.idle_animation || 'idle.webm';
+            const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(idleFile);
+            const ext = idleFile.split('.').pop().toLowerCase();
+            const isOracle = skin.type === 'oracle';
+            const previewWrap = document.createElement('div');
+            previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
+            let previewEl;
+            if (ext === 'webm') {
+                previewEl = document.createElement('video');
+                previewEl.src = previewUrl;
+                previewEl.autoplay = true; previewEl.muted = true; previewEl.loop = true;
+                previewEl.setAttribute('playsinline', '');
+            } else {
+                previewEl = document.createElement('img');
+                previewEl.src = previewUrl;
+            }
+            previewWrap.appendChild(previewEl);
+            card.appendChild(previewWrap);
+            const nameEl = document.createElement('span');
+            nameEl.className = 'empty-state-skin-name';
+            nameEl.textContent = skin.name || skin.folder_name;
+            card.appendChild(nameEl);
+            card.addEventListener('click', function() {
+                _modalSkinSelection = skin.folder_name;
+                grid.querySelectorAll('.empty-state-skin-card').forEach(function(c) {
+                    c.classList.toggle('selected', c.dataset.folder === skin.folder_name);
+                });
+            });
+            grid.appendChild(card);
+        });
+    } catch (e) {
+        console.error('Error loading modal skins:', e);
+    }
+}
+
+function applyModalSelectedSkin() {
+    if (!_modalSkinSelection) return;
+    fetch('/api/skins/select', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ skin_name: _modalSkinSelection })
+    }).catch(function(e) { console.error('Failed to apply skin:', e); });
 }
 
 async function loadEmptyStateLlmModels(provider) {
@@ -1168,6 +1375,18 @@ async function playTTS(button) {
     }
 }
 
+function _formatTimestamp(ts) {
+    if (!ts) return '';
+    try {
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return '';
+        const h = d.getHours();
+        const m = d.getMinutes().toString().padStart(2, '0');
+        const ampm = h >= 12 ? 'pm' : 'am';
+        return `${h % 12 || 12}:${m} ${ampm}`;
+    } catch (_) { return ''; }
+}
+
 function createMessageElement(message) {
     const div = document.createElement('div');
     div.className = `message ${message.role}`;
@@ -1176,9 +1395,14 @@ function createMessageElement(message) {
         ? `<button class="message-action-btn" onclick="copyMessage(this)">Copy</button>
            <button class="message-action-btn message-action-play" onclick="playTTS(this)" title="Play with TTS">Play</button>`
         : `<button class="message-action-btn" onclick="copyMessage(this)">Copy</button>`;
+
+    const ts = _formatTimestamp(message.timestamp);
+    const headerTimestamp = ts ? `<span class="message-header-timestamp">${ts}</span>` : '';
+
     div.innerHTML = `
         <div class="message-avatar">${avatarSvg}</div>
         <div class="message-content">
+            ${headerTimestamp}
             <div class="message-text">${formatMessage(message.content)}</div>
             <div class="message-actions">
                 ${actionsHtml}
@@ -1281,6 +1505,8 @@ async function sendMessage() {
             newChatId = data.id;
             loadedChatId = data.id;
             currentChatId = data.id;
+            // Apply selected skin when initializing chat
+            if (typeof applySelectedSkin === 'function') applySelectedSkin();
             updateActiveChat();
             // Clear input immediately so user sees it sent
             messageInput.value = '';
@@ -1983,7 +2209,7 @@ async function loadDefaultSettings() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderSelect.value = voiceProvider;
         await loadVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelSelect.options.length) {
             const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);
@@ -2001,16 +2227,26 @@ async function loadDefaultSettings() {
 // Show/Hide Modal
 async function showNewChatModal() {
     newChatModal.style.display = 'flex';
+    // Show loader, hide form
+    const modalLoader = document.getElementById('modalLoader');
+    const modalForm = document.getElementById('modalFormContent');
+    if (modalLoader) modalLoader.style.display = '';
+    if (modalForm) modalForm.style.display = 'none';
     // Disable create button if agent is currently streaming a response
     if (modalCreate) modalCreate.disabled = isStreaming;
     await loadDefaultSettings();
+    loadModalSkins();
+    toggleModalOllamaPullBtn();
+    // Reveal form, hide loader
+    if (modalLoader) modalLoader.style.display = 'none';
+    if (modalForm) modalForm.style.display = '';
     if (typeof injectInfoIcons === 'function') injectInfoIcons();
 }
 
 function hideNewChatModal() {
     stopModalVoice();
     newChatModal.style.display = 'none';
-    if (startingQuestionInput) startingQuestionInput.value = '';
+    if (startingQuestionInput) startingQuestionInput.value = 'Are you ready to help me?';
 }
 
 // Create New Chat with Settings
@@ -2082,7 +2318,8 @@ async function createNewChatWithSettings() {
         };
 
         hideNewChatModal();
-        if (startingQuestionInput) startingQuestionInput.value = '';
+        if (typeof applyModalSelectedSkin === 'function') applyModalSelectedSkin();
+        if (startingQuestionInput) startingQuestionInput.value = 'Are you ready to help me?';
 
         // Clear main message input when switching to the new chat
         if (messageInput) {

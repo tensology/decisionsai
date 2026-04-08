@@ -84,6 +84,10 @@ def create_app() -> FastAPI:
     # Shared (base CSS, shared JS — used by all pages)
     _mount_static(app, "/static/shared/css", static_dir / "shared" / "css", "shared_css")
     _mount_static(app, "/static/shared/js", static_dir / "shared" / "js", "shared_js")
+    _mount_static(app, "/static/vendor", static_dir / "vendor", "vendor")
+    # Catch-all for the entire static directory (covers /static/vendor/* etc.)
+    if static_dir.exists():
+        app.mount("/static", StaticFiles(directory=str(static_dir), html=False), name="static_root")
 
     # Per-page static files
     _mount_static(app, "/board/js", static_dir / "board", "board_js")
@@ -137,9 +141,9 @@ def create_app() -> FastAPI:
             response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
             response.headers["Content-Security-Policy"] = (
                 "default-src 'self'; "
-                "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
-                "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-                "font-src 'self' https://fonts.gstatic.com; "
+                "script-src 'self' 'unsafe-inline'; "
+                "style-src 'self' 'unsafe-inline'; "
+                "font-src 'self' data:; "
                 "img-src 'self' data:; "
                 "media-src 'self' blob:; "
                 "connect-src 'self' ws: wss:; "
@@ -164,9 +168,9 @@ def create_app() -> FastAPI:
         response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; "
-            "script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; "
-            "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-            "font-src 'self' https://fonts.gstatic.com; "
+            "script-src 'self' 'unsafe-inline'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "font-src 'self' data:; "
             "img-src 'self' data:; "
             "media-src 'self' blob:; "
             "connect-src 'self' ws: wss:; "

@@ -13,7 +13,7 @@ from unittest.mock import patch, MagicMock
 
 import pytest
 
-from distr.core.step_runner.service import (
+from distr.core.workflow.service import (
     create_workflow_input,
     plan_session,
     get_session_with_steps,
@@ -65,8 +65,8 @@ class TestCreateWorkflowInput:
 class TestPlanSessionWorkflowInput:
     """Tests that plan_session stores workflow_input on the session."""
 
-    @patch("distr.core.step_runner.service._call_llm_for_plan")
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service._legacy_call_llm_for_plan")
+    @patch("distr.core.workflow.service.get_session")
     def test_plan_session_stores_workflow_input(self, mock_get_session, mock_llm):
         """When workflow_input dict is provided, it should be serialized to JSON."""
         mock_llm.return_value = [{"title": "Step 1", "instruction": "do it"}]
@@ -102,8 +102,8 @@ class TestPlanSessionWorkflowInput:
         assert parsed["source_type"] == "instruction"
         assert parsed["text"] == "hello"
 
-    @patch("distr.core.step_runner.service._call_llm_for_plan")
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service._legacy_call_llm_for_plan")
+    @patch("distr.core.workflow.service.get_session")
     def test_plan_session_no_workflow_input(self, mock_get_session, mock_llm):
         """When workflow_input is None, the column should be None."""
         mock_llm.return_value = [{"title": "Step 1", "instruction": "do it"}]
@@ -134,9 +134,9 @@ class TestPlanSessionWorkflowInput:
 class TestCreateScheduledSessionWorkflowInput:
     """Tests that create_scheduled_session auto-creates workflow_input."""
 
-    @patch("distr.core.step_runner.service.plan_session")
-    @patch("distr.core.step_runner.service._schedule_to_cron")
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service.plan_session")
+    @patch("distr.core.workflow.scheduler.schedule_to_cron")
+    @patch("distr.core.workflow.service.get_session")
     def test_scheduled_session_passes_workflow_input(self, mock_get_session, mock_cron, mock_plan):
         """create_scheduled_session should call plan_session with a scheduled workflow_input."""
         mock_plan.return_value = 99
@@ -157,8 +157,8 @@ class TestCreateScheduledSessionWorkflowInput:
 class TestGetSessionWithStepsIncludesNewFields:
     """Tests that get_session_with_steps includes context_rules and workflow_input."""
 
-    @patch("distr.core.step_runner.service.get_session")
-    @patch("distr.core.step_runner.service.get_run_history")
+    @patch("distr.core.workflow.service.get_session")
+    @patch("distr.core.workflow.service._get_session_run_history")
     def test_includes_context_rules_and_workflow_input(self, mock_run_history, mock_get_session):
         """Response dict should contain context_rules and workflow_input keys."""
         mock_run_history.return_value = []
@@ -197,8 +197,8 @@ class TestGetSessionWithStepsIncludesNewFields:
         parsed_wi = json.loads(result["workflow_input"])
         assert parsed_wi["source_type"] == "instruction"
 
-    @patch("distr.core.step_runner.service.get_session")
-    @patch("distr.core.step_runner.service.get_run_history")
+    @patch("distr.core.workflow.service.get_session")
+    @patch("distr.core.workflow.service._get_session_run_history")
     def test_includes_none_when_fields_empty(self, mock_run_history, mock_get_session):
         """When context_rules and workflow_input are None, they should still be in the dict."""
         mock_run_history.return_value = []
@@ -239,7 +239,7 @@ class TestGetSessionWithStepsIncludesNewFields:
 class TestDuplicateSessionCopiesContextRules:
     """Tests that duplicate_session copies context_rules but NOT workflow_input."""
 
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service.get_session")
     def test_copies_context_rules(self, mock_get_session):
         """Duplicated session should have the original's context_rules."""
         mock_orig = MagicMock()

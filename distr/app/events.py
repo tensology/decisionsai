@@ -81,7 +81,7 @@ class EventHandlerMixin:
             self._evt_voice_listening(data)
 
         # --- Oracle ---
-        elif event in ('oracle_change', 'hide_oracle', 'show_oracle'):
+        elif event in ('oracle_change', 'change_oracle', 'hide_oracle', 'show_oracle'):
             self._evt_oracle(event, data)
 
         # --- Chat lifecycle ---
@@ -264,6 +264,10 @@ class EventHandlerMixin:
                 signal_manager.direct_oracle_change.emit(filename)
             else:
                 logger.warning(f"[EVENT QUEUE] oracle_change event missing filename: {data}")
+        elif event == 'change_oracle':
+            signal_manager.change_oracle.emit()
+        elif event == 'change_oracle_previous':
+            signal_manager.change_oracle_previous.emit()
         elif event == 'hide_oracle':
             signal_manager.hide_oracle.emit()
         elif event == 'show_oracle':
@@ -322,7 +326,7 @@ class EventHandlerMixin:
                     step_result = (response_text or self._get_last_assistant_message(chat_id) or "Step completed.").strip()
                     self._set_step_status(pending["step_id"], "completed", result=step_result[:2000])
                     try:
-                        from distr.core.step_runner.service import update_session_status
+                        from distr.core.workflow.service import update_session_status
                         update_session_status(pending["session_id"], "completed")
                     except Exception:
                         pass
@@ -337,7 +341,7 @@ class EventHandlerMixin:
                 if (pending_chat_id is None) or (pending_chat_id == chat_id):
                     self._set_step_status(pending["step_id"], "failed", result=(error or "Unknown error")[:2000])
                     try:
-                        from distr.core.step_runner.service import update_session_status
+                        from distr.core.workflow.service import update_session_status
                         update_session_status(pending["session_id"], "failed")
                     except Exception:
                         pass
@@ -365,8 +369,8 @@ class EventHandlerMixin:
             logger.info(f"[EVENT QUEUE] Received action_created event: id={action_id}, title='{title}'")
             signal_manager.action_created.emit(action_id)
             try:
-                from distr.gui.web.step_runner_events import increment_step_runner_updated
-                increment_step_runner_updated()
+                from distr.gui.web.workflow_events import increment_workflow_updated
+                increment_workflow_updated()
             except Exception:
                 pass
         elif event == 'start_action_recording':
@@ -421,8 +425,8 @@ class EventHandlerMixin:
     def _evt_step_runner(self, event, data):
         if event == 'step_runner_updated':
             try:
-                from distr.gui.web.step_runner_events import increment_step_runner_updated
-                increment_step_runner_updated()
+                from distr.gui.web.workflow_events import increment_workflow_updated
+                increment_workflow_updated()
             except ImportError:
                 pass
         elif event == 'step_runner_run_all_requested':
@@ -431,7 +435,7 @@ class EventHandlerMixin:
             session_type = data.get('session_type') or 'instruction'
             if session_id and steps_data:
                 try:
-                    from distr.core.step_runner.service import update_session_status
+                    from distr.core.workflow.service import update_session_status
                     update_session_status(session_id, 'in_progress')
                     self._on_step_runner_run_all_requested(session_id, steps_data, None, session_type)
                 except Exception as e:
@@ -447,6 +451,18 @@ class EventHandlerMixin:
         transcript = data.get('transcript')
         error = data.get('error')
         input_type = data.get('input_type', 'voice')
+
+        # Check if this is a pending remote UI voice transcription
+        if hasattr(self, 'telegram_manager') and self.telegram_manager:
+            if hasattr(self.telegram_manager, '_pending_voice_callbacks'):
+                cb = self.telegram_manager._pending_voice_callbacks.pop(request_id, None)
+                if cb:
+                    result_event, result_holder = cb
+                    result_holder['transcript'] = transcript if success else None
+                    result_holder['error'] = error
+                    result_event.set()
+                    return  # Don't process as normal Telegram transcription
+
         if success and transcript:
             logger.info("[EVENT QUEUE] ✅ Telegram voice transcription successful (request_id: %s): '%s'", request_id, transcript[:200])
             try:

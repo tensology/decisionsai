@@ -158,11 +158,11 @@ def _get_tools():
 
 
 def _get_router():
-    """Build router once, cache for all tests."""
+    """Build retriever once, cache for all tests."""
     global _router_cache
     if _router_cache is None:
-        from distr.core.agent.services.llm.tool_router import ToolRouter
-        _router_cache = ToolRouter()
+        from distr.core.agent.tool_retriever import ToolRetriever
+        _router_cache = ToolRetriever()
         _router_cache.build_index(_get_tools())
     return _router_cache
 
@@ -181,27 +181,20 @@ FAST_ACTION_ONLY = frozenset(["select all", "paste", "undo"])
 
 @pytest.mark.parametrize("user_text,expected_tool", ROUTING_CASES, ids=[c[0][:50] for c in ROUTING_CASES])
 def test_router_includes_expected_tool(user_text, expected_tool):
-    """The semantic router should include the expected tool in its candidate set."""
+    """The semantic retriever should include the expected tool in its candidate set."""
     if user_text in FAST_ACTION_ONLY:
         pytest.skip(f"'{user_text}' is handled by fast action regex, not router")
 
-    router = _get_router()
-    if not router.is_ready:
-        pytest.skip("ToolRouter not ready (Ollama embedding unavailable)")
+    retriever = _get_router()
+    if not retriever.is_ready():
+        pytest.skip("ToolRetriever not ready (embedding model unavailable)")
 
-    tools = _get_tools()
-    selected = router.route(user_text, tools)
-    selected_names = [t.name for t in selected]
-
-    # Also get the rank and score for diagnostics
-    scores = router.get_scores(user_text)
-    rank = next((i + 1 for i, (n, _) in enumerate(scores) if n == expected_tool), None)
-    sim = next((s for n, s in scores if n == expected_tool), 0)
+    selected_names = retriever.retrieve(user_text, "llama3:8b")
+    if selected_names is None:
+        pytest.skip("ToolRetriever returned None (kill switch or index not ready)")
 
     assert expected_tool in selected_names, (
-        f"Router did not include '{expected_tool}' for: \"{user_text}\"\n"
-        f"  Rank: {rank}, Similarity: {sim:.3f}\n"
-        f"  Top 5: {[(n, f'{s:.3f}') for n, s in scores[:5]]}\n"
+        f"Retriever did not include '{expected_tool}' for: \"{user_text}\"\n"
         f"  Selected: {selected_names}"
     )
 

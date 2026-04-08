@@ -9,12 +9,24 @@ by the run ID.
 
 import asyncio
 import json
+import sys
 import threading
 from datetime import datetime
 from unittest.mock import patch, MagicMock, PropertyMock
 
 from hypothesis import given, settings as hyp_settings
 from hypothesis import strategies as st
+
+# distr.core.signals requires PyQt6 which is not available in the test environment.
+# Inject a mock module so local imports inside service.py resolve correctly.
+_mock_signals_module = MagicMock()
+_mock_signal_manager = MagicMock()
+_mock_signals_module.signal_manager = _mock_signal_manager
+sys.modules.setdefault("distr.core.signals", _mock_signals_module)
+
+# distr.core.step_runner.test_loop requires pydantic which is not available in tests.
+_mock_test_loop_module = MagicMock()
+sys.modules.setdefault("distr.core.step_runner.test_loop", _mock_test_loop_module)
 
 import distr.core.workflow.service as service_mod
 from distr.core.workflow.service import start_workflow_run, _active_runs, _RunContext

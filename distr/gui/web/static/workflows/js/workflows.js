@@ -10,6 +10,8 @@
     var expandedStepId = null;
     var activeStepTab = {};  // stepId -> active tab name
     var pollTimer = null;
+    var lastKnownVersion = null;
+    var versionPollTimer = null;
 
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -95,6 +97,7 @@
             renderSchedule(data);
             renderVariables(data.variables || []);
             renderRuns(data.runs || []);
+            renderContextRules(data);
             checkActiveRun();
         }).catch(function () { snack("Failed to load workflow", "error"); });
     }
@@ -140,6 +143,25 @@
     }
     function stopPolling() {
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
+    }
+
+    // ── Version-based polling (Requirement 8.3, 8.4) ──
+    function startVersionPolling() {
+        stopVersionPolling();
+        versionPollTimer = setInterval(checkVersion, 3000);
+    }
+    function stopVersionPolling() {
+        if (versionPollTimer) { clearInterval(versionPollTimer); versionPollTimer = null; }
+    }
+    function checkVersion() {
+        api("GET", "/workflows/version").then(function (data) {
+            if (lastKnownVersion !== null && data.version !== lastKnownVersion) {
+                // Version changed — refresh data
+                loadList();
+                if (currentWorkflowId) softRefresh();
+            }
+            lastKnownVersion = data.version;
+        }).catch(function () {});
     }
 
     function checkActiveRun() {
@@ -529,7 +551,7 @@
                 convertBtn.disabled = true;
                 if (spinner) spinner.classList.remove("hidden");
                 var payload = { instruction: instruction, step_type: actionTypeSelect ? actionTypeSelect.value : "execute_code" };
-                api("POST", "/step-runner/generate-code", payload)
+                api("POST", "/workflows/steps/" + step.id + "/generate-code", payload)
                     .then(function (data) {
                         var codeEl = container.querySelector(".sf-code");
                         if (codeEl && data.code) codeEl.value = data.code;
@@ -565,7 +587,7 @@
                 testCodeBtn.disabled = true;
                 if (spinner) spinner.classList.remove("hidden");
                 var payload = { code: code, step_type: actionTypeSelect ? actionTypeSelect.value : "execute_code" };
-                api("POST", "/step-runner/test-code", payload)
+                api("POST", "/workflows/steps/" + step.id + "/test-code", payload)
                     .then(function (data) {
                         if (resultsEl) {
                             var statusColor = data.passed ? "text-green-400" : "text-red-400";
@@ -635,7 +657,7 @@
                 valGenerateBtn.disabled = true;
                 if (spinner) spinner.classList.remove("hidden");
                 var payload = { instruction: instruction, step_type: "playwright" };
-                api("POST", "/step-runner/generate-code", payload)
+                api("POST", "/workflows/steps/" + step.id + "/generate-code", payload)
                     .then(function (data) {
                         var codeEl = container.querySelector(".sf-val-code");
                         if (codeEl && data.code) codeEl.value = data.code;
@@ -671,7 +693,7 @@
                 valTestBtn.disabled = true;
                 if (spinner) spinner.classList.remove("hidden");
                 var payload = { code: code, step_type: "playwright" };
-                api("POST", "/step-runner/test-code", payload)
+                api("POST", "/workflows/steps/" + step.id + "/test-code", payload)
                     .then(function (data) {
                         if (resultsEl) {
                             var statusColor = data.passed ? "text-green-400" : "text-red-400";
@@ -949,6 +971,33 @@
                 '<span class="text-xs text-gray-500">' + ended + '</span>' +
             '</div>';
         }).join('');
+    }
+
+    // ── Context Rules tab ──
+    var _contextRulesDebounceTimer = null;
+    function renderContextRules(data) {
+        var textarea = document.getElementById("wf-context-rules");
+        var statusEl = document.getElementById("wf-context-save-status");
+        if (!textarea) return;
+        textarea.value = data.context_rules || "";
+        if (statusEl) statusEl.textContent = "";
+        // Remove old listener by cloning
+        var newTextarea = textarea.cloneNode(true);
+        textarea.parentNode.replaceChild(newTextarea, textarea);
+        newTextarea.addEventListener("input", function () {
+            if (_contextRulesDebounceTimer) clearTimeout(_contextRulesDebounceTimer);
+            if (statusEl) statusEl.textContent = "Saving...";
+            _contextRulesDebounceTimer = setTimeout(function () {
+                var text = newTextarea.value;
+                api("PATCH", "/workflows/" + currentWorkflowId, { context_rules: text })
+                    .then(function () {
+                        if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 2000); }
+                    })
+                    .catch(function () {
+                        if (statusEl) statusEl.textContent = "Save failed";
+                    });
+            }, 1000);
+        });
     }
 
     // ── Tabs ──
@@ -1252,8 +1301,55 @@
             });
         }
 
+        // Plan Steps: LLM step generation from instruction
+        var planBtn = document.getElementById("wf-plan-btn");
+        if (planBtn) {
+            planBtn.addEventListener("click", function () {
+                var desc = (document.getElementById("wf-builder-desc").value || "").trim();
+                if (!desc) { snack("Enter an instruction first", "error"); return; }
+                planBtn.disabled = true;
+                planBtn.textContent = "Planning...";
+                document.getElementById("wf-builder-error").classList.add("hidden");
+                api("POST", "/workflows/plan", { instruction: desc })
+                    .then(function (data) {
+                        snack("Steps planned");
+                        document.getElementById("wf-builder-desc").value = "";
+                        selectWorkflow(data.id);
+                        loadList();
+                    })
+                    .catch(function (e) {
+                        var errEl = document.getElementById("wf-builder-error");
+                        errEl.textContent = e.message || "Plan failed";
+                        errEl.classList.remove("hidden");
+                    })
+                    .finally(function () {
+                        planBtn.disabled = false;
+                        planBtn.textContent = "Plan Steps";
+                    });
+            });
+        }
+
+        // Generate Steps for existing workflow
+        var genStepsBtn = document.getElementById("wf-generate-steps-btn");
+        if (genStepsBtn) {
+            genStepsBtn.addEventListener("click", function () {
+                if (!currentWorkflowId) return;
+                var instruction = prompt("Describe the steps to generate:");
+                if (!instruction || !instruction.trim()) return;
+                genStepsBtn.disabled = true;
+                api("POST", "/workflows/" + currentWorkflowId + "/generate-steps", { instruction: instruction.trim() })
+                    .then(function () {
+                        snack("Steps generated");
+                        loadDetail(currentWorkflowId);
+                    })
+                    .catch(function (e) { snack(e.message || "Step generation failed", "error"); })
+                    .finally(function () { genStepsBtn.disabled = false; });
+            });
+        }
+
         loadList();
         checkPresetsExist();
+        startVersionPolling();
     }
 
     if (document.readyState === "loading") {

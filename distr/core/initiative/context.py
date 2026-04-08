@@ -131,7 +131,7 @@ class ContextAssembler:
         return result
 
     def _fetch_scheduled_sessions(self) -> list:
-        from distr.core.step_runner.service import list_sessions
+        from distr.core.workflow.service import list_sessions
 
         sessions = list_sessions(session_type="scheduled")
         return [s for s in sessions if s.get("enabled", True)]

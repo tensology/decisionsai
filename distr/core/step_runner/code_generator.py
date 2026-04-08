@@ -69,7 +69,7 @@ Fix the code so it runs successfully. Return ONLY the corrected Python code with
 def _litellm_model(provider: str, model: str, settings: dict) -> str:
     """Map provider + model to litellm model string.
 
-    Mirrors the helper in ``distr.core.step_runner.service`` so the code
+    Mirrors the helper in ``distr.core.workflow.service`` so the code
     generator can resolve the same provider/model pairs.
     """
     if provider == "ollama":

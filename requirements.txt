@@ -4,7 +4,7 @@ PyQt6-WebEngine
 vosk
 pyautogui
 pyaudio
-# sentence-transformers
+sentence-transformers
 fuzzywuzzy
 setuptools-rust
 sqlalchemy
@@ -69,6 +69,10 @@ tqdm
 kokoro-onnx>=0.4.0
 # Kanade voice conversion model for Kokoro voice cloning (KokoClone)
 kanade-tokenizer @ git+https://github.com/frothywater/kanade-tokenizer
+# F5-TTS: zero-shot voice cloning TTS (https://github.com/SWivid/F5-TTS)
+f5-tts
+# torchcodec is a broken transitive dep of f5-tts on macOS — excluded
+# torchcodec
 colorama
 pynput
 

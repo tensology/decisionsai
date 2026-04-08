@@ -329,7 +329,7 @@
     }
 
     function _pollCliStatus(ticketId, btnEl) {
-        // Poll the step runner audit log for the CLI session to complete
+        // Poll the workflow audit log for the CLI session to complete
         var attempts = 0;
         var maxAttempts = 120; // 10 minutes at 5s intervals
         var interval = setInterval(function() {
@@ -344,7 +344,7 @@
                 }
                 return;
             }
-            apiFetch("/api/step-runner/sessions?session_type=kiro_cli&limit=1&search=Ticket%20%23" + ticketId)
+            apiFetch("/api/workflows?type=kiro_cli&limit=1&search=Ticket%20%23" + ticketId)
                 .then(function(sessions) {
                     if (sessions && sessions.length > 0) {
                         var s = sessions[0];
@@ -810,7 +810,7 @@
 
     function loadBoardDefaults(data) {
         apiFetch("/api/kanban/linkable").then(function(ld) {
-            populateSelect("kb-board-def-workflow", ld.step_runner_workflows || ld.workflows, "id", "title", data ? data.default_workflow_id : null);
+            populateSelect("kb-board-def-workflow", ld.workflows, "id", "title", data ? data.default_workflow_id : null);
             populateSelect("kb-board-def-project", ld.projects, "id", "name", data ? data.default_project_id : null);
 
         }).catch(function() {});

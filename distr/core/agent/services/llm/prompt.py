@@ -69,6 +69,7 @@ def build_tools_description(tools: List) -> str:
         'SCREENSHOT & VISION': ['screenshot_analyzer', 'vision_analyzer', 'image_generator'],
         'CODE & FILES': ['execute_code', 'file_operations', 'open_file', 'document_extractor', 'pdf_page_extractor', 'index_folder', 'convert_document'],
         'WEB': ['web_search', 'web_fetch'],
+        'UI ELEMENT TARGETING': ['get_window_tree', 'find_element', 'move_to_element', 'click_element_by_id'],
         'MOUSE CONTROL': ['mouse_movement', 'mouse_actions'],
         'KEYBOARD': ['text_editing', 'caret_movement', 'special_key', 'function_key', 'type_text'],
         'WINDOWS & NAVIGATION': ['open_window', 'keyboard_shortcut', 'open_file_menu', 'oracle_control', 'oracle_globe', 'smart_open', 'mode_control', 'shortcut'],

@@ -99,8 +99,8 @@ class MenuTrayMixin:
         self.actions_action.triggered.connect(lambda: self._open_web_url("/actions/"))
         self.menu.addAction(self.actions_action)
 
-        self.step_runner_action = QAction("Step Runner", self.menu)
-        self.step_runner_action.triggered.connect(lambda: self._open_web_url("/step-runner/"))
+        self.step_runner_action = QAction("Workflows", self.menu)
+        self.step_runner_action.triggered.connect(lambda: self._open_web_url("/workflows/"))
         self.menu.addAction(self.step_runner_action)
 
         self.snippets_action = QAction("Snippets", self.menu)

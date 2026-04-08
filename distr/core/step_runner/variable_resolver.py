@@ -8,7 +8,7 @@ import json
 import logging
 import re
 from copy import deepcopy
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +67,38 @@ def _substitute(text: str, var_context: Dict[str, str]) -> str:
         return match.group(0)  # leave as-is
 
     return _PLACEHOLDER_RE.sub(_replacer, text)
+
+
+def resolve_variables(
+    text: str,
+    previous_step_results: List[dict],
+    explicit_variables: Optional[Dict[str, str]] = None,
+) -> str:
+    """Resolve ``{{variable}}`` placeholders in a plain text string.
+
+    Parameters
+    ----------
+    text:
+        The text containing ``{{...}}`` placeholders to resolve.
+    previous_step_results:
+        Ordered list of completed step results.  Each entry is a dict that
+        should contain a ``"result"`` key with the step's output text.
+    explicit_variables:
+        Optional mapping of variable names to values.  These take precedence
+        over step-derived variables.
+
+    Returns
+    -------
+    str
+        The text with all resolvable placeholders replaced.  Unresolvable
+        placeholders are left as-is.
+    """
+    if not text:
+        return text
+    var_context = _build_variable_context(
+        previous_step_results, explicit_variables or {},
+    )
+    return _substitute(text, var_context)
 
 
 def resolve_http_variables(

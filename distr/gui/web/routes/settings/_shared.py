@@ -142,6 +142,7 @@ class GeneralSettings(BaseModel):
     elevenlabs_voice: str = "default"
     openai_voice: str = "alloy"
     coqui_voice: str = "p225"
+    f5tts_voice: str = "default"
     playback_speed: float = 1.0
     speech_volume: int = 100
     vad_threshold: int = 50

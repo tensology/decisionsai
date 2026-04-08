@@ -182,9 +182,9 @@ class TestTestCodeEndpoint:
 class TestStepCRUDNewFields:
     """Test that update_step_status handles config and code fields."""
 
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service.get_session")
     def test_update_step_status_with_config_and_code(self, mock_get_session):
-        from distr.core.step_runner.service import update_step_status
+        from distr.core.workflow.service import update_step_status
 
         mock_step = MagicMock()
         mock_step.id = 1
@@ -202,9 +202,9 @@ class TestStepCRUDNewFields:
         assert mock_step.config == '{"command": "ls"}'
         assert mock_step.code == "print('hello')"
 
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service.get_session")
     def test_update_step_status_without_new_fields(self, mock_get_session):
-        from distr.core.step_runner.service import update_step_status
+        from distr.core.workflow.service import update_step_status
 
         mock_step = MagicMock()
         mock_step.id = 1
@@ -225,10 +225,10 @@ class TestStepCRUDNewFields:
 class TestResultsHistory:
     """Test that get_session_with_steps includes runs for all session types."""
 
-    @patch("distr.core.step_runner.service.get_run_history")
-    @patch("distr.core.step_runner.service.get_session")
+    @patch("distr.core.workflow.service._get_session_run_history")
+    @patch("distr.core.workflow.service.get_session")
     def test_get_session_includes_runs_for_instruction_type(self, mock_get_session, mock_run_history):
-        from distr.core.step_runner.service import get_session_with_steps
+        from distr.core.workflow.service import get_session_with_steps
 
         mock_run_history.return_value = [{"id": 1, "status": "completed"}]
 

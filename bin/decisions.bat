@@ -460,6 +460,16 @@ if !errorlevel! equ 0 (
     )
 )
 
+:: Verify PyTorch loads correctly
+echo [33mVerifying PyTorch...[0m
+for /f "tokens=*" %%r in ('"%VENV_DIR%\Scripts\python.exe" -c "try: import torch; print('ok ' + torch.__version__)" ^& "except: print('error')" 2^>nul') do set "TORCH_CHECK=%%r"
+if "!TORCH_CHECK:~0,2!"=="ok" (
+    echo [32m√[0m PyTorch !TORCH_CHECK:~3! loaded successfully
+) else (
+    echo [33m⚠  PyTorch could not load. F5-TTS and sentence-transformers may be unavailable.[0m
+    echo [33m   Tool retrieval will use TF-IDF fallback.[0m
+)
+
 :: Add project root to user PATH (so 'decisions.bat' works from anywhere)
 echo [33mChecking system PATH...[0m
 :: Use cmd /c to isolate PATH expansion (which contains parens like x86) from breaking the if-block
@@ -510,7 +520,7 @@ if not exist "!SIDECAR_BIN!" (
             echo [33mBuilding sidecar...[0m
             if not exist "%SCRIPT_DIR%\sidecar\dist" mkdir "%SCRIPT_DIR%\sidecar\dist"
             pushd "%SCRIPT_DIR%\sidecar"
-            go mod tidy -q >nul 2>&1
+            go mod tidy >nul 2>&1
             go build -ldflags="-s -w" -o dist\decisionsai-sidecar.exe . >nul 2>&1
             popd
             if exist "!SIDECAR_BIN!" (

@@ -351,7 +351,7 @@ class InitiativeService:
             self._log_to_chat(f"Executed {action.action_type}: {action.description}", settings)
 
     def _dispatch_step_runner(self, action: ProposedAction, settings: dict) -> None:
-        from distr.core.step_runner.service import create_scheduled_session
+        from distr.core.workflow.service import create_scheduled_session
         instruction = action.description
         payload = action.payload or {}
         schedule = payload.get("schedule", "daily")

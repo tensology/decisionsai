@@ -615,6 +615,26 @@ class TelegramRemoteControlMixin:
                         }
                     )
 
+                elif command == "key_swap_window":
+                    # Command + ~ (macOS) or Alt + Tab (Windows/Linux) — switch windows
+                    import platform
+                    if platform.system() == "Darwin":
+                        success = self._press_key_combination(
+                            ["command", "`"], take_screenshot=True
+                        )
+                    else:
+                        success = self._press_key_combination(
+                            ["alt", "tab"], take_screenshot=True
+                        )
+                    self._send_websocket_message(
+                        {
+                            "type": "remote_control_response",
+                            "command": "key_swap_window",
+                            "request_id": request_id,
+                            "data": {"success": success},
+                        }
+                    )
+
                 elif command == "key_select_all":
                     # Control + A (or Command + A on macOS) - Select all
                     import platform
@@ -819,6 +839,153 @@ class TelegramRemoteControlMixin:
                             "request_id": request_id,
                             "error": str(e), "data": {},
                         })
+
+                elif command == "voice_text_input":
+                    # Text input from remote UI modal (tap on voice button)
+                    # No transcription needed — just route the text
+                    text = command_data.get("text", "").strip()
+                    mode = command_data.get("mode", "dictate")
+                    if not text:
+                        self._send_websocket_message({
+                            "type": "remote_control_response", "command": "voice_text_input",
+                            "request_id": request_id, "error": "No text", "data": {"mode": mode},
+                        })
+                    else:
+                        if mode == "command":
+                            from distr.core.signals import signal_manager
+                            signal_manager.send_text_input.emit(str(text), True, None, None)
+                        elif mode == "dictate":
+                            self._type_text_quick(text)
+                        self._send_websocket_message({
+                            "type": "remote_control_response", "command": "voice_text_input",
+                            "request_id": request_id, "data": {"text": text, "mode": mode},
+                        })
+
+                elif command == "voice_transcribe":
+                    # Voice transcription from remote UI — save audio, send to agent's loaded STT
+                    import base64 as _b64
+                    import tempfile
+                    import uuid
+                    import threading
+
+                    audio_b64 = command_data.get("audio_data", "")
+                    mime_type = command_data.get("mime_type", "audio/webm")
+                    mode = command_data.get("mode", "dictate")
+
+                    if not audio_b64:
+                        self._send_websocket_message({
+                            "type": "remote_control_response", "command": "voice_transcribe",
+                            "request_id": request_id, "error": "No audio data", "data": {"mode": mode},
+                        })
+                    else:
+                        def _do_voice_transcribe():
+                            try:
+                                audio_bytes = _b64.b64decode(audio_b64)
+
+                                # Determine extension
+                                ext = ".webm"
+                                if "mp4" in mime_type: ext = ".mp4"
+                                elif "ogg" in mime_type: ext = ".ogg"
+                                elif "wav" in mime_type: ext = ".wav"
+
+                                # Save to temp file
+                                tmp = tempfile.NamedTemporaryFile(suffix=ext, delete=False)
+                                tmp.write(audio_bytes)
+                                tmp.close()
+                                audio_path = tmp.name
+
+                                # Convert to WAV 16kHz mono if ffmpeg available (same as Telegram voice)
+                                wav_path = audio_path + ".wav"
+                                try:
+                                    import subprocess
+                                    result = subprocess.run(
+                                        ["ffmpeg", "-y", "-i", audio_path, "-ar", "16000", "-ac", "1", wav_path],
+                                        capture_output=True, timeout=10
+                                    )
+                                    if result.returncode == 0:
+                                        import os
+                                        os.unlink(audio_path)
+                                        audio_path = wav_path
+                                    else:
+                                        logger.warning("ffmpeg conversion failed (rc=%d), using original", result.returncode)
+                                except FileNotFoundError:
+                                    logger.warning("ffmpeg not found, using original audio file")
+                                except Exception as e:
+                                    logger.warning("ffmpeg error: %s, using original", e)
+
+                                # Send to agent's STT via command queue
+                                from PyQt6.QtWidgets import QApplication
+                                app = QApplication.instance()
+                                if not app or not hasattr(app, "agent_command_queue"):
+                                    self._send_websocket_message({
+                                        "type": "remote_control_response", "command": "voice_transcribe",
+                                        "request_id": request_id, "error": "Agent not available", "data": {"mode": mode},
+                                    })
+                                    return
+
+                                voice_req_id = str(uuid.uuid4())
+
+                                # Register callback for this transcription result
+                                import threading as _thr
+                                result_event = _thr.Event()
+                                result_holder = {}
+
+                                if not hasattr(self, '_pending_voice_callbacks'):
+                                    self._pending_voice_callbacks = {}
+                                self._pending_voice_callbacks[voice_req_id] = (result_event, result_holder)
+
+                                app.agent_command_queue.put(
+                                    ("transcribe_file", {
+                                        "audio_file_path": audio_path,
+                                        "request_id": voice_req_id,
+                                        "input_type": "voice",
+                                    }),
+                                    block=False,
+                                )
+
+                                # Wait for result (up to 30s)
+                                if result_event.wait(timeout=30.0):
+                                    transcript = result_holder.get("transcript", "")
+                                    error = result_holder.get("error")
+                                    if transcript:
+                                        self._send_websocket_message({
+                                            "type": "remote_control_response", "command": "voice_transcribe",
+                                            "request_id": request_id,
+                                            "data": {"text": transcript, "mode": mode},
+                                        })
+                                        # For command mode, also send the text to the agent as input
+                                        if mode == "command":
+                                            from distr.core.signals import signal_manager
+                                            signal_manager.send_text_input.emit(str(transcript), True, None, None)
+                                    else:
+                                        self._send_websocket_message({
+                                            "type": "remote_control_response", "command": "voice_transcribe",
+                                            "request_id": request_id,
+                                            "error": error or "No speech detected", "data": {"mode": mode},
+                                        })
+                                else:
+                                    self._pending_voice_callbacks.pop(voice_req_id, None)
+                                    self._send_websocket_message({
+                                        "type": "remote_control_response", "command": "voice_transcribe",
+                                        "request_id": request_id,
+                                        "error": "Transcription timed out", "data": {"mode": mode},
+                                    })
+
+                                # Cleanup temp file
+                                try:
+                                    import os
+                                    os.unlink(audio_path)
+                                except OSError:
+                                    pass
+
+                            except Exception as e:
+                                logger.error("voice_transcribe error: %s", e, exc_info=True)
+                                self._send_websocket_message({
+                                    "type": "remote_control_response", "command": "voice_transcribe",
+                                    "request_id": request_id, "error": str(e), "data": {"mode": mode},
+                                })
+
+                        threading.Thread(target=_do_voice_transcribe, daemon=True, name="VoiceTranscribe").start()
 
                 elif command == "api_relay":
                     # Relay an API call to the local web UI server and return the response

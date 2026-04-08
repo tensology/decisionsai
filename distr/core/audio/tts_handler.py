@@ -22,6 +22,8 @@ def _tts_provider_to_internal(provider: str) -> str:
         return "openai"
     if p in ("coqui", "coqui tts (offline)", "coqui tts"):
         return "coqui"
+    if p in ("f5tts", "f5-tts", "f5-tts (offline)", "f5 tts (offline)", "f5 tts"):
+        return "f5tts"
     return p or "kokoro"
 
 
@@ -68,6 +70,12 @@ def _normalize_voice_for_provider(provider: str, voice: str, settings: dict) -> 
         return "af_heart"
 
     # ElevenLabs is resolved again inside _generate_elevenlabs; keep raw here.
+    # F5-TTS: custom voices pass through, default is "default"
+    if prov == "f5tts":
+        if raw.startswith("custom_"):
+            return raw
+        return raw if raw else "default"
+
     # Coqui: validate speaker ID against known voices
     if prov == "coqui":
         try:
@@ -106,6 +114,8 @@ def generate_tts_audio(
             voice = (settings.get("openai_voice") or "alloy").strip()
         elif prov == "coqui":
             voice = (settings.get("coqui_voice") or "p225").strip()
+        elif prov == "f5tts":
+            voice = (settings.get("f5tts_voice") or "default").strip()
         else:
             voice = "af_heart"
     else:
@@ -130,6 +140,8 @@ def generate_tts_audio(
         _generate_openai(text, voice, speed, out_file)
     elif prov == "coqui":
         _generate_coqui(text, voice, speed, out_file)
+    elif prov == "f5tts":
+        _generate_f5tts(text, voice, speed, out_file)
     else:
         raise ValueError(f"Unknown TTS provider: {provider or prov}")
     return out_file
@@ -192,6 +204,8 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
         _generate_openai(test_text, voice, speed, out_file)
     elif provider == 'coqui':
         _generate_coqui(test_text, voice, speed, out_file)
+    elif provider == 'f5tts':
+        _generate_f5tts(test_text, voice, speed, out_file)
     else:
         raise ValueError("Unknown TTS provider: %s", provider)
 
@@ -240,6 +254,23 @@ def _resolve_display_name(provider: str, voice: str, voice_name: str = None) -> 
         except Exception:
             pass
         return voice or "Sarah"
+
+    if provider == 'f5tts':
+        if voice and voice.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(voice.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+            return "Custom Voice"
+        return voice.capitalize() if voice and voice != 'default' else "F5-TTS"
 
     return (voice_name or voice or "Assistant").strip()
 
@@ -507,3 +538,89 @@ def _generate_coqui(text: str, voice: str, speed: float, out_file: str):
     audio, sr = _resample_audio(audio, sr, 48000)
     sf.write(out_file, audio, sr)
     logger.info("Wrote Coqui TTS sample to %s", out_file)
+
+
+def _generate_f5tts(text: str, voice: str, speed: float, out_file: str):
+    """Generate F5-TTS voice sample to WAV file. Supports voice cloning via reference audio."""
+    import numpy as np
+
+    # Uninstall torchcodec if it somehow got reinstalled — it's broken on macOS with torch 2.x
+    try:
+        import torchcodec  # noqa: F401
+        logger.warning("F5-TTS: torchcodec is installed but broken on this system — ignoring")
+    except Exception:
+        pass
+
+    try:
+        from f5_tts.api import F5TTS
+    except ImportError:
+        raise ImportError("f5-tts is required. Install with: pip install f5-tts")
+    except OSError as e:
+        if "torchcodec" in str(e) or "libtorchcodec" in str(e):
+            raise RuntimeError(
+                "torchcodec is causing a conflict. Run: pip uninstall torchcodec -y"
+            ) from e
+        raise
+
+    # Resolve reference audio and text
+    ref_audio = None
+    ref_text = None
+
+    if voice and voice.startswith("custom_"):
+        try:
+            from distr.core.db import get_session, CustomVoice
+            db_id = int(voice.split("_", 1)[1])
+            session = get_session()
+            try:
+                cv = session.query(CustomVoice).filter(
+                    CustomVoice.id == db_id, CustomVoice.provider == "f5tts", CustomVoice.status == "ready"
+                ).first()
+                if cv and cv.audio_dir and os.path.isdir(cv.audio_dir):
+                    for fname in os.listdir(cv.audio_dir):
+                        if fname.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                            ref_audio = os.path.join(cv.audio_dir, fname)
+                            break
+                    ref_text = getattr(cv, 'system_prompt', None) or None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("Failed to resolve F5-TTS custom voice %s: %s", voice, e)
+        if not ref_audio:
+            raise FileNotFoundError(f"No reference audio found for custom voice {voice}")
+
+    # Fall back to default reference audio bundled with f5-tts
+    if not ref_audio:
+        try:
+            import f5_tts
+            pkg_dir = os.path.dirname(f5_tts.__file__)
+            candidate = os.path.join(pkg_dir, "infer", "examples", "basic", "basic_ref_en.wav")
+            if os.path.isfile(candidate):
+                ref_audio = candidate
+                ref_text = "Some call me nature, others call me mother nature."
+        except Exception:
+            pass
+
+    if not ref_audio:
+        raise FileNotFoundError(
+            "F5-TTS requires a reference audio file. "
+            "Upload a custom voice or ensure f5-tts is installed with its example files."
+        )
+
+    clamped_speed = max(0.5, min(2.0, speed))
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    model = F5TTS()
+    wav, sr, _ = model.infer(
+        ref_file=ref_audio,
+        ref_text=ref_text or "",
+        gen_text=text,
+        speed=clamped_speed,
+    )
+
+    audio = np.array(wav, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    audio, sr = _resample_audio(audio, sr, 48000)
+    sf.write(out_file, audio, sr)
+    logger.info("Wrote F5-TTS sample to %s", out_file)

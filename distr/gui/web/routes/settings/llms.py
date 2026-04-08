@@ -153,8 +153,8 @@ def register_routes(router, templates):
 
             # Filter by type capability
             _type_filters = {
-                "conversational": lambda m: not _is_dict(m) or m.get("supports_tools", True),
-                "coding": lambda m: not _is_dict(m) or m.get("supports_tools", True),
+                "conversational": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
                 "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
                 "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
             }

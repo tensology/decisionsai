@@ -17,6 +17,120 @@
             </div>
         </div>
 
+        <!-- KiloCode -->
+        <div>
+            <div class="provider-row">
+                <input type="checkbox" id="kilocode_enabled" name="kilocode_enabled"
+                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer"
+                        onchange="toggleProviderInput('kilocode', this.checked)">
+                <span class="provider-label">KiloCode:</span>
+                <div class="provider-input-wrapper">
+                    <div class="relative flex-1">
+                        <input type="password" id="kilocode_key" name="kilocode_key"
+                                placeholder="Enter KiloCode API Key"
+                                disabled
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors
+                                        hover:border-[#7a7c8c] disabled:opacity-50">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('kilocode_key')" title="Show password">
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <button type="button" class="validate-btn" id="kilocode_validate" onclick="validateProvider('kilocode')" disabled>Validate</button>
+                    <span id="kilocode_indicator" class="validation-indicator"></span>
+                </div>
+            </div>
+            <div class="api-key-info">
+                Get your KiloCode API key from <a href="https://kilo.ai/" target="_blank">Kilo.ai</a> → Dashboard → API Keys
+            </div>
+        </div>
+
+        <!-- Google Gemini -->
+        <div>
+            <div class="provider-row">
+                <input type="checkbox" id="gemini_enabled" name="gemini_enabled"
+                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer"
+                        onchange="toggleProviderInput('gemini', this.checked)">
+                <span class="provider-label">Google Gemini:</span>
+                <div class="provider-input-wrapper">
+                    <div class="relative flex-1">
+                        <input type="password" id="gemini_key" name="gemini_key"
+                                placeholder="Enter Google Gemini API Key"
+                                disabled
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors
+                                        hover:border-[#7a7c8c] disabled:opacity-50">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('gemini_key')" title="Show password">
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <button type="button" class="validate-btn" id="gemini_validate" onclick="validateProvider('gemini')" disabled>Validate</button>
+                    <span id="gemini_indicator" class="validation-indicator"></span>
+                </div>
+            </div>
+            <div class="api-key-info">
+                Get your Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> → Get API Key
+            </div>
+        </div>
+
+        <!-- ElevenLabs -->
+        <div>
+            <div class="provider-row">
+                <input type="checkbox" id="elevenlabs_enabled" name="elevenlabs_enabled"
+                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer"
+                        onchange="toggleProviderInput('elevenlabs', this.checked)">
+                <span class="provider-label">ElevenLabs:</span>
+                <div class="provider-input-wrapper">
+                    <div class="relative flex-1">
+                        <input type="password" id="elevenlabs_key" name="elevenlabs_key"
+                                placeholder="Enter ElevenLabs API Key"
+                                disabled
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors
+                                        hover:border-[#7a7c8c] disabled:opacity-50">
+                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('elevenlabs_key')" title="Show password">
+                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
+                                <circle cx="12" cy="12" r="3"></circle>
+                            </svg>
+                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
+                                <line x1="1" y1="1" x2="23" y2="23"></line>
+                            </svg>
+                        </button>
+                    </div>
+                    <button type="button" class="validate-btn" id="elevenlabs_validate" onclick="validateProvider('elevenlabs')" disabled>Validate</button>
+                    <span id="elevenlabs_indicator" class="validation-indicator"></span>
+                </div>
+            </div>
+            <div class="api-key-info">
+                Get your ElevenLabs API key from <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">ElevenLabs</a> → Profile Settings → API Keys
+            </div>
+        </div>
+
         <!-- AssemblyAI -->
         <div>
             <div class="provider-row">
@@ -131,44 +245,6 @@
             </div>
         </div>
 
-        <!-- ElevenLabs -->
-        <div>
-            <div class="provider-row">
-                <input type="checkbox" id="elevenlabs_enabled" name="elevenlabs_enabled"
-                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                checked:bg-[#10a37f] checked:border-[#10a37f]
-                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                transition-colors cursor-pointer"
-                        onchange="toggleProviderInput('elevenlabs', this.checked)">
-                <span class="provider-label">ElevenLabs:</span>
-                <div class="provider-input-wrapper">
-                    <div class="relative flex-1">
-                        <input type="password" id="elevenlabs_key" name="elevenlabs_key"
-                                placeholder="Enter ElevenLabs API Key"
-                                disabled
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
-                                        focus:outline-none focus:border-[#10a37f] transition-colors
-                                        hover:border-[#7a7c8c] disabled:opacity-50">
-                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('elevenlabs_key')" title="Show password">
-                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                <circle cx="12" cy="12" r="3"></circle>
-                            </svg>
-                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                                <line x1="1" y1="1" x2="23" y2="23"></line>
-                            </svg>
-                        </button>
-                    </div>
-                    <button type="button" class="validate-btn" id="elevenlabs_validate" onclick="validateProvider('elevenlabs')" disabled>Validate</button>
-                    <span id="elevenlabs_indicator" class="validation-indicator"></span>
-                </div>
-            </div>
-            <div class="api-key-info">
-                Get your ElevenLabs API key from <a href="https://elevenlabs.io/app/settings/api-keys" target="_blank">ElevenLabs</a> → Profile Settings → API Keys
-            </div>
-        </div>
-
         <!-- OpenRouter -->
         <div>
             <div class="provider-row">
@@ -242,82 +318,6 @@
             </div>
             <div class="api-key-info">
                 Get your Groq API key from <a href="https://console.groq.com/keys" target="_blank">Groq Console</a> → API Keys → Create API Key
-            </div>
-        </div>
-
-        <!-- KiloCode -->
-        <div>
-            <div class="provider-row">
-                <input type="checkbox" id="kilocode_enabled" name="kilocode_enabled"
-                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                checked:bg-[#10a37f] checked:border-[#10a37f]
-                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                transition-colors cursor-pointer"
-                        onchange="toggleProviderInput('kilocode', this.checked)">
-                <span class="provider-label">KiloCode:</span>
-                <div class="provider-input-wrapper">
-                    <div class="relative flex-1">
-                        <input type="password" id="kilocode_key" name="kilocode_key"
-                                placeholder="Enter KiloCode API Key"
-                                disabled
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
-                                        focus:outline-none focus:border-[#10a37f] transition-colors
-                                        hover:border-[#7a7c8c] disabled:opacity-50">
-                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('kilocode_key')" title="Show password">
-                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                <circle cx="12" cy="12" r="3"></circle>
-                            </svg>
-                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                                <line x1="1" y1="1" x2="23" y2="23"></line>
-                            </svg>
-                        </button>
-                    </div>
-                    <button type="button" class="validate-btn" id="kilocode_validate" onclick="validateProvider('kilocode')" disabled>Validate</button>
-                    <span id="kilocode_indicator" class="validation-indicator"></span>
-                </div>
-            </div>
-            <div class="api-key-info">
-                Get your KiloCode API key from <a href="https://kilo.ai/" target="_blank">Kilo.ai</a> → Dashboard → API Keys
-            </div>
-        </div>
-
-        <!-- Google Gemini -->
-        <div>
-            <div class="provider-row">
-                <input type="checkbox" id="gemini_enabled" name="gemini_enabled"
-                        class="provider-checkbox w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
-                                checked:bg-[#10a37f] checked:border-[#10a37f]
-                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
-                                transition-colors cursor-pointer"
-                        onchange="toggleProviderInput('gemini', this.checked)">
-                <span class="provider-label">Google Gemini:</span>
-                <div class="provider-input-wrapper">
-                    <div class="relative flex-1">
-                        <input type="password" id="gemini_key" name="gemini_key"
-                                placeholder="Enter Google Gemini API Key"
-                                disabled
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-4 py-2 pr-10 text-white
-                                        focus:outline-none focus:border-[#10a37f] transition-colors
-                                        hover:border-[#7a7c8c] disabled:opacity-50">
-                        <button type="button" class="toggle-password-btn" onclick="togglePasswordVisibility('gemini_key')" title="Show password">
-                            <svg class="eye-icon eye-closed" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"></path>
-                                <circle cx="12" cy="12" r="3"></circle>
-                            </svg>
-                            <svg class="eye-icon eye-open hidden" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19m-6.72-1.07a3 3 0 1 1-4.24-4.24"></path>
-                                <line x1="1" y1="1" x2="23" y2="23"></line>
-                            </svg>
-                        </button>
-                    </div>
-                    <button type="button" class="validate-btn" id="gemini_validate" onclick="validateProvider('gemini')" disabled>Validate</button>
-                    <span id="gemini_indicator" class="validation-indicator"></span>
-                </div>
-            </div>
-            <div class="api-key-info">
-                Get your Gemini API key from <a href="https://aistudio.google.com/apikey" target="_blank">Google AI Studio</a> → Get API Key
             </div>
         </div>
 

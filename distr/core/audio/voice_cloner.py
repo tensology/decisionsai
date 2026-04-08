@@ -102,6 +102,32 @@ def clear_reference_cache():
     _ref_cache.clear()
 
 
+def unload_model():
+    """Release Kanade model weights from memory. Call when switching away from custom voice."""
+    global _kanade_model, _vocoder_model, _device, _sample_rate
+    if _kanade_model is None:
+        return
+    try:
+        import torch
+        import gc
+        _ref_cache.clear()
+        _kanade_model.cpu()
+        _vocoder_model.cpu()
+        del _kanade_model
+        del _vocoder_model
+        _kanade_model = None
+        _vocoder_model = None
+        _device = None
+        _sample_rate = None
+        gc.collect()
+        # Free MPS cache if on Apple Silicon
+        if torch.backends.mps.is_available():
+            torch.mps.empty_cache()
+        logger.info("VoiceCloner: Kanade model unloaded, memory freed")
+    except Exception as e:
+        logger.warning("VoiceCloner: error during unload: %s", e)
+
+
 def convert_voice(
     audio_float32: np.ndarray,
     source_sample_rate: int,

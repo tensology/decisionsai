@@ -32,7 +32,7 @@ class KanbanBoard(Base):
     agent_sub_model = Column(String, default='')
     agent_source_lane = Column(String, default='')  # lane name the agent picks tickets from (e.g. "Current")
     agent_done_lane = Column(String, default='')  # lane name to move tickets into when done (e.g. "QA / Assess" or "Done")
-    default_workflow_id = Column(Integer, nullable=True)  # FK to auto_workflows.id (default step-runner workflow)
+    default_workflow_id = Column(Integer, nullable=True)  # FK to auto_workflows.id (default workflow)
     default_project_id = Column(Integer, nullable=True)  # default project for new tickets
     default_snippet_id = Column(Integer, nullable=True)  # default snippet for new tickets
     default_action_id = Column(Integer, nullable=True)  # default action for new tickets

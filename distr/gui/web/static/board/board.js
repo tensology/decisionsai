@@ -18,16 +18,15 @@ document.addEventListener('DOMContentLoaded', () => {
         
         // Check if SortableJS is loaded
         if (typeof Sortable === 'undefined' || !Sortable.create) {
-            console.warn('SortableJS not loaded! Trying to load from CDN...');
-            // Try loading SortableJS manually
+            console.warn('SortableJS not loaded! Loading local copy...');
             const script = document.createElement('script');
-            script.src = 'https://cdn.jsdelivr.net/npm/sortablejs@latest/Sortable.min.js';
+            script.src = '/static/vendor/sortable.min.js';
             script.onload = () => {
                 console.log('SortableJS loaded successfully');
                 initializeBoard();
             };
             script.onerror = () => {
-                console.error('Failed to load SortableJS from CDN');
+                console.error('Failed to load SortableJS');
                 initializeBoard(); // Continue anyway
             };
             document.head.appendChild(script);

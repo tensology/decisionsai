@@ -69,6 +69,8 @@ class RenderingConfig:
     image_offset_y: int = 0
     chroma_key: Tuple[int, int, int] | None = None  # RGB color to make transparent, e.g. (137, 218, 239)
     chroma_threshold: int = 30  # Color distance threshold for chroma-key removal
+    unfocused_opacity_enabled: bool = False  # Whether to reduce opacity when window loses focus
+    unfocused_opacity: float = 0.5  # Opacity value (0.0-1.0) when window is not focused
 
 
 @dataclass
@@ -141,6 +143,8 @@ def parse(json_str: str) -> SkinConfig:
         image_offset_y=rdata.get("image_offset_y", 0),
         chroma_key=tuple(rdata["chroma_key"]) if "chroma_key" in rdata and rdata["chroma_key"] else None,
         chroma_threshold=rdata.get("chroma_threshold", 30),
+        unfocused_opacity_enabled=rdata.get("unfocused_opacity_enabled", False),
+        unfocused_opacity=rdata.get("unfocused_opacity", 0.5),
     )
 
     # --- events ---
@@ -230,6 +234,8 @@ def to_json(config: SkinConfig) -> str:
             "image_offset_y": config.rendering.image_offset_y,
             "chroma_key": list(config.rendering.chroma_key) if config.rendering.chroma_key else None,
             "chroma_threshold": config.rendering.chroma_threshold,
+            "unfocused_opacity_enabled": config.rendering.unfocused_opacity_enabled,
+            "unfocused_opacity": config.rendering.unfocused_opacity,
         },
         "events": {
             hook: _event_response_dict(resp)

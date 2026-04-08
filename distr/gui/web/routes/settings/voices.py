@@ -51,13 +51,15 @@ def register_routes(router, templates):
             elif provider_id == "coqui":
                 from distr.core.agent.constants import COQUI_VOICES
                 voices = [{"id": vid, "name": name} for vid, name in COQUI_VOICES.items()]
+            elif provider_id == "f5tts":
+                voices = [{"id": "default", "name": "Default (F5-TTS Base)"}]
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "elevenlabs"):
+        if provider_id in ("kokoro", "elevenlabs", "f5tts"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text
@@ -189,6 +191,29 @@ def register_routes(router, templates):
             logger.warning("Could not load COQUI_VOICES: %s", e)
             return [{"id": "p225", "name": "Sarah"}]
 
+    @router.get("/voices/f5tts")
+    async def get_f5tts_voices():
+        """Return F5-TTS voice list (default + any custom cloned voices)."""
+        voices = [{"id": "default", "name": "Default (F5-TTS Base)"}]
+        try:
+            from distr.core.db import get_session, CustomVoice
+            session = get_session()
+            try:
+                customs = session.query(CustomVoice).filter(
+                    CustomVoice.provider == 'f5tts', CustomVoice.status == 'ready'
+                ).all()
+                for cv in customs:
+                    voices.append({
+                        "id": f"custom_{cv.id}",
+                        "name": f"⭐ {cv.name}",
+                        "custom": True,
+                    })
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug("Could not load F5-TTS custom voices: %s", e)
+        return voices
+
     # ── Custom Voices CRUD ──────────────────────────────────────────────
 
     @router.get("/custom-voices")
@@ -232,8 +257,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("elevenlabs", "kokoro"):
-            return JSONResponse({"error": "Provider must be elevenlabs or kokoro"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro", "f5tts"):
+            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, or f5tts"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()

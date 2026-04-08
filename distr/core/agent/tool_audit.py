@@ -26,7 +26,7 @@ def record_tool_execution(
     if not chat_id:
         return
     try:
-        from distr.core.step_runner.service import append_audit_step
+        from distr.core.workflow.service import append_audit_step
 
         inst = instruction_hint or f"Executed {tool_name}"
         append_audit_step(

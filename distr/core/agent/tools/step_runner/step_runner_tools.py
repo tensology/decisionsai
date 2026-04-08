@@ -32,7 +32,7 @@ class ListStepRunnerSessionsTool(BaseTool):
 
     def _run(self, limit: int = 20, session_type: Optional[str] = None, search: Optional[str] = None, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import list_sessions
+            from distr.core.workflow.service import list_sessions
             sessions = list_sessions(limit=limit, session_type=session_type, search=search)
             if not sessions:
                 return "No Step Runner sessions found."
@@ -75,7 +75,7 @@ class GetStepRunnerSessionTool(BaseTool):
 
     def _run(self, session_id: int, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import get_session_with_steps
+            from distr.core.workflow.service import get_session_with_steps
             data = get_session_with_steps(session_id)
             if not data:
                 return f"Session {session_id} not found."
@@ -132,12 +132,12 @@ class DeleteStepRunnerSessionTool(BaseTool):
 
     def _run(self, session_id: int, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import delete_session
-            from distr.gui.web.step_runner_events import increment_step_runner_updated
+            from distr.core.workflow.service import delete_session
+            from distr.gui.web.workflow_events import increment_workflow_updated
             ok = delete_session(session_id)
             if not ok:
                 return f"Session {session_id} not found."
-            increment_step_runner_updated()
+            increment_workflow_updated()
             if self.event_queue:
                 try:
                     self.event_queue.put(("step_runner_updated", {}), block=False)
@@ -174,12 +174,12 @@ class UpdateStepRunnerStepTool(BaseTool):
     def _run(self, step_id: int, status: Optional[str] = None, result: Optional[str] = None,
              title: Optional[str] = None, instruction: Optional[str] = None, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import update_step_status
-            from distr.gui.web.step_runner_events import increment_step_runner_updated
+            from distr.core.workflow.service import update_step_status
+            from distr.gui.web.workflow_events import increment_workflow_updated
             ok = update_step_status(step_id, status=status, result=result, title=title, instruction=instruction)
             if not ok:
                 return f"Step {step_id} not found."
-            increment_step_runner_updated()
+            increment_workflow_updated()
             if self.event_queue:
                 try:
                     self.event_queue.put(("step_runner_updated", {}), block=False)
@@ -213,12 +213,12 @@ class AddStepRunnerStepTool(BaseTool):
 
     def _run(self, session_id: int, title: str, instruction: str, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import add_step_to_session
-            from distr.gui.web.step_runner_events import increment_step_runner_updated
+            from distr.core.workflow.service import add_step_to_session
+            from distr.gui.web.workflow_events import increment_workflow_updated
             step = add_step_to_session(session_id, title=title, instruction=instruction)
             if not step:
                 return f"Session {session_id} not found."
-            increment_step_runner_updated()
+            increment_workflow_updated()
             if self.event_queue:
                 try:
                     self.event_queue.put(("step_runner_updated", {}), block=False)
@@ -251,12 +251,12 @@ class RemoveStepRunnerStepTool(BaseTool):
 
     def _run(self, session_id: int, step_id: int, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import remove_step
-            from distr.gui.web.step_runner_events import increment_step_runner_updated
+            from distr.core.workflow.service import remove_step
+            from distr.gui.web.workflow_events import increment_workflow_updated
             ok = remove_step(session_id, step_id)
             if not ok:
                 return f"Step {step_id} not found in session {session_id}."
-            increment_step_runner_updated()
+            increment_workflow_updated()
             if self.event_queue:
                 try:
                     self.event_queue.put(("step_runner_updated", {}), block=False)
@@ -288,7 +288,7 @@ class RunStepRunnerAllTool(BaseTool):
 
     def _run(self, session_id: int, **kwargs) -> str:
         try:
-            from distr.core.step_runner.service import get_session_with_steps
+            from distr.core.workflow.service import get_session_with_steps
             data = get_session_with_steps(session_id)
             if not data:
                 return f"Session {session_id} not found."
@@ -367,8 +367,8 @@ class UpdateScheduleTool(BaseTool):
         **kwargs,
     ) -> str:
         try:
-            from distr.core.step_runner.service import update_scheduled_session, get_session_with_steps
-            from distr.gui.web.step_runner_events import increment_step_runner_updated
+            from distr.core.workflow.service import update_scheduled_session, get_session_with_steps
+            from distr.gui.web.workflow_events import increment_workflow_updated
 
             ok = update_scheduled_session(
                 session_id,
@@ -381,7 +381,7 @@ class UpdateScheduleTool(BaseTool):
             if not ok:
                 return f"Session {session_id} not found or is not a scheduled session."
 
-            increment_step_runner_updated()
+            increment_workflow_updated()
             if self.event_queue:
                 try:
                     self.event_queue.put(("step_runner_updated", {}), block=False)

@@ -157,6 +157,11 @@ class ChatManagerCore:
                             getattr(settings, "openai_voice", "alloy") or "alloy"
                         )
                         agent_name = openai_voice.capitalize()
+                    elif tts_provider == "F5-TTS (Offline)":
+                        f5tts_voice = (
+                            getattr(settings, "f5tts_voice", "default") or "default"
+                        )
+                        agent_name = f5tts_voice.capitalize() if f5tts_voice != "default" else "F5-TTS"
         except Exception as e:
             logger.warning(
                 "ChatManagerCore: Could not determine agent from settings: %s", e

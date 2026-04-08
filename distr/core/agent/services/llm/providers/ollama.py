@@ -84,17 +84,21 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         self.command_queue = command_queue
         self.confirmation_results_dict = confirmation_results_dict
 
-        # Load tools
+        # Load tools (use cache when available to avoid re-instantiation)
         try:
-            self._tools = load_tools(
-                chat_manager=chat_manager, use_navigation_tools=True,
-                llm_service=self, tts_service=tts_service, llm_model=model_name,
-                event_queue=event_queue, command_queue=command_queue,
-                confirmation_results_dict=confirmation_results_dict,
-            )
+            from distr.core.agent.tools.loader import _tool_cache
+            if _tool_cache:
+                self._tools = list(_tool_cache.values())
+            else:
+                self._tools = load_tools(
+                    chat_manager=chat_manager, use_navigation_tools=True,
+                    llm_service=self, tts_service=tts_service, llm_model=model_name,
+                    event_queue=event_queue, command_queue=command_queue,
+                    confirmation_results_dict=confirmation_results_dict,
+                )
             self._tools_dict = {tool.name: tool for tool in self._tools}
-            # Build semantic tool router index in background
-            self._build_tool_router_async()
+            # Build semantic tool retriever index in background
+            self._build_tool_index_async()
         except Exception as e:
             logger.warning("Failed to load tools: %s", e)
             self._tools = []

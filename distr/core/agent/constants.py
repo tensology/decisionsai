@@ -93,6 +93,16 @@ TTS_PROVIDERS = [
         "settings_key": "coqui_voice",
         "supports_custom_voices": False,
     },
+    {
+        "id": "f5tts",
+        "name": "F5-TTS (Offline)",
+        "type": "offline",
+        "enabled": True,
+        "default_voice": "default",
+        "settings_key": "f5tts_voice",
+        "supports_custom_voices": True,
+        "custom_voice_limit": 0,
+    },
 ]
 
 # Quick lookups derived from the registry
@@ -179,6 +189,7 @@ TTS_SAMPLE_RATES = {
     'openai': SAMPLE_RATE_OPENAI_TTS,
     'elevenlabs': SAMPLE_RATE_ELEVENLABS,
     'coqui': SAMPLE_RATE_COQUI,
+    'f5tts': 24000,
 }
 
 # --- Playback Speed Bounds ---
@@ -187,6 +198,7 @@ SPEED_BOUNDS = {
     "elevenlabs": (0.7, 1.2),
     "openai": (0.25, 4.0),
     "coqui": (0.5, 2.0),
+    "f5tts": (0.5, 2.0),
 }
 
 # --- ElevenLabs Default Voice Settings ---
@@ -241,7 +253,7 @@ def normalize_voice_provider(raw: str) -> str:
     """Normalize voice provider strings to canonical lowercase id.
 
     Handles display names like 'Kokoro (Offline)', DB values like 'kokoro',
-    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, qwen3, coqui.
+    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, qwen3, coqui, f5tts.
     """
     v = (raw or '').strip().lower()
     if 'kokoro' in v:
@@ -252,4 +264,6 @@ def normalize_voice_provider(raw: str) -> str:
         return 'openai'
     if 'coqui' in v:
         return 'coqui'
+    if 'f5tts' in v or 'f5-tts' in v or 'f5 tts' in v:
+        return 'f5tts'
     return v or 'kokoro'

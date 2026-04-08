@@ -366,13 +366,13 @@ def run_agent_session(settings, input_device=None, output_device=None, command_q
 # ===========================================
 # 5. Application Class
 # ===========================================
-from distr.app.step_runner import StepRunnerMixin
+from distr.app.workflow import WorkflowOrchestrationMixin
 from distr.app.signals import SignalBridgeMixin
 from distr.app.events import EventHandlerMixin
 from distr.app.agent_lifecycle import AgentLifecycleMixin
 
 
-class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, SignalBridgeMixin, QtWidgets.QApplication):
+class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationMixin, SignalBridgeMixin, QtWidgets.QApplication):
     """Main application class handling window management and lifecycle"""
     
     def __init__(self, argv):
@@ -389,6 +389,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         self.selected_input_device = None
         self.selected_output_device = None
 
+        # Kill any orphaned worker processes from a previous session, and
+        # register atexit/signal handlers to clean up on this session's exit.
+        try:
+            from distr.core.process_tracker import setup as _pt_setup
+            _pt_setup()
+        except Exception as _pt_err:
+            logging.getLogger(__name__).debug("process_tracker setup failed: %s", _pt_err)
+
         # Use explicit spawn context for Queue/Manager to avoid semaphore issues on macOS
         # This ensures proper serialization when passing to spawned child processes
         self.mp_context = multiprocessing.get_context('spawn')
@@ -399,6 +407,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         # Create shared manager for cross-process screen info cache
         self.screen_info_manager = self.mp_context.Manager()
         self.screen_info_cache = self.screen_info_manager.dict()
+        # Track the manager's server process PID
+        try:
+            from distr.core.process_tracker import register_child_pid as _reg_pid
+            if hasattr(self.screen_info_manager, '_process') and self.screen_info_manager._process:
+                _reg_pid(self.screen_info_manager._process.pid)
+        except Exception:
+            pass
         # Initialize screen cache in utils module
         from distr.core.screen_utils import init_screen_cache_manager
         init_screen_cache_manager(self.screen_info_cache)
@@ -406,6 +421,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         # Create shared manager for confirmation results (cross-process communication)
         self.confirmation_manager = self.mp_context.Manager()
         self.confirmation_results_dict = self.confirmation_manager.dict()
+        # Track the confirmation manager's server process PID
+        try:
+            from distr.core.process_tracker import register_child_pid as _reg_pid
+            if hasattr(self.confirmation_manager, '_process') and self.confirmation_manager._process:
+                _reg_pid(self.confirmation_manager._process.pid)
+        except Exception:
+            pass
         # Prevent agent->app current_chat_changed events from being relayed back to agent.
         self._suppress_current_chat_relay = False
         
@@ -455,6 +477,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         # Set up application behavior
         signal_manager.exit_app.connect(self.quit)
         signal_manager.restart_app.connect(lambda: self.oracle_window.restart_app() if hasattr(self, 'oracle_window') and self.oracle_window else None)
+        signal_manager.show_about_window.connect(self._on_show_about_from_web)
         signal_manager.reload_agent.connect(self.reload_agent_session)
         signal_manager.audio_devices_changed.connect(self.update_agent_audio_devices)
         signal_manager.stt_model_changed.connect(self.update_agent_stt_model)
@@ -496,22 +519,30 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         self._last_device_hash = None
         self._device_check_enabled = False  # Will be enabled after initialization
 
-        # Step Runner: check for due scheduled sessions every minute
-        self.step_runner_scheduler_timer = QTimer()
-        self.step_runner_scheduler_timer.timeout.connect(self._run_step_runner_scheduled)
-        self.step_runner_scheduler_timer.start(60000)  # 60 seconds
-        logger.info("Started Step Runner scheduler (interval: 60 seconds)")
+        # Run one-time StepRunner → Workflow data migration before any workflow operations
+        from distr.core.workflow.service import migrate_step_runner_data
+        migration_ok = migrate_step_runner_data()
+        if migration_ok:
+            logger.info("StepRunner migration check passed — ready for workflow operations.")
+        else:
+            logger.warning("StepRunner migration failed — running in degraded mode. Will retry on next startup.")
 
-        # Step Runner orchestration: run steps in sequence, wait for completion, retry on failure
-        self._step_runner_orchestrations: dict[int, dict] = {}
+        # Workflow scheduler: check for due scheduled workflows every minute
+        self.workflow_scheduler_timer = QTimer()
+        self.workflow_scheduler_timer.timeout.connect(self._run_workflow_scheduled)
+        self.workflow_scheduler_timer.start(60000)  # 60 seconds
+        logger.info("Started Workflow scheduler (interval: 60 seconds)")
+
+        # Workflow orchestration: run steps in sequence, wait for completion, retry on failure
+        self._workflow_orchestrations: dict[int, dict] = {}
         self._pending_single_step = None
-        signal_manager.step_runner_run_all_requested.connect(self._on_step_runner_run_all_requested)
-        signal_manager.step_runner_execute_requested.connect(self._on_step_runner_execute_requested)
-        signal_manager.step_runner_cancel_requested.connect(self._on_step_runner_cancel_requested)
-        signal_manager.step_runner_skip_step_requested.connect(self._on_step_runner_skip_step_requested)
-        signal_manager.step_runner_continue_requested.connect(self._on_step_runner_continue_requested)
+        signal_manager.workflow_run_all_requested.connect(self._on_workflow_run_all_requested)
+        signal_manager.workflow_execute_step_requested.connect(self._on_workflow_execute_step_requested)
+        signal_manager.workflow_cancel_requested.connect(self._on_workflow_cancel_requested)
+        signal_manager.workflow_skip_step_requested.connect(self._on_workflow_skip_step_requested)
+        signal_manager.workflow_continue_requested.connect(self._on_workflow_continue_requested)
         # Check for missed scheduled runs on startup (delayed to let agent initialize first)
-        QTimer.singleShot(10000, self._run_step_runner_scheduled)
+        QTimer.singleShot(10000, self._run_workflow_scheduled)
 
         # Initialize Initiative Service
         from distr.core.initiative.service import InitiativeService
@@ -836,6 +867,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         # Use a delay to ensure everything is fully initialized
         QTimer.singleShot(2000, self._enable_device_check_timer)
     
+    def _on_show_about_from_web(self):
+        """Show the about window and play splash sound (triggered from web UI)."""
+        if hasattr(self, 'oracle_window') and self.oracle_window:
+            self.oracle_window.show_about_window()
+        self._play_splash_sound()
+
     def _play_splash_sound(self):
         """Play the splash sound file in a separate thread."""
         def play_sound():
@@ -1266,8 +1303,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
                 self.screen_info_timer.stop()
             if hasattr(self, 'device_check_timer'):
                 self.device_check_timer.stop()
-            if hasattr(self, 'step_runner_scheduler_timer'):
-                self.step_runner_scheduler_timer.stop()
+            if hasattr(self, 'workflow_scheduler_timer'):
+                self.workflow_scheduler_timer.stop()
             if hasattr(self, 'initiative_service'):
                 self.initiative_service.stop()
             
@@ -1361,7 +1398,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, StepRunnerMixin, Signa
         """Cleanup all child processes"""
         logger = logging.getLogger(__name__)
         logger.info("Cleaning up all child processes...")
-        
+
+        # Kill all tracked worker PIDs (covers orphaned processes psutil can't see)
+        try:
+            from distr.core.process_tracker import kill_tracked_pids
+            kill_tracked_pids(timeout=3.0)
+        except Exception as e:
+            logger.debug(f"process_tracker cleanup error: {e}")
+
         # Cleanup agent process (already handled by _cleanup_agent_process, but ensure it's done)
         self._cleanup_agent_process()
         

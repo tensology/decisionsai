@@ -13,6 +13,7 @@ from typing import Optional, Dict, Any
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+from distr.core.agent.tools.base import LazyToolMixin
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ class GoogleWorkspaceInput(BaseModel):
     params: Optional[Dict[str, Any]] = Field(default=None, description="Parameters for the action. For 'draft_email': {'to': 'email@example.com', 'subject': 'Subject text', 'body': 'Email body text'}. For 'send_email': same as draft_email plus optional 'cc' and 'bcc'. For 'check_inbox': optional 'max_results' (default 10) and 'query' (default 'in:inbox'). For other actions, see tool description.")
 
 
-class GoogleWorkspaceTool(BaseTool):
+class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
     """Tool for interacting with Google Workspace services."""
     
     name: str = "google_workspace"
@@ -104,11 +105,13 @@ class GoogleWorkspaceTool(BaseTool):
     
     def __init__(self):
         super().__init__()
-        # Use object.__setattr__ to bypass Pydantic validation for non-field attributes
+
+    def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
     
     def _run(self, action: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         """Execute Google Workspace action"""
+        self._ensure_initialized()
         # Check connection status first
         if not self.connector.is_connected():
             return "Error: Google is not connected. Please connect your Google account in Settings > Advanced. You can use Rube tool as fallback if needed."
@@ -464,5 +467,6 @@ class GoogleWorkspaceTool(BaseTool):
     
     async def _arun(self, action: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> str:
         """Async run method"""
+        self._ensure_initialized()
         return self._run(action, params, **kwargs)
 

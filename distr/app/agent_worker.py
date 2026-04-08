@@ -19,6 +19,7 @@ def run_agent_session(settings, input_device=None, output_device=None,
     """Runs the agent session in a separate process with proper error handling."""
     import warnings
     import logging
+    import sys
 
     # Suppress macOS memory logging noise
     if sys.platform == 'darwin':

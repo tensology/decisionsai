@@ -1,5 +1,5 @@
 /**
- * Step Runner page: break down big instructions into steps, view, approve, execute.
+ * Step Runner page (legacy): API calls redirected to unified /api/workflows/ endpoints.
  */
 (function() {
     var currentSessionId = null;
@@ -102,7 +102,7 @@
     function loadSessions() {
         var search = (document.getElementById("step-runner-search") || {}).value || "";
         var type = (document.getElementById("step-runner-filter") || {}).value || "";
-        var url = "/api/step-runner/sessions?limit=50";
+        var url = "/api/workflows?limit=50";
         if (type) url += "&session_type=" + encodeURIComponent(type);
         if (search) url += "&search=" + encodeURIComponent(search);
         fetch(url)
@@ -174,7 +174,7 @@
         var el = document.getElementById("step-runner-history-list");
         if (!el) return;
         el.innerHTML = "<p class=\"text-xs text-gray-500\">Loading run history...</p>";
-        fetch("/api/step-runner/sessions/" + sessionId + "/runs")
+        fetch("/api/workflows/" + sessionId + "/runs")
             .then(function(r) { return r.json(); })
             .then(function(runs) {
                 if (!Array.isArray(runs) || !runs.length) {
@@ -237,7 +237,7 @@
             if (saveStatus) saveStatus.textContent = "Saving...";
             _contextRulesDebounceTimer = setTimeout(function() {
                 var text = newTextarea.value;
-                fetch("/api/step-runner/sessions/" + sessionId, {
+                fetch("/api/workflows/" + sessionId, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ context_rules: text })
@@ -255,7 +255,7 @@
     }
 
     function loadSessionDetail(id) {
-        fetch("/api/step-runner/sessions/" + id)
+        fetch("/api/workflows/" + id)
             .then(function(r) {
                 if (!r.ok) throw new Error("Session not found");
                 return r.json();
@@ -509,7 +509,7 @@
         var config = collectStepConfig(card, stepType);
         // Clear previous callout
         showValidationCallout(card, []);
-        fetch("/api/step-runner/validate", {
+        fetch("/api/workflows/steps/validate", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ step_type: stepType, config: config })
@@ -551,6 +551,8 @@
             var stepType = s.step_type || "run_command";
             var config = parseStepConfig(s);
             var resultHtml = s.result ? "<p class=\"mt-2 text-xs text-gray-500\">" + escapeAttr(s.result).slice(0, 200) + "</p>" : "";
+            var isRunning = s.status === "running";
+            var isPlayRecording = stepType === "play_recording";
             return "<div class=\"rounded-lg border border-white/10 p-4 bg-[#152054]/50 step-card\" data-step-id=\"" + s.id + "\">" +
                 "<div class=\"flex items-center justify-between gap-2\">" +
                 "<span class=\"step-title text-sm font-medium text-white\">" + escapeAttr(s.title) + "</span>" +
@@ -567,10 +569,12 @@
                 "<button type=\"button\" class=\"step-save mt-2 px-3 py-1 rounded bg-[#f97316] text-white text-xs\">Save</button>" +
                 "</div>" +
                 resultHtml +
-                "<div class=\"mt-3 flex gap-2\">" +
+                "<div class=\"mt-3 flex gap-2 flex-wrap\">" +
                 "<button type=\"button\" class=\"step-edit px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10\" data-id=\"" + s.id + "\">Edit</button>" +
                 (s.status === "pending" ? "<button type=\"button\" class=\"step-execute px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]\" data-id=\"" + s.id + "\">Execute</button>" : "") +
                 (s.status === "pending" ? "<button type=\"button\" class=\"step-approve px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10\" data-id=\"" + s.id + "\">Approve</button>" : "") +
+                (s.status !== "running" ? "<button type=\"button\" class=\"step-run-from px-3 py-1.5 rounded border border-[#f97316]/50 text-[#f97316] text-xs hover:bg-[#f97316]/10\" data-id=\"" + s.id + "\">Run from here</button>" : "") +
+                (isRunning && isPlayRecording ? "<button type=\"button\" class=\"step-stop-playback px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20\" data-id=\"" + s.id + "\">Stop playback</button>" : "") +
                 "</div>" +
                 "</div>";
         }).join("");
@@ -580,7 +584,7 @@
             sel.addEventListener("change", function() {
                 var stepId = parseInt(sel.dataset.stepId, 10);
                 var newType = sel.value;
-                fetch("/api/step-runner/steps/" + stepId, {
+                fetch("/api/workflows/steps/" + stepId, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ step_type: newType })
@@ -604,6 +608,47 @@
         });
         el.querySelectorAll(".step-approve").forEach(function(btn) {
             btn.addEventListener("click", function() { approveStep(parseInt(btn.getAttribute("data-id"), 10)); });
+        });
+
+        // Wire "Run from here" buttons
+        el.querySelectorAll(".step-run-from").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                var stepId = parseInt(btn.getAttribute("data-id"), 10);
+                var sessionId = currentSessionId;
+                if (!sessionId) return;
+                btn.disabled = true;
+                fetch("/api/workflows/" + sessionId + "/run-all", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ start_step_id: stepId })
+                })
+                    .then(function(r) { return r.json(); })
+                    .then(function(data) {
+                        if (data.detail) {
+                            showSnackbar(data.detail, "error");
+                        } else {
+                            showSnackbar("Running from this step");
+                        }
+                        if (currentSessionId) loadSessionDetail(currentSessionId);
+                    })
+                    .catch(function() { showSnackbar("Run failed", "error"); })
+                    .finally(function() { btn.disabled = false; });
+            });
+        });
+
+        // Wire "Stop playback" buttons for running play_recording steps
+        el.querySelectorAll(".step-stop-playback").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                var sessionId = currentSessionId;
+                if (!sessionId) return;
+                fetch("/api/workflows/" + sessionId + "/cancel", { method: "POST" })
+                    .then(function(r) { return r.json(); })
+                    .then(function() {
+                        showSnackbar("Playback stopped");
+                        if (currentSessionId) loadSessionDetail(currentSessionId);
+                    })
+                    .catch(function() { showSnackbar("Stop failed", "error"); });
+            });
         });
         el.querySelectorAll(".step-edit").forEach(function(btn) {
             btn.addEventListener("click", function() {
@@ -652,7 +697,7 @@
                 var label = btn.querySelector(".step-convert-to-code-label");
                 btn.disabled = true;
                 if (label) label.textContent = "Generating...";
-                fetch("/api/step-runner/generate-code", {
+                fetch("/api/workflows/generate-code", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ step_id: stepId, instruction: instruction, step_type: stepType })
@@ -704,7 +749,7 @@
                 btn.disabled = true;
                 if (label) label.textContent = "Testing...";
                 if (resultsArea) { resultsArea.classList.add("hidden"); resultsArea.innerHTML = ""; }
-                fetch("/api/step-runner/test-code", {
+                fetch("/api/workflows/test-code", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ step_id: stepId, code: code, step_type: stepType, headless: headless })
@@ -771,7 +816,7 @@
                 if ((stepType === "execute_code" || stepType === "playwright") && config.code) {
                     payload.code = config.code;
                 }
-                fetch("/api/step-runner/steps/" + stepId, {
+                fetch("/api/workflows/steps/" + stepId, {
                     method: "PATCH",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
@@ -788,7 +833,7 @@
     }
 
     function executeStep(stepId) {
-        fetch("/api/step-runner/execute", {
+        fetch("/api/workflows/execute", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ step_id: stepId })
@@ -809,7 +854,7 @@
     }
 
     function approveStep(stepId) {
-        fetch("/api/step-runner/steps/" + stepId, {
+        fetch("/api/workflows/steps/" + stepId, {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ status: "approved" })
@@ -1042,7 +1087,7 @@
         var btn = this;
         btn.disabled = true;
         btn.textContent = "Creating...";
-        fetch("/api/step-runner/scheduled", {
+        fetch("/api/workflows/scheduled", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -1070,7 +1115,7 @@
     document.getElementById("step-runner-enabled").addEventListener("change", function() {
         var id = this.dataset.sessionId;
         if (!id) return;
-        fetch("/api/step-runner/sessions/" + id + "/schedule", {
+        fetch("/api/workflows/" + id + "/schedule", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ enabled: this.checked })
@@ -1134,7 +1179,7 @@
             }
             payload.schedule = parsed.cron;
         }
-        fetch("/api/step-runner/sessions/" + id + "/schedule", {
+        fetch("/api/workflows/" + id + "/schedule", {
             method: "PATCH",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
@@ -1151,17 +1196,11 @@
         var id = this.dataset.sessionId;
         if (!id) return;
         this.disabled = true;
-        // Optimistic reset: immediately show all steps as pending
-        var stepCards = document.querySelectorAll("#step-runner-steps .step-card");
-        stepCards.forEach(function(card) {
-            var badge = card.querySelector(".text-xs.px-2");
-            if (badge) {
-                badge.className = "text-xs px-2 py-0.5 rounded bg-gray-600/50 text-gray-400";
-                badge.textContent = "pending";
-            }
-            // Remove execute/approve buttons so they don't double-fire; they'll re-render on reload
-        });
-        fetch("/api/step-runner/sessions/" + id + "/run-all", { method: "POST" })
+        fetch("/api/workflows/" + id + "/run-all", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({})
+        })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.detail) {
@@ -1181,7 +1220,7 @@
     document.getElementById("step-runner-cancel").addEventListener("click", function() {
         var id = this.dataset.sessionId;
         if (!id) return;
-        fetch("/api/step-runner/sessions/" + id + "/cancel", { method: "POST" })
+        fetch("/api/workflows/" + id + "/cancel", { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.detail) {
@@ -1197,7 +1236,7 @@
     document.getElementById("step-runner-skip-step").addEventListener("click", function() {
         var id = this.dataset.sessionId;
         if (!id) return;
-        fetch("/api/step-runner/sessions/" + id + "/skip-step", { method: "POST" })
+        fetch("/api/workflows/" + id + "/skip-step", { method: "POST" })
             .then(function(r) { return r.json(); })
             .then(function(data) {
                 if (data.detail) {
@@ -1213,7 +1252,7 @@
     document.getElementById("step-runner-delete").addEventListener("click", function() {
         var id = this.dataset.sessionId;
         if (!id || !confirm("Delete this session? This cannot be undone.")) return;
-        fetch("/api/step-runner/sessions/" + id, { method: "DELETE" })
+        fetch("/api/workflows/" + id, { method: "DELETE" })
             .then(function(r) {
                 if (!r.ok) throw new Error("Delete failed");
                 showSnackbar("Session deleted");
@@ -1228,7 +1267,7 @@
     document.getElementById("step-runner-duplicate").addEventListener("click", function() {
         var id = this.dataset.sessionId;
         if (!id) return;
-        fetch("/api/step-runner/sessions/" + id + "/duplicate", { method: "POST" })
+        fetch("/api/workflows/" + id + "/duplicate", { method: "POST" })
             .then(function(r) {
                 if (!r.ok) throw new Error("Duplicate failed");
                 return r.json();
@@ -1253,7 +1292,7 @@
         var btn = this;
         btn.disabled = true;
         btn.textContent = "Planning...";
-        fetch("/api/step-runner/plan", {
+        fetch("/api/workflows/plan", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ instruction: instruction })
@@ -1280,28 +1319,36 @@
 
     loadSessions();
 
-    var _lastStepRunnerVersion = 0;
-    var _stepRunnerVersionPollTimeout = null;
-    function _pollStepRunnerVersion() {
-        fetch("/api/step-runner/version")
-            .then(function(r) { return r.ok ? r.json() : {}; })
-            .then(function(d) {
-                var v = d.version || 0;
-                if (v !== _lastStepRunnerVersion) {
-                    _lastStepRunnerVersion = v;
-                    loadSessions();
-                    if (currentSessionId) loadSessionDetail(currentSessionId);
-                }
-            })
-            .catch(function() {})
-            .finally(function() {
-                var delay = currentSessionStatus === "in_progress" ? 2000 : 5000;
-                _stepRunnerVersionPollTimeout = setTimeout(_pollStepRunnerVersion, delay);
-            });
+    // ── Real-time updates via WebSocket ─────────────────────────────────
+    var _srWs = null;
+    var _srWsReconnectDelay = 1000;
+
+    function _connectSrWebSocket() {
+        if (_srWs && (_srWs.readyState === WebSocket.OPEN || _srWs.readyState === WebSocket.CONNECTING)) return;
+        var proto = window.location.protocol === "https:" ? "wss:" : "ws:";
+        var url = proto + "//" + window.location.host + "/api/ws/workflows";
+        try {
+            _srWs = new WebSocket(url);
+            _srWs.onopen = function() { _srWsReconnectDelay = 1000; };
+            _srWs.onmessage = function(e) {
+                try {
+                    var msg = JSON.parse(e.data);
+                    if (msg.type === "workflow_updated") {
+                        loadSessions();
+                        if (currentSessionId) loadSessionDetail(currentSessionId);
+                    }
+                } catch (_) {}
+            };
+            _srWs.onclose = function() {
+                _srWs = null;
+                setTimeout(function() {
+                    _srWsReconnectDelay = Math.min(_srWsReconnectDelay * 2, 15000);
+                    _connectSrWebSocket();
+                }, _srWsReconnectDelay);
+            };
+        } catch(e) {
+            setTimeout(_connectSrWebSocket, 3000);
+        }
     }
-    fetch("/api/step-runner/version")
-        .then(function(r) { return r.ok ? r.json() : {}; })
-        .then(function(d) { _lastStepRunnerVersion = d.version || 0; })
-        .catch(function() {})
-        .finally(function() { _stepRunnerVersionPollTimeout = setTimeout(_pollStepRunnerVersion, 5000); });
+    _connectSrWebSocket();
 })();

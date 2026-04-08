@@ -36,6 +36,7 @@ def register_routes(router, templates):
                 "name": config.name,
                 "type": config.type,
                 "idle_animation": idle_anim.animation if idle_anim else None,
+                "idle_playback": idle_anim.playback if idle_anim else "loop",
             })
 
         settings = load_settings_from_db()

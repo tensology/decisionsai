@@ -20,6 +20,12 @@ try:
 except ImportError:
     sd = None
 
+# Cache for query_macos_devices — system_profiler is expensive (hammers coreaudiod).
+# Only re-run it at most once every 30 seconds.
+_macos_device_cache: tuple = ([], [])   # (outputs, inputs)
+_macos_device_cache_ts: float = 0.0
+_MACOS_DEVICE_CACHE_TTL: float = 30.0  # seconds
+
 
 def get_device_type(device_name: str) -> str:
     """Determine device type from device name."""
@@ -97,7 +103,12 @@ def query_windows_devices():
 
 
 def query_macos_devices():
-    """Query devices using system_profiler on macOS."""
+    """Query devices using system_profiler on macOS. Results are cached for 30s to avoid hammering coreaudiod."""
+    import time
+    global _macos_device_cache, _macos_device_cache_ts
+    now = time.monotonic()
+    if now - _macos_device_cache_ts < _MACOS_DEVICE_CACHE_TTL:
+        return _macos_device_cache
     try:
         # Use system_profiler to get audio devices
         result = subprocess.run(
@@ -157,16 +168,18 @@ def query_macos_devices():
                     logger.debug(f"Found output device: {name} (type: {device_type})")
         
         logger.debug(f"query_macos_devices: Found {len(outputs)} outputs, {len(inputs)} inputs")
+        _macos_device_cache = (outputs, inputs)
+        _macos_device_cache_ts = now
         return outputs, inputs
-        
+
     except subprocess.TimeoutExpired:
         logger.warning("system_profiler timed out (using sounddevice fallback)")
-        return [], []
+        return _macos_device_cache  # return stale cache rather than empty
     except Exception as e:
         logger.error(f"Error querying macOS devices: {e}")
         import traceback
         logger.error(traceback.format_exc())
-        return [], []
+        return _macos_device_cache  # return stale cache rather than empty
 
 
 def query_unix_devices():
@@ -642,44 +655,23 @@ def restore_locked_devices(settings: dict):
 def get_current_device_list_hash():
     """
     Get an MD5 hash of the current device list for change detection.
-    Returns an MD5 hash string of the combined input/output device lists.
-    Returns empty string on error to prevent crashes.
-    Uses query_native_devices (system_profiler/pactl on macOS/Linux); falls back to sounddevice if that fails.
+    Uses sd.query_devices() (lightweight) instead of system_profiler to avoid
+    hammering coreaudiod every 5 seconds.
     """
     import hashlib
     try:
-        outputs, inputs = query_native_devices()
-        # Fallback to sounddevice if native query returns empty (e.g. system_profiler timeout on macOS)
-        if (not outputs and not inputs) and sd is not None:
-            try:
-                devices = sd.query_devices()
-                out_names = sorted([d['name'] for d in devices if d.get('max_output_channels', 0) > 0])
-                in_names = sorted([d['name'] for d in devices if d.get('max_input_channels', 0) > 0])
-                device_names = sorted(set(out_names + in_names))
-                hash_str = '|'.join(device_names)
-                return hashlib.md5(hash_str.encode('utf-8')).hexdigest()
-            except Exception as sd_err:
-                logger.debug("sounddevice fallback for hash failed: %s", sd_err)
-        # Create a simple hash by combining device names
-        device_names = sorted([dev['name'] for dev in outputs] + [dev['name'] for dev in inputs])
-        hash_str = '|'.join(device_names)
-        # Create MD5 hash
-        md5_hash = hashlib.md5(hash_str.encode('utf-8')).hexdigest()
-        return md5_hash
-    except Exception as e:
-        # Return empty string on error - this prevents crashes from subprocess calls
-        logger.error(f"Error getting device list hash: {e}")
-        # Last-resort fallback to sounddevice
         if sd is not None:
-            try:
-                devices = sd.query_devices()
-                out_names = sorted([d['name'] for d in devices if d.get('max_output_channels', 0) > 0])
-                in_names = sorted([d['name'] for d in devices if d.get('max_input_channels', 0) > 0])
-                device_names = sorted(set(out_names + in_names))
-                hash_str = '|'.join(device_names)
-                return hashlib.md5(hash_str.encode('utf-8')).hexdigest()
-            except Exception:
-                pass
+            devices = sd.query_devices()
+            out_names = sorted([d['name'] for d in devices if d.get('max_output_channels', 0) > 0])
+            in_names = sorted([d['name'] for d in devices if d.get('max_input_channels', 0) > 0])
+            device_names = sorted(set(out_names + in_names))
+            return hashlib.md5('|'.join(device_names).encode('utf-8')).hexdigest()
+        # Fallback to native query (cached) if sounddevice unavailable
+        outputs, inputs = query_native_devices()
+        device_names = sorted([dev['name'] for dev in outputs] + [dev['name'] for dev in inputs])
+        return hashlib.md5('|'.join(device_names).encode('utf-8')).hexdigest()
+    except Exception as e:
+        logger.error(f"Error getting device list hash: {e}")
         return ''
 
 

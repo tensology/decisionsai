@@ -107,6 +107,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.moveEvent = self.on_move_event
 
         signal_manager.change_oracle.connect(self.cycle_oracle)
+        signal_manager.change_oracle_previous.connect(self.cycle_oracle_previous)
         signal_manager.show_oracle.connect(self.show_oracle)
         signal_manager.hide_oracle.connect(self.hide_oracle)
 
@@ -373,6 +374,18 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         _folder, config = result
         self._skin_config = config
 
+        # Restore the saved size for this skin
+        try:
+            from distr.core.db.skin_sizes import get_skin_size
+            saved_size = get_skin_size(migrated)
+            if saved_size != self.content_size:
+                self.content_size = saved_size
+                settings = load_settings_from_db()
+                settings['sphere_size'] = saved_size
+                save_settings_to_db(settings)
+        except Exception:
+            pass
+
         # Recreate renderer
         self._render_strategy = create_renderer(self._skin_config)
 
@@ -393,6 +406,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Apply geometry (padding, mask, container shape) for the new skin type
         self._apply_skin_geometry()
+
+        # Apply unfocused opacity for the new skin
+        self._apply_unfocused_opacity()
 
         self.update()
 
@@ -556,6 +572,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         )
         self._animation_player.play()
         self._current_anim_path = anim_path
+        logger.info("_play_animation: playing %s (%d frames)", anim_path, len(self._animation_player._webm_player._frames) if self._animation_player._webm_player else 0)
 
     def _apply_skin_geometry(self):
         """Recalculate padding, window size, and container geometry based on skin config.
@@ -922,6 +939,24 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             path.addEllipse(0, 0, self.total_size, self.total_size)
             self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
 
+    def changeEvent(self, event):
+        """Handle window activation changes for unfocused opacity."""
+        if event.type() in (QtCore.QEvent.Type.ActivationChange,):
+            self._apply_unfocused_opacity()
+        super().changeEvent(event)
+
+    def _apply_unfocused_opacity(self):
+        """Set window opacity based on focus state and skin config."""
+        if (self._skin_config is None
+                or self._skin_config.type != "oracle"
+                or not self._skin_config.rendering.unfocused_opacity_enabled):
+            self.setWindowOpacity(1.0)
+            return
+        if self.isActiveWindow():
+            self.setWindowOpacity(1.0)
+        else:
+            self.setWindowOpacity(max(0.05, min(1.0, self._skin_config.rendering.unfocused_opacity)))
+
     def mousePressEvent(self, event):
         logging.info(f"mousePressEvent: button={event.button()}, hands_free={self.is_hands_free}")
         if event.button() == QtCore.Qt.MouseButton.LeftButton:
@@ -934,29 +969,34 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.menu.exec(event.globalPosition().toPoint())
 
     def cycle_oracle(self):
-        """Cycle to the next oracle GIF animation via the skin system."""
+        """Cycle to the next oracle animation file within the oracle skin folder."""
         if not self._check_eula_accepted():
             return
         if self._skin_config is None or self._skin_config.type != "oracle":
+            logger.info("cycle_oracle: skipped — skin_config type is %s", 
+                       self._skin_config.type if self._skin_config else "None")
             return
 
         oracle_dir = os.path.join(AVATARS_DIR, "oracle")
-        gif_files = sorted(
-            [f for f in os.listdir(oracle_dir) if f.endswith('.gif')],
+        anim_files = sorted(
+            [f for f in os.listdir(oracle_dir) if f.endswith('.webm') or f.endswith('.gif')],
             key=lambda x: int(os.path.splitext(x)[0]) if os.path.splitext(x)[0].isdigit() else float('inf')
         )
-        if not gif_files:
+        if not anim_files:
+            logger.warning("cycle_oracle: no animation files found in %s", oracle_dir)
             return
 
         current_anim = self._skin_config.events.get("idle", None)
-        current_file = current_anim.animation if current_anim else "0.gif"
+        current_file = current_anim.animation if current_anim else anim_files[0]
         try:
-            idx = gif_files.index(current_file)
-            next_file = gif_files[(idx + 1) % len(gif_files)]
+            idx = anim_files.index(current_file)
+            next_file = anim_files[(idx + 1) % len(anim_files)]
         except ValueError:
-            next_file = gif_files[0]
+            next_file = anim_files[0]
 
-        # Update all events in the config to use the new GIF
+        logger.info("cycle_oracle: %s → %s (%d files total)", current_file, next_file, len(anim_files))
+
+        # Update all events in the config to use the new animation file
         for hook in self._skin_config.events:
             self._skin_config.events[hook].animation = next_file
 
@@ -968,7 +1008,40 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Trigger reload
         self._on_direct_oracle_change("oracle")
-        logging.debug(f"Cycled oracle to: {next_file}")
+
+    def cycle_oracle_previous(self):
+        """Cycle to the previous oracle animation file."""
+        if not self._check_eula_accepted():
+            return
+        if self._skin_config is None or self._skin_config.type != "oracle":
+            return
+
+        oracle_dir = os.path.join(AVATARS_DIR, "oracle")
+        anim_files = sorted(
+            [f for f in os.listdir(oracle_dir) if f.endswith('.webm') or f.endswith('.gif')],
+            key=lambda x: int(os.path.splitext(x)[0]) if os.path.splitext(x)[0].isdigit() else float('inf')
+        )
+        if not anim_files:
+            return
+
+        current_anim = self._skin_config.events.get("idle", None)
+        current_file = current_anim.animation if current_anim else anim_files[0]
+        try:
+            idx = anim_files.index(current_file)
+            prev_file = anim_files[(idx - 1) % len(anim_files)]
+        except ValueError:
+            prev_file = anim_files[-1]
+
+        for hook in self._skin_config.events:
+            self._skin_config.events[hook].animation = prev_file
+
+        from distr.core.skin_config import to_json
+        skin_json_path = os.path.join(oracle_dir, "skin.json")
+        with open(skin_json_path, "w", encoding="utf-8") as f:
+            f.write(to_json(self._skin_config))
+
+        self._on_direct_oracle_change("oracle")
+        logging.debug(f"Cycled oracle previous to: {prev_file}")
 
 
     def mouseMoveEvent(self, event):
@@ -1383,7 +1456,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                                         
                 if position:
                     logger.info(f"Restoring oracle position: ({position.pos_x}, {position.pos_y})")
-                    self.move(int(position.pos_x), int(position.pos_y))
+                    saved_x, saved_y = int(position.pos_x), int(position.pos_y)
+                    from PyQt6.QtCore import QTimer
+                    QTimer.singleShot(0, lambda: self.move(saved_x, saved_y))
                     
                     # Update cache again after moving to ensure current screen is correct
                     try:
@@ -1446,15 +1521,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Restore the window position from saved settings"""
         logger.debug("\n=== Starting position restoration ===")
         screens_id = get_screens_hash()
-        current_screen = QApplication.primaryScreen()  # Start with primary screen
-        
+
         with get_session() as session:
-            # Get position for current screen configuration
             position = session.query(ScreenPosition).filter_by(screens_id=screens_id).first()
-            
-            if position:                                
-                logger.debug(f"Found saved position for {position.screen_name}: ({position.pos_x}, {position.pos_y})")
-                self.move(int(position.pos_x), int(position.pos_y))
+
+            if position:
+                saved_x = int(position.pos_x)
+                saved_y = int(position.pos_y)
+                logger.debug(f"Found saved position for {position.screen_name}: ({saved_x}, {saved_y})")
+                # Defer the move until after the window is fully shown so Qt doesn't
+                # apply availableGeometry constraints that shift the position by the
+                # menu bar height (~20-24px on macOS).
+                from PyQt6.QtCore import QTimer
+                QTimer.singleShot(0, lambda: self.move(saved_x, saved_y))
             else:
                 logger.debug("No saved position found")
                 self.set_default_position()
@@ -1546,38 +1625,31 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def update_size(self, new_size):
         """Update the oracle size while maintaining proportions"""
         self.content_size = new_size
-        self.shadow_size = int(new_size * 0.022)
-        self.stroke_width = int(new_size * 0.033)
-        
-        self.total_size = self.content_size + 2 * (self.shadow_size + self.stroke_width)
-        
-        # Update window size
-        self.setFixedSize(self.total_size, self.total_size)
-        
-        # Update container and label geometries
-        self.round_container.setGeometry(
-            self.shadow_size + self.stroke_width,
-            self.shadow_size + self.stroke_width,
-            self.content_size,
-            self.content_size
-        )
-        
-        self.gif_label.setGeometry(0, 0, self.content_size, self.content_size)
-        
-        # Reload the current image to ensure proper scaling
-        if hasattr(self, 'current_movie'):
-            self.current_movie.setScaledSize(QtCore.QSize(self.content_size, self.content_size))
-        
+        self._apply_skin_geometry()
+
+        # Reload the current animation at the new size so frames rescale
+        if self._skin_config:
+            current_hook = self._event_dispatcher.get_current_hook() or "idle"
+            response = self._skin_config.events.get(current_hook) or self._skin_config.events.get("idle")
+            if response:
+                self._play_animation(response)
+
         # Force a repaint
         self.update()
-        
-        # Save the new size to settings (only place where we save)
+
+        # Save the new size to settings and per-skin store
         settings = load_settings_from_db()
         settings['sphere_size'] = new_size
         save_settings_to_db(settings)
+        try:
+            from distr.core.db.skin_sizes import set_skin_size
+            if self._skin_folder:
+                set_skin_size(self._skin_folder, new_size)
+        except Exception:
+            pass
         logging.debug(f"Updated oracle size to: {new_size}px")
-        
-        # Reposition player window with animation to keep it centered
+
+        # Reposition player window
         self.position_player_window(animate=True)
 
     def _check_eula_accepted(self):

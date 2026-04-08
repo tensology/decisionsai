@@ -18,7 +18,7 @@ from distr.core.step_runner.step_types import (
     ExecuteCodeConfig,
     PlaywrightConfig,
 )
-from distr.core.step_runner.service import build_step_context_prompt
+from distr.core.workflow.service import build_step_context_prompt
 
 
 # ---------------------------------------------------------------------------

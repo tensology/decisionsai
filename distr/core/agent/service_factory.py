@@ -45,6 +45,11 @@ try:
 except ImportError:
     CoquiTTSService = None
 
+try:
+    from .services import F5TTSTTSService
+except ImportError:
+    F5TTSTTSService = None
+
 from .libs import ElevenLabs
 
 # Maps engine name -> (ServiceClass, required_import_label)
@@ -224,6 +229,45 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
             event_queue=settings.get('_event_queue'),
             speech_volume=100,
         )
+    elif engine == 'f5tts':
+        if not F5TTSTTSService:
+            raise ImportError("F5TTSTTSService is not available. Install with: pip install f5-tts")
+        voice_name = tts_config.get('voice_name', 'default')
+        lo, hi = SPEED_BOUNDS['f5tts']
+        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
+
+        # Resolve reference audio for voice cloning
+        ref_audio = None
+        ref_text = None
+        if voice_name and voice_name.startswith('custom_'):
+            try:
+                from distr.core.db import get_session as _gs, CustomVoice as _CV
+                _db_id = int(voice_name.split('_', 1)[1])
+                _sess = _gs()
+                try:
+                    _cv = _sess.query(_CV).filter(
+                        _CV.id == _db_id, _CV.provider == 'f5tts', _CV.status == 'ready'
+                    ).first()
+                    if _cv and _cv.audio_dir:
+                        for _fn in os.listdir(_cv.audio_dir):
+                            if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                                ref_audio = os.path.join(_cv.audio_dir, _fn)
+                                break
+                        ref_text = getattr(_cv, 'system_prompt', None) or None
+                finally:
+                    _sess.close()
+            except Exception:
+                pass
+
+        service = F5TTSTTSService(
+            voice_name=voice_name,
+            reference_audio_path=ref_audio,
+            reference_text=ref_text,
+            stt_service=stt_service,
+            playback_speed=playback_speed,
+            event_queue=settings.get('_event_queue'),
+            speech_volume=100,
+        )
     else:
         raise ValueError(f"Unsupported TTS engine: {engine}")
 
@@ -318,6 +362,22 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
                 return COQUI_VOICES.get(v, v)
             except Exception:
                 return v or DEFAULT_COQUI_AGENT
+        if 'f5tts' in vp:
+            v = (settings or {}).get('f5tts_voice', 'default')
+            if v and v.startswith('custom_'):
+                try:
+                    from distr.core.db import get_session, CustomVoice
+                    db_id = int(v.split('_', 1)[1])
+                    session = get_session()
+                    try:
+                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                        if cv:
+                            return cv.name
+                    finally:
+                        session.close()
+                except Exception:
+                    pass
+            return v.capitalize() if v and v != 'default' else "F5-TTS"
         return DEFAULT_KOKORO_AGENT
     if 'kokoro' in vp:
         if vm.startswith('custom_'):
@@ -345,6 +405,21 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
             return COQUI_VOICES.get(vm, vm)
         except Exception:
             return vm or DEFAULT_COQUI_AGENT
+    if 'f5tts' in vp:
+        if vm.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(vm.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+        return vm.capitalize() if vm and vm != 'default' else "F5-TTS"
     if 'elevenlabs' in vp:
         # Check custom voices DB first (fast, no API call)
         try:
@@ -393,6 +468,9 @@ def resolve_agent_name_from_tts_config(tts_config: dict, settings: dict) -> str:
     if engine == 'coqui':
         vm = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
         return resolve_voice_to_display_name('coqui', vm, settings)
+    if engine == 'f5tts':
+        vm = tts_config.get('voice_name', 'default')
+        return resolve_voice_to_display_name('f5tts', vm, settings)
     # Unknown engine — fall back to kokoro from settings
     return resolve_voice_to_display_name('kokoro', '', settings)
 

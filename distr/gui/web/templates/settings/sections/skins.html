@@ -32,6 +32,21 @@
                                 class="bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
                                        focus:outline-none focus:border-[#10a37f] transition-colors w-full max-w-sm">
                         </select>
+                        <label class="flex items-center gap-2 mt-3 cursor-pointer">
+                            <input type="checkbox" id="oracle_pingpong_checkbox"
+                                   class="w-4 h-4 rounded border-[#565869] bg-[#0d1117] text-[#10a37f] focus:ring-[#10a37f] cursor-pointer">
+                            <span class="text-sm text-[#ececf1]">Ping-pong playback</span>
+                        </label>
+                        <label class="flex items-center gap-2 mt-3 cursor-pointer">
+                            <input type="checkbox" id="oracle_unfocused_opacity_checkbox"
+                                   class="w-4 h-4 rounded border-[#565869] bg-[#0d1117] text-[#10a37f] focus:ring-[#10a37f] cursor-pointer">
+                            <span class="text-sm text-[#ececf1]">Fade when unfocused</span>
+                        </label>
+                        <div id="oracle_unfocused_opacity_slider_wrap" class="mt-2 flex items-center gap-3 max-w-sm hidden">
+                            <input type="range" id="oracle_unfocused_opacity_slider" min="5" max="100" value="50" step="5"
+                                   class="flex-1 h-1 bg-[#40414f] rounded-lg appearance-none cursor-pointer slider-thumb">
+                            <span id="oracle_unfocused_opacity_value" class="text-sm text-[#ececf1] w-10 text-right">50%</span>
+                        </div>
                     </div>
                     <div class="flex-shrink-0">
                         <div id="oracle_preview_container" class="w-48 h-48 rounded-full bg-[#0d1117] border-2 border-[#565869] flex items-center justify-center overflow-hidden">

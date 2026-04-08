@@ -89,7 +89,7 @@ Scheduled sessions run automatically when the desktop app is running.
     ) -> str:
         """Create a Step Runner session from the instruction, optionally with a schedule."""
         try:
-            from distr.core.step_runner.service import (
+            from distr.core.workflow.service import (
                 plan_session,
                 create_scheduled_session,
                 get_session_with_steps,

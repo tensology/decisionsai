@@ -81,8 +81,40 @@
             <div class="empty-state-content" id="emptyStateSetup">
                 <h1 class="chat-brand"><span class="chat-brand-decisions">Decisions</span><span class="chat-brand-ai">AI</span></h1>
                 <h2 class="empty-state-setup-title">Setup your Agent</h2>
-                <div class="empty-state-form">
-                    <p class="empty-state-section-label">LLM</p>
+                <!-- Loading spinner shown while data loads -->
+                <div id="emptyStateLoader" class="empty-state-loader">
+                    <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                    <p class="empty-state-loader-text">Loading configuration...</p>
+                </div>
+                <div class="empty-state-form" id="emptyStateForm" style="display:none;">
+                    <div class="empty-state-section-header">
+                        <p class="empty-state-section-label">LLM</p>
+                        <div class="empty-state-section-actions">
+                            <div class="empty-state-kilo-wrap">
+                                <div class="empty-state-kilo-chat-bubble">Signup and Get Free Billion-Parameter Models</div>
+                                <a href="https://app.kilo.ai/users/sign_in?callbackPath=/profile" target="_blank" rel="noopener" class="empty-state-kilo-link" title="Free Kilo Models">
+                                    <img src="/assets/img/kilo-logo.png" alt="Kilo" class="empty-state-kilo-logo">
+                                </a>
+                            </div>
+                            <div class="empty-state-key-hint-wrap">
+                                <span class="empty-state-key-hint">Place Your Key Here →</span>
+                                <div class="empty-state-key-hint-tooltip">
+                                    <strong>How to get started:</strong><br>
+                                    1. Click the Kilo logo to sign up for a free account<br>
+                                    2. On your dashboard, scroll down to find your API key<br>
+                                    3. Copy the key, then click "Manage Providers"<br>
+                                    4. Find KiloCode in the list and paste your key<br>
+                                    5. Click Validate, then click Save<br>
+                                    6. Come back here, reload the page<br>
+                                    7. Select "KiloCode" as your LLM provider above
+                                </div>
+                            </div>
+                            <a href="/settings#thirdparty" target="_blank" rel="noopener" class="empty-state-action-btn empty-state-providers-btn">
+                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                                <span>Manage Providers</span>
+                            </a>
+                        </div>
+                    </div>
                     <div class="empty-state-row">
                         <div class="form-group">
                             <label for="emptyStateLlmProvider">Provider</label>
@@ -92,9 +124,14 @@
                         </div>
                         <div class="form-group">
                             <label for="emptyStateLlmModel">Model</label>
-                            <select id="emptyStateLlmModel" class="form-control form-control-select">
-                                <option value="">Loading…</option>
-                            </select>
+                            <div style="display:flex;align-items:center;gap:6px;">
+                                <select id="emptyStateLlmModel" class="form-control form-control-select" style="flex:1;">
+                                    <option value="">Loading…</option>
+                                </select>
+                                <button type="button" id="emptyStateOllamaPullBtn" class="modal-play-voice-btn" title="Download model" style="display:none;background:#f97316;border-radius:6px;padding:6px 8px;border:none;cursor:pointer;" onclick="pullOllamaModelFromEmptyState()">
+                                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                                </button>
+                            </div>
                         </div>
                     </div>
                     <p class="empty-state-section-label">Voice</p>
@@ -105,6 +142,7 @@
                                 <option value="kokoro">Kokoro</option>
                                 <option value="openai">OpenAI TTS</option>
                                 <option value="elevenlabs">ElevenLabs</option>
+                                <option value="f5tts">F5-TTS</option>
                             </select>
                         </div>
                         <div class="form-group form-group-with-play">
@@ -130,8 +168,12 @@
                             </div>
                         </div>
                     </div>
+                    <p class="empty-state-section-label">Skin</p>
+                    <div id="emptyStateSkinGrid" class="empty-state-skin-grid">
+                        <!-- Dynamically populated -->
+                    </div>
                 </div>
-                <p class="empty-state-prompt">How can I help you today?</p>
+                <p class="empty-state-prompt" id="emptyStatePrompt" style="display:none;">How can I help you today?</p>
             </div>
             <div class="empty-state-agent-loading" id="emptyStateAgentLoading" style="display: none;">
                 <p class="empty-state-agent-loading-text">Agent is Loading</p>
@@ -151,6 +193,8 @@
         </div>
 
         <!-- Input Area -->
+        <!-- Clickable llama (bottom-right, triggers about window) -->
+        <div id="llamaClickTarget" class="llama-click-target" title="About DecisionsAI"></div>
         <div class="input-container" id="inputContainer">
             <div class="input-wrapper">
                 <textarea 
@@ -196,7 +240,40 @@
             <button class="modal-close" id="modalClose">&times;</button>
         </div>
         <div class="modal-body">
-            <p class="modal-section-label">LLM</p>
+            <!-- Modal loader -->
+            <div id="modalLoader" class="empty-state-loader">
+                <svg class="empty-state-loader-spin" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2.5"><circle cx="12" cy="12" r="10" stroke-opacity="0.2"/><path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/></svg>
+                <p class="empty-state-loader-text">Loading configuration...</p>
+            </div>
+            <div id="modalFormContent" style="display:none;">
+            <div class="empty-state-section-header">
+                <p class="modal-section-label" style="margin:0;">LLM</p>
+                <div class="empty-state-section-actions">
+                    <div class="empty-state-kilo-wrap">
+                        <div class="empty-state-kilo-chat-bubble">Signup and Get Free Billion-Parameter Models</div>
+                        <a href="https://app.kilo.ai/users/sign_in?callbackPath=/profile" target="_blank" rel="noopener" class="empty-state-kilo-link" title="Free Kilo Models">
+                            <img src="/assets/img/kilo-logo.png" alt="Kilo" class="empty-state-kilo-logo">
+                        </a>
+                    </div>
+                    <div class="empty-state-key-hint-wrap">
+                        <span class="empty-state-key-hint">Place Your Key Here →</span>
+                        <div class="empty-state-key-hint-tooltip">
+                            <strong>How to get started:</strong><br>
+                            1. Click the Kilo logo to sign up for a free account<br>
+                            2. On your dashboard, scroll down to find your API key<br>
+                            3. Copy the key, then click "Manage Providers"<br>
+                            4. Find KiloCode in the list and paste your key<br>
+                            5. Click Validate, then click Save<br>
+                            6. Come back here, reload the page<br>
+                            7. Select "KiloCode" as your LLM provider above
+                        </div>
+                    </div>
+                    <a href="/settings#thirdparty" target="_blank" rel="noopener" class="empty-state-action-btn empty-state-providers-btn">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
+                        <span>Manage Providers</span>
+                    </a>
+                </div>
+            </div>
             <div class="modal-row">
                 <div class="form-group">
                     <label for="llmProvider">Provider</label>
@@ -206,9 +283,14 @@
                 </div>
                 <div class="form-group">
                     <label for="llmModel">Model</label>
-                    <select id="llmModel" class="form-control form-control-select">
-                        <option value="">Loading…</option>
-                    </select>
+                    <div style="display:flex;align-items:center;gap:6px;">
+                        <select id="llmModel" class="form-control form-control-select" style="flex:1;">
+                            <option value="">Loading…</option>
+                        </select>
+                        <button type="button" id="modalOllamaPullBtn" class="modal-play-voice-btn" title="Download model" style="display:none;background:#f97316;border-radius:6px;padding:6px 8px;border:none;cursor:pointer;" onclick="pullOllamaModelFromModal()">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4M7 10l5 5 5-5M12 15V3"/></svg>
+                        </button>
+                    </div>
                 </div>
             </div>
             <p class="modal-section-label">Voice</p>
@@ -219,6 +301,7 @@
                         <option value="kokoro">Kokoro</option>
                         <option value="openai">OpenAI TTS</option>
                         <option value="elevenlabs">ElevenLabs</option>
+                        <option value="f5tts">F5-TTS</option>
                     </select>
                 </div>
                 <div class="form-group form-group-with-play">
@@ -244,10 +327,15 @@
                     </div>
                 </div>
             </div>
+            <p class="modal-section-label">Skin</p>
+            <div id="modalSkinGrid" class="empty-state-skin-grid">
+                <!-- Dynamically populated -->
+            </div>
             <div class="form-group">
                 <label for="startingQuestion">Starting question</label>
-                <textarea id="startingQuestion" class="form-control form-control-textarea" rows="3" placeholder="Type your first question…"></textarea>
+                <textarea id="startingQuestion" class="form-control form-control-textarea" rows="3" placeholder="Type your first question…">Are you ready to help me?</textarea>
             </div>
+            </div><!-- /modalFormContent -->
         </div>
         <div class="modal-footer">
             <button class="btn btn-secondary" id="modalCancel">Cancel</button>
@@ -384,6 +472,48 @@
         </form>
     </div>
 </div>
+
+<!-- Ollama Model Browser Modal -->
+<div id="ollama_browser_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60" id="ollama_browser_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-2xl w-full max-h-[85vh] flex flex-col pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between flex-shrink-0">
+                <h2 id="ollama_browser_modal_title" class="text-lg font-semibold text-white">Download Ollama models</h2>
+                <button type="button" id="ollama_browser_modal_close" class="p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="p-5 flex-shrink-0 flex gap-2">
+                <input type="text" id="ollama_browser_search" placeholder="Search models..." class="flex-1 bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f]">
+                <button type="button" id="ollama_browser_refresh" class="px-4 py-2 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded-md text-sm font-medium transition-colors">Refresh</button>
+            </div>
+            <div class="flex-1 overflow-y-auto p-5 pt-0">
+                <div id="ollama_browser_list"><p class="text-[#9ca3af] text-sm">Loading...</p></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Ollama Download Progress Modal -->
+<div id="ollama_download_modal" class="fixed inset-0 z-[55] hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/70 ollama_download_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-md w-full p-6 pointer-events-auto">
+            <h3 class="text-lg font-semibold text-white mb-1" id="ollama_download_modal_title">Downloading model</h3>
+            <p class="text-[#9ca3af] text-sm mb-4" id="ollama_download_modal_model"></p>
+            <div class="flex items-center gap-3 py-4" id="ollama_download_modal_progress">
+                <div class="w-8 h-8 border-2 border-[#565869] border-t-[#10a37f] rounded-full animate-spin flex-shrink-0"></div>
+                <p class="text-[#ececf1] text-sm" id="ollama_download_modal_status">Starting download...</p>
+            </div>
+            <div id="ollama_download_modal_done" class="hidden py-2">
+                <p class="text-sm" id="ollama_download_modal_result"></p>
+            </div>
+            <div class="flex justify-end gap-2 pt-4">
+                <button type="button" id="ollama_download_modal_close" class="px-4 py-2 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded-md text-sm font-medium transition-colors hidden">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
 {% endblock %}
 
 {% block body_scripts %}

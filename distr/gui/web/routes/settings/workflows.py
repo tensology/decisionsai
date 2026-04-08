@@ -3,6 +3,7 @@ Workflow routes — /workflows/*
 """
 from fastapi import Request, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
+from starlette.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import json
@@ -16,6 +17,7 @@ from ._shared import logger
 class WorkflowCreateRequest(BaseModel):
     name: str = "Untitled Workflow"
     description: str = ""
+    workflow_type: Optional[str] = None
 
 
 class WorkflowUpdateRequest(BaseModel):
@@ -29,6 +31,8 @@ class WorkflowUpdateRequest(BaseModel):
     schedule_days: Optional[str] = None
     schedule_timezone: Optional[str] = None
     start_step_position: Optional[int] = None
+    workflow_type: Optional[str] = None
+    context_rules: Optional[str] = None
 
 
 class StepCreateRequest(BaseModel):
@@ -57,13 +61,51 @@ class WorkflowGenerateRequest(BaseModel):
     description: str
 
 
+class WorkflowPlanRequest(BaseModel):
+    instruction: str
+    chat_id: Optional[int] = None
+
+
+class WorkflowGenerateStepsRequest(BaseModel):
+    instruction: str
+
+
+class WorkflowGenerateCodeRequest(BaseModel):
+    instruction: str
+    step_type: str
+
+
+class WorkflowTestCodeRequest(BaseModel):
+    code: str
+    step_type: str
+    headless: bool = True
+
+
+class WorkflowValidateStepRequest(BaseModel):
+    step_type: str
+    config: dict
+
+
+class WorkflowScheduleUpdate(BaseModel):
+    enabled: Optional[bool] = None
+    schedule: Optional[str] = None
+    schedule_time: Optional[str] = None
+    schedule_days: Optional[str] = None
+    timezone: Optional[str] = None
+
+
 def register_routes(router, templates):
 
+    def _is_audit_workflow(workflow_id: int) -> bool:
+        """Return True if the workflow exists and has workflow_type='audit'."""
+        from distr.core.workflow.service import get_workflow_type
+        return get_workflow_type(workflow_id) == "audit"
+
     @router.get("/workflows")
-    async def workflow_list(limit: int = 50, search: Optional[str] = None, status: Optional[str] = None):
+    async def workflow_list(limit: int = 50, search: Optional[str] = None, status: Optional[str] = None, type: Optional[str] = None):
         try:
             from distr.core.workflow.service import list_workflows
-            return JSONResponse(list_workflows(limit=limit, search=search, status=status))
+            return JSONResponse(list_workflows(limit=limit, search=search, status=status, workflow_type=type))
         except Exception as e:
             logger.error("Workflow list failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -72,10 +114,104 @@ def register_routes(router, templates):
     async def workflow_create(data: WorkflowCreateRequest):
         try:
             from distr.core.workflow.service import create_workflow, get_workflow
-            wf_id = create_workflow(name=data.name, description=data.description)
+            kwargs = {"name": data.name, "description": data.description}
+            if data.workflow_type is not None:
+                kwargs["workflow_type"] = data.workflow_type
+            wf_id = create_workflow(**kwargs)
             return JSONResponse(get_workflow(wf_id))
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
             logger.error("Workflow create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    # ── Plan / Version / Step-level endpoints (must be before {workflow_id} routes) ──
+
+    @router.post("/workflows/plan")
+    async def workflow_plan(data: WorkflowPlanRequest):
+        """Plan a workflow from a natural-language instruction."""
+        try:
+            from distr.core.workflow.service import plan_workflow, get_workflow
+            from distr.gui.web.workflow_events import increment_workflow_updated
+            wf_id = plan_workflow(data.instruction, chat_id=data.chat_id)
+            if not wf_id:
+                return JSONResponse({"detail": "Failed to plan workflow"}, status_code=500)
+            increment_workflow_updated()
+            return JSONResponse(get_workflow(wf_id))
+        except Exception as e:
+            logger.error("Workflow plan failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/version")
+    async def workflow_version():
+        """Return a version counter that increments when workflow data changes. UI polls to refresh."""
+        try:
+            from distr.gui.web.workflow_events import get_workflow_update_counter
+            return JSONResponse({"version": get_workflow_update_counter()})
+        except Exception:
+            return JSONResponse({"version": 0})
+
+    @router.get("/workflows/llm-settings")
+    async def get_workflow_llm_settings():
+        """Return the workflow engine's dedicated LLM provider and model."""
+        from distr.core.settings import load_settings_from_db
+        settings = load_settings_from_db()
+        return JSONResponse({
+            "provider": settings.get("step_runner_llm_provider") or "",
+            "model": settings.get("step_runner_llm_model") or "",
+        })
+
+    @router.post("/workflows/llm-settings")
+    async def save_workflow_llm_settings(request: Request):
+        """Save the workflow engine's dedicated LLM provider and model."""
+        from distr.core.settings import load_settings_from_db, save_settings_to_db
+        data = await request.json()
+        settings = load_settings_from_db()
+        settings["step_runner_llm_provider"] = (data.get("provider") or "").strip()
+        settings["step_runner_llm_model"] = (data.get("model") or "").strip()
+        save_settings_to_db(settings)
+        return JSONResponse({"success": True})
+
+    @router.post("/workflows/steps/{step_id}/generate-code")
+    async def workflow_generate_step_code(step_id: int, data: WorkflowGenerateCodeRequest):
+        """Generate code for a step from a natural-language instruction."""
+        try:
+            from distr.core.workflow.service import generate_step_code
+            code = generate_step_code(step_id, data.instruction, data.step_type)
+            return JSONResponse({"code": code})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=400)
+        except RuntimeError as e:
+            logger.error("Workflow generate-code LLM error: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+        except Exception as e:
+            logger.error("Workflow generate-code failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/steps/{step_id}/test-code")
+    async def workflow_test_step_code(step_id: int, data: WorkflowTestCodeRequest):
+        """Execute code in an isolated subprocess with auto-fix loop."""
+        try:
+            from distr.core.workflow.service import test_step_code
+            result = test_step_code(step_id, data.code, data.step_type, headless=data.headless)
+            return JSONResponse(result)
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=400)
+        except Exception as e:
+            logger.error("Workflow test-code failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/steps/{step_id}/validate")
+    async def workflow_validate_step(step_id: int, data: WorkflowValidateStepRequest):
+        """Validate step configuration against type-specific rules."""
+        try:
+            from distr.core.workflow.service import validate_step_config
+            errors = validate_step_config(data.step_type, data.config)
+            if errors:
+                return JSONResponse({"errors": errors}, status_code=422)
+            return JSONResponse({"valid": True})
+        except Exception as e:
+            logger.error("Workflow validate step failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # ── Presets / Export / Import (must be before {workflow_id} routes) ──
@@ -195,11 +331,15 @@ def register_routes(router, templates):
     @router.patch("/workflows/{workflow_id}")
     async def workflow_update(workflow_id: int, data: WorkflowUpdateRequest):
         try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
             from distr.core.workflow.service import update_workflow
             updates = {k: v for k, v in data.dict().items() if v is not None}
             if not update_workflow(workflow_id, **updates):
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
             return JSONResponse({"success": True})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
             logger.error("Workflow update failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -207,6 +347,8 @@ def register_routes(router, templates):
     @router.delete("/workflows/{workflow_id}")
     async def workflow_delete(workflow_id: int):
         try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
             from distr.core.workflow.service import delete_workflow
             if not delete_workflow(workflow_id):
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
@@ -227,6 +369,42 @@ def register_routes(router, templates):
             logger.error("Workflow duplicate failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.post("/workflows/{workflow_id}/generate-steps")
+    async def workflow_generate_steps(workflow_id: int, data: WorkflowGenerateStepsRequest):
+        """Generate steps for an existing workflow using the LLM planner."""
+        try:
+            from distr.core.workflow.service import generate_steps
+            from distr.gui.web.workflow_events import increment_workflow_updated
+            steps = generate_steps(workflow_id, data.instruction)
+            increment_workflow_updated()
+            return JSONResponse({"steps": steps})
+        except Exception as e:
+            logger.error("Workflow generate-steps failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.patch("/workflows/{workflow_id}/schedule")
+    async def workflow_update_schedule(workflow_id: int, data: WorkflowScheduleUpdate):
+        """Update a workflow's schedule configuration."""
+        try:
+            from distr.core.workflow.service import update_workflow
+            updates = {}
+            if data.enabled is not None:
+                updates["schedule_enabled"] = data.enabled
+            if data.schedule is not None:
+                updates["schedule_preset"] = data.schedule
+            if data.schedule_time is not None:
+                updates["schedule_time"] = data.schedule_time
+            if data.schedule_days is not None:
+                updates["schedule_days"] = data.schedule_days
+            if data.timezone is not None:
+                updates["schedule_timezone"] = data.timezone
+            if not update_workflow(workflow_id, **updates):
+                return JSONResponse({"detail": "Workflow not found"}, status_code=404)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error("Workflow update schedule failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.get("/workflows/{workflow_id}/runs")
     async def workflow_runs(workflow_id: int, limit: int = 10):
         try:
@@ -238,10 +416,19 @@ def register_routes(router, templates):
 
     # Execution
     @router.post("/workflows/{workflow_id}/run")
-    async def workflow_run(workflow_id: int):
+    async def workflow_run(workflow_id: int, request: Request):
+        """Start a workflow run. Accepts optional { "start_step_id": int }."""
         try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
             from distr.core.workflow.service import start_workflow_run
-            result = start_workflow_run(workflow_id)
+            body = {}
+            try:
+                body = await request.json()
+            except Exception:
+                pass
+            start_step_id = body.get("start_step_id") if isinstance(body, dict) else None
+            result = start_workflow_run(workflow_id, start_step_id=start_step_id)
             if "error" in result:
                 return JSONResponse({"detail": result["error"]}, status_code=400)
             return JSONResponse(result)
@@ -525,3 +712,16 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow export preset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    # ── Legacy redirect: /step-runner/* → /workflows/* (HTTP 301) ──
+
+    @router.api_route("/step-runner/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def legacy_step_runner_redirect(request: Request, path: str):
+        """Redirect legacy /api/step-runner/* requests to /api/workflows/* with HTTP 301."""
+        new_path = f"/api/workflows/{path}" if path else "/api/workflows"
+        return RedirectResponse(url=new_path, status_code=301)
+
+    @router.api_route("/step-runner", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
+    async def legacy_step_runner_redirect_root(request: Request):
+        """Redirect legacy /api/step-runner root to /api/workflows with HTTP 301."""
+        return RedirectResponse(url="/api/workflows", status_code=301)

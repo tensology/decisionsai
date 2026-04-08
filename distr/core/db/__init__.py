@@ -83,6 +83,8 @@ class Settings(Base):
     conversational_llm_model = Column(String, default='qwen3:8b')
     coding_llm_provider = Column(String, default='Ollama')
     coding_llm_model = Column(String, default='qwen2.5-coder:7b')
+    step_runner_llm_provider = Column(String, default='')
+    step_runner_llm_model = Column(String, default='')
     vision_llm_provider = Column(String, default='Ollama')
     vision_llm_model = Column(String, default='qwen3-vl:2b')
     image_llm_provider = Column(String, default='Ollama')
@@ -131,6 +133,7 @@ class Settings(Base):
     elevenlabs_use_speaker_boost = Column(Boolean, default=True)
     openai_voice = Column(String, default='alloy')
     qwen3_voice = Column(String, default='aiden')
+    f5tts_voice = Column(String, default='default')
     replicate_api_token = Column(String, default='')
 
     # Rube Settings
@@ -341,6 +344,15 @@ class TrelloTicket(Base):
     workflow = relationship("Workflow")
 
 
+class SkinSize(Base):
+    """Per-skin size preference — remembers the last size used for each skin slug."""
+    __tablename__ = 'skin_sizes'
+
+    id = Column(Integer, primary_key=True)
+    skin_slug = Column(String, nullable=False, unique=True)  # e.g. 'oracle', 'clippy', 'hayley'
+    size_px = Column(Integer, nullable=False, default=180)   # pixel size
+
+
 class TelegramGroupMessage(Base):
     """Store Telegram group/channel messages that are received but not acted on."""
     __tablename__ = 'telegram_group_messages'
@@ -480,6 +492,45 @@ try:
                         pass
 except Exception as _mig_err:
     logging.getLogger(__name__).warning(f"Column migration block failed: {_mig_err}")
+
+# Add workflow unification columns to existing auto_workflow* tables before create_all
+try:
+    with engine.connect() as _conn:
+        # auto_workflows: workflow_type, chat_id, context_rules, workflow_input
+        _result = _conn.execute(sa_text("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_workflows'"))
+        if _result.fetchone():
+            _existing = {row[1] for row in _conn.execute(sa_text("PRAGMA table_info(auto_workflows)"))}
+            for _col, _def in [
+                ("workflow_type", "VARCHAR DEFAULT 'manual'"),
+                ("chat_id", "INTEGER"),
+                ("context_rules", "TEXT"),
+                ("workflow_input", "TEXT"),
+            ]:
+                if _col not in _existing:
+                    try:
+                        _conn.execute(sa_text(f"ALTER TABLE auto_workflows ADD COLUMN {_col} {_def}"))
+                        _conn.commit()
+                    except Exception:
+                        pass
+        # auto_workflow_steps: verification, step_type, config, tool_used, routing_path
+        _result = _conn.execute(sa_text("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_workflow_steps'"))
+        if _result.fetchone():
+            _existing = {row[1] for row in _conn.execute(sa_text("PRAGMA table_info(auto_workflow_steps)"))}
+            for _col, _def in [
+                ("verification", "TEXT"),
+                ("step_type", "VARCHAR DEFAULT 'agent_instruction'"),
+                ("config", "TEXT"),
+                ("tool_used", "VARCHAR"),
+                ("routing_path", "TEXT"),
+            ]:
+                if _col not in _existing:
+                    try:
+                        _conn.execute(sa_text(f"ALTER TABLE auto_workflow_steps ADD COLUMN {_col} {_def}"))
+                        _conn.commit()
+                    except Exception:
+                        pass
+except Exception as _wf_mig_err:
+    logging.getLogger(__name__).warning(f"Workflow unification column migration failed: {_wf_mig_err}")
 
 # Create the table
 Base.metadata.create_all(engine)
