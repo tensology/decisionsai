@@ -70,26 +70,32 @@ class ScreenStreamer:
     def stop(self):
         """Stop the streaming loop and clean up ffmpeg."""
         self._running = False
-        if self._ffmpeg:
-            try:
-                self._ffmpeg.stdin.close()
-            except Exception:
-                pass
-            try:
-                self._ffmpeg.terminate()
-                self._ffmpeg.wait(timeout=3)
-            except Exception:
-                try:
-                    self._ffmpeg.kill()
-                except Exception:
-                    pass
-            self._ffmpeg = None
-        if self._thread:
+        self._cleanup_ffmpeg()
+        # Only join thread if called from a different thread
+        if self._thread and self._thread is not threading.current_thread():
             self._thread.join(timeout=5)
             self._thread = None
         self._width = None
         self._height = None
         logger.info("Screen stream stopped: screen=%d", self.screen_number)
+
+    def _cleanup_ffmpeg(self):
+        """Shut down the ffmpeg process."""
+        proc = self._ffmpeg
+        self._ffmpeg = None
+        if proc:
+            try:
+                proc.stdin.close()
+            except Exception:
+                pass
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
 
     def _start_ffmpeg(self, width: int, height: int):
         """Start ffmpeg VP9 WebM encoder subprocess."""
@@ -139,8 +145,14 @@ class ScreenStreamer:
         """Read WebM chunks from ffmpeg stdout and send over WS."""
         header = b"STRM" + struct.pack(">H", self.screen_number)
         try:
-            while self._running and self._ffmpeg and self._ffmpeg.stdout:
-                chunk = self._ffmpeg.stdout.read(32768)  # 32KB chunks
+            while self._running and self._ffmpeg:
+                proc = self._ffmpeg
+                if not proc or not proc.stdout:
+                    break
+                try:
+                    chunk = proc.stdout.read(32768)
+                except (OSError, ValueError):
+                    break
                 if not chunk:
                     break
                 self._send_binary(header + chunk)
@@ -209,4 +221,5 @@ class ScreenStreamer:
         except Exception as e:
             logger.error("Stream loop error: %s", e, exc_info=True)
         finally:
-            self.stop()
+            self._running = False
+            self._cleanup_ffmpeg()
