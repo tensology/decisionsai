@@ -1244,28 +1244,52 @@ class TelegramRemoteControlMixin:
                 x, y = screen_geo["x"], screen_geo["y"]
                 width, height = screen_geo["width"], screen_geo["height"]
 
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                    png_tmp_path = tmp_file.name
-
+                # Fast path: Quartz CGWindowListCreateImage (in-memory, no subprocess)
                 try:
-                    result = subprocess.run(
-                        ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
-                        capture_output=True, timeout=10,
-                    )
-                    if result.returncode != 0 or not os.path.exists(png_tmp_path):
+                    import Quartz
+                    from Quartz import CGWindowListCreateImage, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, CGRectMake, CGImageGetWidth, CGImageGetHeight, CGImageGetBytesPerRow, CGImageGetDataProvider, CGDataProviderCopyData
+                    
+                    rect = CGRectMake(x, y, width, height)
+                    cg_image = CGWindowListCreateImage(rect, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, 0)
+                    
+                    if cg_image:
+                        cg_width = CGImageGetWidth(cg_image)
+                        cg_height = CGImageGetHeight(cg_image)
+                        bytes_per_row = CGImageGetBytesPerRow(cg_image)
+                        provider = CGImageGetDataProvider(cg_image)
+                        raw_data = CGDataProviderCopyData(provider)
+                        
+                        import numpy as np
+                        arr = np.frombuffer(raw_data, dtype=np.uint8).reshape(cg_height, bytes_per_row // 4, 4)
+                        # Quartz gives BGRA, crop to actual width and convert to RGB
+                        arr = arr[:cg_height, :cg_width, :]
+                        rgb_arr = arr[:, :, [2, 1, 0]]  # BGRA -> RGB (drop alpha)
+                        pil_img = Image.fromarray(rgb_arr, 'RGB')
+                except Exception as e:
+                    logger.debug("Quartz capture failed (%s), falling back to screencapture", e)
+                
+                # Fallback: screencapture subprocess
+                if pil_img is None:
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                        png_tmp_path = tmp_file.name
+                    try:
                         result = subprocess.run(
-                            ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                            ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
                             capture_output=True, timeout=10,
                         )
-
-                    if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
-                        pil_img = Image.open(png_tmp_path)
-                        pil_img.load()
-                finally:
-                    try:
-                        os.unlink(png_tmp_path)
-                    except OSError:
-                        pass
+                        if result.returncode != 0 or not os.path.exists(png_tmp_path):
+                            result = subprocess.run(
+                                ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                                capture_output=True, timeout=10,
+                            )
+                        if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
+                            pil_img = Image.open(png_tmp_path)
+                            pil_img.load()
+                    finally:
+                        try:
+                            os.unlink(png_tmp_path)
+                        except OSError:
+                            pass
 
             elif system == "Windows":
                 try:
@@ -1838,21 +1862,87 @@ class TelegramRemoteControlMixin:
     # ── VP9/WebM screen streaming ────────────────────────────────────────
 
     def _capture_pil_image(self, screen_number: int):
-        """Capture a screenshot as a PIL Image with cursor drawn. Returns PIL Image or None."""
-        data = self._capture_screen_screenshot(screen_number, draw_cursor=True)
-        if "error" in data or "image_data" not in data:
-            return None
-        # We need the PIL image before WebP encoding. Re-capture to get raw PIL.
-        # The existing method encodes to WebP, so we need to decode it back or
-        # refactor. For now, decode the WebP bytes back to PIL — it's fast.
-        import io
-        from PIL import Image
-        buf = io.BytesIO(data["image_data"])
+        """Capture a screenshot as an RGB PIL Image with cursor drawn. Returns PIL Image or None.
+        
+        This is the fast path for VP9 streaming — captures and composites cursor
+        but skips WebP encoding entirely.
+        """
         try:
-            img = Image.open(buf)
-            img.load()
-            return img
-        except Exception:
+            import io
+            import platform
+            import subprocess
+            import os
+            import tempfile
+            from PIL import Image
+
+            system = platform.system()
+            screens_info = self._get_screens_list()
+            if not screens_info or screen_number < 1 or screen_number > len(screens_info):
+                return None
+
+            target_screen_info = screens_info[screen_number - 1]
+            screen_geo = target_screen_info["geometry"]
+            pil_img = None
+
+            if system == "Darwin":
+                x, y = screen_geo["x"], screen_geo["y"]
+                width, height = screen_geo["width"], screen_geo["height"]
+                # Fast path: Quartz
+                try:
+                    from Quartz import CGWindowListCreateImage, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, CGRectMake, CGImageGetWidth, CGImageGetHeight, CGImageGetBytesPerRow, CGImageGetDataProvider, CGDataProviderCopyData
+                    import numpy as np
+                    rect = CGRectMake(x, y, width, height)
+                    cg_image = CGWindowListCreateImage(rect, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, 0)
+                    if cg_image:
+                        cg_w = CGImageGetWidth(cg_image)
+                        cg_h = CGImageGetHeight(cg_image)
+                        bpr = CGImageGetBytesPerRow(cg_image)
+                        raw_data = CGDataProviderCopyData(CGImageGetDataProvider(cg_image))
+                        arr = np.frombuffer(raw_data, dtype=np.uint8).reshape(cg_h, bpr // 4, 4)
+                        arr = arr[:cg_h, :cg_w, :]
+                        pil_img = Image.fromarray(arr[:, :, [2, 1, 0]], 'RGB')
+                except Exception:
+                    pass
+                # Fallback: screencapture
+                if pil_img is None:
+                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp:
+                        tmp_path = tmp.name
+                    try:
+                        subprocess.run(["screencapture", "-x", "-R", f"{x},{y},{width},{height}", tmp_path], capture_output=True, timeout=10)
+                        if os.path.exists(tmp_path) and os.path.getsize(tmp_path) > 0:
+                            pil_img = Image.open(tmp_path)
+                            pil_img.load()
+                    finally:
+                        try: os.unlink(tmp_path)
+                        except OSError: pass
+            elif system == "Windows":
+                from PIL import ImageGrab
+                bbox = (screen_geo["x"], screen_geo["y"], screen_geo["x"] + screen_geo["width"], screen_geo["y"] + screen_geo["height"])
+                pil_img = ImageGrab.grab(bbox=bbox)
+            else:
+                from PIL import ImageGrab
+                bbox = (screen_geo["x"], screen_geo["y"], screen_geo["x"] + screen_geo["width"], screen_geo["y"] + screen_geo["height"])
+                pil_img = ImageGrab.grab(bbox=bbox)
+
+            if pil_img is None:
+                return None
+
+            # Draw cursor
+            pil_img = self._draw_cursor_on_pil_image(pil_img, screen_geo)
+
+            # Ensure RGB
+            if pil_img.mode in ("RGBA", "LA", "P"):
+                rgb = Image.new("RGB", pil_img.size, (255, 255, 255))
+                if pil_img.mode == "P":
+                    pil_img = pil_img.convert("RGBA")
+                rgb.paste(pil_img, mask=pil_img.split()[-1] if pil_img.mode == "RGBA" else None)
+                pil_img = rgb
+            elif pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+
+            return pil_img
+        except Exception as e:
+            logger.error("_capture_pil_image error: %s", e)
             return None
 
     def _start_screen_stream(self, screen_number: int, fps: float = 3):
