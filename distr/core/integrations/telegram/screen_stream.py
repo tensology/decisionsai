@@ -94,6 +94,7 @@ class ScreenStreamer:
             "-r", str(fps_int),
             "-i", "pipe:0",
             "-c:v", "libvpx-vp9",
+            "-pix_fmt", "yuv420p",
             "-quality", "realtime",
             "-speed", "8",
             "-tile-columns", "2",
