@@ -973,6 +973,8 @@ async function loadEmptyStateDropdowns() {
     await loadEmptyStateSkins();
     // Show/hide Ollama download button
     toggleEmptyStateOllamaPullBtn();
+    // Hide Kilo promo if KiloCode is already a provider
+    toggleKiloPromo('emptyStateLlmProvider');
     // Reveal the form, hide the loader, enable input
     revealEmptyStateForm();
 }
@@ -1070,6 +1072,18 @@ function toggleEmptyStateOllamaPullBtn() {
     const provider = document.getElementById('emptyStateLlmProvider');
     if (!btn || !provider) return;
     btn.style.display = (provider.value === 'ollama') ? '' : 'none';
+}
+
+function toggleKiloPromo(providerSelectId, containerSelector) {
+    const providerEl = document.getElementById(providerSelectId);
+    if (!providerEl) return;
+    const hasKilo = Array.from(providerEl.options).some(o => o.value.toLowerCase() === 'kilocode');
+    const container = providerEl.closest(containerSelector || '.empty-state-form, .modal-body');
+    if (!container) return;
+    const kiloWrap = container.querySelector('.empty-state-kilo-wrap');
+    const keyHint = container.querySelector('.empty-state-key-hint-wrap');
+    if (kiloWrap) kiloWrap.style.display = hasKilo ? 'none' : '';
+    if (keyHint) keyHint.style.display = hasKilo ? 'none' : '';
 }
 
 async function pullOllamaModelFromEmptyState() {
@@ -2237,6 +2251,8 @@ async function showNewChatModal() {
     await loadDefaultSettings();
     loadModalSkins();
     toggleModalOllamaPullBtn();
+    // Hide Kilo promo if KiloCode is already a provider
+    toggleKiloPromo('llmProvider');
     // Reveal form, hide loader
     if (modalLoader) modalLoader.style.display = 'none';
     if (modalForm) modalForm.style.display = '';
