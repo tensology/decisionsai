@@ -1,13 +1,10 @@
 """
 VP9/WebM screen streaming for remote control.
 
-Captures screenshots at a configurable FPS, encodes them as a VP9 WebM
-stream via ffmpeg, and sends WebM chunks over the WebSocket.
+Captures screenshots at a configurable FPS, encodes as VP9 WebM via ffmpeg,
+sends chunks over WebSocket with STRM prefix.
 
-Binary frame format sent over WS:
-  [4 bytes "STRM"] [2 bytes screen_number big-endian] [WebM chunk bytes]
-
-The frontend uses MediaSource API to append these chunks to a SourceBuffer.
+Binary frame format: [4 bytes "STRM"] [2 bytes screen_number BE] [WebM chunk]
 """
 
 import logging
@@ -25,8 +22,6 @@ MAX_FPS = 10
 
 
 class ScreenStreamer:
-    """Captures screen at configurable FPS → VP9/WebM stream → WS binary."""
-
     def __init__(self, screen_number: int, capture_fn: Callable,
                  send_binary_fn: Callable, fps: float = DEFAULT_FPS):
         self.screen_number = screen_number
@@ -86,51 +81,55 @@ class ScreenStreamer:
                 pass
 
     def _start_ffmpeg(self, width: int, height: int):
-        """Start ffmpeg VP9 WebM encoder."""
         self._width = width
         self._height = height
         fps_int = max(1, round(self._fps))
 
         cmd = [
-            "ffmpeg", "-hide_banner", "-loglevel", "error",
-            # Input: raw RGB frames from pipe
+            "ffmpeg",
+            "-y",
             "-f", "rawvideo",
             "-pix_fmt", "rgb24",
             "-s", f"{width}x{height}",
             "-r", str(fps_int),
             "-i", "pipe:0",
-            # VP9 realtime encoding tuned for screen content
             "-c:v", "libvpx-vp9",
             "-quality", "realtime",
             "-speed", "8",
             "-tile-columns", "2",
             "-frame-parallel", "0",
+            "-row-mt", "1",
             "-tune-content", "screen",
             "-b:v", "500k",
             "-maxrate", "1M",
             "-bufsize", "500k",
-            "-g", str(fps_int * 5),  # keyframe every 5 seconds
+            "-g", str(fps_int * 5),
             "-an",
-            # WebM output to pipe — live-friendly settings
             "-f", "webm",
-            "-live", "1",
             "pipe:1",
         ]
 
         try:
             self._ffmpeg = subprocess.Popen(
-                cmd, stdin=subprocess.PIPE, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, bufsize=0,
+                cmd,
+                stdin=subprocess.PIPE,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,  # CRITICAL: don't use PIPE — causes deadlock
             )
-            logger.info("ffmpeg VP9 started: %dx%d @ %d fps", width, height, fps_int)
+            logger.info("ffmpeg VP9 started: %dx%d @ %d fps, cmd: %s", width, height, fps_int, ' '.join(cmd))
         except FileNotFoundError:
-            logger.error("ffmpeg not found — screen streaming unavailable")
+            logger.error("ffmpeg not found")
+            self._ffmpeg = None
+            self._running = False
+        except Exception as e:
+            logger.error("ffmpeg start failed: %s", e)
             self._ffmpeg = None
             self._running = False
 
     def _reader_thread(self):
-        """Read WebM data from ffmpeg stdout and send as STRM binary frames."""
+        """Read WebM data from ffmpeg stdout, send as STRM binary frames."""
         header = b"STRM" + struct.pack(">H", self.screen_number)
+        bytes_sent = 0
         try:
             while self._running:
                 proc = self._ffmpeg
@@ -144,27 +143,32 @@ class ScreenStreamer:
                     break
                 try:
                     self._send_binary(header + chunk)
-                except Exception:
+                    bytes_sent += len(chunk)
+                except Exception as e:
+                    logger.error("Send binary failed: %s", e)
                     break
         except Exception as e:
             if self._running:
                 logger.error("Stream reader error: %s", e)
+        logger.info("Stream reader done, sent %d bytes total", bytes_sent)
 
     def _run(self):
-        """Main loop: capture → feed to ffmpeg. A separate thread reads ffmpeg output."""
+        """Capture loop: grab screen → feed raw RGB to ffmpeg stdin."""
         reader = None
+        frames_fed = 0
         try:
             while self._running:
                 t0 = time.monotonic()
 
-                # Capture
                 try:
                     img = self._capture_fn(self.screen_number)
                 except Exception as e:
                     logger.error("Capture error: %s", e)
                     time.sleep(0.5)
                     continue
+
                 if img is None:
+                    logger.warning("Capture returned None, retrying...")
                     time.sleep(0.5)
                     continue
 
@@ -180,18 +184,21 @@ class ScreenStreamer:
                                               name="StreamReader")
                     reader.start()
 
-                # Feed raw RGB to ffmpeg stdin
+                # Feed raw RGB to ffmpeg
                 try:
                     if img.mode != "RGB":
                         img = img.convert("RGB")
-                    self._ffmpeg.stdin.write(img.tobytes())
+                    raw = img.tobytes()
+                    self._ffmpeg.stdin.write(raw)
                     self._ffmpeg.stdin.flush()
-                except (BrokenPipeError, OSError):
-                    logger.warning("ffmpeg pipe broken — restarting")
+                    frames_fed += 1
+                    if frames_fed <= 3 or frames_fed % 30 == 0:
+                        logger.info("Fed frame %d to ffmpeg (%dx%d, %d bytes)", frames_fed, w, h, len(raw))
+                except (BrokenPipeError, OSError) as e:
+                    logger.warning("ffmpeg pipe broken: %s — restarting", e)
                     self._kill_ffmpeg()
                     continue
 
-                # Pace to target FPS
                 elapsed = time.monotonic() - t0
                 target = 1.0 / self._fps
                 if elapsed < target:
@@ -200,5 +207,6 @@ class ScreenStreamer:
         except Exception as e:
             logger.error("Stream loop error: %s", e, exc_info=True)
         finally:
+            logger.info("Stream loop ended after %d frames", frames_fed)
             self._running = False
             self._kill_ffmpeg()
