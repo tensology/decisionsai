@@ -20,7 +20,7 @@
 
 **Voice navigation** – Tell the agent "open skins", "open audio settings", "open providers" and it navigates directly to that section. Works for every page and settings tab in the app.
 
-**Bug fixes** – Fixed speech-to-text crashes with Vosk fallback. Fixed Whisper failing to load on some setups. Fixed the agent not finding the right fast action handler. Fixed startup log spam. Database migrations for new workflow columns run automatically.
+**Bug fixes** – Fixed speech-to-text crashes with Vosk fallback. Fixed Whisper failing to load on some setups. Fixed the agent not finding the right fast action handler. Fixed startup log spam. Database migrations for new workflow columns run automatically. Tailwind CSS is now bundled locally — the CDN dependency was defeating the whole offline-first point.
 
 ---
 
