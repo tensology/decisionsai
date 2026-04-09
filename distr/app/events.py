@@ -103,9 +103,17 @@ class EventHandlerMixin:
                         'transcription_for_action_name', 'set_action_name'):
             self._evt_actions(event, data)
 
-        # --- Step Runner ---
-        elif event in ('step_runner_updated', 'step_runner_run_all_requested'):
-            self._evt_step_runner(event, data)
+        # --- Step Runner (websocket refresh) ---
+        elif event == 'step_runner_updated':
+            try:
+                from distr.gui.web.workflow_events import increment_workflow_updated
+                increment_workflow_updated()
+            except ImportError:
+                pass
+
+        # --- Workflow feedback ---
+        elif event == 'step_waiting_for_feedback':
+            self._evt_step_waiting_for_feedback(data)
 
         # --- Telegram send ---
         elif event == 'send_to_telegram':
@@ -318,34 +326,10 @@ class EventHandlerMixin:
             response_text = data.get('response_text')
             self._last_stream_response_text = response_text
             signal_manager.chat_stream_finished.emit(chat_id)
-            # Step Runner single-step completion
-            pending = getattr(self, "_pending_single_step", None)
-            if pending:
-                pending_chat_id = pending.get("chat_id")
-                if (pending_chat_id is None) or (pending_chat_id == chat_id):
-                    step_result = (response_text or self._get_last_assistant_message(chat_id) or "Step completed.").strip()
-                    self._set_step_status(pending["step_id"], "completed", result=step_result[:2000])
-                    try:
-                        from distr.core.workflow.service import update_session_status
-                        update_session_status(pending["session_id"], "completed")
-                    except Exception:
-                        pass
-                    self._pending_single_step = None
         elif event == 'chat_stream_error':
             error = data.get('error')
             chat_id = data.get('chat_id')
             signal_manager.chat_stream_error.emit(error)
-            pending = getattr(self, "_pending_single_step", None)
-            if pending:
-                pending_chat_id = pending.get("chat_id")
-                if (pending_chat_id is None) or (pending_chat_id == chat_id):
-                    self._set_step_status(pending["step_id"], "failed", result=(error or "Unknown error")[:2000])
-                    try:
-                        from distr.core.workflow.service import update_session_status
-                        update_session_status(pending["session_id"], "failed")
-                    except Exception:
-                        pass
-                    self._pending_single_step = None
         elif event == 'typing_indicator_changed':
             show = data.get('show')
             signal_manager.typing_indicator_changed.emit(show)
@@ -419,27 +403,39 @@ class EventHandlerMixin:
                 signal_manager.set_action_name.emit(action_id, name)
 
     # ------------------------------------------------------------------
-    # Step Runner events
+    # Workflow feedback events
     # ------------------------------------------------------------------
 
-    def _evt_step_runner(self, event, data):
-        if event == 'step_runner_updated':
-            try:
-                from distr.gui.web.workflow_events import increment_workflow_updated
-                increment_workflow_updated()
-            except ImportError:
-                pass
-        elif event == 'step_runner_run_all_requested':
-            session_id = data.get('session_id')
-            steps_data = data.get('steps_data', [])
-            session_type = data.get('session_type') or 'instruction'
-            if session_id and steps_data:
-                try:
-                    from distr.core.workflow.service import update_session_status
-                    update_session_status(session_id, 'in_progress')
-                    self._on_step_runner_run_all_requested(session_id, steps_data, None, session_type)
-                except Exception as e:
-                    logger.error("step_runner_run_all_requested failed: %s", e, exc_info=True)
+    def _evt_step_waiting_for_feedback(self, data):
+        """Handle a step entering the waiting-for-feedback state.
+
+        Emits the ``step_waiting_for_feedback`` signal so the main agent
+        (TTS / voice) can speak the result to the user and gather input.
+        """
+        step_id = data.get('step_id')
+        workflow_id = data.get('workflow_id')
+        run_id = data.get('run_id')
+        result = data.get('result', '')
+
+        if step_id is None or workflow_id is None or run_id is None:
+            logger.warning(
+                "step_waiting_for_feedback event missing required fields: %s", data,
+            )
+            return
+
+        try:
+            signal_manager.step_waiting_for_feedback.emit(
+                step_id, workflow_id, run_id, result,
+            )
+            logger.info(
+                "[EVENT QUEUE] Emitted step_waiting_for_feedback for step %d, "
+                "workflow %d, run %d",
+                step_id, workflow_id, run_id,
+            )
+        except Exception as e:
+            logger.error(
+                "Failed to emit step_waiting_for_feedback: %s", e, exc_info=True,
+            )
 
     # ------------------------------------------------------------------
     # Telegram transcription

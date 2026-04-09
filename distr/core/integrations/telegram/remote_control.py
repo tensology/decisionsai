@@ -191,6 +191,38 @@ class TelegramRemoteControlMixin:
                             self._send_websocket_binary(header + image_data)
                     # No JSON response needed — the binary frame IS the response
 
+                elif command == "start_screen_stream":
+                    # Start VP9/WebM screen streaming
+                    screen_number = command_data.get("screen_number", 1)
+                    fps = command_data.get("fps", 3)
+                    self._start_screen_stream(screen_number, fps)
+                    self._send_websocket_message({
+                        "type": "remote_control_response", "command": "start_screen_stream",
+                        "request_id": request_id,
+                        "data": {"success": True, "screen_number": screen_number, "fps": fps},
+                    })
+
+                elif command == "stop_screen_stream":
+                    self._stop_screen_stream()
+                    self._send_websocket_message({
+                        "type": "remote_control_response", "command": "stop_screen_stream",
+                        "request_id": request_id, "data": {"success": True},
+                    })
+
+                elif command == "set_stream_fps":
+                    fps = command_data.get("fps", 3)
+                    if hasattr(self, '_screen_streamer') and self._screen_streamer:
+                        self._screen_streamer.fps = fps
+                        self._send_websocket_message({
+                            "type": "remote_control_response", "command": "set_stream_fps",
+                            "request_id": request_id, "data": {"success": True, "fps": fps},
+                        })
+                    else:
+                        self._send_websocket_message({
+                            "type": "remote_control_response", "command": "set_stream_fps",
+                            "request_id": request_id, "error": "No active stream", "data": {},
+                        })
+
                 elif command == "set_mouse_position":
                     x = command_data.get("x")
                     y = command_data.get("y")
@@ -1802,6 +1834,44 @@ class TelegramRemoteControlMixin:
         except Exception as e:
             logger.error(f"Error pressing key combination: {e}", exc_info=True)
             return False
+
+    # ── VP9/WebM screen streaming ────────────────────────────────────────
+
+    def _capture_pil_image(self, screen_number: int):
+        """Capture a screenshot as a PIL Image with cursor drawn. Returns PIL Image or None."""
+        data = self._capture_screen_screenshot(screen_number, draw_cursor=True)
+        if "error" in data or "image_data" not in data:
+            return None
+        # We need the PIL image before WebP encoding. Re-capture to get raw PIL.
+        # The existing method encodes to WebP, so we need to decode it back or
+        # refactor. For now, decode the WebP bytes back to PIL — it's fast.
+        import io
+        from PIL import Image
+        buf = io.BytesIO(data["image_data"])
+        try:
+            img = Image.open(buf)
+            img.load()
+            return img
+        except Exception:
+            return None
+
+    def _start_screen_stream(self, screen_number: int, fps: float = 3):
+        """Start VP9/WebM screen streaming."""
+        self._stop_screen_stream()  # stop any existing stream
+        from distr.core.integrations.telegram.screen_stream import ScreenStreamer
+        self._screen_streamer = ScreenStreamer(
+            screen_number=screen_number,
+            capture_fn=self._capture_pil_image,
+            send_binary_fn=self._send_websocket_binary,
+            fps=fps,
+        )
+        self._screen_streamer.start()
+
+    def _stop_screen_stream(self):
+        """Stop VP9/WebM screen streaming."""
+        if hasattr(self, '_screen_streamer') and self._screen_streamer:
+            self._screen_streamer.stop()
+            self._screen_streamer = None
 
     def _post_screenshot_to_server(
         self, channel: str, screen_number: int, image_data: bytes, image_format: str
