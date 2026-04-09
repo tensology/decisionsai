@@ -4,21 +4,23 @@
 
 ## [2.7.0] - 2026-04-09
 
-### New Chat Setup, Skin Picker, Remote Controls, Speed Boost
+### Unified Workflows, Chat Setup, Remote Controls, Faster Local Models
 
-**New Chat Setup Screen** – When you open the chat page with no conversations, you now get a clean setup form that loads everything in the background first (no more "Loading..." dropdowns). Pick your LLM, voice, and skin all in one place before you start chatting. The "Configure New Chat" modal got the same upgrade.
+**Workflows are now one system** – Step Runner and Workflows were doing the same thing separately. Now it's just Workflows. Your existing Step Runner sessions migrate over automatically on startup. One place to build, schedule, and run automations.
 
-**Skin Picker** – You can now preview and choose your oracle or avatar skin right from the chat setup screen. Hover over a skin and it pops out big so you can actually see what it looks like. Your skin choice only applies when you start the conversation — browsing doesn't change anything.
+**Chat setup screen** – Opening the chat page now gives you a proper setup form — pick your LLM provider, model, voice, and oracle skin before your first message. The "Configure New Chat" modal got the same treatment. Everything loads in the background so you're not staring at empty dropdowns.
 
-**Free Models Shortcut** – There's a Kilo logo button in the chat setup that links you straight to signing up for free billion-parameter models. Hover over "Place Your Key Here" for step-by-step instructions on how to set it up. No more digging through docs.
+**Oracle skin picker** – Choose your oracle or avatar skin right from the chat setup. The skin picker shows live previews of all installed skins. Skins now support ping-pong playback and looping animations, and you can resize the oracle from the settings.
 
-**Remote Web UI Controls** – The web UI now has dictation and agent input buttons, a window swapping tool, and a bunch of new keyboard controls. You can do way more from the browser without touching the desktop app.
+**Free model access** – There's a Kilo shortcut in the chat setup that takes you straight to signing up for free cloud models. Step-by-step instructions built in — no docs needed. KiloCode is now the first provider listed in Third Party settings.
 
-**Faster Ollama Responses** – If you're running a local Ollama model, responses are noticeably faster now. We trimmed the system prompt by about 15% and stopped sending duplicate tool info. The model dropdown also only shows models that actually support tool calling, so you won't accidentally pick one that can't do anything useful.
+**Remote web UI controls** – Dictation and agent input buttons, window swapping tool, expanded keyboard controls. You can do a lot more from the browser now without touching the desktop app.
 
-**Workflows Unified** – The old "Step Runner" and "Workflows" were basically two systems doing the same thing. Now it's just Workflows. Everything got merged — your old Step Runner sessions migrate automatically. One UI, one set of API endpoints, no confusion.
+**Faster local Ollama responses** – Optimized how the system prompt is built for local models. Removed duplicate tool info and trimmed unnecessary sections. Model dropdowns now only show Ollama models that actually support tool calling — no more picking a model that can't do anything.
 
-**Voice & Bug Fixes** – Fixed Whisper speech-to-text failing to load on some setups. Fixed the agent crashing when trying to detect fast actions. Fixed a bunch of startup warnings that were cluttering the logs. The agent can now navigate directly to any settings page by voice — "open skins", "open audio", "open providers" all work.
+**Voice navigation** – Tell the agent "open skins", "open audio settings", "open providers" and it navigates directly to that section. Works for every page and settings tab in the app.
+
+**Bug fixes** – Fixed speech-to-text crashes with Vosk fallback. Fixed Whisper failing to load on some setups. Fixed the agent not finding the right fast action handler. Fixed startup log spam. Database migrations for new workflow columns run automatically.
 
 ---
 
