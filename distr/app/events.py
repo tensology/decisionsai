@@ -574,6 +574,10 @@ class EventHandlerMixin:
 
         # Send to Telegram
         if hasattr(self, 'telegram_manager'):
+            # Convert WAV to OGG Opus for Telegram (native voice note format, ~95% smaller)
+            if audio_file and audio_file.exists() and str(audio_file).endswith('.wav'):
+                audio_file = self._convert_wav_to_ogg(audio_file)
+
             if audio_file:
                 logger.info(f"[Telegram] 🎵 Sending with audio_file: {audio_file} (exists: {audio_file.exists() if audio_file else False})")
             if screenshot_file:
@@ -994,6 +998,32 @@ class EventHandlerMixin:
         except Exception as e:
             logger.error(f"Failed to generate TTS audio: {e}", exc_info=True)
         return None
+
+    @staticmethod
+    def _convert_wav_to_ogg(wav_path):
+        """Convert a WAV file to OGG Opus for Telegram voice notes.
+
+        Returns the Path to the OGG file, or the original WAV path on failure.
+        """
+        from pathlib import Path
+        ogg_path = Path(str(wav_path).rsplit('.', 1)[0] + '.ogg')
+        try:
+            import subprocess
+            result = subprocess.run(
+                ['ffmpeg', '-y', '-i', str(wav_path), '-c:a', 'libopus', '-b:a', '64k', str(ogg_path)],
+                capture_output=True, text=True, timeout=30,
+            )
+            if result.returncode == 0 and ogg_path.exists():
+                wav_size = wav_path.stat().st_size
+                ogg_size = ogg_path.stat().st_size
+                logger.info(f"[Telegram] Converted WAV→OGG Opus: {wav_size:,} → {ogg_size:,} bytes ({ogg_size * 100 // wav_size}%)")
+                return ogg_path
+            logger.warning(f"[Telegram] ffmpeg WAV→OGG failed: {result.stderr[:200]}")
+        except FileNotFoundError:
+            logger.debug("[Telegram] ffmpeg not found — sending WAV as-is")
+        except Exception as e:
+            logger.warning(f"[Telegram] WAV→OGG conversion failed: {e}")
+        return wav_path
 
     def _telegram_cleanup_temp_files(self, audio_file, screenshot_file, analyzed_image_path):
         """Clean up temporary files after sending to Telegram."""

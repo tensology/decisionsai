@@ -129,7 +129,7 @@ try:
     from distr.core.system_resources import recommend_ollama_defaults as _rec
     _ollama_rec = _rec()
 except Exception:
-    _ollama_rec = {"conversational": "qwen3:8b", "coding": "qwen2.5-coder:7b", "vision": "qwen3-vl:2b"}
+    _ollama_rec = {"conversational": "gemma4:e2b", "coding": "qwen2.5-coder:7b", "vision": "qwen3-vl:2b"}
 
 DEFAULT_MODELS = {
     "ollama": _ollama_rec["conversational"],

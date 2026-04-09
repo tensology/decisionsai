@@ -396,8 +396,21 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
                 resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str}
             else:
-                resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name,
-                        "content": f"Error: Tool '{func_name}' not found"}
+                matched = self._fuzzy_match_tool(func_name) if hasattr(self, '_fuzzy_match_tool') else None
+                if matched:
+                    try:
+                        result = matched._run(**json.loads(tc["function"].get("arguments", "{}")))
+                        status = "completed"
+                    except Exception as e:
+                        result = f"Error: {e}"
+                        status = "failed"
+                    chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                    from distr.core.agent.tool_audit import record_tool_execution
+                    record_tool_execution(chat_id, matched.name, str(result), status, event_queue=self.event_queue)
+                    resp = {"tool_call_id": tc["id"], "role": "tool", "name": matched.name, "content": str(result)}
+                else:
+                    resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name,
+                            "content": f"Error: Tool '{func_name}' not found"}
 
             self._messages.append(resp)
 
@@ -537,7 +550,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
             if chat:
-                self.chat_manager.add_assistant_message(chat, content)
+                from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+                self.chat_manager.add_assistant_message(chat, clean_text_for_tts(content))
 
         # For Telegram requests, store as fallback since TextFrames aren't pushed to TTS
         if getattr(self, '_is_telegram_request', False):

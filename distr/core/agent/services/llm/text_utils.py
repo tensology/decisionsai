@@ -57,11 +57,14 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     text = re.sub(r'_+', '', text)
     text = re.sub(r'`+', '', text)
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
-    text = re.sub(r'^#+\s+', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
+    text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*\d+\.\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*[•\-\*→]\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'[✓❌✅⚠️🚨]', '', text)
     text = re.sub(r'\[([^\]]+)\]', r'\1', text)
+    # Strip lone # characters that arrive in streaming chunks
+    text = re.sub(r'(?:^|\n)#{1,6}\s', '\n', text)
 
     # Normalize whitespace
     text = re.sub(r'[ \t]{2,}', ' ', text)

@@ -436,7 +436,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if not full_response and not tool_calls and not is_processing_tool_result:
                 full_response = await self._requery_without_tools(full_response)
 
-            # 13. Save response
+            # 13. Save response (clean markdown for display)
+            if full_response:
+                full_response = clean_text_for_tts(full_response, strip_whitespace=True)
             if current_chat_id and full_response:
                 if tool_calls and any(tc.get('function', {}).get('name') == 'clear_chat' for tc in tool_calls):
                     return
@@ -656,7 +658,22 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, error_msg, "failed", event_queue=self.event_queue)
             else:
-                results.append(f"Tool '{tool_name}' not found. Available: {', '.join(list(self._tools_dict.keys())[:5])}...")
+                # Fuzzy match — LLM may have hallucinated a tool name
+                matched = self._fuzzy_match_tool(tool_name)
+                if matched:
+                    try:
+                        loop = asyncio.get_running_loop()
+                        result = await loop.run_in_executor(
+                            None, lambda t=matched, a=args_dict: t._run(**a)
+                        )
+                        results.append(result)
+                        chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                        from distr.core.agent.tool_audit import record_tool_execution
+                        record_tool_execution(chat_id, matched.name, str(result), "completed", event_queue=self.event_queue)
+                    except Exception as e:
+                        results.append(f"Error executing tool {matched.name}: {e}")
+                else:
+                    results.append(f"Tool '{tool_name}' not found. Available: {', '.join(list(self._tools_dict.keys())[:5])}...")
 
         return results
 

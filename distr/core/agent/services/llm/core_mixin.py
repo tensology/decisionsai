@@ -175,6 +175,34 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             return fast_action
         return None
 
+    def _fuzzy_match_tool(self, tool_name: str):
+        """Find the closest matching tool when the LLM hallucinates a tool name.
+
+        Returns the matched tool object, or None if no close match.
+        """
+        tools_dict = getattr(self, '_tools_dict', {})
+        if not tools_dict:
+            return None
+
+        name_lower = tool_name.lower().replace('-', '_').replace(' ', '_')
+
+        # Direct substring match — e.g. "list_boards" matches "kanban_ticket"
+        for real_name, tool in tools_dict.items():
+            desc = (getattr(tool, 'description', '') or '').lower()
+            # Check if the hallucinated name's keywords appear in a tool's description
+            keywords = name_lower.split('_')
+            if len(keywords) >= 2 and all(kw in desc for kw in keywords):
+                logger.info("Fuzzy tool match: '%s' → '%s' (keyword match in description)", tool_name, real_name)
+                return tool
+
+        # Partial name overlap — e.g. "list_workflows" matches "list_workflows_tool"
+        for real_name, tool in tools_dict.items():
+            if name_lower in real_name or real_name in name_lower:
+                logger.info("Fuzzy tool match: '%s' → '%s' (substring match)", tool_name, real_name)
+                return tool
+
+        return None
+
     def _get_username(self) -> str:
         """Extract OS username (first name if available)."""
         import getpass

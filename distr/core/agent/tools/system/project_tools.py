@@ -442,16 +442,6 @@ class OpenAndStartProjectTool(BaseTool):
                     response += f"Opened in {editor_used}.\n"
                 if startup_created:
                     response += f"Startup file created.\n"
-                
-                # Instructions for LLM behavior
-                response += "\n---\n"
-                response += "INSTRUCTIONS FOR YOUR RESPONSE TO THE USER:\n"
-                response += "- Keep it SHORT. One or two sentences max.\n"
-                response += "- Just say the project is started and ready to go.\n"
-                response += "- DO NOT list files you created or break down what happened.\n"
-                response += "- DO NOT describe the startup file contents or structure.\n"
-                response += "- DO NOT presume specific actions like 'run the website' or 'start the server'.\n"
-                response += "- Ask what they'd like to work on, nothing more.\n"
 
                 return response
 
@@ -1208,6 +1198,53 @@ class StartProjectTool(BaseTool):
         try:
             from distr.core.agent.services.rag.project import get_active_project
 
+            # Extract project name from text (e.g. "start project auctionnow" → "auctionnow")
+            search_name = ""
+            if text:
+                import re
+                text_lower = text.lower().strip().rstrip('.')
+                # Strip common prefixes to get the project name
+                for prefix in ['start project', 'start the project', 'open project', 'open and start project',
+                               'launch project', 'run project', 'start']:
+                    if text_lower.startswith(prefix):
+                        search_name = text_lower[len(prefix):].strip()
+                        break
+                if not search_name:
+                    search_name = text_lower
+
+            # If a project name was specified, find it by fuzzy matching
+            if search_name:
+                from distr.core.db import get_session as get_db_session
+                from distr.core.db.projects import Project
+                from difflib import SequenceMatcher
+
+                with get_db_session() as session:
+                    all_projects = session.query(Project).all()
+                    best_match = None
+                    best_score = 0.0
+                    for p in all_projects:
+                        score = SequenceMatcher(None, search_name, p.name.lower()).ratio()
+                        if score > best_score:
+                            best_score = score
+                            best_match = p
+                        # Also check trigger words
+                        try:
+                            triggers = json.loads(p.additional_trigger_words) if p.additional_trigger_words else []
+                            for tw in triggers:
+                                tw_score = SequenceMatcher(None, search_name, tw.lower()).ratio()
+                                if tw_score > best_score:
+                                    best_score = tw_score
+                                    best_match = p
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            pass
+
+                    if best_match and best_score >= 0.5:
+                        logger.info("StartProject: fuzzy matched '%s' to project '%s' (score: %.2f)", search_name, best_match.name, best_score)
+                        # Delegate to OpenAndStartProjectTool with the matched name
+                        from distr.core.agent.tools.system.project_tools import OpenAndStartProjectTool
+                        opener = OpenAndStartProjectTool()
+                        return opener._run(project_name=best_match.name)
+
             project = get_active_project()
 
             if not project:
@@ -1277,16 +1314,6 @@ class StartProjectTool(BaseTool):
                 else:
                     response += f"Warning: Could not find Cursor or VS Code in system PATH.\n"
                 response += f"Startup file created.\n"
-
-                # Instructions for LLM behavior
-                response += "\n---\n"
-                response += "INSTRUCTIONS FOR YOUR RESPONSE TO THE USER:\n"
-                response += "- Keep it SHORT. One or two sentences max.\n"
-                response += "- Just say the project is started and ready to go.\n"
-                response += "- DO NOT list files you created or break down what happened.\n"
-                response += "- DO NOT describe the startup file contents or structure.\n"
-                response += "- DO NOT presume specific actions like 'run the website' or 'start the server'.\n"
-                response += "- Ask what they'd like to work on, nothing more.\n"
 
                 return response
 

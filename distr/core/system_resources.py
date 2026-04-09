@@ -15,10 +15,10 @@ logger = logging.getLogger(__name__)
 # Each entry: (min_ram_gb, model_name, approx_vram_gb, label)
 # NOTE: min_ram_gb accounts for ~5 GB app overhead (PyQt, pipecat, whisper, torch).
 OLLAMA_MODEL_TIERS = [
-    (0,   "qwen3:0.6b",  0.5,  "minimal — fits ≤8 GB RAM"),
-    (10,  "qwen3:1.7b",  1.5,  "ultra-light — fits 10-11 GB RAM"),
-    (12,  "qwen3:4b",    3.5,  "light — fits 12-15 GB RAM"),
-    (16,  "qwen3:8b",    6.0,  "default — needs 16+ GB RAM"),
+    (0,   "qwen3:0.6b",   0.5,  "minimal — fits ≤8 GB RAM"),
+    (10,  "qwen3:1.7b",   1.5,  "ultra-light — fits 10-11 GB RAM"),
+    (12,  "qwen3:4b",     3.5,  "light — fits 12-15 GB RAM"),
+    (16,  "gemma4:e2b",   5.5,  "default — needs 16+ GB RAM"),
 ]
 
 # Vision model tiers
