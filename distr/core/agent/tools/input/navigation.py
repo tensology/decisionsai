@@ -484,9 +484,9 @@ class ShortcutTool(BaseTool):
     
     name: str = "keyboard_shortcut"
     description: str = """Executes keyboard shortcuts for window and tab management.
-    Use this for: creating new tabs, switching tabs, closing windows, quitting apps, opening Spotlight or GPT, swapping windows.
-    Examples: "new tab", "close this window", "quit the app", "open spotlight", "open GPT", "swap window", "next window".
-    Available shortcuts: new_tab, previous_tab, next_tab, close, quit, open_spotlight, open_gpt, swap_window, next_window, cycle_window."""
+    Use this for: creating new tabs, switching tabs, closing windows, minimizing, maximizing, fullscreen, hiding apps, quitting apps, opening Spotlight or GPT, swapping windows.
+    Examples: "new tab", "close this window", "minimize", "maximize", "fullscreen", "hide app", "quit the app", "open spotlight", "swap window".
+    Available shortcuts: new_tab, previous_tab, next_tab, close, quit, minimize, maximize, fullscreen, hide, open_spotlight, open_gpt, swap_window, next_window, cycle_window."""
     
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
     
@@ -613,10 +613,14 @@ class ShortcutTool(BaseTool):
         """Get triggers for keyboard shortcuts."""
         return [
             "new tab", "open new tab", "agent new tab",
-            "close tab", "close this tab",
+            "close tab", "close this tab", "close window", "close this window",
             "next tab", "switch tab",
             "previous tab", "last tab", "prev tab",
             "refresh", "reload", "reload page",
+            "minimize", "minimise", "minimize window", "minimise window",
+            "maximize", "maximise", "maximize window", "maximise window",
+            "fullscreen", "full screen", "enter fullscreen", "exit fullscreen",
+            "hide app", "hide window", "hide this app",
             "swap window", "swap windows", "next window", "cycle window",
             "switch window", "other window",
         ]
@@ -635,6 +639,10 @@ class ShortcutTool(BaseTool):
                 "next_tab": [cmd, "alt", "right"],
                 "close": [cmd, "w"],
                 "quit": [cmd, "q"],
+                "minimize": [cmd, "m"],
+                "maximize": ["ctrl", cmd, "f"],
+                "fullscreen": ["ctrl", cmd, "f"],
+                "hide": [cmd, "h"],
                 "open_spotlight": [cmd, "space"],
                 "open_gpt": ["alt", "space"],
                 "spotlight": [cmd, "space"],
@@ -649,6 +657,10 @@ class ShortcutTool(BaseTool):
                      "previous_tab": [cmd, "shift", "tab"],
                      "next_tab": [cmd, "tab"],
                      "quit": ["alt", "f4"],
+                     "minimize": ["win", "down"],
+                     "maximize": ["win", "up"],
+                     "fullscreen": ["f11"],
+                     "hide": ["win", "d"],
                      "open_spotlight": ["win"],
                      "spotlight": ["win"],
                      "swap_window": ["alt", "tab"],
@@ -669,6 +681,12 @@ class ShortcutTool(BaseTool):
                     shortcut = "close"
                 elif "quit" in text_lower or "exit" in text_lower:
                     shortcut = "quit"
+                elif "minimize" in text_lower or "minimise" in text_lower:
+                    shortcut = "minimize"
+                elif "maximize" in text_lower or "maximise" in text_lower or "full screen" in text_lower or "fullscreen" in text_lower:
+                    shortcut = "maximize"
+                elif "hide" in text_lower and ("window" in text_lower or "app" in text_lower):
+                    shortcut = "hide"
                 elif "spotlight" in text_lower:
                     shortcut = "open_spotlight"
                 elif "gpt" in text_lower:

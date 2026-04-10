@@ -667,6 +667,39 @@ class TelegramRemoteControlMixin:
                         }
                     )
 
+                elif command == "key_minimize":
+                    import platform
+                    if platform.system() == "Darwin":
+                        success = self._press_key_combination(["command", "m"], take_screenshot=True)
+                    else:
+                        success = self._press_key_combination(["win", "down"], take_screenshot=True)
+                    self._send_websocket_message({
+                        "type": "remote_control_response", "command": "key_minimize",
+                        "request_id": request_id, "data": {"success": success},
+                    })
+
+                elif command == "key_maximize":
+                    import platform
+                    if platform.system() == "Darwin":
+                        success = self._press_key_combination(["ctrl", "command", "f"], take_screenshot=True)
+                    else:
+                        success = self._press_key_combination(["win", "up"], take_screenshot=True)
+                    self._send_websocket_message({
+                        "type": "remote_control_response", "command": "key_maximize",
+                        "request_id": request_id, "data": {"success": success},
+                    })
+
+                elif command == "key_close_window":
+                    import platform
+                    if platform.system() == "Darwin":
+                        success = self._press_key_combination(["command", "w"], take_screenshot=True)
+                    else:
+                        success = self._press_key_combination(["ctrl", "w"], take_screenshot=True)
+                    self._send_websocket_message({
+                        "type": "remote_control_response", "command": "key_close_window",
+                        "request_id": request_id, "data": {"success": success},
+                    })
+
                 elif command == "key_select_all":
                     # Control + A (or Command + A on macOS) - Select all
                     import platform
