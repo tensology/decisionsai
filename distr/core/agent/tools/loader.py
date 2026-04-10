@@ -11,7 +11,6 @@ import threading
 from typing import List, Dict, Optional
 
 from distr.core.agent.tools.base import BaseActionTool
-from distr.core.utils import load_settings_from_db
 
 logger = logging.getLogger(__name__)
 
@@ -80,17 +79,6 @@ def _get_tool_definitions(
         ("UseSnippetTool", {}),
         # Create Action
         ("CreateActionTool", dict(event_queue=event_queue)),
-        # Create Step Runner
-        ("CreateStepRunnerTool", dict(chat_manager=chat_manager)),
-        # Step Runner CRUD and execution
-        ("ListStepRunnerSessionsTool", {}),
-        ("GetStepRunnerSessionTool", {}),
-        ("DeleteStepRunnerSessionTool", dict(event_queue=event_queue)),
-        ("UpdateStepRunnerStepTool", dict(event_queue=event_queue)),
-        ("AddStepRunnerStepTool", dict(event_queue=event_queue)),
-        ("RemoveStepRunnerStepTool", dict(event_queue=event_queue)),
-        ("RunStepRunnerAllTool", dict(event_queue=event_queue)),
-        ("UpdateScheduleTool", dict(event_queue=event_queue)),
         # Workflow Builder (AutoWorkflow) tools
         ("ListWorkflowsTool", {}),
         ("GetWorkflowTool", {}),
@@ -196,6 +184,7 @@ def _get_tool_definitions(
     ]
 
     # Check if Rube is enabled before loading tools
+    from distr.core.utils import load_settings_from_db
     settings = load_settings_from_db()
     rube_enabled = settings.get('rube_enabled', False)
     if rube_enabled:
@@ -281,6 +270,7 @@ TOOL_REGISTRY = {
     "OracleControlTool":       ("input.navigation", "OracleControlTool"),
     "ModeControlTool":         ("input.navigation", "ModeControlTool"),
     "ShortcutTool":            ("input.navigation", "ShortcutTool"),
+    "WindowManagementTool":    ("input.window_management", "WindowManagementTool"),
     "TextEditingTool":         ("input.text_editing", "TextEditingTool"),
     "CaretMovementTool":       ("input.caret_movement", "CaretMovementTool"),
     "MouseMovementTool":       ("input.mouse_movement", "MouseMovementTool"),
@@ -315,15 +305,6 @@ TOOL_REGISTRY = {
     "WebFetchTool":            ("web.web_fetch", "WebFetchTool"),
     # actions/
     "CreateActionTool":        ("actions.create_action", "CreateActionTool"),
-    "CreateStepRunnerTool":    ("step_runner.create_step_runner", "CreateStepRunnerTool"),
-    "ListStepRunnerSessionsTool": ("step_runner.step_runner_tools", "ListStepRunnerSessionsTool"),
-    "GetStepRunnerSessionTool":   ("step_runner.step_runner_tools", "GetStepRunnerSessionTool"),
-    "DeleteStepRunnerSessionTool": ("step_runner.step_runner_tools", "DeleteStepRunnerSessionTool"),
-    "UpdateStepRunnerStepTool":   ("step_runner.step_runner_tools", "UpdateStepRunnerStepTool"),
-    "AddStepRunnerStepTool":      ("step_runner.step_runner_tools", "AddStepRunnerStepTool"),
-    "RemoveStepRunnerStepTool":   ("step_runner.step_runner_tools", "RemoveStepRunnerStepTool"),
-    "RunStepRunnerAllTool":       ("step_runner.step_runner_tools", "RunStepRunnerAllTool"),
-    "UpdateScheduleTool":         ("step_runner.step_runner_tools", "UpdateScheduleTool"),
     # workflow builder (AutoWorkflow) tools
     "ListWorkflowsTool":          ("step_runner.workflow_tools", "ListWorkflowsTool"),
     "GetWorkflowTool":            ("step_runner.workflow_tools", "GetWorkflowTool"),
@@ -389,8 +370,8 @@ _BASE_PACKAGE = "distr.core.agent.tools"
 # describing what the tool does and when to use it.
 TOOL_DESCRIPTIONS: dict[str, str] = {
     # input/
-    "SmartOpenTool": "Open a URL in the browser, launch a desktop application by name, or open a file with its default app.",
-    "OpenWindowTool": "Switch to or bring forward an already-running application window by name.",
+    "SmartOpenTool": "Open a URL in the browser, launch a desktop application by name, or open a file with its default app. Use for: open Chrome, open Spotify, open a website, launch an app.",
+    "OpenWindowTool": "Switch focus to an already-running application window. Use for: switch to Chrome, bring up Finder, focus on VS Code.",
     "OpenFileMenuTool": "Open the File menu in the currently active application window.",
     "OracleControlTool": "Show, hide, minimize, or restore the Oracle assistant overlay on the desktop.",
     "ModeControlTool": "Switch the assistant between different interaction modes such as voice, chat, or silent.",
@@ -430,19 +411,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "VisionAnalyzerTool": "Analyze a dropped or specified image file using a vision-enabled LLM to describe its contents.",
     "ImageGeneratorTool": "Generate an image from a text description using an image generation LLM and save it to disk.",
     # web/
-    "WebSearchTool": "Search the web for current information, news, or facts using a search engine.",
-    "WebFetchTool": "Fetch and extract the text content of a web page given its URL.",
+    "WebSearchTool": "Search the web, Google, or the internet for current information, news, facts, or answers.",
+    "WebFetchTool": "Fetch, read, or extract the text content of a web page given its URL.",
     # actions/
     "CreateActionTool": "Record a new reusable macro action that can be replayed later to automate repetitive tasks.",
-    "CreateStepRunnerTool": "Break down a task into ordered steps and create a Step Runner session, optionally with a recurring schedule.",
-    "ListStepRunnerSessionsTool": "List all existing Step Runner sessions with their status and step counts.",
-    "GetStepRunnerSessionTool": "Retrieve the details and steps of a specific Step Runner session by its ID.",
-    "DeleteStepRunnerSessionTool": "Delete a Step Runner session and all of its associated steps.",
-    "UpdateStepRunnerStepTool": "Update the title, instruction, or status of an individual step within a Step Runner session.",
-    "AddStepRunnerStepTool": "Add a new step to an existing Step Runner session at a specified position.",
-    "RemoveStepRunnerStepTool": "Remove a specific step from a Step Runner session.",
-    "RunStepRunnerAllTool": "Execute all pending steps in a Step Runner session sequentially.",
-    "UpdateScheduleTool": "Update the schedule, time, or timezone of a recurring Step Runner session.",
     # workflow builder (AutoWorkflow) tools
     "ListWorkflowsTool": "List all saved workflows with optional filtering by status or search term.",
     "GetWorkflowTool": "Retrieve the full details, steps, and run history of a specific workflow by its ID.",
@@ -463,17 +435,17 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CreateSnippetTool": "Create a reusable text snippet that can be quickly inserted later.",
     "UseSnippetTool": "Insert a previously saved text snippet into the current input field.",
     # chat/
-    "NewChatTool": "Start a new conversation session, clearing the current chat context.",
-    "ClearChatTool": "Clear all messages from the current chat conversation.",
+    "NewChatTool": "Start a new conversation, new chat, or fresh chat session.",
+    "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
-    "OpenPageTool": "Navigate to a specific page or section within the application's web UI.",
+    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, kanban, board, settings, preferences, actions, snippets, projects, workflows, step runner, docs, activity log, audio, models, skins, or about. Use for: open kanban, go to settings, show the board, open chat page.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "ExitAppTool": "Quit and close the DecisionsAI desktop application.",
     "RestartAppTool": "Restart the DecisionsAI desktop application to apply updates or recover from errors.",
     "WakeUpTool": "Wake the computer from sleep or activate the display when the screen is off.",
     "SpeakOnDesktopTool": "Speak a text message aloud on the desktop using text-to-speech, used as a remote intercom from Telegram.",
-    "ExecuteCodeTool": "Write and execute Python or shell code to perform complex tasks, calculations, or system automation.",
+    "ExecuteCodeTool": "Write and run Python or shell code, scripts, or commands to perform tasks, calculations, or automation.",
     "ListProjectsTool": "List all registered projects with their names, paths, and active status.",
     "GetProjectDetailsTool": "Get detailed information about a specific project including its files, settings, and configuration.",
     "SwitchProjectTool": "Switch the active project context to a different registered project.",
@@ -494,7 +466,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
     "RubeTool": "Execute multi-step API workflows using the Rube integration platform for connected third-party services.",
     "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
-    "KanbanTicketTool": "Create, update, list, or manage tickets on the project kanban board for task tracking.",
+    "KanbanTicketTool": "Create, update, list, move, or manage kanban tickets, tasks, or cards on the project board.",
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "KiroCliTool": "Delegate coding tasks to the Kiro AI coding agent for project-level code generation and editing.",
     # meta/
