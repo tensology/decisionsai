@@ -1244,52 +1244,28 @@ class TelegramRemoteControlMixin:
                 x, y = screen_geo["x"], screen_geo["y"]
                 width, height = screen_geo["width"], screen_geo["height"]
 
-                # Fast path: Quartz CGWindowListCreateImage (in-memory, no subprocess)
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                    png_tmp_path = tmp_file.name
+
                 try:
-                    import Quartz
-                    from Quartz import CGWindowListCreateImage, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, CGRectMake, CGImageGetWidth, CGImageGetHeight, CGImageGetBytesPerRow, CGImageGetDataProvider, CGDataProviderCopyData
-                    
-                    rect = CGRectMake(x, y, width, height)
-                    cg_image = CGWindowListCreateImage(rect, kCGWindowListOptionOnScreenOnly, kCGNullWindowID, 0)
-                    
-                    if cg_image:
-                        cg_width = CGImageGetWidth(cg_image)
-                        cg_height = CGImageGetHeight(cg_image)
-                        bytes_per_row = CGImageGetBytesPerRow(cg_image)
-                        provider = CGImageGetDataProvider(cg_image)
-                        raw_data = CGDataProviderCopyData(provider)
-                        
-                        import numpy as np
-                        arr = np.frombuffer(raw_data, dtype=np.uint8).reshape(cg_height, bytes_per_row // 4, 4)
-                        # Quartz gives BGRA, crop to actual width and convert to RGB
-                        arr = arr[:cg_height, :cg_width, :]
-                        rgb_arr = arr[:, :, [2, 1, 0]]  # BGRA -> RGB (drop alpha)
-                        pil_img = Image.fromarray(rgb_arr, 'RGB')
-                except Exception as e:
-                    logger.debug("Quartz capture failed (%s), falling back to screencapture", e)
-                
-                # Fallback: screencapture subprocess
-                if pil_img is None:
-                    with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                        png_tmp_path = tmp_file.name
-                    try:
+                    result = subprocess.run(
+                        ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                        capture_output=True, timeout=10,
+                    )
+                    if result.returncode != 0 or not os.path.exists(png_tmp_path):
                         result = subprocess.run(
-                            ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                            ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
                             capture_output=True, timeout=10,
                         )
-                        if result.returncode != 0 or not os.path.exists(png_tmp_path):
-                            result = subprocess.run(
-                                ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
-                                capture_output=True, timeout=10,
-                            )
-                        if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
-                            pil_img = Image.open(png_tmp_path)
-                            pil_img.load()
-                    finally:
-                        try:
-                            os.unlink(png_tmp_path)
-                        except OSError:
-                            pass
+
+                    if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
+                        pil_img = Image.open(png_tmp_path)
+                        pil_img.load()
+                finally:
+                    try:
+                        os.unlink(png_tmp_path)
+                    except OSError:
+                        pass
 
             elif system == "Windows":
                 try:
