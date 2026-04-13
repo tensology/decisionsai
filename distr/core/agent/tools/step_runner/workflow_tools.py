@@ -1,8 +1,5 @@
 """
 Workflow tools for the agent — CRUD and execution for AutoWorkflow definitions.
-
-These tools operate on the workflow builder (Step Runner UI) workflows,
-NOT the old StepRunnerSession model.
 """
 
 import logging
@@ -191,8 +188,7 @@ class GetProjectStatusTool(BaseTool):
                 AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep,
                 AutoWorkflowStepResult,
             )
-            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
-            from distr.core.workflow.service import _active_runs, _runs_lock
+            from distr.core.workflow.dispatcher import _active_runs, _runs_lock
 
             sections = []
 
@@ -212,13 +208,13 @@ class GetProjectStatusTool(BaseTool):
 
                 # 2a. CLI tasks currently in progress for this project
                 active_cli = (
-                    db.query(StepRunnerSession)
+                    db.query(AutoWorkflow)
                     .filter(
-                        StepRunnerSession.session_type == "kiro_cli",
-                        StepRunnerSession.status == "in_progress",
-                        StepRunnerSession.instruction.ilike(f"%{project.name}%"),
+                        AutoWorkflow.workflow_type == "kiro_cli",
+                        AutoWorkflow.status == "in_progress",
+                        AutoWorkflow.name.ilike(f"%{project.name}%"),
                     )
-                    .order_by(StepRunnerSession.modified_date.desc())
+                    .order_by(AutoWorkflow.modified_date.desc())
                     .all()
                 )
 
@@ -257,11 +253,11 @@ class GetProjectStatusTool(BaseTool):
                 if active_cli or active_workflow_runs:
                     sections.append("\n🔴 CURRENTLY RUNNING:")
                     for cs in active_cli:
-                        instr = (cs.instruction or "")[:120]
+                        instr = (cs.name or "")[:120]
                         sections.append(f"  • CLI: {instr}")
                         for step in sorted(cs.steps, key=lambda s: s.position):
                             if step.status == "running":
-                                sections.append(f"    Step '{step.title}' is executing now")
+                                sections.append(f"    Step '{step.name}' is executing now")
                     for run in active_workflow_runs:
                         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == run.workflow_id).first()
                         wf_name = wf.name if wf else f"Workflow {run.workflow_id}"
@@ -279,20 +275,20 @@ class GetProjectStatusTool(BaseTool):
                 # ── LATEST CLI RESULTS ────────────────────────────
 
                 cli_sessions = (
-                    db.query(StepRunnerSession)
+                    db.query(AutoWorkflow)
                     .filter(
-                        StepRunnerSession.session_type == "kiro_cli",
-                        StepRunnerSession.instruction.ilike(f"%{project.name}%"),
-                        StepRunnerSession.status != "in_progress",
+                        AutoWorkflow.workflow_type == "kiro_cli",
+                        AutoWorkflow.name.ilike(f"%{project.name}%"),
+                        AutoWorkflow.status != "in_progress",
                     )
-                    .order_by(StepRunnerSession.modified_date.desc())
+                    .order_by(AutoWorkflow.modified_date.desc())
                     .limit(3)
                     .all()
                 )
                 if cli_sessions:
                     sections.append("\n--- Recent CLI Activity ---")
                     for cs in cli_sessions:
-                        instr = (cs.instruction or "")[:120]
+                        instr = (cs.name or "")[:120]
                         ts = cs.modified_date.strftime("%Y-%m-%d %H:%M") if cs.modified_date else "?"
                         sections.append(f"  • {instr} [{cs.status}, {ts}]")
                         for step in sorted(cs.steps, key=lambda s: s.position):

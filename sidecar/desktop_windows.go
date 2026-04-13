@@ -42,6 +42,15 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	m["find_element"]    = handleFindElement
 	m["get_clipboard"]   = handleGetClipboard
 	m["set_clipboard"]   = handleSetClipboard
+	// Stub new tools — not yet implemented on Windows
+	stub := func(name string) ToolHandler {
+		return func(params map[string]any) (any, error) {
+			return nil, fmt.Errorf("%s is not yet implemented on Windows", name)
+		}
+	}
+	m["drag_to"]          = stub("drag_to")
+	m["scroll"]           = stub("scroll")
+	m["wait_for_element"] = stub("wait_for_element")
 }
 
 func platformMoveMouse(x, y int) (any, error) {

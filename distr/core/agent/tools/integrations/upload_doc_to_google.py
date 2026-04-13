@@ -151,10 +151,17 @@ class UploadDocToGoogleTool(LazyToolMixin, BaseTool):
     def _get_last_dropped_file(self) -> Optional[str]:
         """Get the last file that was dropped on the oracle ball."""
         try:
-            from distr.core.agent.tools.integrations.rube_tool import get_dropped_files
-            dropped_files = get_dropped_files()
-            if dropped_files and len(dropped_files) > 0:
-                return dropped_files[-1]
+            import json
+            storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+            storage_file = os.path.join(storage_dir, "current_files.json")
+            if not os.path.exists(storage_file):
+                return None
+            with open(storage_file, 'r') as f:
+                data = json.load(f)
+                files = data.get("files", [])
+                existing_files = [fp for fp in files if os.path.exists(fp)]
+                if existing_files:
+                    return existing_files[-1]
         except Exception:
             pass
         return None

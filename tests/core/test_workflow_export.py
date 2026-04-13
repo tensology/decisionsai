@@ -18,6 +18,7 @@ from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
 
 from distr.core.db import Base
+from distr.core.workflow import import_export as import_export_mod
 from distr.core.db.workflow import (
     AutoWorkflow,
     AutoWorkflowStep,
@@ -108,7 +109,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -120,7 +121,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -131,7 +132,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -142,7 +143,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -164,7 +165,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -176,7 +177,7 @@ class TestExportWorkflow:
         engine, Session = db_setup
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(99999)
 
@@ -187,7 +188,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -198,7 +199,7 @@ class TestExportWorkflow:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow(wf_id)
 
@@ -213,7 +214,7 @@ class TestExportWorkflowBundle:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             bundle = service.export_workflow_bundle(wf_id)
 
@@ -226,7 +227,7 @@ class TestExportWorkflowBundle:
         engine, Session, wf_id = populated_db
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             bundle = service.export_workflow_bundle(wf_id)
 
@@ -241,7 +242,7 @@ class TestExportWorkflowBundle:
         engine, Session = db_setup
         from distr.core.workflow import service
 
-        with patch.object(service, "get_session") as mock_gs:
+        with patch.object(import_export_mod, "get_session") as mock_gs:
             mock_gs.return_value = _ctx_session(Session)
             result = service.export_workflow_bundle(99999)
 

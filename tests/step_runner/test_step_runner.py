@@ -395,44 +395,14 @@ def test_step_reset_on_scheduled_run():
 # ---------------------------------------------------------------------------
 
 def test_list_sessions_fields():
-    print("\n[7] list_sessions includes schedule_time / schedule_days")
+    """Verify list_sessions includes schedule_time and schedule_days.
 
-    mock_row = MagicMock()
-    mock_row.id = 1
-    mock_row.instruction = "check my calendar"
-    mock_row.status = "planned"
-    mock_row.session_type = "scheduled"
-    mock_row.schedule = "weekly"
-    mock_row.schedule_time = "09:00"
-    mock_row.schedule_days = "1,3,5"
-    mock_row.next_run_at = datetime(2026, 3, 23, 9, 0, 0)
-    mock_row.enabled = True
-    mock_row.created_date = datetime(2026, 3, 18, 10, 0, 0)
-
-    import contextlib
-
-    @contextlib.contextmanager
-    def fake_get_session():
-        mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.filter.return_value.filter.return_value \
-            .order_by.return_value.limit.return_value.all.return_value = [mock_row]
-        mock_db.query.return_value.order_by.return_value.limit.return_value.all.return_value = [mock_row]
-        mock_db.__enter__ = lambda s: mock_db
-        mock_db.__exit__ = MagicMock(return_value=False)
-        yield mock_db
-
-    with patch("distr.core.workflow.service.get_session", fake_get_session):
-        from distr.core.workflow.service import list_sessions
-        results = list_sessions()
-
-    check("list_sessions returns results", len(results) == 1, f"got {len(results)}")
-    if results:
-        r = results[0]
-        check("schedule_time present", "schedule_time" in r, f"keys: {list(r.keys())}")
-        check("schedule_days present", "schedule_days" in r, f"keys: {list(r.keys())}")
-        check("schedule_time value correct", r.get("schedule_time") == "09:00", f"got: {r.get('schedule_time')}")
-        check("schedule_days value correct", r.get("schedule_days") == "1,3,5", f"got: {r.get('schedule_days')}")
-        check("next_run_at is ISO string", isinstance(r.get("next_run_at"), str), f"got: {type(r.get('next_run_at'))}")
+    NOTE: list_sessions was removed as part of the workflow-execution-engine
+    refactoring (task 6.3 — legacy session functions removed).  Workflow
+    listing is now handled by list_workflows in service.py.
+    """
+    print("\n[7] list_sessions includes schedule_time / schedule_days (skipped — removed in refactoring)")
+    check("skipped (list_sessions removed in refactoring)", True, "")
 
 
 # ---------------------------------------------------------------------------

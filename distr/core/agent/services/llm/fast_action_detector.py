@@ -1055,7 +1055,8 @@ class FastActionDetector:
         
         # Check if at least one part looks conversational (question words without action verbs)
         question_indicators = re.compile(
-            r'\b(what\'?s?|who\'?s?|where|when|why|how|is\s+there|are\s+there|do\s+you|can\s+you\s+tell\s+me|tell\s+me\s+about)\b'
+            r'\b(what\'?s?|who\'?s?|where|when|why|how|is\s+there|are\s+there|do\s+you|can\s+you\s+tell\s+me|tell\s+me\s+about'
+            r'|no[,.]?\s+you\s+didn|that\'?s?\s+not|you\s+didn\'?t|that\s+was\s+wrong|try\s+again|not\s+what\s+i)\b'
         )
         action_indicators = re.compile(
             r'\b(screenshot|screen|take\s+a|look\s+at|analyze|copy|paste|move\s+mouse|click|open|run|play|execute)\b'
@@ -1063,13 +1064,16 @@ class FastActionDetector:
         
         has_conversational = False
         has_action = False
+        action_count = 0
         for part in parts:
             if question_indicators.search(part) and not action_indicators.search(part):
                 has_conversational = True
             if action_indicators.search(part):
                 has_action = True
+                action_count += 1
         
-        return has_conversational and has_action
+        # Route to LLM if: mixed conversational+action, OR multiple separate actions
+        return (has_conversational and has_action) or action_count >= 2
     
     def _is_conversational(self, text: str) -> bool:
         """Check if text is a conversational query (not an action command)."""

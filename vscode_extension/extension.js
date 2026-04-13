@@ -263,9 +263,9 @@ function startStartupWatcher(outputChannel, context) {
 
 /**
  * Parse decisions-meta comment from ticket file contents.
- * Format: <!-- decisions-meta: {"run_id": 42, "step_id": 7, "api_base": "http://localhost:5555"} -->
+ * Format: <!-- decisions-meta: {"run_id": 42, "step_id": 7, "workflow_id": 5, "api_base": "http://localhost:5555"} -->
  * @param {string} fileContents
- * @returns {{ run_id: number, step_id: number, api_base: string } | null}
+ * @returns {{ run_id: number, step_id: number, workflow_id: number, api_base: string } | null}
  */
 function parseDecisionsMeta(fileContents) {
 	try {
@@ -283,13 +283,14 @@ function parseDecisionsMeta(fileContents) {
 
 /**
  * Call the CONTINUE endpoint to signal that Cursor has finished processing a ticket.
- * POST {api_base}/api/workflows/runs/{run_id}/continue
- * @param {{ run_id: number, step_id: number, api_base: string }} meta
+ * POST {api_base}/api/workflows/{workflow_id}/runs/{run_id}/continue
+ * @param {{ run_id: number, step_id: number, workflow_id: number, api_base: string }} meta
  * @param {vscode.OutputChannel} outputChannel
  */
 function callContinueEndpoint(meta, outputChannel) {
 	try {
-		const url = `${meta.api_base}/api/workflows/runs/${meta.run_id}/continue`;
+		const wfId = meta.workflow_id || 0;
+		const url = `${meta.api_base}/api/workflows/${wfId}/runs/${meta.run_id}/continue`;
 		const body = JSON.stringify({ input: 'Cursor processing completed' });
 		const parsedUrl = new URL(url);
 		const transport = parsedUrl.protocol === 'https:' ? https : http;

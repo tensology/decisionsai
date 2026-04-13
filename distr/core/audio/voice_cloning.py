@@ -41,6 +41,8 @@ def process_custom_voice(voice_id: int) -> None:
             _clone_kokoro(voice, audio_files, session)
         elif voice.provider == "f5tts":
             _clone_f5tts(voice, audio_files, session)
+        elif voice.provider == "voxcpm":
+            _clone_voxcpm(voice, audio_files, session)
         else:
             voice.status = "failed"
             voice.error_message = f"Unsupported provider: {voice.provider}"
@@ -148,6 +150,37 @@ def _clone_f5tts(voice, audio_files, session) -> None:
     voice.status = "ready"
     session.commit()
     logger.info("F5-TTS custom voice registered: %s -> %s", voice.name, voice.provider_voice_id)
+
+
+def _clone_voxcpm(voice, audio_files, session) -> None:
+    """Register VoxCPM custom voice for voice cloning.
+
+    VoxCPM uses a reference audio clip directly for zero-shot cloning — no training needed.
+    Converts any non-WAV files to WAV using pydub (ffmpeg backend).
+    VoxCPM accepts 16kHz reference audio and outputs 48kHz.
+    """
+    from pydub import AudioSegment
+
+    _NATIVE_EXTS = {'.wav', '.flac', '.ogg'}
+
+    for fpath in audio_files:
+        ext = os.path.splitext(fpath)[1].lower()
+        if ext not in _NATIVE_EXTS:
+            wav_path = os.path.splitext(fpath)[0] + '.wav'
+            logger.info("VoxCPM clone: converting %s -> %s", os.path.basename(fpath), os.path.basename(wav_path))
+            audio_seg = AudioSegment.from_file(fpath)
+            # VoxCPM accepts 16kHz reference audio
+            audio_seg = audio_seg.set_channels(1).set_frame_rate(16000).set_sample_width(2)
+            audio_seg.export(wav_path, format='wav')
+            try:
+                os.remove(fpath)
+            except OSError:
+                pass
+
+    voice.provider_voice_id = f"custom_{voice.id}"
+    voice.status = "ready"
+    session.commit()
+    logger.info("VoxCPM custom voice registered: %s -> %s", voice.name, voice.provider_voice_id)
 
 
 async def transcribe_audio_file(file_path: str) -> str:

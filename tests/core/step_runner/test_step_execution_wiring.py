@@ -1,8 +1,9 @@
 """Unit tests for task 16: validation before execution and type-specific executors.
 
 Tests cover:
-- 16.1: Validation is called before execution; failures mark step as failed and skip
+- 16.1: Validation is called before execution; failures mark step as failed
 - 16.2: Type-specific routing for run_command, http_request, execute_code, playwright, play_recording
+  - Direct execution types now delegate to StepDispatcher.run_in_workflow()
 """
 
 import json
@@ -79,83 +80,101 @@ class TestValidationBeforeExecution:
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_invalid_run_command_fails_step(self, mock_get_session, mock_assemble):
-        """A run_command step with empty command fails validation and is marked failed."""
+    def test_invalid_run_command_dispatched_to_step_dispatcher(self, mock_get_session, mock_assemble):
+        """A run_command step with empty command is dispatched to StepDispatcher
+        which handles validation internally."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="run_command", config={})
-        _patch_db(mock_get_session, db_session, db_step)
-
-        mock_ctx = StepInputContext(step_config={})
-        mock_assemble.return_value = mock_ctx
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
         mixin._finish_workflow_orchestration = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        # Step should be marked as failed with validation error
-        fail_calls = [c for c in mixin._set_workflow_step_status.call_args_list if c[0][1] == "failed"]
-        assert len(fail_calls) >= 1
-        result_text = fail_calls[0].kwargs.get("result", "")
-        assert "Validation failed" in result_text
-        assert "command" in result_text.lower()
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            mock_dispatcher.run_in_workflow.return_value = {
+                "error": "Validation failed: command: Command is required",
+            }
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            # Should start a thread for StepDispatcher
+            mock_thread.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_invalid_http_request_fails_step(self, mock_get_session, mock_assemble):
-        """An http_request step with empty URL fails validation."""
+    def test_invalid_http_request_dispatched_to_step_dispatcher(self, mock_get_session, mock_assemble):
+        """An http_request step with empty URL is dispatched to StepDispatcher
+        which handles validation internally."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=20, step_type="http_request", config={"url": ""})
-        _patch_db(mock_get_session, db_session, db_step)
-
-        mock_ctx = StepInputContext(step_config={"url": ""})
-        mock_assemble.return_value = mock_ctx
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
         mixin._finish_workflow_orchestration = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch(steps_data=[{"id": 20, "title": "HTTP Step", "instruction": "fetch"}])
-        mixin._send_workflow_instruction(orch, 0)
 
-        fail_calls = [c for c in mixin._set_workflow_step_status.call_args_list if c[0][1] == "failed"]
-        assert len(fail_calls) >= 1
-        result_text = fail_calls[0].kwargs.get("result", "")
-        assert "Validation failed" in result_text
-        assert "url" in result_text.lower()
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            mock_dispatcher.run_in_workflow.return_value = {
+                "error": "Validation failed: url: URL is required",
+            }
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            mock_thread.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="prompt")
     @patch("distr.core.db.get_session")
     def test_valid_run_command_proceeds(self, mock_get_session, mock_build, mock_assemble):
-        """A run_command step with valid config passes validation and proceeds to execution."""
+        """A run_command step with valid config proceeds to StepDispatcher execution."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="run_command", config={"command": "echo hello"})
-        _patch_db(mock_get_session, db_session, db_step)
-
-        mock_ctx = StepInputContext(step_config={"command": "echo hello"})
-        mock_assemble.return_value = mock_ctx
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
+
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher:
+            mock_dispatcher = MagicMock()
+            mock_dispatcher.run_in_workflow.return_value = {
+                "success": True, "status": "passed", "output": "hello", "passed": True,
+            }
+            MockDispatcher.return_value = mock_dispatcher
+            with patch("threading.Thread") as mock_thread:
+                mock_thread.return_value.start = MagicMock()
+                mixin._send_workflow_instruction(orch, 0)
+                # Should start a thread for StepDispatcher execution
+                mock_thread.assert_called_once()
 
         # Should NOT be marked as failed
         fail_calls = [c for c in mixin._set_workflow_step_status.call_args_list if c[0][1] == "failed"]
         assert len(fail_calls) == 0
-        # Should proceed to direct execution
-        mixin._execute_step_directly.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="prompt")
@@ -166,9 +185,13 @@ class TestValidationBeforeExecution:
         from unittest.mock import AsyncMock
         import asyncio
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="agent_instruction", config={})
-        _patch_db(mock_get_session, db_session, db_step)
+        db_session = _make_db_session()
+        # First query returns step (for step_type check), subsequent queries return session/step for context
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.side_effect = [db_step, db_session, db_step]
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(workflow_rules="rules")
         mock_assemble.return_value = mock_ctx
@@ -198,46 +221,43 @@ class TestValidationBeforeExecution:
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_validation_failure_skips_to_next_step(self, mock_get_session, mock_assemble):
-        """When validation fails and there's a next step, orchestration advances."""
+    def test_validation_failure_handled_by_dispatcher(self, mock_get_session, mock_assemble):
+        """When a direct step type has invalid config, StepDispatcher handles the failure."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="run_command", config={})
-        _patch_db(mock_get_session, db_session, db_step)
-
-        mock_ctx = StepInputContext(step_config={})
-        mock_assemble.return_value = mock_ctx
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
         mixin._reset_workflow_timeout = MagicMock()
-        # Prevent recursive call from actually doing anything complex
         mixin._finish_workflow_orchestration = MagicMock()
+        mixin._on_step_completed = MagicMock()
+        mixin._handle_workflow_error = MagicMock()
 
         steps = [
             {"id": 10, "title": "Step 1", "instruction": "bad step"},
             {"id": 11, "title": "Step 2", "instruction": "next step"},
         ]
         orch = _make_orch(steps_data=steps)
-        # Mock the recursive _send_workflow_instruction to avoid infinite loop
-        original_send = mixin._send_workflow_instruction
-        call_count = [0]
-        def mock_send(o, idx, prompt=None):
-            call_count[0] += 1
-            if call_count[0] == 1:
-                original_send(o, idx, prompt)
-            # Don't recurse further
-        mixin._send_workflow_instruction = mock_send
 
-        mixin._send_workflow_instruction(orch, 0)
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            mock_dispatcher.run_in_workflow.return_value = {
+                "error": "Validation failed: command: Command is required",
+            }
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
 
-        # Step 10 should be failed, step 11 should be set to running
-        status_calls = mixin._set_workflow_step_status.call_args_list
-        failed_calls = [c for c in status_calls if c[0] == (10, "failed") or (len(c[0]) >= 2 and c[0][0] == 10 and c[0][1] == "failed")]
-        running_calls = [c for c in status_calls if len(c[0]) >= 2 and c[0][0] == 11 and c[0][1] == "running"]
-        assert len(failed_calls) >= 1
-        assert len(running_calls) >= 1
+        # A thread should have been started for StepDispatcher
+        mock_thread.assert_called_once()
+        # The thread target will call StepDispatcher.run_in_workflow() which returns
+        # the validation error — StepDispatcher handles marking the step as failed
 
 
 # ===========================================================================
@@ -245,119 +265,156 @@ class TestValidationBeforeExecution:
 # ===========================================================================
 
 class TestTypeSpecificRouting:
-    """Verify that non-agent step types are routed to direct execution."""
+    """Verify that non-agent step types are routed to StepDispatcher."""
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_run_command_routes_to_direct_execution(self, mock_get_session, mock_assemble):
-        """run_command steps are routed to _execute_step_directly."""
+    def test_run_command_routes_to_dispatcher(self, mock_get_session, mock_assemble):
+        """run_command steps are routed to StepDispatcher.run_in_workflow()."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="run_command", config={"command": "echo hi"})
-        _patch_db(mock_get_session, db_session, db_step)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(step_config={"command": "echo hi"})
         mock_assemble.return_value = mock_ctx
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        mixin._execute_step_directly.assert_called_once_with(orch, 0, "run_command", mock_ctx)
-        # Signal should NOT be emitted (not going to agent)
-        orch["signal_send_text_input"].emit.assert_not_called()
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            mock_dispatcher.run_in_workflow.return_value = {"success": True, "passed": True, "output": "hi"}
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            # Should start a thread for StepDispatcher
+            mock_thread.assert_called_once()
+            # Signal should NOT be emitted (not going to agent)
+            orch["signal_send_text_input"].emit.assert_not_called()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_http_request_routes_to_direct_execution(self, mock_get_session, mock_assemble):
-        """http_request steps are routed to _execute_step_directly."""
+    def test_http_request_routes_to_dispatcher(self, mock_get_session, mock_assemble):
+        """http_request steps are routed to StepDispatcher.run_in_workflow()."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="http_request", config={"url": "https://example.com"})
-        _patch_db(mock_get_session, db_session, db_step)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(step_config={"url": "https://example.com"})
         mock_assemble.return_value = mock_ctx
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        mixin._execute_step_directly.assert_called_once_with(orch, 0, "http_request", mock_ctx)
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            mock_thread.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_execute_code_routes_to_direct_execution(self, mock_get_session, mock_assemble):
-        """execute_code steps are routed to _execute_step_directly."""
+    def test_execute_code_routes_to_dispatcher(self, mock_get_session, mock_assemble):
+        """execute_code steps are routed to StepDispatcher.run_in_workflow()."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="execute_code", config={"code": "print('hi')"})
-        _patch_db(mock_get_session, db_session, db_step)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(step_config={"code": "print('hi')"})
         mock_assemble.return_value = mock_ctx
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        mixin._execute_step_directly.assert_called_once_with(orch, 0, "execute_code", mock_ctx)
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            mock_thread.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_playwright_routes_to_direct_execution(self, mock_get_session, mock_assemble):
-        """playwright steps are routed to _execute_step_directly."""
+    def test_playwright_routes_to_dispatcher(self, mock_get_session, mock_assemble):
+        """playwright steps are routed to StepDispatcher.run_in_workflow()."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="playwright", config={"code": "print('pw')"})
-        _patch_db(mock_get_session, db_session, db_step)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(step_config={"code": "print('pw')"})
         mock_assemble.return_value = mock_ctx
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        mixin._execute_step_directly.assert_called_once_with(orch, 0, "playwright", mock_ctx)
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            mock_thread.assert_called_once()
 
     @patch("distr.core.step_runner.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
-    def test_play_recording_routes_to_direct_execution(self, mock_get_session, mock_assemble):
-        """play_recording steps are routed to _execute_step_directly."""
+    def test_play_recording_routes_to_dispatcher(self, mock_get_session, mock_assemble):
+        """play_recording steps are routed to StepDispatcher.run_in_workflow()."""
         from distr.core.step_runner.context_assembly import StepInputContext
 
-        db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="play_recording", config={"recording_name": "my_rec"})
-        _patch_db(mock_get_session, db_session, db_step)
+        mock_db = MagicMock()
+        mock_db.query.return_value.filter.return_value.first.return_value = db_step
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
         mock_ctx = StepInputContext(step_config={"recording_name": "my_rec"})
         mock_assemble.return_value = mock_ctx
 
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._execute_step_directly = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
-        mixin._send_workflow_instruction(orch, 0)
 
-        mixin._execute_step_directly.assert_called_once_with(orch, 0, "play_recording", mock_ctx)
+        with patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
+            mixin._send_workflow_instruction(orch, 0)
+            mock_thread.assert_called_once()
 
 
 class TestDirectExecutionTypes:
@@ -432,37 +489,6 @@ class TestExecExecuteCode:
         assert "from step data" in result
 
 
-class TestValidateStepConfig:
-    """Test the _validate_workflow_step_config method."""
-
-    def test_valid_config_returns_true(self):
-        from distr.core.step_runner.context_assembly import StepInputContext
-
-        mixin = WorkflowOrchestrationMixin()
-        mixin._set_workflow_step_status = MagicMock()
-        mixin._skip_to_next_workflow_step = MagicMock()
-
-        ctx = StepInputContext(step_config={"command": "echo hi"})
-        orch = _make_orch()
-        result = mixin._validate_workflow_step_config(orch, 0, "run_command", ctx)
-        assert result is True
-        mixin._set_workflow_step_status.assert_not_called()
-
-    def test_invalid_config_returns_false(self):
-        from distr.core.step_runner.context_assembly import StepInputContext
-
-        mixin = WorkflowOrchestrationMixin()
-        mixin._set_workflow_step_status = MagicMock()
-        mixin._skip_to_next_workflow_step = MagicMock()
-
-        ctx = StepInputContext(step_config={})
-        orch = _make_orch()
-        result = mixin._validate_workflow_step_config(orch, 0, "run_command", ctx)
-        assert result is False
-        mixin._set_workflow_step_status.assert_called_once()
-        mixin._skip_to_next_workflow_step.assert_called_once()
-
-
 class TestPlayRecordingExecution:
     """Test the _execute_play_recording method."""
 
@@ -471,7 +497,7 @@ class TestPlayRecordingExecution:
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
         mixin._cancel_workflow_timeout = MagicMock()
-        mixin._advance_workflow_orchestration = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
         config = {"recording_name": "my_recording"}
@@ -489,7 +515,7 @@ class TestPlayRecordingExecution:
     def test_no_recording_specified(self):
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
-        mixin._skip_to_next_workflow_step = MagicMock()
+        mixin._on_step_completed = MagicMock()
 
         orch = _make_orch()
         config = {}
@@ -497,50 +523,35 @@ class TestPlayRecordingExecution:
 
         fail_calls = [c for c in mixin._set_workflow_step_status.call_args_list if c[0][1] == "failed"]
         assert len(fail_calls) == 1
-        mixin._skip_to_next_workflow_step.assert_called_once()
+        mixin._on_step_completed.assert_called_once()
 
 
-class TestOnDirectStepCompleted:
-    """Test the _on_direct_step_completed callback."""
+class TestOnStepCompleted:
+    """Test the _on_step_completed routing callback (replaces _on_direct_step_completed)."""
 
-    def test_success_advances_orchestration(self):
+    @patch("distr.core.workflow.router.StepRouter")
+    def test_success_routes_via_step_router(self, MockRouter):
         mixin = WorkflowOrchestrationMixin()
         mixin._set_workflow_step_status = MagicMock()
         mixin._cancel_workflow_timeout = MagicMock()
-        mixin._advance_workflow_orchestration = MagicMock()
+        mixin._finish_workflow_orchestration = MagicMock()
+
+        mock_router = MagicMock()
+        mock_router.route.return_value = {"action": "end_run", "status": "completed"}
+        MockRouter.return_value = mock_router
 
         orch = _make_orch()
-        # _on_direct_step_completed checks _workflow_orchestrations dict
+        orch["run_id"] = 42
+        orch["_advancing"] = False
         mixin._workflow_orchestrations = {1: orch}
 
-        mixin._on_direct_step_completed(orch, 0, "output text", True)
+        mixin._on_step_completed(workflow_id=1, response_text="output text")
 
-        mixin._set_workflow_step_status.assert_called_once_with(10, "completed", result="output text")
-        assert orch["any_step_succeeded"] is True
-        mixin._advance_workflow_orchestration.assert_called_once()
+        mixin._set_workflow_step_status.assert_called()
+        mixin._finish_workflow_orchestration.assert_called_once()
 
-    def test_failure_triggers_error_handler(self):
+    def test_no_orchestration_is_noop(self):
         mixin = WorkflowOrchestrationMixin()
-        mixin._set_workflow_step_status = MagicMock()
-        mixin._handle_workflow_error = MagicMock()
-
-        orch = _make_orch()
-        mixin._workflow_orchestrations = {1: orch}
-
-        mixin._on_direct_step_completed(orch, 0, "error occurred", False)
-
-        mixin._set_workflow_step_status.assert_called_once_with(10, "failed", result="error occurred")
-        mixin._handle_workflow_error.assert_called_once()
-
-    def test_cancelled_orchestration_is_ignored(self):
-        """If orchestration was cancelled while thread was running, callback is a no-op."""
-        mixin = WorkflowOrchestrationMixin()
-        mixin._set_workflow_step_status = MagicMock()
-
-        orch = _make_orch()
-        # Orchestration not in the dict (cancelled)
         mixin._workflow_orchestrations = {}
-
-        mixin._on_direct_step_completed(orch, 0, "output", True)
-
-        mixin._set_workflow_step_status.assert_not_called()
+        # Should not raise
+        mixin._on_step_completed(workflow_id=999, response_text="output")

@@ -21,7 +21,7 @@
   <a href="#installation"><strong>Install</strong></a> ·
   <a href="#integrations"><strong>Integrations</strong></a> ·
   <a href="#voice-commands"><strong>Voice Commands</strong></a> ·
-  <a href="#step-runner"><strong>Step Runner</strong></a>
+  <a href="#workflows"><strong>Workflows</strong></a>
 </p>
 
 ---
@@ -45,8 +45,10 @@
 | 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
 | 🔄 | **Recorded macros** | Capture keyboard and mouse sequences, replay them by voice — perfect for repetitive tasks |
 | 👁️ | **Vision** | Share screenshots, photos, or diagrams — the assistant reasons about what it sees |
-| 🔀 | **Step Runner** | Multi-step workflows with validation, agent routing, recording, presets, and scheduling |
-| 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, and transfer files from anywhere |
+| 🔀 | **Workflows** | Multi-step workflows with validation, agent routing, recording, presets, and scheduling |
+| 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
+| 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
+| 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
 
 ## How It Works
 
@@ -81,7 +83,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Actions** | View, edit, rename, and trigger recorded macros |
 | **Snippets** | Manage text or code snippets with trigger words |
 | **Projects** | Create projects with context blocks and linked files |
-| **Step Runner** | Build multi-step workflows with validation, routing, recording, presets, and scheduling |
+| **Workflows** | Build multi-step workflows with validation, routing, recording, presets, and scheduling |
 
 <p align="center">
   <img src="assets/readme/chat.webp" alt="DecisionsAI Web Interface" />
@@ -99,6 +101,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
+| **Sidecar (Go)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
 
 **Optional cloud services:**
 
@@ -109,7 +112,6 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Anthropic](https://www.anthropic.com/) | Claude 3.7 Sonnet, Claude 3.5 Opus, Claude 3 Haiku |
 | [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning (up to 5 custom voices) |
 | [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
-| [Rube/Composio](https://composio.dev/) | Connect to 500+ apps for workflow automation |
 
 ---
 
@@ -242,13 +244,14 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 
 ---
 
-## Step Runner
+## Workflows
 
-Build multi-step workflows the agent executes in sequence. Each step has an action, optional validation, and routing logic.
+Build multi-step workflows the agent executes in sequence. Each step has an action, optional validation, and routing logic. The workflow agent has full tool access — it can take screenshots, click elements, run Python scripts, search the web, and use any tool the main agent has.
 
 | Concept | How it works |
 |---|---|
-| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, or variable assignments |
+| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, Playwright scripts, or variable assignments |
+| **Tool-calling agent** | Each step runs through a dedicated LLM with native tool calling — it actually does things instead of describing what it would do |
 | **Validation** | Text matching, rule-based checks, LLM judgment, or screenshot comparison |
 | **Static routing** | Pick a "go to" step for pass/fail |
 | **Agent routing** | Give the agent a prompt — it picks the next step dynamically |
@@ -258,7 +261,7 @@ Build multi-step workflows the agent executes in sequence. Each step has an acti
 | **Variables** | Persist across steps within a single run |
 
 <p align="center">
-  <img src="assets/readme/steprunner.webp" alt="Step Runner" />
+  <img src="assets/readme/steprunner.webp" alt="Workflows" />
 </p>
 
 ---
@@ -268,11 +271,12 @@ Build multi-step workflows the agent executes in sequence. Each step has an acti
 ```
 bin/                 # Launchers and setup scripts
 distr/
-├── core/            # Agent pipeline, LLM, STT, TTS, actions
+├── core/            # Agent pipeline, LLM, STT, TTS, actions, workflows
 ├── gui/
 │   ├── dialogs/     # About, preferences windows
 │   ├── oracle/      # Oracle overlay and tray
 │   └── web/         # Local web UI (templates, static, API)
+sidecar/             # Go binary — machine control agent (macOS/Windows)
 assets/
 ├── avatars/         # Skin packs (Clippy, Nugget, Rusty, Masko, etc.)
 └── readme/          # README images

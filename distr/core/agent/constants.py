@@ -88,18 +88,18 @@ TTS_PROVIDERS = [
         "id": "coqui",
         "name": TTS_COQUI,
         "type": "offline",
-        "enabled": False,  # Coqui TTS package doesn't support Python 3.12+
+        "enabled": True,
         "default_voice": "p225",
         "settings_key": "coqui_voice",
         "supports_custom_voices": False,
     },
     {
-        "id": "f5tts",
-        "name": "F5-TTS (Offline)",
+        "id": "voxcpm",
+        "name": "VoxCPM (Offline)",
         "type": "offline",
-        "enabled": True,
+        "enabled": False,  # Requires CUDA — MPS crashes, CPU too slow
         "default_voice": "default",
-        "settings_key": "f5tts_voice",
+        "settings_key": "voxcpm_voice",
         "supports_custom_voices": True,
         "custom_voice_limit": 0,
     },
@@ -115,7 +115,7 @@ DEFAULT_COQUI_AGENT = "Sarah"
 # Coqui VCTK voices — loaded from playground/coqui-ai-voices.json
 # Keyed by speaker ID (e.g. "p225") -> display name (e.g. "Sarah")
 import json as _json, os as _os
-_COQUI_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '../../../../playground/coqui-ai-voices.json')
+_COQUI_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '../../../playground/coqui-ai-voices.json')
 try:
     with open(_COQUI_JSON, 'r') as _f:
         _coqui_raw = _json.load(_f)
@@ -183,13 +183,17 @@ SAMPLE_RATE_OPENAI_TTS = 24000
 SAMPLE_RATE_ELEVENLABS = 44100
 SAMPLE_RATE_COQUI = 22050
 
+# VoxCPM sample rate: 16kHz for 0.5B (CPU/macOS), 48kHz for VoxCPM2 (CUDA).
+# Default to 16kHz — the service's get_sample_rate() returns the actual rate.
+SAMPLE_RATE_VOXCPM = 16000
+
 # Engine -> output sample rate (used by _load_config and transport setup)
 TTS_SAMPLE_RATES = {
     'kokoro': SAMPLE_RATE_KOKORO,
     'openai': SAMPLE_RATE_OPENAI_TTS,
     'elevenlabs': SAMPLE_RATE_ELEVENLABS,
     'coqui': SAMPLE_RATE_COQUI,
-    'f5tts': 24000,
+    'voxcpm': SAMPLE_RATE_VOXCPM,
 }
 
 # --- Playback Speed Bounds ---
@@ -198,7 +202,7 @@ SPEED_BOUNDS = {
     "elevenlabs": (0.7, 1.2),
     "openai": (0.25, 4.0),
     "coqui": (0.5, 2.0),
-    "f5tts": (0.5, 2.0),
+    "voxcpm": (0.5, 2.0),
 }
 
 # --- ElevenLabs Default Voice Settings ---
@@ -253,7 +257,7 @@ def normalize_voice_provider(raw: str) -> str:
     """Normalize voice provider strings to canonical lowercase id.
 
     Handles display names like 'Kokoro (Offline)', DB values like 'kokoro',
-    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, qwen3, coqui, f5tts.
+    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, qwen3, coqui, f5tts, voxcpm.
     """
     v = (raw or '').strip().lower()
     if 'kokoro' in v:
@@ -266,4 +270,6 @@ def normalize_voice_provider(raw: str) -> str:
         return 'coqui'
     if 'f5tts' in v or 'f5-tts' in v or 'f5 tts' in v:
         return 'f5tts'
+    if 'voxcpm' in v or 'vox cpm' in v:
+        return 'voxcpm'
     return v or 'kokoro'

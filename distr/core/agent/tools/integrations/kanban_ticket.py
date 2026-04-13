@@ -1271,18 +1271,18 @@ class KanbanTicketTool(BaseTool):
         audit_id = None
         step_id = None
         try:
-            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
             with self._get_session() as s:
-                audit = StepRunnerSession(
-                    instruction=f"[Project: {project_name}] Ticket #{ticket_id_val}: {title}",
+                audit = AutoWorkflow(
+                    name=f"[Project: {project_name}] Ticket #{ticket_id_val}: {title}",
                     status="in_progress",
-                    session_type="kiro_cli",
+                    workflow_type="kiro_cli",
                 )
                 s.add(audit)
                 s.flush()
-                step = StepRunnerStep(
-                    session_id=audit.id, position=0,
-                    title=f"Ticket #{ticket_id_val}", instruction=instruction[:500],
+                step = AutoWorkflowStep(
+                    workflow_id=audit.id, position=0,
+                    name=f"Ticket #{ticket_id_val}", instruction=instruction[:500],
                     status="running", tool_used="kiro-cli",
                 )
                 s.add(step)
@@ -1314,14 +1314,9 @@ class KanbanTicketTool(BaseTool):
             output = f"Kiro CLI error: {e}"
             status = "failed"
 
-        # Update audit trail
+        # Update audit trail (legacy StepRunner — removed in task 6.3)
         if audit_id and step_id:
-            try:
-                from distr.core.workflow.service import update_step_status, update_session_status
-                update_step_status(step_id, status=status, result=output[:2000])
-                update_session_status(audit_id, status)
-            except Exception:
-                pass
+            pass
 
         if self.event_queue:
             try:

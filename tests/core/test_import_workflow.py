@@ -63,7 +63,7 @@ class TestImportWorkflowUnifiedFormat:
             "variables": [],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
             assert wf_id is not None
 
@@ -95,7 +95,7 @@ class TestImportWorkflowUnifiedFormat:
             "variables": [],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:
@@ -121,7 +121,7 @@ class TestImportWorkflowUnifiedFormat:
             "variables": [],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:
@@ -164,7 +164,7 @@ class TestImportWorkflowLegacyFormat:
             ],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:
@@ -219,7 +219,7 @@ class TestImportWorkflowLegacyFormat:
             ],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:
@@ -247,7 +247,7 @@ class TestImportWorkflowLegacyFormat:
             "steps": [],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:
@@ -277,7 +277,7 @@ class TestImportWorkflowLegacyFormat:
             ],
         }
 
-        with patch("distr.core.workflow.service.get_session", patched):
+        with patch("distr.core.workflow.import_export.get_session", patched):
             wf_id = import_workflow(data)
 
             with _session_ctx(factory) as db:

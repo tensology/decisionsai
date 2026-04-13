@@ -529,7 +529,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
                                        "content": f"Error: Tool '{func_name}' not found"})
 
     def _handle_follow_up_content(self, content):
-        """Save follow-up content to history. Suppress TTS for file paths."""
+        """Save follow-up content to history and speak it via TTS.
+
+        TTS is suppressed only for raw file paths (e.g. tool returned a path
+        like '/Users/paul/file.mp4') — not for normal conversational responses
+        that happen to follow a tool call.
+        """
         import threading
 
         if not content:
@@ -556,6 +561,20 @@ class OpenAICompatibleLLMService(BaseLLMService):
         # For Telegram requests, store as fallback since TextFrames aren't pushed to TTS
         if getattr(self, '_is_telegram_request', False):
             self._telegram_fallback_text = content
+
+        # Push to TTS pipeline so the user hears the follow-up response.
+        # Only suppress for raw file paths — normal conversational follow-ups
+        # after tool calls (e.g. "Here's the transcription summary...") should be spoken.
+        if not should_suppress and self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
+            import asyncio
+            from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+            cleaned = clean_text_for_tts(content)
+            if cleaned and cleaned.strip():
+                try:
+                    asyncio.ensure_future(self.push_frame(TextFrame(text=cleaned)))
+                    asyncio.ensure_future(self.push_frame(LLMFullResponseEndFrame()))
+                except Exception as e:
+                    logger.debug("Could not push follow-up TTS frame: %s", e)
 
         if should_suppress:
             threading.current_thread().suppress_tts_for_tool_chain = False

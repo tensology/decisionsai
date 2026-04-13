@@ -923,6 +923,8 @@ class EventHandlerMixin:
             voice_id = settings.get('openai_voice', 'alloy')
         elif "elevenlabs" in vp_lower:
             voice_id = settings.get('elevenlabs_voice', '')
+        elif "voxcpm" in vp_lower:
+            voice_id = settings.get('voxcpm_voice', 'default')
         else:
             voice_id = ''
 
@@ -989,6 +991,19 @@ class EventHandlerMixin:
                     logger.warning("ElevenLabs library not available")
                 except Exception as e:
                     logger.error(f"Failed to generate ElevenLabs TTS audio: {e}", exc_info=True)
+
+            elif 'voxcpm' in tts_lower:
+                try:
+                    from distr.core.audio.tts_handler import _generate_voxcpm
+                    audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
+                    _generate_voxcpm(text, voice_id or 'default', 1.0, str(audio_file))
+                    logger.info(f"Generated VoxCPM TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
+                    return audio_file
+                except ImportError:
+                    logger.warning("VoxCPM library not available")
+                except Exception as e:
+                    logger.error(f"Failed to generate VoxCPM TTS audio: {e}", exc_info=True)
+
             else:
                 logger.warning(f"Unknown TTS provider: {tts_provider}")
         except Exception as e:

@@ -50,6 +50,11 @@ try:
 except ImportError:
     F5TTSTTSService = None
 
+try:
+    from .services import VoxCPMTTSService
+except ImportError:
+    VoxCPMTTSService = None
+
 from .libs import ElevenLabs
 
 # Maps engine name -> (ServiceClass, required_import_label)
@@ -229,11 +234,11 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
             event_queue=settings.get('_event_queue'),
             speech_volume=100,
         )
-    elif engine == 'f5tts':
-        if not F5TTSTTSService:
-            raise ImportError("F5TTSTTSService is not available. Install with: pip install f5-tts")
+    elif engine == 'voxcpm':
+        if not VoxCPMTTSService:
+            raise ImportError("VoxCPMTTSService is not available. Install with: pip install voxcpm")
         voice_name = tts_config.get('voice_name', 'default')
-        lo, hi = SPEED_BOUNDS['f5tts']
+        lo, hi = SPEED_BOUNDS['voxcpm']
         playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
 
         # Resolve reference audio for voice cloning
@@ -246,7 +251,7 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
                 _sess = _gs()
                 try:
                     _cv = _sess.query(_CV).filter(
-                        _CV.id == _db_id, _CV.provider == 'f5tts', _CV.status == 'ready'
+                        _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
                     ).first()
                     if _cv and _cv.audio_dir:
                         for _fn in os.listdir(_cv.audio_dir):
@@ -259,7 +264,7 @@ def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, mode
             except Exception:
                 pass
 
-        service = F5TTSTTSService(
+        service = VoxCPMTTSService(
             voice_name=voice_name,
             reference_audio_path=ref_audio,
             reference_text=ref_text,
@@ -378,6 +383,22 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
                 except Exception:
                     pass
             return v.capitalize() if v and v != 'default' else "F5-TTS"
+        if 'voxcpm' in vp:
+            v = (settings or {}).get('voxcpm_voice', 'default')
+            if v and v.startswith('custom_'):
+                try:
+                    from distr.core.db import get_session, CustomVoice
+                    db_id = int(v.split('_', 1)[1])
+                    session = get_session()
+                    try:
+                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                        if cv:
+                            return cv.name
+                    finally:
+                        session.close()
+                except Exception:
+                    pass
+            return v.capitalize() if v and v != 'default' else "VoxCPM"
         return DEFAULT_KOKORO_AGENT
     if 'kokoro' in vp:
         if vm.startswith('custom_'):
@@ -420,6 +441,21 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
             except Exception:
                 pass
         return vm.capitalize() if vm and vm != 'default' else "F5-TTS"
+    if 'voxcpm' in vp:
+        if vm.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(vm.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+        return vm.capitalize() if vm and vm != 'default' else "VoxCPM"
     if 'elevenlabs' in vp:
         # Check custom voices DB first (fast, no API call)
         try:
@@ -471,6 +507,9 @@ def resolve_agent_name_from_tts_config(tts_config: dict, settings: dict) -> str:
     if engine == 'f5tts':
         vm = tts_config.get('voice_name', 'default')
         return resolve_voice_to_display_name('f5tts', vm, settings)
+    if engine == 'voxcpm':
+        vm = tts_config.get('voice_name', 'default')
+        return resolve_voice_to_display_name('voxcpm', vm, settings)
     # Unknown engine — fall back to kokoro from settings
     return resolve_voice_to_display_name('kokoro', '', settings)
 

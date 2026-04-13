@@ -43,6 +43,11 @@ try:
 except ImportError:
     F5TTSTTSService = None
 
+try:
+    from .tts.voxcpm import VoxCPMTTSService
+except ImportError:
+    VoxCPMTTSService = None
+
 # LLM services
 from .llm.providers.ollama import OllamaLLMService
 
@@ -89,6 +94,8 @@ if CoquiTTSService:
     __all__.append("CoquiTTSService")
 if F5TTSTTSService:
     __all__.append("F5TTSTTSService")
+if VoxCPMTTSService:
+    __all__.append("VoxCPMTTSService")
 if OpenAILLMService:
     __all__.append("OpenAILLMService")
 if OpenRouterLLMService:

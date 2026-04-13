@@ -183,7 +183,7 @@ class TestMigrationBasic:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             result = svc.migrate_step_runner_data()
 
         assert result is True
@@ -232,7 +232,7 @@ class TestStatusMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -246,7 +246,7 @@ class TestStatusMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -261,7 +261,7 @@ class TestStatusMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -275,7 +275,7 @@ class TestStatusMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -293,7 +293,7 @@ class TestSessionTypeMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -308,7 +308,7 @@ class TestSessionTypeMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -324,7 +324,7 @@ class TestSessionTypeMapping:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -346,7 +346,7 @@ class TestPositionResequencing:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -370,7 +370,7 @@ class TestPositionResequencing:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             svc.migrate_step_runner_data()
 
         with session_ctx() as session:
@@ -395,7 +395,7 @@ class TestIdempotency:
             conn.commit()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             result1 = svc.migrate_step_runner_data()
             assert result1 is True
 
@@ -447,14 +447,15 @@ class TestDegradedMode:
             finally:
                 session.close()
 
-        with patch.object(svc, "get_session", error_session):
+        with patch("distr.core.workflow.migration.get_session", error_session):
             result = svc.migrate_step_runner_data()
 
         assert result is False
         assert svc.is_migration_degraded() is True
 
         # Reset for other tests
-        svc._migration_degraded_mode = False
+        import distr.core.workflow.migration as migration_mod
+        migration_mod._migration_degraded_mode = False
 
 
 class TestNoLegacyTables:
@@ -483,7 +484,7 @@ class TestNoLegacyTables:
                 session.close()
 
         import distr.core.workflow.service as svc
-        with patch.object(svc, "get_session", session_ctx):
+        with patch("distr.core.workflow.migration.get_session", session_ctx):
             result = svc.migrate_step_runner_data()
 
         assert result is True

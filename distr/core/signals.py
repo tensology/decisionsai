@@ -88,6 +88,7 @@ class SignalManager(QObject):
     send_text_input = pyqtSignal(str, bool, str, object)
 
     # Workflow execution signals
+    step_waiting_for_feedback = pyqtSignal(int, int, int, str)            # step_id, workflow_id, run_id, result_text
     workflow_finished = pyqtSignal(int, str)                              # session_id, summary
     workflow_run_all_requested = pyqtSignal(int, object, object, str)     # session_id, steps_data, run_id, session_type
     workflow_execute_step_requested = pyqtSignal(int, int, str, object)   # step_id, session_id, instruction, chat_id

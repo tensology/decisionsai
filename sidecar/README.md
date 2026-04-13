@@ -11,14 +11,20 @@ Connects to the relay server via WebSocket and executes tool calls:
 | `run_command` | Run shell commands (bash/cmd) |
 | `read_file` / `write_file` / `list_directory` | File system access |
 | `capture_screen` | Take a screenshot |
+| `screen_analyze` | Screenshot + AI vision analysis (describe/locate/verify) |
+| `run_python` | Execute arbitrary Python scripts with optional pip install |
 | `get_window_tree` | Walk the accessibility tree of the frontmost window |
 | `click_element` | Click a UI element by ID |
 | `type_text` | Type text (optionally into a specific element) |
 | `press_keys` | Press keyboard shortcuts (e.g. `cmd,s`, `ctrl,z`) |
+| `drag_to` | Drag from one position/element to another |
+| `scroll` | Scroll up/down/left/right at current position or coordinates |
+| `wait_for_element` | Poll until a UI element appears (with timeout) |
 | `list_windows` | List all visible windows |
 | `launch_app` | Launch an application |
 | `focus_window` | Bring a window to the foreground |
 | `find_element` | Search for UI elements by name/type |
+| `move_mouse` | Move mouse to element or coordinates without clicking |
 | `get_clipboard` / `set_clipboard` | Clipboard access |
 | `get_system_info` | OS, hostname, CPU info |
 

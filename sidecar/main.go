@@ -155,7 +155,7 @@ func runLoop(serverURL string, handlers map[string]ToolHandler) error {
 
 	// Register capabilities
 	hostname, _ := os.Hostname()
-	caps := []string{"terminal", "filesystem", "clipboard", "screenshot", "desktop"}
+	caps := []string{"terminal", "filesystem", "clipboard", "screenshot", "desktop", "screen_intelligence", "python_executor"}
 	reg := Registration{
 		Type:         "sidecar_register",
 		OS:           runtime.GOOS,

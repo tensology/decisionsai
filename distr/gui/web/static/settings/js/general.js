@@ -43,6 +43,7 @@ async function loadGeneralSettings() {
         document.getElementById('load_splash_sound').checked = settings.load_splash_sound || false;
         document.getElementById('show_about').checked = settings.show_about || false;
         document.getElementById('welcome_greet_me').checked = settings.welcome_greet_me || false;
+        document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
 
         // Load listening state radio buttons
         const listeningState = settings.listening_state || 'remember';
@@ -128,6 +129,7 @@ async function saveGeneralSettings() {
             load_splash_sound: document.getElementById('load_splash_sound').checked,
             show_about: document.getElementById('show_about').checked,
             welcome_greet_me: document.getElementById('welcome_greet_me').checked,
+            load_on_startup: document.getElementById('load_on_startup').checked,
             listening_state: listeningState,
             voice_provider: voiceProvider,
             playback_speed: parseFloat(document.getElementById('playback_speed').value),

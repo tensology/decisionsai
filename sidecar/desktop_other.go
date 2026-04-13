@@ -14,6 +14,7 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	for _, name := range []string{
 		"list_windows", "get_window_tree", "click_element",
 		"type_text", "press_keys", "launch_app", "focus_window", "find_element",
+		"move_mouse", "drag_to", "scroll", "wait_for_element",
 	} {
 		m[name] = stub(name)
 	}

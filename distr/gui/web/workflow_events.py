@@ -13,7 +13,6 @@ import logging
 logger = logging.getLogger(__name__)
 
 _workflow_update_counter = 0
-_pending_single_step = None
 _lock = threading.Lock()
 
 # All connected workflow WebSocket clients (set of websocket objects)
@@ -70,21 +69,3 @@ def get_workflow_update_counter() -> int:
         return _workflow_update_counter
 
 
-def set_pending_single_step(payload: dict) -> None:
-    """Set pending single-step execution state."""
-    global _pending_single_step
-    with _lock:
-        _pending_single_step = payload
-
-
-def get_pending_single_step() -> dict:
-    """Get pending single-step execution state."""
-    with _lock:
-        return dict(_pending_single_step) if _pending_single_step else {}
-
-
-def clear_pending_single_step() -> None:
-    """Clear pending single-step execution state."""
-    global _pending_single_step
-    with _lock:
-        _pending_single_step = None

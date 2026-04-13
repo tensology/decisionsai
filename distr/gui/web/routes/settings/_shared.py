@@ -114,8 +114,6 @@ class ThirdPartySettings(BaseModel):
     kilo_key: str = ""
     gemini_enabled: bool = False
     gemini_key: str = ""
-    rube_enabled: bool = False
-    rube_token: str = ""
 
 
 class ValidateRequest(BaseModel):
@@ -136,6 +134,7 @@ class GeneralSettings(BaseModel):
     load_splash_sound: bool = False
     show_about: bool = False
     welcome_greet_me: bool = False
+    load_on_startup: bool = True
     listening_state: str = "remember"
     voice_provider: str = "kokoro"
     kokoro_voice: str = "af_heart"
@@ -143,6 +142,7 @@ class GeneralSettings(BaseModel):
     openai_voice: str = "alloy"
     coqui_voice: str = "p225"
     f5tts_voice: str = "default"
+    voxcpm_voice: str = "default"
     playback_speed: float = 1.0
     speech_volume: int = 100
     vad_threshold: int = 50

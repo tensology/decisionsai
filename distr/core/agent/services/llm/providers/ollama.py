@@ -279,6 +279,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         start_time = time.time()
         self._cancelled = False
 
+        # Strip any stale Tool_Hint_Block unconditionally — ensures clean state
+        # even on early-exit paths or when model switches to a non-small tier.
+        self._strip_tool_hint()
+
         import threading as _threading
         if getattr(self, '_is_telegram_request', False):
             _threading.current_thread().telegram_request = True
@@ -330,6 +334,176 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # 4. Resolve model & check provider mismatch
             current_model = self._resolve_current_model()
             if self._check_provider_mismatch(current_model, current_chat_id):
+                return
+
+            # 4b. Tier check — route small models to Text_Tool_Extraction path
+            from distr.core.agent.tool_retriever import ToolRetriever as _ToolRetriever
+            tier = _ToolRetriever.classify_model_tier(current_model)
+
+            if tier == "small":
+                logger.info(
+                    "LLM: [small-path] model=%s tier=%s tools=%d",
+                    current_model, tier, len(filtered_tools),
+                )
+                # Build and inject hint block if tools are available
+                hint_block = self._build_tool_hint_block(filtered_tools)
+                if hint_block:
+                    self._inject_tool_hint(hint_block)
+
+                # Build chat_kwargs WITHOUT a "tools" key (Req 2.4, 6.4)
+                sys_len = len(self._messages[0].get('content', '')) if self._messages else 0
+                logger.info(
+                    "LLM: [small-path] calling ollama model=%s msgs=%d sys_prompt_len=%d",
+                    current_model, len(self._messages), sys_len,
+                )
+                num_ctx = 8192
+                small_chat_kwargs = {
+                    "model": current_model,
+                    "messages": self._messages,
+                    "stream": True,
+                    "options": {"keep_alive": -1, "num_ctx": num_ctx, "temperature": 0.7},
+                }
+                # Explicitly no "tools" key
+                if current_chat_id:
+                    try:
+                        signal_manager.chat_stream_started.emit(current_chat_id)
+                        signal_manager.typing_indicator_changed.emit(True)
+                    except (RuntimeError, Exception):
+                        pass
+                try:
+                    small_stream = await self._ollama_client.chat(**small_chat_kwargs)
+                    t_small = time.time()
+                    full_response, _tc, _fm = await self._process_stream(
+                        small_stream, current_chat_id, False, is_processing_tool_result, start_time,
+                    )
+                    logger.info("LLM: [small-path] stream done: %.3fs (%d chars)", time.time() - t_small, len(full_response))
+                except Exception as _small_err:
+                    logger.error("LLM: [small-path] API error: %s", _small_err, exc_info=True)
+                    await self.push_frame(ErrorFrame(error=str(_small_err)))
+                    return
+
+                # Prompt injection check on last user message (Req 9.1, 9.2, 9.3)
+                _skip_parse = False
+                if last_user_message and self._check_prompt_injection(last_user_message):
+                    _skip_parse = True
+
+                _tool_executed = False
+                if not _skip_parse and hint_block:
+                    # Only attempt parsing when a hint was injected
+                    _parse_start = time.time()
+                    try:
+                        from distr.core.agent.services.llm.intent_parser import parse as _intent_parse
+                        _offered_names = [getattr(t, "name", "") for t in filtered_tools]
+                        _parse_result = _intent_parse(full_response, _offered_names)
+                        _parse_elapsed_ms = (time.time() - _parse_start) * 1000
+                        # Req 10.2: warn if parsing exceeded 50ms for ≤2000 char response
+                        if _parse_elapsed_ms > 50 and len(full_response) <= 2000:
+                            logger.warning(
+                                "LLM: [small-path] IntentParser exceeded 50ms: %.1fms for %d chars",
+                                _parse_elapsed_ms, len(full_response),
+                            )
+                    except Exception as _parse_exc:
+                        logger.warning(
+                            "LLM: [small-path] IntentParser raised exception: %s", _parse_exc,
+                        )
+                        _parse_result = None
+
+                    if _parse_result is not None:
+                        _tool_name, _args = _parse_result
+
+                        # Resolve positional fallback: parser returns {"_arg0": value}
+                        # when the model used a positional arg instead of key=value.
+                        # Map it to the first required parameter from the tool schema.
+                        if "_arg0" in _args and len(_args) == 1:
+                            from distr.core.agent.services.llm.tool_format import get_tool_parameters, convert_tools_to_openai_format
+                            _pos_val = _args["_arg0"]
+                            _pos_params = get_tool_parameters(_tool_name)
+                            if not _pos_params and _tool_name in self._tools_dict:
+                                _pos_schemas = convert_tools_to_openai_format([self._tools_dict[_tool_name]])
+                                if _pos_schemas:
+                                    _pos_params = _pos_schemas[0].get("function", {}).get("parameters", {})
+                            _required = (_pos_params or {}).get("required", [])
+                            _first_param = _required[0] if _required else None
+                            if not _first_param:
+                                _all_props = list((_pos_params or {}).get("properties", {}).keys())
+                                _first_param = _all_props[0] if _all_props else None
+                            if _first_param:
+                                _args = {_first_param: _pos_val}
+                            else:
+                                # Can't map positional — treat as plain text
+                                logger.warning("LLM: [small-path] positional arg for %r but no params in schema", _tool_name)
+                                _parse_result = None
+                        # Validate tool is in _tools_dict — try fuzzy match if not exact
+                        if _tool_name not in self._tools_dict:
+                            _fuzzy = self._fuzzy_match_tool(_tool_name)
+                            if _fuzzy and _fuzzy.name in {getattr(t, "name", "") for t in filtered_tools}:
+                                logger.info("LLM: [small-path] fuzzy matched %r → %r", _tool_name, _fuzzy.name)
+                                _tool_name = _fuzzy.name
+                            else:
+                                logger.warning(
+                                    "LLM: [small-path] extracted tool %r not in _tools_dict (fuzzy: %s). Response: %r",
+                                    _tool_name, _fuzzy.name if _fuzzy else "none", full_response[:200],
+                                )
+                                _tool_name = None
+                        # Validate tool was in the offered set — try fuzzy match if hallucinated
+                        elif _tool_name not in {getattr(t, "name", "") for t in filtered_tools}:
+                            _fuzzy = self._fuzzy_match_tool(_tool_name)
+                            if _fuzzy and _fuzzy.name in {getattr(t, "name", "") for t in filtered_tools}:
+                                logger.info("LLM: [small-path] fuzzy matched hallucinated %r → %r", _tool_name, _fuzzy.name)
+                                _tool_name = _fuzzy.name
+                            else:
+                                logger.warning(
+                                    "LLM: [small-path] hallucinated tool %r not in offered set %r. Response: %r",
+                                    _tool_name, _offered_names, full_response[:200],
+                                )
+                                _tool_name = None
+                        if _tool_name is not None:
+                            logger.info(
+                                "LLM: [small-path] extracted tool=%r snippet=%r",
+                                _tool_name, full_response[:80],
+                            )
+                            _coerced = self._coerce_args_to_schema_types(_tool_name, _args)
+                            _tool_calls = [{"function": {"name": _tool_name, "arguments": json.dumps(_coerced)}}]
+                            _tool_results = await self._execute_tool_calls(_tool_calls, last_user_message=last_user_message)
+                            self._messages.append({"role": "assistant", "content": "", "tool_calls": _tool_calls})
+
+                            # Record with routing_hint="text_extraction" (Req 5.4)
+                            _chat_id_for_audit = self.chat_manager.get_current_chat() if self.chat_manager else None
+                            from distr.core.agent.tool_audit import record_tool_execution
+                            record_tool_execution(
+                                _chat_id_for_audit, _tool_name,
+                                str(_tool_results[0]) if _tool_results else "",
+                                "completed",
+                                instruction_hint=f"[text_extraction] {(last_user_message or '')[:120]}",
+                                event_queue=self.event_queue,
+                                routing_hint="text_extraction",
+                            )
+
+                            # Follow existing post-execution flow (Req 5.5)
+                            full_response, should_return = await self._handle_post_tool_execution(
+                                _tool_calls, _tool_results, current_chat_id, full_response,
+                            )
+                            _tool_executed = True
+                            if should_return:
+                                return
+                    else:
+                        # No tool intent found — log DEBUG (Req 7.3)
+                        logger.debug("LLM: [small-path] no tool intent found in response")
+
+                # Save plain-text response if no tool was executed
+                if not _tool_executed:
+                    if full_response:
+                        full_response = clean_text_for_tts(full_response, strip_whitespace=True)
+                    if current_chat_id and full_response:
+                        try:
+                            self.chat_manager.add_assistant_message(current_chat_id, full_response)
+                            signal_manager.chat_stream_finished.emit(current_chat_id)
+                            signal_manager.typing_indicator_changed.emit(False)
+                        except (RuntimeError, Exception) as e:
+                            logger.warning("Could not save/signal: %s", e)
+                    if full_response:
+                        self._messages.append({"role": "assistant", "content": full_response})
+                # Return early — do NOT fall through to the standard path
                 return
 
             # 5. Call Ollama streaming API (reuse client)
@@ -680,3 +854,122 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
     def reset_conversation(self):
         """Reset the conversation history."""
         self._messages = [self._messages[0]]  # Keep system message
+
+    # ------------------------------------------------------------------
+    #  Tool hint block helpers (Text_Tool_Extraction path)
+    # ------------------------------------------------------------------
+
+    def _build_tool_hint_block(self, filtered_tools: list) -> str:
+        """Build the plain-text Tool_Hint_Block for small models.
+
+        Returns empty string if filtered_tools is empty.
+        """
+        if not filtered_tools:
+            return ""
+
+        from distr.core.agent.services.llm.tool_format import convert_tools_to_openai_format
+
+        openai_schemas = convert_tools_to_openai_format(filtered_tools)
+        schema_by_name = {s["function"]["name"]: s["function"] for s in openai_schemas if "function" in s}
+
+        tool_lines = []
+        for tool in filtered_tools:
+            name = tool.name
+            func = schema_by_name.get(name, {})
+            description = (func.get("description") or getattr(tool, "description", "") or "")[:100]
+            params = list((func.get("parameters") or {}).get("properties", {}).keys())
+            param_str = ", ".join(f'{p}="..."' for p in params[:3])
+            tool_lines.append(f'TOOL: {name}({param_str})  # {description}')
+
+        lines = [
+            "[TOOL USE]",
+            "If you need to use a tool, output ONLY this on its own line (replace values in <>):",
+            "",
+        ] + [f"  {tl}" for tl in tool_lines] + [
+            "",
+            "Output the TOOL: line alone. No other text before or after it on that line.",
+            "Do not use print(), do not use code blocks, do not add extra words.",
+            "[/TOOL USE]",
+        ]
+        return "\n".join(lines)
+
+    def _inject_tool_hint(self, hint_block: str) -> None:
+        """Append hint_block to self._messages[0]['content'] (the system message)."""
+        if not hint_block or not self._messages:
+            return
+        self._messages[0]["content"] = self._messages[0].get("content", "") + "\n\n" + hint_block
+
+    def _strip_tool_hint(self) -> None:
+        """Remove any previously injected Tool_Hint_Block from self._messages[0]['content'].
+
+        Idempotent — safe to call multiple times.
+        """
+        if not self._messages:
+            return
+        content = self._messages[0].get("content", "")
+        # Strip all known hint block formats
+        for pattern in [
+            r"\s*\[TOOL USE\].*?\[/TOOL USE\]\s*",
+            r"\s*=== TOOL USE INSTRUCTIONS ===.*?=== END TOOL USE INSTRUCTIONS ===\s*",
+            r"\s*--- Available Tools ---.*?--- End Tools ---\s*",
+        ]:
+            content = re.sub(pattern, "", content, flags=re.DOTALL)
+        self._messages[0]["content"] = content
+
+    def _check_prompt_injection(self, user_message: str) -> bool:
+        """Return True and log WARNING if user_message contains a valid TOOL: pattern.
+
+        A valid TOOL: pattern is a line of the form:
+            TOOL: <tool_name>(...)
+        where <tool_name> matches ^[a-zA-Z_][a-zA-Z0-9_]*$ and the line ends with ')'.
+
+        Bare occurrences of 'TOOL:' not followed by a valid tool name and argument
+        list do NOT trigger the warning.
+        """
+        # Pattern: line starting with TOOL: (case-insensitive), valid tool name, parens ending with )
+        _INJECTION_PATTERN = re.compile(
+            r"^tool:\s*([a-zA-Z_][a-zA-Z0-9_]*)\s*\(.*\)\s*$",
+            re.IGNORECASE | re.MULTILINE,
+        )
+        if _INJECTION_PATTERN.search(user_message):
+            logger.warning(
+                "Potential prompt injection detected in user message: %r",
+                user_message[:200],
+            )
+            return True
+        return False
+
+    def _coerce_args_to_schema_types(self, tool_name: str, args: dict) -> dict:
+        """Coerce string arg values to the types declared in the tool's JSON schema."""
+        tool = self._tools_dict.get(tool_name)
+        if tool is None:
+            return dict(args)
+
+        # Extract properties from args_schema (Pydantic) or hardcoded params
+        from distr.core.agent.services.llm.tool_format import get_tool_parameters, convert_tools_to_openai_format
+        parameters = get_tool_parameters(tool_name)
+        if not parameters:
+            schemas = convert_tools_to_openai_format([tool])
+            if schemas:
+                parameters = schemas[0].get("function", {}).get("parameters", {})
+        properties = (parameters or {}).get("properties", {})
+
+        coerced = {}
+        for key, value in args.items():
+            declared_type = properties.get(key, {}).get("type", "string")
+            try:
+                if declared_type == "integer":
+                    coerced[key] = int(value)
+                elif declared_type == "number":
+                    coerced[key] = float(value)
+                elif declared_type == "boolean":
+                    coerced[key] = (str(value).lower() == "true")
+                else:
+                    coerced[key] = str(value)
+            except (ValueError, TypeError) as exc:
+                logger.warning(
+                    "Coercion failed for arg %r (tool=%r, declared_type=%r, value=%r): %s",
+                    key, tool_name, declared_type, value, exc,
+                )
+                coerced[key] = str(value)
+        return coerced

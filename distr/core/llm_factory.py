@@ -113,6 +113,15 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     return normalize_provider(provider), model
 
 
+def resolve_computer_use_config(settings: Dict[str, Any]) -> Tuple[str, str]:
+    """Resolve computer use provider/model. Returns ('', '') if not configured."""
+    provider = (settings.get("computer_use_provider") or "").strip()
+    model = (settings.get("computer_use_model") or "").strip()
+    if provider:
+        return normalize_provider(provider), model
+    return "", ""
+
+
 def create_stream(
     provider: str,
     model: str,

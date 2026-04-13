@@ -421,7 +421,7 @@ def register_routes(router, templates):
         try:
             if _is_audit_workflow(workflow_id):
                 return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
-            from distr.core.workflow.service import start_workflow_run
+            from distr.core.workflow.dispatcher import start_workflow_run
             body = {}
             try:
                 body = await request.json()
@@ -439,7 +439,7 @@ def register_routes(router, templates):
     @router.post("/workflows/{workflow_id}/cancel-run/{run_id}")
     async def workflow_cancel_run(workflow_id: int, run_id: int):
         try:
-            from distr.core.workflow.service import cancel_run
+            from distr.core.workflow.dispatcher import cancel_run
             if not cancel_run(run_id):
                 return JSONResponse({"detail": "Run not found"}, status_code=404)
             return JSONResponse({"success": True})
@@ -447,11 +447,11 @@ def register_routes(router, templates):
             logger.error("Workflow cancel run failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    @router.post("/workflows/runs/{run_id}/continue")
-    async def workflow_continue_run(run_id: int, request: Request):
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
+    async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
         """Resume a waiting workflow run. Accepts optional { "input": "..." } body."""
         try:
-            from distr.core.workflow.service import continue_waiting_step
+            from distr.core.workflow.dispatcher import continue_waiting_step
             body = {}
             try:
                 body = await request.json()
@@ -523,12 +523,13 @@ def register_routes(router, templates):
             logger.error("Workflow reorder steps failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    # Step execution
+    # Step execution (path-param route)
     @router.post("/workflows/{workflow_id}/steps/{step_id}/execute")
     async def workflow_execute_step(workflow_id: int, step_id: int):
         try:
-            from distr.core.workflow.service import execute_step
-            result = execute_step(step_id, isolated=True)
+            from distr.core.workflow.dispatcher import StepDispatcher
+            dispatcher = StepDispatcher()
+            result = dispatcher.run_isolated(step_id)
             if "error" in result:
                 return JSONResponse({"detail": result["error"]}, status_code=400)
             return JSONResponse(result)
@@ -539,7 +540,7 @@ def register_routes(router, templates):
     @router.post("/workflows/{workflow_id}/steps/{step_id}/cancel")
     async def workflow_cancel_step(workflow_id: int, step_id: int):
         try:
-            from distr.core.workflow.service import cancel_step
+            from distr.core.workflow.dispatcher import cancel_step
             if not cancel_step(step_id):
                 return JSONResponse({"detail": "Step not found"}, status_code=404)
             return JSONResponse({"success": True})
@@ -551,11 +552,33 @@ def register_routes(router, templates):
     async def workflow_complete_step(workflow_id: int, step_id: int, request: Request):
         """Mark step complete with result. Body: {result: str, passed: bool}"""
         try:
-            from distr.core.workflow.service import complete_step
+            from distr.core.workflow.router import StepRouter
+            from distr.core.db import get_session as _get_session
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep as _Step
             body = await request.json()
-            res = complete_step(step_id, result=body.get("result", ""), passed=body.get("passed", True))
-            if "error" in res:
-                return JSONResponse({"detail": res["error"]}, status_code=400)
+            result_text = body.get("result", "")
+            passed = body.get("passed", True)
+            # Find the active run for this step (if any)
+            run_id = None
+            with _get_session() as db:
+                step = db.query(_Step).filter(_Step.id == step_id).first()
+                if not step:
+                    return JSONResponse({"detail": "Step not found"}, status_code=404)
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.workflow_id == step.workflow_id,
+                    AutoWorkflowRun.current_step_id == step_id,
+                    AutoWorkflowRun.status == "running",
+                ).first()
+                if run:
+                    run_id = run.id
+            if run_id is not None:
+                router = StepRouter()
+                res = router.route(step_id, result_text, passed, run_id)
+            else:
+                # Isolated step — just record the result
+                from distr.core.workflow.service import update_step
+                update_step(step_id, status="passed" if passed else "failed", result=result_text)
+                res = {"done": True, "status": "passed" if passed else "failed"}
             return JSONResponse(res)
         except Exception as e:
             logger.error("Workflow complete step failed: %s", e, exc_info=True)

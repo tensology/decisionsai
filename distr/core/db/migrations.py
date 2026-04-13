@@ -426,6 +426,19 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add f5tts_voice column: {e}")
 
+    # Handle database migration for voxcpm_voice column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT voxcpm_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN voxcpm_voice VARCHAR DEFAULT 'default'"))
+                conn.commit()
+                logger.info("Added voxcpm_voice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add voxcpm_voice column: {e}")
+
     # Handle database migration for qwen3_voice/replicate settings columns (Qwen3-TTS)
     for col, dtype, default in [
         ("qwen3_voice", "VARCHAR", "'aiden'"),
@@ -589,7 +602,21 @@ def run_migrations():
                 logger.info("Added image_llm_model column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add image_llm_model column: {e}")
-    
+
+    # Handle database migration for computer_use LLM columns
+    for _col, _default in [("computer_use_provider", "''"), ("computer_use_model", "''")]:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {_col} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} VARCHAR DEFAULT {_default}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", _col)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", _col, e)
+
     # Handle database migration for agent_current_chat_id column in settings (web chat "In agent" state)
     try:
         with Session() as session:
@@ -1434,3 +1461,16 @@ def run_migrations():
                             logger.warning(f"Could not add {col} column to auto_workflow_steps: {e}")
     except Exception as e:
         logger.debug(f"Workflow unification migration (auto_workflow_steps): {e}")
+
+    # Handle database migration for load_on_startup column in settings table
+    try:
+        with Session() as session:
+            session.execute(text("SELECT load_on_startup FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN load_on_startup BOOLEAN DEFAULT 1"))
+                conn.commit()
+                logger.info("Added load_on_startup column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add load_on_startup column: {e}")

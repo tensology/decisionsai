@@ -341,8 +341,8 @@ class TestPBTFixWorkflowAgentRouting:
 class TestPBTPreservationDirectExecution:
     """Property test: for any random direct-execution step type (run_command,
     http_request, execute_code, playwright, play_recording), the step is
-    dispatched to ``_execute_step_directly`` in a background thread, NOT to
-    WorkflowAgent.
+    dispatched to ``StepDispatcher.run_in_workflow()`` in a background thread,
+    NOT to WorkflowAgent.
 
     **Validates: Requirements 3.3**
     """
@@ -366,37 +366,24 @@ class TestPBTPreservationDirectExecution:
 
         # Mock the DB lookup to return the direct step type
         mock_db_session = MagicMock()
-        mock_sess_obj = SimpleNamespace(id=workflow_id, context_rules=None, workflow_input=None)
         mock_step_obj = SimpleNamespace(id=step["id"], step_type=step_type, config=None)
-        mock_db_session.query.return_value.filter.return_value.first.side_effect = [
-            mock_sess_obj, mock_step_obj
-        ]
-
-        # Mock context assembly
-        mock_ctx = MagicMock()
-        mock_ctx.workflow_rules = ""
-        mock_ctx.step_config = {}
-
-        # Mock _validate_workflow_step_config to return True (valid config)
-        mixin._validate_workflow_step_config = MagicMock(return_value=True)
-        # Mock _execute_step_directly to capture the call
-        mixin._execute_step_directly = MagicMock()
+        mock_db_session.query.return_value.filter.return_value.first.return_value = mock_step_obj
 
         with patch("distr.core.db.get_session") as mock_get_session, \
-             patch("distr.core.step_runner.context_assembly.assemble_step_context", return_value=mock_ctx):
+             patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
             mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
             mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
 
             mixin._send_workflow_instruction(orch, 0)
 
         # WorkflowAgent dispatch should NOT have been called
         mock_run_coro.assert_not_called()
-        # Direct execution should have been called
-        mixin._execute_step_directly.assert_called_once()
-        call_args = mixin._execute_step_directly.call_args[0]
-        assert call_args[0] is orch
-        assert call_args[1] == 0
-        assert call_args[2] == step_type
+        # A thread should have been started for StepDispatcher
+        mock_thread.assert_called_once()
 
     @given(step_type=_direct_step_types)
     @settings(max_examples=20, suppress_health_check=[HealthCheck.function_scoped_fixture])
@@ -415,7 +402,7 @@ class TestPBTPreservationDirectExecution:
         self, mock_run_coro, mock_signals, workflow_id, step
     ):
         """For any direct-execution step type, ``signal_manager.send_text_input``
-        is never called — direct steps use background threads.
+        is never called — direct steps use StepDispatcher in background threads.
         """
         step_type = step["step_type"]
         mixin = _setup_mixin()
@@ -423,23 +410,17 @@ class TestPBTPreservationDirectExecution:
         orch, _, _ = _insert_orchestration(mixin, workflow_id, steps)
 
         mock_db_session = MagicMock()
-        mock_sess_obj = SimpleNamespace(id=workflow_id, context_rules=None, workflow_input=None)
         mock_step_obj = SimpleNamespace(id=step["id"], step_type=step_type, config=None)
-        mock_db_session.query.return_value.filter.return_value.first.side_effect = [
-            mock_sess_obj, mock_step_obj
-        ]
-
-        mock_ctx = MagicMock()
-        mock_ctx.workflow_rules = ""
-        mock_ctx.step_config = {}
-
-        mixin._validate_workflow_step_config = MagicMock(return_value=True)
-        mixin._execute_step_directly = MagicMock()
+        mock_db_session.query.return_value.filter.return_value.first.return_value = mock_step_obj
 
         with patch("distr.core.db.get_session") as mock_get_session, \
-             patch("distr.core.step_runner.context_assembly.assemble_step_context", return_value=mock_ctx):
+             patch("distr.core.workflow.dispatcher.StepDispatcher") as MockDispatcher, \
+             patch("threading.Thread") as mock_thread:
             mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db_session)
             mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+            mock_dispatcher = MagicMock()
+            MockDispatcher.return_value = mock_dispatcher
+            mock_thread.return_value.start = MagicMock()
 
             mixin._send_workflow_instruction(orch, 0)
 

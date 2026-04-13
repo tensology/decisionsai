@@ -27,6 +27,7 @@ class Settings(Base):
     load_splash_sound = Column(Boolean, default=True)
     show_about = Column(Boolean, default=True)
     welcome_greet_me = Column(Boolean, default=True)
+    load_on_startup = Column(Boolean, default=True)
     always_confirm_file_operations = Column(Boolean, default=True)  # Always show confirmation dialog for file operations
     startup_listening_state = Column(String, default='remember')  # values: 'remember', 'stop', 'start'
 
@@ -89,6 +90,8 @@ class Settings(Base):
     vision_llm_model = Column(String, default='qwen3-vl:2b')
     image_llm_provider = Column(String, default='Ollama')
     image_llm_model = Column(String, default='x/flux2-klein:latest')
+    computer_use_provider = Column(String, default='')
+    computer_use_model = Column(String, default='')
 
     # Advanced Settings
     excluded_files = Column(String, default='')
@@ -134,9 +137,10 @@ class Settings(Base):
     openai_voice = Column(String, default='alloy')
     qwen3_voice = Column(String, default='aiden')
     f5tts_voice = Column(String, default='default')
+    voxcpm_voice = Column(String, default='default')
     replicate_api_token = Column(String, default='')
 
-    # Rube Settings
+    # Rube Settings (discontinued — columns kept for migration compatibility)
     rube_enabled = Column(Boolean, default=False)
     rube_token = Column(String, default='')
     
@@ -483,6 +487,8 @@ try:
                 # Telegram response format settings
                 ("telegram_text_only_override", "BOOLEAN DEFAULT 0"),
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 1"),
+                # Load on startup
+                ("load_on_startup", "BOOLEAN DEFAULT 1"),
             ]:
                 if _col not in _existing:
                     try:
@@ -586,7 +592,6 @@ def init_db():
     """Initialize the database by creating all tables and adding default settings"""
     # Import project models to ensure they're registered with Base
     from distr.core.db import projects as _projects  # noqa: F401
-    from distr.core.db import step_runner as _step_runner  # noqa: F401
     from distr.core.db import workflow as _workflow  # noqa: F401
     from distr.core.db import kanban as _kanban  # noqa: F401
 

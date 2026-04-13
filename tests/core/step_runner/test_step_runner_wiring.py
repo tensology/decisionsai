@@ -68,7 +68,9 @@ class TestSendWorkflowInstructionWiring:
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.first.side_effect = [db_session, db_step]
+        # New query pattern: 1st call = step (for step_type check),
+        # 2nd call = workflow (for context assembly), 3rd call = step (for context assembly)
+        mock_db.query.return_value.filter.return_value.first.side_effect = [db_step, db_session, db_step]
         mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -97,7 +99,7 @@ class TestSendWorkflowInstructionWiring:
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.first.side_effect = [db_session, db_step]
+        mock_db.query.return_value.filter.return_value.first.side_effect = [db_step, db_session, db_step]
         mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 
@@ -120,10 +122,10 @@ class TestSendWorkflowInstructionWiring:
         from distr.core.step_runner.context_assembly import StepInputContext
 
         db_session = _make_db_session()
-        db_step = _make_db_step(step_id=10)
+        db_step = _make_db_step(step_id=10, step_type="agent_instruction")
 
         mock_db = MagicMock()
-        mock_db.query.return_value.filter.return_value.first.side_effect = [db_session, db_step]
+        mock_db.query.return_value.filter.return_value.first.side_effect = [db_step, db_session, db_step]
         mock_get_session.return_value.__enter__ = MagicMock(return_value=mock_db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
 

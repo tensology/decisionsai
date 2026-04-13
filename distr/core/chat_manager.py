@@ -162,6 +162,11 @@ class ChatManagerCore:
                             getattr(settings, "f5tts_voice", "default") or "default"
                         )
                         agent_name = f5tts_voice.capitalize() if f5tts_voice != "default" else "F5-TTS"
+                    elif tts_provider == "VoxCPM (Offline)":
+                        voxcpm_voice = (
+                            getattr(settings, "voxcpm_voice", "default") or "default"
+                        )
+                        agent_name = voxcpm_voice.capitalize() if voxcpm_voice != "default" else "VoxCPM"
         except Exception as e:
             logger.warning(
                 "ChatManagerCore: Could not determine agent from settings: %s", e

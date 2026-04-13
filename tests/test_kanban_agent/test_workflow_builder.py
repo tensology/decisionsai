@@ -164,7 +164,8 @@ class TestGeneratedWorkflowImportRoundTrip:
         def patched_get_session():
             return _session_ctx(factory)
 
-        with patch("distr.core.workflow.service.get_session", patched_get_session):
+        with patch("distr.core.workflow.import_export.get_session", patched_get_session), \
+             patch("distr.core.workflow.service.get_session", patched_get_session):
             wf_id = import_workflow(workflow_json)
             assert wf_id is not None
 

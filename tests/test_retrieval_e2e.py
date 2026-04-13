@@ -116,7 +116,6 @@ from distr.core.agent.tools.loader import TOOL_REGISTRY
 # Pick some tools that are unlikely to be in top-10 retrieval
 OBSCURE_QUERIES = [
     ("I need the playwright browser automation", "PlaywrightTool"),
-    ("rube workflow integration", "RubeTool"),
     ("speak on my desktop speakers", "SpeakOnDesktopTool"),
     ("PDF page extractor", "PDFPageExtractorTool"),
     ("vision analyzer for images", "VisionAnalyzerTool"),

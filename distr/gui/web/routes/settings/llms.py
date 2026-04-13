@@ -55,6 +55,12 @@ def register_routes(router, templates):
             "vision_model": _model(settings.get("vision_llm_model"), "vision"),
             "image_provider": _provider(settings.get("image_llm_provider")),
             "image_model": _model(settings.get("image_llm_model"), "image"),
+            "step_runner_provider": (settings.get("step_runner_llm_provider") or "").strip().lower() or "",
+            "step_runner_model": (settings.get("step_runner_llm_model") or "").strip(),
+            "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
+            "computer_use_model": (settings.get("computer_use_model") or "").strip(),
+            "kanban_provider": (settings.get("kanban_agent_orchestrator_provider") or "").strip().lower() or "",
+            "kanban_model": (settings.get("kanban_agent_orchestrator_model") or "").strip(),
         })
 
     @router.post("/llms")
@@ -86,6 +92,12 @@ def register_routes(router, templates):
         settings["vision_llm_model"] = (settings_data.get("vision_model") or "").strip()
         settings["image_llm_provider"] = (settings_data.get("image_provider") or "ollama").strip()
         settings["image_llm_model"] = (settings_data.get("image_model") or "").strip()
+        settings["step_runner_llm_provider"] = (settings_data.get("step_runner_provider") or "").strip()
+        settings["step_runner_llm_model"] = (settings_data.get("step_runner_model") or "").strip()
+        settings["computer_use_provider"] = (settings_data.get("computer_use_provider") or "").strip()
+        settings["computer_use_model"] = (settings_data.get("computer_use_model") or "").strip()
+        settings["kanban_agent_orchestrator_provider"] = (settings_data.get("kanban_provider") or "").strip()
+        settings["kanban_agent_orchestrator_model"] = (settings_data.get("kanban_model") or "").strip()
 
         save_settings_to_db(settings)
         return JSONResponse({"success": True, "message": "LLMs settings saved"})
@@ -157,6 +169,9 @@ def register_routes(router, templates):
                 "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
                 "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
                 "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
+                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "computer_use": lambda m: True,
+                "kanban": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
             }
             filt = _type_filters.get(type)
             if filt:

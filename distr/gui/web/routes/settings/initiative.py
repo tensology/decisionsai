@@ -61,3 +61,49 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to save initiative settings: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    # ------------------------------------------------------------------
+    # Draft queue endpoints
+    # ------------------------------------------------------------------
+
+    @router.get("/initiative/drafts")
+    async def get_pending_drafts():
+        """Get all pending initiative draft actions."""
+        try:
+            from distr.core.initiative.draft_queue import DraftQueue
+            queue = DraftQueue()
+            queue.expire_old()
+            import dataclasses
+            entries = queue.get_all()
+            return JSONResponse([dataclasses.asdict(e) for e in entries])
+        except Exception as e:
+            logger.error(f"Failed to load drafts: {e}", exc_info=True)
+            return JSONResponse([])
+
+    @router.post("/initiative/drafts/{draft_id}/approve")
+    async def approve_draft(draft_id: str):
+        """Approve a pending draft action."""
+        try:
+            from distr.core.initiative.draft_queue import DraftQueue
+            queue = DraftQueue()
+            removed = queue.remove(draft_id)
+            if removed:
+                return JSONResponse({"success": True, "message": "Draft approved and removed"})
+            return JSONResponse({"success": False, "error": "Draft not found"}, status_code=404)
+        except Exception as e:
+            logger.error(f"Failed to approve draft: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.post("/initiative/drafts/{draft_id}/reject")
+    async def reject_draft(draft_id: str):
+        """Reject a pending draft action."""
+        try:
+            from distr.core.initiative.draft_queue import DraftQueue
+            queue = DraftQueue()
+            removed = queue.remove(draft_id)
+            if removed:
+                return JSONResponse({"success": True, "message": "Draft rejected and removed"})
+            return JSONResponse({"success": False, "error": "Draft not found"}, status_code=404)
+        except Exception as e:
+            logger.error(f"Failed to reject draft: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)

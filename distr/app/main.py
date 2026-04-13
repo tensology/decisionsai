@@ -541,6 +541,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         signal_manager.workflow_cancel_requested.connect(self._on_workflow_cancel_requested)
         signal_manager.workflow_skip_step_requested.connect(self._on_workflow_skip_step_requested)
         signal_manager.workflow_continue_requested.connect(self._on_workflow_continue_requested)
+        signal_manager.step_waiting_for_feedback.connect(self._on_step_waiting_for_feedback)
         # Check for missed scheduled runs on startup (delayed to let agent initialize first)
         QTimer.singleShot(10000, self._run_workflow_scheduled)
 
@@ -935,7 +936,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             vp = (settings.get("tts_provider") or "kokoro").strip()
             from distr.core.agent.constants import normalize_voice_provider
             vp_id = normalize_voice_provider(vp)
-            _display = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs"}
+            _display = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "voxcpm": "VoxCPM"}
             voice_provider = _display.get(vp_id, vp_id.title())
             voice_model = (settings.get("kokoro_voice") or settings.get("openai_voice") or settings.get("elevenlabs_voice") or "").strip() or None
             ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New Chat", starting_question=None)

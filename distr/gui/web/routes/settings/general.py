@@ -38,6 +38,7 @@ def register_routes(router, templates):
             "load_splash_sound": settings.get("load_splash_sound", False),
             "show_about": settings.get("show_about", False),
             "welcome_greet_me": settings.get("welcome_greet_me", False),
+            "load_on_startup": settings.get("load_on_startup", True),
             "listening_state": settings.get("listening_state", "remember"),
             "voice_provider": settings.get("voice_provider", "kokoro"),
             "kokoro_voice": settings.get("kokoro_voice", "af_heart"),
@@ -45,6 +46,7 @@ def register_routes(router, templates):
             "openai_voice": settings.get("openai_voice", "alloy"),
             "coqui_voice": settings.get("coqui_voice", "p225"),
             "f5tts_voice": settings.get("f5tts_voice", "default"),
+            "voxcpm_voice": settings.get("voxcpm_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
             "vad_threshold": settings.get("vad_threshold", 50),
@@ -131,8 +133,8 @@ def register_routes(router, templates):
     @router.post("/play-voice")
     @route_handler("generate voice sample")
     async def play_voice_endpoint(request: PlayVoiceRequest):
-        """Generate a voice sample and serve it as MP3 for reliable browser playback."""
-        from distr.core.audio.tts_handler import generate_voice_sample, wav_to_mp3
+        """Generate a voice sample and serve it as WAV for browser playback."""
+        from distr.core.audio.tts_handler import generate_voice_sample
         from starlette.responses import FileResponse
         from distr.core.settings import load_settings_from_db
 
@@ -191,10 +193,9 @@ def register_routes(router, templates):
             None,
             lambda: generate_voice_sample(provider, voice, request.speed, voice_name)
         )
-        mp3_path = await loop.run_in_executor(None, lambda: wav_to_mp3(wav_path))
 
         return FileResponse(
-            mp3_path,
-            media_type="audio/mpeg",
+            wav_path,
+            media_type="audio/wav",
             headers={"Cache-Control": "no-cache"},
         )

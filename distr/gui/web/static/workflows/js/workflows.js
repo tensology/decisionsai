@@ -12,6 +12,8 @@
     var pollTimer = null;
     var lastKnownVersion = null;
     var versionPollTimer = null;
+    var ws = null;
+    var wsReconnectTimer = null;
 
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -145,7 +147,7 @@
         if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
     }
 
-    // ── Version-based polling (Requirement 8.3, 8.4) ──
+    // ── Version-based polling (fallback for when WebSocket is unavailable) ──
     function startVersionPolling() {
         stopVersionPolling();
         versionPollTimer = setInterval(checkVersion, 3000);
@@ -164,6 +166,49 @@
         }).catch(function () {});
     }
 
+    // ── WebSocket for real-time workflow updates ──
+    function connectWebSocket() {
+        if (ws && (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN)) return;
+        var proto = location.protocol === "https:" ? "wss:" : "ws:";
+        var url = proto + "//" + location.host + "/api/ws/workflows";
+        try {
+            ws = new WebSocket(url);
+        } catch (e) {
+            console.warn("WebSocket connect failed, falling back to polling", e);
+            startVersionPolling();
+            return;
+        }
+        ws.onopen = function () {
+            console.log("Workflow WS: connected");
+            // WebSocket is live — stop version polling to avoid duplicate refreshes
+            stopVersionPolling();
+            if (wsReconnectTimer) { clearTimeout(wsReconnectTimer); wsReconnectTimer = null; }
+        };
+        ws.onmessage = function (evt) {
+            try {
+                var msg = JSON.parse(evt.data);
+                if (msg.type === "workflow_updated") {
+                    loadList();
+                    if (currentWorkflowId) softRefresh();
+                }
+                // Ignore ping/pong and unknown message types
+            } catch (e) {
+                console.warn("Workflow WS: bad message", e);
+            }
+        };
+        ws.onclose = function () {
+            console.log("Workflow WS: disconnected, will reconnect");
+            ws = null;
+            // Fall back to polling while disconnected, then try to reconnect
+            startVersionPolling();
+            wsReconnectTimer = setTimeout(connectWebSocket, 5000);
+        };
+        ws.onerror = function () {
+            // onclose will fire after onerror, so reconnect is handled there
+            console.warn("Workflow WS: error");
+        };
+    }
+
     function checkActiveRun() {
         if (!currentWorkflowId) return;
         api("GET", "/workflows/" + currentWorkflowId + "/active-run").then(function (data) {
@@ -177,7 +222,7 @@
                         '<button type="button" class="wf-cancel-run ml-auto px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">Cancel Run</button>' +
                     '</div>';
                     runBar.querySelector(".wf-continue-run").addEventListener("click", function () {
-                        api("POST", "/workflows/runs/" + data.id + "/continue")
+                        api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
                             .then(function () { snack("Run continued"); startPolling(); loadDetail(currentWorkflowId); })
                             .catch(function (e) { snack(e.message || "Failed to continue", "error"); });
                     });
@@ -866,7 +911,7 @@
         if (!currentWorkflowId) return;
         api("GET", "/workflows/" + currentWorkflowId + "/active-run").then(function (data) {
             if (data && data.id) {
-                api("POST", "/workflows/runs/" + data.id + "/continue")
+                api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
                     .then(function () { snack("Run continued"); startPolling(); loadDetail(currentWorkflowId); })
                     .catch(function (e) { snack(e.message || "Failed to continue", "error"); });
             } else {
@@ -1349,6 +1394,8 @@
 
         loadList();
         checkPresetsExist();
+        connectWebSocket();
+        // Start version polling as initial fallback until WebSocket connects
         startVersionPolling();
     }
 

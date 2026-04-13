@@ -571,6 +571,7 @@ Cleaned ticket:"""
         """
         run_id = os.environ.get("DECISIONS_WORKFLOW_RUN_ID")
         step_id = os.environ.get("DECISIONS_WORKFLOW_STEP_ID")
+        workflow_id = os.environ.get("DECISIONS_WORKFLOW_ID")
         if not run_id:
             return ""
         try:
@@ -579,6 +580,7 @@ Cleaned ticket:"""
             meta = {
                 "run_id": int(run_id),
                 "step_id": int(step_id) if step_id else 0,
+                "workflow_id": int(workflow_id) if workflow_id else 0,
                 "api_base": api_base,
             }
             return f"<!-- decisions-meta: {_json.dumps(meta)} -->\n"

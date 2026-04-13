@@ -41,6 +41,12 @@ func buildHandlers() map[string]ToolHandler {
 	// API relay — forward HTTP calls to the desktop app's local server
 	m["api_relay"] = handleAPIRelay
 
+	// Screen intelligence — screenshot + vision/computer-use analysis via desktop app
+	m["screen_analyze"] = handleScreenAnalyze
+
+	// Python executor — run arbitrary Python scripts
+	m["run_python"] = handleRunPython
+
 	return m
 }
 
@@ -340,4 +346,133 @@ func handleMoveMouse(params map[string]any) (any, error) {
 	x := toInt(params["x"])
 	y := toInt(params["y"])
 	return platformMoveMouse(x, y)
+}
+
+// ── screen_analyze ────────────────────────────────────────────────────────────
+// Captures a screenshot and sends it to the desktop app's vision or computer-use
+// endpoint for AI-powered analysis. Three modes:
+//   describe — "what's on screen?" (uses vision LLM)
+//   locate   — "where is the Save button?" (uses computer use LLM, returns coords)
+//   verify   — "did the file save?" (uses vision LLM, returns pass/fail)
+
+func handleScreenAnalyze(params map[string]any) (any, error) {
+	question, _ := params["question"].(string)
+	mode, _ := params["mode"].(string)
+	if mode == "" {
+		mode = "describe"
+	}
+	if question == "" {
+		question = "Describe what is currently visible on screen"
+	}
+
+	// 1. Capture screenshot
+	screenshotResult, err := handleCaptureScreen(nil)
+	if err != nil {
+		return nil, fmt.Errorf("screen_analyze: screenshot failed: %w", err)
+	}
+	screenshotMap, ok := screenshotResult.(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("screen_analyze: unexpected screenshot result type")
+	}
+	screenshotB64, _ := screenshotMap["data"].(string)
+	if screenshotB64 == "" {
+		return nil, fmt.Errorf("screen_analyze: empty screenshot data")
+	}
+
+	// 2. Send to desktop app's /api/screen/analyze endpoint
+	result, err := callDesktopAPI("/api/screen/analyze", map[string]any{
+		"screenshot": screenshotB64,
+		"question":   question,
+		"mode":       mode,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("screen_analyze: %w", err)
+	}
+	return result, nil
+}
+
+// ── run_python ────────────────────────────────────────────────────────────────
+// Execute arbitrary Python code. The model writes Python, this tool runs it.
+// Supports optional package installation via pip before execution.
+
+func handleRunPython(params map[string]any) (any, error) {
+	code, _ := params["code"].(string)
+	if code == "" {
+		return nil, fmt.Errorf("missing required parameter: code")
+	}
+
+	timeoutMs := 60000
+	if t, ok := params["timeout"].(float64); ok && t > 0 {
+		timeoutMs = int(t)
+	}
+
+	// Optional: install packages before running
+	if pkgs, ok := params["packages"].([]any); ok && len(pkgs) > 0 {
+		for _, pkg := range pkgs {
+			pkgStr, ok := pkg.(string)
+			if !ok || pkgStr == "" {
+				continue
+			}
+			installCtx, installCancel := context.WithTimeout(context.Background(), 30*time.Second)
+			installCmd := exec.CommandContext(installCtx, "python3", "-m", "pip", "install", "--quiet", pkgStr)
+			installOut, installErr := installCmd.CombinedOutput()
+			installCancel()
+			if installErr != nil {
+				return map[string]any{
+					"stdout":    string(installOut),
+					"stderr":    fmt.Sprintf("pip install %s failed: %v", pkgStr, installErr),
+					"exit_code": 1,
+				}, nil
+			}
+		}
+	}
+
+	// Write code to temp file
+	tmpFile := filepath.Join(os.TempDir(), fmt.Sprintf("dai-python-%d.py", time.Now().UnixMilli()))
+	if err := os.WriteFile(tmpFile, []byte(code), 0644); err != nil {
+		return nil, fmt.Errorf("run_python: write temp file: %w", err)
+	}
+	defer os.Remove(tmpFile)
+
+	// Execute
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(timeoutMs)*time.Millisecond)
+	defer cancel()
+
+	cmd := exec.CommandContext(ctx, "python3", tmpFile)
+	var stdoutBuf, stderrBuf strings.Builder
+	cmd.Stdout = &stdoutBuf
+	cmd.Stderr = &stderrBuf
+
+	err := cmd.Run()
+	exitCode := 0
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok {
+			exitCode = exitErr.ExitCode()
+		} else {
+			exitCode = 1
+		}
+	}
+
+	out := stdoutBuf.String()
+	if len(out) > 20000 {
+		out = out[:20000] + "\n... [truncated]"
+	}
+
+	return map[string]any{
+		"stdout":    out,
+		"stderr":    stderrBuf.String(),
+		"exit_code": exitCode,
+	}, nil
+}
+
+// ── callDesktopAPI ────────────────────────────────────────────────────────────
+// Helper to call the desktop app's local HTTP API. Reuses the api_relay handler
+// with POST method.
+
+func callDesktopAPI(path string, body map[string]any) (any, error) {
+	return handleAPIRelay(map[string]any{
+		"method": "POST",
+		"path":   path,
+		"body":   body,
+	})
 }

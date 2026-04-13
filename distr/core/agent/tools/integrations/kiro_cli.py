@@ -96,14 +96,9 @@ If no project_name is given, uses the currently active project.
             output = f"Kiro CLI error: {e}"
             status = "failed"
 
-        # Update audit trail
+        # Update audit trail (legacy StepRunner — removed in task 6.3)
         if audit_id and step_id:
-            try:
-                from distr.core.workflow.service import update_step_status, update_session_status
-                update_step_status(step_id, status=status, result=output[:2000])
-                update_session_status(audit_id, status)
-            except Exception:
-                pass
+            pass
 
         if self.event_queue:
             try:
@@ -150,20 +145,20 @@ If no project_name is given, uses the currently active project.
     def _create_audit_session(self, project_name, instruction, chat_id):
         try:
             from distr.core.db import get_session
-            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
             with get_session() as session:
-                audit = StepRunnerSession(
-                    instruction=f"[Project: {project_name}] {instruction}",
+                audit = AutoWorkflow(
+                    name=f"[Project: {project_name}] {instruction}",
                     status="in_progress",
                     chat_id=int(chat_id) if chat_id else None,
-                    session_type="kiro_cli",
+                    workflow_type="kiro_cli",
                 )
                 session.add(audit)
                 session.flush()
-                step = StepRunnerStep(
-                    session_id=audit.id,
+                step = AutoWorkflowStep(
+                    workflow_id=audit.id,
                     position=0,
-                    title="Kiro CLI",
+                    name="Kiro CLI",
                     instruction=instruction[:500],
                     status="running",
                     tool_used="kiro-cli",

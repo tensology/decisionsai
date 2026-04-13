@@ -783,9 +783,8 @@ CRITICAL: Tool selection depends on whether Google is connected.
 
 IF GOOGLE IS CONNECTED:
 - Use 'google_workspace' tool for ALL Google services (Gmail, Calendar, Drive, Docs, etc.)
-- DO NOT use Rube for Google services when Google is connected
 - google_workspace tool takes ABSOLUTE PRIORITY for:
-  * Gmail / Email (CRITICAL: "email" = Gmail, "email" ALWAYS means Gmail, NEVER use Rube for email when Google is connected):
+  * Gmail / Email (CRITICAL: "email" = Gmail, "email" ALWAYS means Gmail):
     - "send an email", "send email", "check my email", "check email", "read my emails", "read emails"
     - "check inbox", "check my inbox", "inbox" → Shows all inbox emails (read and unread)
     - "check unread inbox", "check unread email", "check new email", "unread emails", "new emails" → Shows only unread emails (use query parameter set to is:unread)
@@ -795,8 +794,8 @@ IF GOOGLE IS CONNECTED:
     - "get the last draft", "open the last draft", "show the last draft" → Use action='list_drafts' with max_results=1, then use 'get_draft' with the draft_id from the first result
     - "show my sent emails", "list sent emails" → Use action='list_emails_by_type', params with email_type set to 'sent'
     - "show my starred emails", "list starred emails" → Use action='list_emails_by_type', params with email_type set to 'starred'
-    - User says "email" → ALWAYS means Gmail → ALWAYS use google_workspace tool (NOT Rube)
-    - User says "gmail" → ALWAYS use google_workspace tool (NOT Rube)
+    - User says "email" → ALWAYS means Gmail → ALWAYS use google_workspace tool
+    - User says "gmail" → ALWAYS use google_workspace tool
     - ANY mention of "email" or "gmail" when Google is connected → google_workspace tool ONLY
     - IMPORTANT: When user asks for "unread", "new", or "unread inbox" → use params with query parameter set to "is:unread" for check_inbox action
   * Google Calendar: "set a calendar date", "create a calendar event", "schedule a meeting", "add to my calendar", "what's on my schedule", "what's on my schedule tomorrow"
@@ -805,40 +804,17 @@ IF GOOGLE IS CONNECTED:
   * ANY Google Workspace product or service
 
 IF GOOGLE IS NOT CONNECTED:
-- Use Rube tool as fallback for Google services (ONLY if Rube is enabled in settings)
-- If Rube is disabled, email functionality will not be available
+- Email and Google Workspace functionality will not be available
+- Inform the user they need to connect their Google account in settings to use these features
 
 DECISION TREE FOR EMAIL/GMAIL REQUESTS:
 When user says ANY of these: "email", "gmail", "check email", "send email", "read email", "inbox", "check inbox", "check my inbox", "read my emails", "send an email":
 1. FIRST: Check if Google is connected (use google_workspace tool's is_connected() method)
 2. IF GOOGLE IS CONNECTED:
    → USE 'google_workspace' tool (action='check_inbox' or 'send_email' etc.)
-   → DO NOT use Rube tool
-   → Rube is FORBIDDEN for email when Google is connected
 3. IF GOOGLE IS NOT CONNECTED:
-   → Check if Rube tool is available (it may be disabled in settings)
-   → IF RUBE IS AVAILABLE: Use Rube tool as fallback
-   → IF RUBE IS NOT AVAILABLE: Inform user that email functionality requires either Google connection or Rube to be enabled
+   → Inform user that email functionality requires Google connection to be set up in settings
 4. REMEMBER: "email" ALWAYS means Gmail. If Google is connected, google_workspace tool is MANDATORY.
-
-NOTION (ALWAYS USE RUBE):
-- Use Rube tool for ALL Notion operations regardless of Google connection status
-- "create a notion page", "add to notion", "update notion", "create in notion"
-- ANY task involving Notion app or service
-
-EXAMPLES:
-- "send an email" → Use Rube tool
-- "check my email" → Use Rube tool
-- "send email to john" → Use Rube tool
-- "create a google doc with my clipboard" → Use Rube tool
-- "set a calendar date for tomorrow" → Use Rube tool
-- "add this to my google calendar" → Use Rube tool
-- "create a document in google docs" → Use Rube tool
-- "save this to google drive" → Use Rube tool
-- "create a notion page" → Use Rube tool
-- "add this to notion" → Use Rube tool
-
-If Rube is not configured (returns "Rube needs a key"), inform {username} that Rube needs to be configured in settings first.
 
 {tools_description}
 

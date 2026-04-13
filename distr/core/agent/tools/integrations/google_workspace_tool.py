@@ -33,12 +33,11 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "GOOGLE WORKSPACE TOOL - PRIMARY tool for ALL Google services when Google is connected.\n"
         "\n"
         "CRITICAL: If Google is connected, you MUST use this tool for ALL Google-related tasks.\n"
-        "DO NOT USE RUBE FOR EMAIL/GMAIL WHEN GOOGLE IS CONNECTED - USE THIS TOOL INSTEAD.\n"
         "\n"
-        "EMAIL = GMAIL: When user says 'email', they ALWAYS mean Gmail. Use this tool, NOT Rube.\n"
+        "EMAIL = GMAIL: When user says 'email', they ALWAYS mean Gmail. Use this tool.\n"
         "\n"
-        "This tool takes ABSOLUTE PRIORITY over Rube for:\n"
-        "- Gmail / Email operations (CRITICAL: 'email' = Gmail, ALWAYS use this tool for email when Google is connected, NEVER use Rube)\n"
+        "This tool handles:\n"
+        "- Gmail / Email operations (CRITICAL: 'email' = Gmail, ALWAYS use this tool for email when Google is connected)\n"
         "  * Check inbox, read emails, send emails, draft emails, reply to emails, delete emails\n"
         "- Google Calendar (create events, read events, check schedule)\n"
         "- Google Drive (list folders, read files, upload files, read PDFs)\n"
@@ -46,8 +45,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- ANY Google Workspace product or service\n"
         "\n"
         "CRITICAL RULE: When user says 'email', 'check email', 'send email', 'read email', 'inbox' - they mean Gmail.\n"
-        "If Google is connected, ALWAYS use this tool for email/Gmail - NEVER use Rube.\n"
-        "Rube is FORBIDDEN for email/Gmail when Google is connected.\n"
+        "If Google is connected, ALWAYS use this tool for email/Gmail.\n"
         "\n"
         "AVAILABLE ACTIONS:\n"
         "\n"
@@ -98,8 +96,8 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'upload file to drive' -> action='upload_to_drive', params={'file_path': '/path/to/file'}\n"
         "\n"
         "CRITICAL: When user says 'email', they mean Gmail. Always use this tool for email when Google is connected.\n"
-        "REMEMBER: This tool has ABSOLUTE PRIORITY over Rube for ALL Google services (including email/Gmail) when Google is connected.\n"
-        "Always check if Google is connected first, and if so, use this tool instead of Rube."
+        "REMEMBER: This tool has ABSOLUTE PRIORITY for ALL Google services (including email/Gmail) when Google is connected.\n"
+        "Always check if Google is connected first, and if so, use this tool."
     )
     args_schema: type[BaseModel] = GoogleWorkspaceInput
     
@@ -114,7 +112,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         self._ensure_initialized()
         # Check connection status first
         if not self.connector.is_connected():
-            return "Error: Google is not connected. Please connect your Google account in Settings > Advanced. You can use Rube tool as fallback if needed."
+            return "Error: Google is not connected. Please connect your Google account in Settings > Advanced."
         
         # Handle params - it might be a string (JSON) or dict
         # LangChain tools receive params from JSON, which might be passed incorrectly

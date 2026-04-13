@@ -106,7 +106,7 @@ async function createDefaultChat() {
             const general = await generalRes.json();
             const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
             if (vp) voiceProvider = vp;
-            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
+            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
             const v = (general[key] || '').trim();
             if (v && v !== '—') voiceModel = v;
         }
@@ -211,12 +211,8 @@ function setupEventListeners() {
     const emptyStatePlayVoiceBtn = document.getElementById('emptyStatePlayVoiceBtn');
     if (emptyStatePlayVoiceBtn) emptyStatePlayVoiceBtn.addEventListener('click', playEmptyStateVoice);
 
-    // Close modal on background click
-    newChatModal.addEventListener('click', (e) => {
-        if (e.target === newChatModal) {
-            hideNewChatModal();
-        }
-    });
+    // Modal should only close via Cancel, Close button, or Escape — NOT on overlay click
+    // (removed: newChatModal background click handler)
 
     // Update active nav tab based on current page
     document.querySelectorAll('.nav-tab').forEach(tab => {
@@ -528,6 +524,12 @@ function handleChatEventStreamFinished(msg) {
         window._agentStreamResolve = null;
     }
     streamingChatId = null;
+    // Reset input state in case the message came from voice/PTT (not web sendMessage)
+    isStreaming = false;
+    messageInput.disabled = false;
+    messageInput.placeholder = 'Send message...';
+    sendButton.disabled = !messageInput.value.trim();
+    setSendButtonStreaming(false);
 }
 
 function handleChatEventStreamError(msg) {
@@ -874,6 +876,13 @@ function showChatView(isLoaded) {
     inputContainer.style.display = isLoaded ? 'block' : 'none';
     const loadBar = document.getElementById('loadChatBar');
     if (loadBar) loadBar.style.display = isLoaded ? 'none' : 'flex';
+    // Always re-enable the input when showing a chat — it may still be disabled
+    // from the initial 'Loading...' state set before DOMContentLoaded completes.
+    if (!isStreaming) {
+        messageInput.disabled = false;
+        if (messageInput.placeholder === 'Loading...') messageInput.placeholder = 'Send message...';
+        sendButton.disabled = !messageInput.value.trim();
+    }
 }
 
 function updateLoadButtonVisibility() {
@@ -958,7 +967,7 @@ async function loadEmptyStateDropdowns() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderEl.value = voiceProvider;
         await loadEmptyStateVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelEl.options.length) {
             const opt = Array.from(voiceModelEl.options).find(o => o.value === defaultVoice);
@@ -2223,7 +2232,7 @@ async function loadDefaultSettings() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderSelect.value = voiceProvider;
         await loadVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : 'elevenlabs_voice';
+        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelSelect.options.length) {
             const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);
@@ -2264,6 +2273,13 @@ function hideNewChatModal() {
     newChatModal.style.display = 'none';
     if (startingQuestionInput) startingQuestionInput.value = 'Are you ready to help me?';
 }
+
+// Close modal on Escape key
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && newChatModal.style.display !== 'none') {
+        hideNewChatModal();
+    }
+});
 
 // Create New Chat with Settings
 // Flow: create chat (model selected) -> load it into the feed (clear everything else) -> once loaded, send starting question to agent like a normal message.

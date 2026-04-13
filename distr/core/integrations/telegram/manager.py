@@ -213,6 +213,7 @@ class TelegramWebSocketManager(
                     "elevenlabs": "elevenlabs_voice",
                     "openai": "openai_voice",
                     "coqui": "coqui_voice",
+                    "voxcpm": "voxcpm_voice",
                 }
                 voice_id = settings.get(voice_keys.get(provider, "kokoro_voice"), "")
 

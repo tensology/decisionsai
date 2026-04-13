@@ -392,7 +392,7 @@ class AboutWindow(QtWidgets.QMainWindow):
             "Anthropic: Claude API": "https://www.anthropic.com/",
             "Kokoro: Text-to-Speech": "https://github.com/thewh1teagle/kokoro-onnx/",
             "ElevenLabs: Text-to-Speech": "https://elevenlabs.io/",
-            "Rube.app: Cross-App Automation via MCP": "https://rube.app/",
+            "VoxCPM: Tokenizer-Free TTS & Voice Cloning": "https://github.com/OpenBMB/VoxCPM",
             "PyAutoGUI: GUI Automation (Used for Actions)": "https://pyautogui.readthedocs.io/",
             "Pydantic: Data Validation": "https://pydantic-docs.helpmanual.io/",
             "PyQt6: GUI Framework": "https://www.riverbankcomputing.com/software/pyqt/",

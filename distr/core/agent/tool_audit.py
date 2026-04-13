@@ -20,6 +20,7 @@ def record_tool_execution(
     event_queue: Optional[Any] = None,
     user_text: Optional[str] = None,
     routing_path: Optional[str] = None,
+    routing_hint: Optional[str] = None,
 ) -> None:
     """Record a tool execution to the Step Runner audit log for the chat.
     If event_queue is provided, puts ('step_runner_updated', {}) so main app can refresh UI."""
@@ -29,6 +30,8 @@ def record_tool_execution(
         from distr.core.workflow.service import append_audit_step
 
         inst = instruction_hint or f"Executed {tool_name}"
+        # routing_hint is an alias for routing_path (text_extraction path uses routing_hint)
+        effective_routing = routing_hint if routing_hint is not None else routing_path
         append_audit_step(
             chat_id=chat_id,
             tool_name=tool_name,
@@ -36,7 +39,7 @@ def record_tool_execution(
             result=result,
             status=status,
             user_text=user_text,
-            routing_path=routing_path,
+            routing_path=effective_routing,
         )
         if event_queue:
             try:

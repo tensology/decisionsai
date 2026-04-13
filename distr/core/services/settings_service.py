@@ -74,6 +74,13 @@ def save_general_settings(data) -> None:
     _safe_emit(signal_manager.oracle_position_changed, data.oracle_position,
                label="oracle_position_changed")
 
+    # --- Autostart (load on startup) ---
+    try:
+        from distr.core.autostart import set_autostart
+        set_autostart(data.load_on_startup)
+    except Exception as e:
+        logger.warning("Failed to update autostart setting: %s", e)
+
 
 # ---------------------------------------------------------------------------
 # Individual voice / oracle updaters
@@ -206,12 +213,6 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         settings[key_field] = resolve_secret_fn(
             settings.get(key_field, ""), getattr(data, key_field)
         )
-
-    # rube uses "rube_token" not "rube_key"
-    settings["rube_enabled"] = data.rube_enabled
-    settings["rube_token"] = resolve_secret_fn(
-        settings.get("rube_token", ""), data.rube_token
-    )
 
     save_settings_to_db(settings)
     _safe_emit(signal_manager.reload_agent, label="reload_agent (third-party save)")

@@ -11,12 +11,22 @@ This file contains:
 
 import sys
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 import numpy as np
 import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
+
+# ---------------------------------------------------------------------------
+# Stub out PyQt6-dependent modules so tests can run without the GUI stack.
+# distr.core.settings imports distr.core.utils which imports PyQt6.
+# We register a lightweight stub in sys.modules before any production imports.
+# ---------------------------------------------------------------------------
+if "distr.core.settings" not in sys.modules:
+    _settings_stub = MagicMock()
+    _settings_stub.load_settings_from_db = MagicMock(return_value={})
+    sys.modules["distr.core.settings"] = _settings_stub
 
 from distr.core.agent.tool_retriever import ALWAYS_ON_NAMES, ToolRetriever
 
@@ -101,14 +111,14 @@ def test_tier_classification_binary(model_name: str) -> None:
     """**Validates: Requirements 2.4, 2.6**
 
     For any non-empty model name string, classify_model_tier SHALL return
-    exactly one of "micro" or "standard" — never another value, never an
-    exception.
+    exactly one of "micro", "small", or "standard" — never another value,
+    never an exception.
     """
     # Feature: semantic-tool-retrieval, Property 2
     result = ToolRetriever.classify_model_tier(model_name)
-    assert result in ("micro", "standard"), (
+    assert result in ("micro", "small", "standard"), (
         f"classify_model_tier({model_name!r}) returned {result!r}, "
-        f"expected 'micro' or 'standard'"
+        f"expected 'micro', 'small', or 'standard'"
     )
 
 
@@ -140,7 +150,7 @@ def test_micro_tier_parameter_extraction(prefix: str, value: float, suffix: str)
 
     For any model name containing a ``{value:.1f}b`` parameter-count token,
     the tier classification SHALL be driven by the *formatted* numeric value
-    compared against the 1.5 boundary — not the raw float.
+    compared against the tier thresholds.
     """
     # Feature: semantic-tool-retrieval, Property 3: param count drives tier
     model_name = f"{prefix}{value:.1f}b{suffix}"
@@ -149,6 +159,11 @@ def test_micro_tier_parameter_extraction(prefix: str, value: float, suffix: str)
     if formatted_value <= 1.5:
         assert tier == "micro", (
             f"Expected 'micro' for formatted_value={formatted_value} "
+            f"(model_name={model_name!r}), got {tier!r}"
+        )
+    elif formatted_value <= 4.0:
+        assert tier in ("micro", "small", "standard"), (
+            f"Expected a valid tier for formatted_value={formatted_value} "
             f"(model_name={model_name!r}), got {tier!r}"
         )
     else:

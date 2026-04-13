@@ -212,6 +212,110 @@ class WorkflowOrchestrationMixin:
                 self._finish_workflow_orchestration(workflow_id=workflow_id, success=False)
 
 
+    # ── Feedback loop (step_waiting_for_feedback) ──────────────────
+
+    def _on_step_waiting_for_feedback(
+        self, step_id: int, workflow_id: int, run_id: int, result_text: str,
+    ):
+        """Handle the ``step_waiting_for_feedback`` signal from StepRouter.
+
+        Stores the waiting state so that when the main agent (or user) later
+        provides feedback we can resume via ``StepRouter.resume_from_feedback``.
+        """
+        with _orch_lock:
+            if not hasattr(self, "_waiting_for_feedback"):
+                self._waiting_for_feedback: Dict[int, dict] = {}
+            self._waiting_for_feedback[run_id] = {
+                "step_id": step_id,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "result_text": result_text,
+            }
+        logger.info(
+            "Workflow: step %d (workflow %d, run %d) is waiting for feedback",
+            step_id, workflow_id, run_id,
+        )
+
+    def _provide_workflow_feedback(
+        self, run_id: int, feedback: str,
+    ) -> Optional[dict]:
+        """Provide feedback for a waiting step and resume routing.
+
+        Called when the main agent or user supplies feedback for a step that
+        entered the ``waiting`` state.  Delegates to
+        ``StepRouter.resume_from_feedback`` and processes the routing decision.
+
+        Returns the routing decision dict, or ``None`` if no waiting state was
+        found for *run_id*.
+        """
+        with _orch_lock:
+            waiting_states: Dict[int, dict] = getattr(self, "_waiting_for_feedback", {})
+            info = waiting_states.pop(run_id, None)
+        if not info:
+            logger.warning(
+                "Workflow feedback: no waiting state for run %d", run_id,
+            )
+            return None
+
+        step_id = info["step_id"]
+        workflow_id = info["workflow_id"]
+
+        try:
+            from distr.core.workflow.router import StepRouter
+
+            router = StepRouter()
+            decision = router.resume_from_feedback(step_id, run_id, feedback)
+            logger.info(
+                "Workflow feedback: run %d resumed — decision: %s",
+                run_id, decision.get("action"),
+            )
+
+            # If the router says to dispatch the next step, kick off the
+            # dispatcher so the workflow continues automatically.
+            if decision.get("action") == "next_step":
+                next_step_id = decision["step_id"]
+                wait_before = decision.get("wait_before_next", 0)
+                self._dispatch_next_after_feedback(
+                    workflow_id, run_id, next_step_id, wait_before,
+                )
+
+            return decision
+        except Exception as e:
+            logger.error(
+                "Workflow feedback: resume failed for run %d: %s",
+                run_id, e, exc_info=True,
+            )
+            return {"action": "end_run", "status": "failed", "error": str(e)}
+
+    def _dispatch_next_after_feedback(
+        self,
+        workflow_id: int,
+        run_id: int,
+        next_step_id: int,
+        wait_before: int = 0,
+    ) -> None:
+        """Dispatch the next step after feedback resumes a waiting run."""
+        def _do_dispatch():
+            try:
+                from distr.core.workflow.dispatcher import StepDispatcher
+
+                dispatcher = StepDispatcher()
+                dispatcher.run_in_workflow(next_step_id, run_id)
+            except Exception as e:
+                logger.error(
+                    "Workflow feedback: dispatch next step %d failed: %s",
+                    next_step_id, e, exc_info=True,
+                )
+
+        if wait_before and wait_before > 0:
+            QTimer.singleShot(wait_before, _do_dispatch)
+        else:
+            # Run in a thread to avoid blocking the Qt event loop
+            threading.Thread(
+                target=_do_dispatch, daemon=True,
+                name=f"wf-feedback-dispatch-{run_id}",
+            ).start()
+
     # ── Chat / context helpers ──────────────────────────────────────
 
     def _resolve_workflow_chat_id(self, workflow_id: int, default_chat_id=None):
@@ -319,18 +423,19 @@ class WorkflowOrchestrationMixin:
     def _on_workflow_execute_step_requested(
         self, step_id: int, workflow_id: int, instruction: str, chat_id,
     ):
-        try:
-            resolved_chat_id, _ = self._resolve_workflow_chat_id(workflow_id, chat_id)
-            self._pending_single_step = {
-                "step_id": int(step_id),
-                "workflow_id": int(workflow_id),
-                "chat_id": resolved_chat_id,
-            }
-            if resolved_chat_id:
-                signal_manager.current_chat_changed.emit(int(resolved_chat_id))
-            signal_manager.send_text_input.emit(instruction, False, None, None)
-        except Exception as e:
-            logger.error("Workflow execute request failed: %s", e, exc_info=True)
+        """Execute a single step in isolation via StepDispatcher."""
+        from distr.core.workflow.dispatcher import StepDispatcher
+
+        def _run():
+            try:
+                dispatcher = StepDispatcher()
+                dispatcher.run_isolated(int(step_id))
+            except Exception as e:
+                logger.error(
+                    "Workflow execute step %d failed: %s", step_id, e, exc_info=True,
+                )
+
+        threading.Thread(target=_run, daemon=True, name=f"wf-isolated-{step_id}").start()
 
     # ── Orchestration lifecycle ─────────────────────────────────────
 
@@ -416,18 +521,78 @@ class WorkflowOrchestrationMixin:
     def _send_workflow_instruction(
         self, orch: dict, step_index: int, prompt: str = None,
     ) -> None:
-        """Dispatch a step to the WorkflowAgent or execute directly for typed steps."""
+        """Dispatch a step via StepDispatcher or WorkflowAgent.
+
+        For non-agent step types, delegates to ``StepDispatcher.run_in_workflow()``.
+        For agent instructions (and explicit prompts like retries/verification),
+        sends to the WorkflowAgent and routes on completion via ``_on_step_completed``.
+        """
+        from distr.core.workflow.dispatcher import StepDispatcher
         from distr.core.workflow.service import build_step_context_prompt
         from distr.core.step_runner.context_assembly import assemble_step_context
 
         workflow_id = orch.get("workflow_id")
-        instruction = prompt
+        run_id = orch.get("run_id")
+        step_data = orch["steps_data"][step_index]
+        step_id = step_data["id"]
 
-        if instruction is None:
-            step_data = orch["steps_data"][step_index]
-            step_input_ctx = None
+        # If no explicit prompt, check if this is a direct-execution step type
+        if prompt is None:
             step_type = "agent_instruction"
+            try:
+                from distr.core.db import get_session as get_db_session
+                from distr.core.db.workflow import AutoWorkflowStep
 
+                with get_db_session() as db:
+                    step_obj = (
+                        db.query(AutoWorkflowStep)
+                        .filter(AutoWorkflowStep.id == step_id)
+                        .first()
+                    )
+                    if step_obj:
+                        step_type = (
+                            getattr(step_obj, "step_type", "agent_instruction")
+                            or "agent_instruction"
+                        )
+            except Exception as e:
+                logger.debug("Workflow: failed to load step type: %s", e)
+
+            # Direct execution types → delegate entirely to StepDispatcher
+            if step_type in _DIRECT_EXECUTION_TYPES:
+                def _run_dispatched():
+                    try:
+                        dispatcher = StepDispatcher()
+                        result = dispatcher.run_in_workflow(step_id, run_id)
+                        output = result.get("output", result.get("message", "Step completed."))
+                        passed = result.get("passed", result.get("success", False))
+                        QTimer.singleShot(
+                            0,
+                            lambda: self._on_step_completed(
+                                workflow_id=workflow_id,
+                                response_text=output or "Step completed.",
+                                passed=passed,
+                            ),
+                        )
+                    except Exception as exc:
+                        logger.error(
+                            "Workflow: StepDispatcher failed for step %d: %s",
+                            step_id, exc, exc_info=True,
+                        )
+                        QTimer.singleShot(
+                            0,
+                            lambda: self._handle_workflow_error(
+                                str(exc), workflow_id=workflow_id,
+                            ),
+                        )
+
+                threading.Thread(
+                    target=_run_dispatched, daemon=True,
+                    name=f"wf-dispatch-{step_id}",
+                ).start()
+                return
+
+            # Agent instruction path — build context prompt
+            step_input_ctx = None
             try:
                 from distr.core.db import get_session as get_db_session
                 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
@@ -441,14 +606,10 @@ class WorkflowOrchestrationMixin:
                         )
                         step_obj = (
                             db.query(AutoWorkflowStep)
-                            .filter(AutoWorkflowStep.id == step_data["id"])
+                            .filter(AutoWorkflowStep.id == step_id)
                             .first()
                         )
                         if wf and step_obj:
-                            step_type = (
-                                getattr(step_obj, "step_type", "agent_instruction")
-                                or "agent_instruction"
-                            )
                             step_input_ctx = assemble_step_context(
                                 session=wf,
                                 step=step_obj,
@@ -458,19 +619,8 @@ class WorkflowOrchestrationMixin:
                 logger.debug("Workflow: failed to assemble step context: %s", e)
 
             orch["step_input_context"] = step_input_ctx
-
-            # Direct execution path for non-agent step types
-            if step_type in _DIRECT_EXECUTION_TYPES:
-                if not self._validate_workflow_step_config(
-                    orch, step_index, step_type, step_input_ctx,
-                ):
-                    return
-                self._execute_step_directly(orch, step_index, step_type, step_input_ctx)
-                return
-
-            # Agent instruction path — build context prompt
             context_rules = step_input_ctx.workflow_rules if step_input_ctx else ""
-            instruction = build_step_context_prompt(
+            prompt = build_step_context_prompt(
                 step_index=step_index,
                 total_steps=len(orch["steps_data"]),
                 workflow_description=(
@@ -483,6 +633,7 @@ class WorkflowOrchestrationMixin:
                 context_rules=context_rules,
             )
 
+        # Send to WorkflowAgent
         workflow_agent: Optional[WorkflowAgent] = orch.get("workflow_agent")
         if workflow_agent is None:
             logger.error(
@@ -502,7 +653,7 @@ class WorkflowOrchestrationMixin:
             return
 
         future = asyncio.run_coroutine_threadsafe(
-            workflow_agent.execute(instruction), agent_loop,
+            workflow_agent.execute(prompt), agent_loop,
         )
 
         def _on_agent_done(fut):
@@ -521,7 +672,7 @@ class WorkflowOrchestrationMixin:
                 return
             QTimer.singleShot(
                 0,
-                lambda: self._advance_workflow_orchestration(
+                lambda: self._on_step_completed(
                     workflow_id=workflow_id, response_text=response_text,
                 ),
             )
@@ -529,136 +680,7 @@ class WorkflowOrchestrationMixin:
         future.add_done_callback(_on_agent_done)
 
 
-    # ── Step validation ─────────────────────────────────────────────
-
-    def _validate_workflow_step_config(
-        self, orch: dict, step_index: int, step_type: str, step_input_ctx,
-    ) -> bool:
-        from distr.core.step_runner.validation import StepValidator
-
-        step_data = orch["steps_data"][step_index]
-        config_dict = step_input_ctx.step_config if step_input_ctx else {}
-        errors = StepValidator().validate(step_type, config_dict)
-        if not errors:
-            return True
-        error_msg = "; ".join(f"{e.field}: {e.message}" for e in errors)
-        logger.warning(
-            "Workflow: validation failed for step %d (%s): %s",
-            step_data["id"], step_type, error_msg,
-        )
-        self._set_workflow_step_status(
-            step_data["id"], "failed", result=f"Validation failed: {error_msg}",
-        )
-        self._skip_to_next_workflow_step(orch, step_index)
-        return False
-
-    def _skip_to_next_workflow_step(self, orch: dict, current_index: int) -> None:
-        steps_data = orch["steps_data"]
-        workflow_id = orch.get("workflow_id")
-        orch["is_retry"] = False
-        orch["retry_count"] = 0
-        next_idx = current_index + 1
-        if next_idx >= len(steps_data):
-            self._finish_workflow_orchestration(
-                workflow_id=workflow_id,
-                success=orch.get("any_step_succeeded", False),
-            )
-            return
-        orch["current_index"] = next_idx
-        self._set_workflow_step_status(steps_data[next_idx]["id"], "running")
-        try:
-            self._send_workflow_instruction(orch, next_idx)
-            self._reset_workflow_timeout(workflow_id)
-        except Exception:
-            self._finish_workflow_orchestration(workflow_id=workflow_id, success=False)
-
-    # ── Direct execution for typed steps ────────────────────────────
-
-    def _execute_step_directly(
-        self, orch: dict, step_index: int, step_type: str, step_input_ctx,
-    ) -> None:
-        """Execute a non-agent step type directly (run_command, http_request, etc.).
-
-        Resolves ``{{variable}}`` placeholders via ``variable_resolver.resolve_variables()``
-        before execution.
-        """
-        from distr.core.step_runner.variable_resolver import resolve_variables
-
-        step_data = orch["steps_data"][step_index]
-        config = step_input_ctx.step_config if step_input_ctx else {}
-        workflow_id = orch.get("workflow_id")
-
-        # Resolve {{variable}} placeholders in config string values
-        prior_results = orch.get("prior_results") or []
-        resolved_config: Dict = {}
-        for key, val in config.items():
-            if isinstance(val, str):
-                resolved_config[key] = resolve_variables(val, prior_results)
-            else:
-                resolved_config[key] = val
-        config = resolved_config
-
-        if step_type == "play_recording":
-            self._execute_play_recording(orch, step_index, config)
-            return
-
-        def _run():
-            result_text, success = "", True
-            try:
-                if step_type == "run_command":
-                    result_text, success = self._exec_run_command(config)
-                elif step_type == "http_request":
-                    result_text, success = self._exec_http_request(config, step_input_ctx)
-                elif step_type == "execute_code":
-                    result_text, success = self._exec_execute_code(config, step_data)
-                elif step_type == "playwright":
-                    result_text, success = self._exec_playwright(config, step_data)
-            except Exception as exc:
-                result_text, success = f"Error: {exc}", False
-            QTimer.singleShot(
-                0,
-                lambda: self._on_direct_step_completed(
-                    orch, step_index, result_text, success,
-                ),
-            )
-
-        threading.Thread(target=_run, daemon=True).start()
-
-    def _on_direct_step_completed(
-        self, orch: dict, step_index: int, result_text: str, success: bool,
-    ) -> None:
-        workflow_id = orch.get("workflow_id")
-        with _orch_lock:
-            orchestrations: Dict[int, dict] = getattr(
-                self, "_workflow_orchestrations", {},
-            )
-            if (
-                workflow_id not in orchestrations
-                or orchestrations[workflow_id] is not orch
-            ):
-                return
-            step_data = orch["steps_data"][step_index]
-            self._set_workflow_step_status(
-                step_data["id"],
-                "completed" if success else "failed",
-                result=(result_text or "")[:2000],
-            )
-            if success:
-                orch["any_step_succeeded"] = True
-                orch["prior_results"].append({
-                    "title": step_data.get("title") or f"Step {step_index + 1}",
-                    "result": (result_text or "")[:200],
-                })
-        if success:
-            self._cancel_workflow_timeout(workflow_id)
-            self._advance_workflow_orchestration(
-                workflow_id=workflow_id,
-                response_text=result_text or "Step completed.",
-            )
-        else:
-            self._handle_workflow_error(
-                result_text or "Step execution failed.", workflow_id=workflow_id,
-            )
+    # ── (Step validation and direct execution now handled by StepDispatcher) ──
 
 
     # ── Static execution helpers (shared with StepRunnerMixin) ──────
@@ -772,21 +794,33 @@ class WorkflowOrchestrationMixin:
                             step_data["id"], "failed",
                             result=f"Recording ID {recording_id} not found",
                         )
-                        self._skip_to_next_workflow_step(orch, step_index)
+                        self._on_step_completed(
+                            workflow_id=workflow_id,
+                            response_text=f"Recording ID {recording_id} not found",
+                            passed=False,
+                        )
                         return
             except Exception as exc:
                 self._set_workflow_step_status(
                     step_data["id"], "failed",
                     result=f"Error looking up recording: {exc}",
                 )
-                self._skip_to_next_workflow_step(orch, step_index)
+                self._on_step_completed(
+                    workflow_id=workflow_id,
+                    response_text=f"Error looking up recording: {exc}",
+                    passed=False,
+                )
                 return
         else:
             self._set_workflow_step_status(
                 step_data["id"], "failed",
                 result="No recording name or ID specified",
             )
-            self._skip_to_next_workflow_step(orch, step_index)
+            self._on_step_completed(
+                workflow_id=workflow_id,
+                response_text="No recording name or ID specified",
+                passed=False,
+            )
             return
 
         _advanced = [False]
@@ -814,7 +848,7 @@ class WorkflowOrchestrationMixin:
             self._cancel_workflow_timeout(workflow_id)
             QTimer.singleShot(
                 0,
-                lambda: self._advance_workflow_orchestration(
+                lambda: self._on_step_completed(
                     workflow_id=workflow_id, response_text=result_text,
                 ),
             )
@@ -841,14 +875,22 @@ class WorkflowOrchestrationMixin:
         )
 
 
-    # ── Advance orchestration ───────────────────────────────────────
+    # ── Step completion / routing ──────────────────────────────────
 
-    def _advance_workflow_orchestration(
+    def _on_step_completed(
         self,
         workflow_id: int,
         chat_id=None,
         response_text=None,
+        passed: bool = True,
     ):
+        """Handle step completion: delegate routing to StepRouter, then dispatch next or finish.
+
+        Replaces the old ``_advance_workflow_orchestration`` with proper routing
+        via ``StepRouter.route()``.
+        """
+        from distr.core.workflow.router import StepRouter
+
         with _orch_lock:
             orchestrations: Dict[int, dict] = getattr(
                 self, "_workflow_orchestrations", {},
@@ -858,7 +900,7 @@ class WorkflowOrchestrationMixin:
                 return
             if orch.get("_advancing"):
                 logger.debug(
-                    "Workflow: _advance already in progress for workflow %d",
+                    "Workflow: _on_step_completed already in progress for workflow %d",
                     workflow_id,
                 )
                 return
@@ -868,6 +910,7 @@ class WorkflowOrchestrationMixin:
             self._cancel_workflow_timeout(workflow_id)
             idx = orch["current_index"]
             steps_data = orch["steps_data"]
+            run_id = orch.get("run_id")
             expected_chat_id = orch.get("chat_id")
 
             if expected_chat_id and chat_id and expected_chat_id != chat_id:
@@ -878,6 +921,7 @@ class WorkflowOrchestrationMixin:
                     chat_id or expected_chat_id,
                 )
 
+            # Handle verification sub-steps (Qt-specific, not in StepRouter)
             if orch.get("is_verification_step"):
                 if "VERIFIED" in (response_text or "").upper():
                     orch["is_verification_step"] = False
@@ -888,58 +932,107 @@ class WorkflowOrchestrationMixin:
                         chat_id=chat_id or expected_chat_id,
                     )
                     return
-            else:
-                current_step = steps_data[idx]
-                step_result = (response_text or "Step completed.").strip()
 
-                if "[WAIT]" in (response_text or ""):
-                    self._set_workflow_step_status(
-                        current_step["id"], "waiting", result=step_result[:2000],
-                    )
-                    self._cancel_workflow_timeout(workflow_id)
-                    logger.info(
-                        "Workflow: workflow %d step %d is waiting",
-                        workflow_id, idx + 1,
-                    )
-                    return
+            current_step = steps_data[idx]
+            step_result = (response_text or "Step completed.").strip()
 
+            # Handle [WAIT] marker in agent response
+            if "[WAIT]" in (response_text or ""):
                 self._set_workflow_step_status(
-                    current_step["id"], "completed", result=step_result[:2000],
+                    current_step["id"], "waiting", result=step_result[:2000],
                 )
-                orch["any_step_succeeded"] = True
-                orch["prior_results"].append({
-                    "title": current_step.get("title") or f"Step {idx + 1}",
-                    "result": step_result[:200],
-                })
+                self._cancel_workflow_timeout(workflow_id)
+                logger.info(
+                    "Workflow: workflow %d step %d is waiting",
+                    workflow_id, idx + 1,
+                )
+                return
 
-                verification = (current_step.get("verification") or "").strip()
-                if verification:
-                    orch["is_verification_step"] = True
-                    orch["retry_count"] = 0
-                    verify_prompt = (
-                        "[VERIFICATION] Take a screenshot and verify this condition:\n"
-                        f"{verification}\n\n"
-                        "Use the playwright_browser tool if this is a web/browser task — it will "
-                        "capture both a screenshot AND browser console logs for cross-checking.\n"
-                        "If confirmed, respond with VERIFIED. If not, describe what you see "
-                        "and any console errors that contradict the expected state."
+            # Update local orchestration state
+            self._set_workflow_step_status(
+                current_step["id"], "completed", result=step_result[:2000],
+            )
+            orch["any_step_succeeded"] = True
+            orch["prior_results"].append({
+                "title": current_step.get("title") or f"Step {idx + 1}",
+                "result": step_result[:200],
+            })
+
+            # Handle verification prompt if configured
+            verification = (current_step.get("verification") or "").strip()
+            if verification:
+                orch["is_verification_step"] = True
+                orch["retry_count"] = 0
+                verify_prompt = (
+                    "[VERIFICATION] Take a screenshot and verify this condition:\n"
+                    f"{verification}\n\n"
+                    "Use the playwright_browser tool if this is a web/browser task — it will "
+                    "capture both a screenshot AND browser console logs for cross-checking.\n"
+                    "If confirmed, respond with VERIFIED. If not, describe what you see "
+                    "and any console errors that contradict the expected state."
+                )
+                try:
+                    self._send_workflow_instruction(orch, idx, prompt=verify_prompt)
+                    self._reset_workflow_timeout(workflow_id)
+                except Exception as e:
+                    logger.error(
+                        "Workflow: failed to send verification prompt: %s",
+                        e, exc_info=True,
                     )
-                    try:
-                        self._send_workflow_instruction(orch, idx, prompt=verify_prompt)
-                        self._reset_workflow_timeout(workflow_id)
-                    except Exception as e:
-                        logger.error(
-                            "Workflow: failed to send verification prompt: %s",
-                            e, exc_info=True,
-                        )
-                        self._finish_workflow_orchestration(
-                            workflow_id=workflow_id, success=False,
-                        )
+                    self._finish_workflow_orchestration(
+                        workflow_id=workflow_id, success=False,
+                    )
+                return
+
+            # ── Delegate routing to StepRouter ──
+            step_id = current_step["id"]
+            router = StepRouter()
+
+            if run_id is not None:
+                decision = router.route(step_id, step_result, passed, run_id)
+            else:
+                # No run_id — fall back to sequential advancement
+                decision = {"action": "next_step_sequential"}
+
+            action = decision.get("action")
+
+            if action == "waiting":
+                # StepRouter entered waiting state — stop advancing
+                self._cancel_workflow_timeout(workflow_id)
+                logger.info(
+                    "Workflow: workflow %d step %d entered waiting via StepRouter",
+                    workflow_id, idx + 1,
+                )
+                return
+
+            if action == "end_run":
+                self._finish_workflow_orchestration(
+                    workflow_id=workflow_id,
+                    success=decision.get("status") == "completed"
+                    or orch.get("any_step_succeeded", True),
+                )
+                return
+
+            if action == "next_step":
+                # StepRouter determined the next step by ID — find its index
+                next_step_id = decision.get("step_id")
+                wait_before = decision.get("wait_before_next", 0)
+                next_idx = self._find_step_index(steps_data, next_step_id)
+                if next_idx is None:
+                    # Step ID not in our steps_data — end run
+                    self._finish_workflow_orchestration(
+                        workflow_id=workflow_id,
+                        success=orch.get("any_step_succeeded", True),
+                    )
                     return
+            else:
+                # Sequential fallback (no run_id or unknown action)
+                next_idx = idx + 1
+                wait_before = 0
 
             orch["is_retry"] = False
             orch["retry_count"] = 0
-            next_idx = idx + 1
+
             if next_idx >= len(steps_data):
                 self._finish_workflow_orchestration(
                     workflow_id=workflow_id,
@@ -948,26 +1041,42 @@ class WorkflowOrchestrationMixin:
                 return
 
             orch["current_index"] = next_idx
-            try:
-                self._set_workflow_step_status(steps_data[next_idx]["id"], "running")
-                self._send_workflow_instruction(orch, next_idx)
-                self._reset_workflow_timeout(workflow_id)
-                logger.info(
-                    "Workflow: workflow %d, step %d/%d",
-                    workflow_id, next_idx + 1, len(steps_data),
-                )
-            except Exception as e:
-                logger.error(
-                    "Workflow: failed to send step %d: %s",
-                    next_idx + 1, e, exc_info=True,
-                )
-                self._finish_workflow_orchestration(
-                    workflow_id=workflow_id, success=False,
-                )
+
+            def _dispatch_next():
+                try:
+                    self._set_workflow_step_status(steps_data[next_idx]["id"], "running")
+                    self._send_workflow_instruction(orch, next_idx)
+                    self._reset_workflow_timeout(workflow_id)
+                    logger.info(
+                        "Workflow: workflow %d, step %d/%d",
+                        workflow_id, next_idx + 1, len(steps_data),
+                    )
+                except Exception as e:
+                    logger.error(
+                        "Workflow: failed to send step %d: %s",
+                        next_idx + 1, e, exc_info=True,
+                    )
+                    self._finish_workflow_orchestration(
+                        workflow_id=workflow_id, success=False,
+                    )
+
+            if wait_before and wait_before > 0:
+                QTimer.singleShot(wait_before, _dispatch_next)
+            else:
+                _dispatch_next()
+
         finally:
             with _orch_lock:
                 if orch:
                     orch["_advancing"] = False
+
+    @staticmethod
+    def _find_step_index(steps_data: list, step_id: int) -> Optional[int]:
+        """Find the index of a step in steps_data by its ID."""
+        for i, s in enumerate(steps_data):
+            if s.get("id") == step_id:
+                return i
+        return None
 
 
     # ── Error handling / retry ──────────────────────────────────────

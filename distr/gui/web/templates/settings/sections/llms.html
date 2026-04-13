@@ -125,4 +125,86 @@
                 </button>
             </div>
         </div>
+
+        <!-- Computer Use LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-1">Computer Use</h3>
+            <p class="text-xs text-gray-500 mb-3">Pixel-precise screen element location. Requires Computer Use support (e.g. Claude Sonnet/Opus). Leave empty to use accessibility tree only.</p>
+            <div class="flex items-center gap-4">
+                <label for="computer_use_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="flex-1">
+                    <select id="computer_use_provider" name="computer_use_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Disabled (accessibility tree only)</option>
+                    </select>
+                </div>
+                <label for="computer_use_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="computer_use_model" name="computer_use_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="computer_use_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
+        <!-- Step Runner (Workflows) LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-1">Step Runner (Workflows)</h3>
+            <p class="text-xs text-gray-500 mb-3">Dedicated model for workflow step execution. Falls back to Conversational if empty.</p>
+            <div class="flex items-center gap-4">
+                <label for="step_runner_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="flex-1">
+                    <select id="step_runner_provider" name="step_runner_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Inherit from Conversational</option>
+                    </select>
+                </div>
+                <label for="step_runner_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="step_runner_model" name="step_runner_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="step_runner_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
+        <!-- Kanban Agent LLM -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-1">Kanban Agent</h3>
+            <p class="text-xs text-gray-500 mb-3">Orchestrator model for the Kanban board agent. Falls back to Conversational if empty.</p>
+            <div class="flex items-center gap-4">
+                <label for="kanban_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
+                <div class="flex-1">
+                    <select id="kanban_provider" name="kanban_provider"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="">Inherit from Conversational</option>
+                    </select>
+                </div>
+                <label for="kanban_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
+                <select id="kanban_model" name="kanban_model"
+                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                focus:outline-none focus:border-[#10a37f] transition-colors
+                                hover:border-[#7a7c8c] cursor-pointer">
+                    <option value="">Select model...</option>
+                </select>
+                <button type="button" id="kanban_download" class="w-8 h-8 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
+                    ⬇
+                </button>
+            </div>
+        </div>
+
     </div>

@@ -333,7 +333,7 @@ class TestMigrationFieldPreservation:
         def patched_get_session():
             return _session_ctx(factory)
 
-        with patch.object(svc, "get_session", patched_get_session):
+        with patch("distr.core.workflow.migration.get_session", patched_get_session):
             result = svc.migrate_step_runner_data()
 
         assert result is True, "Migration should succeed"

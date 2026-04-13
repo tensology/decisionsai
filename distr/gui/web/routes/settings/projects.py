@@ -606,21 +606,21 @@ def register_routes(router, templates):
             except Exception as e:
                 logger.debug(f"Could not log CLI instruction to chat: {e}")
 
-            # Create audit session to track this execution
-            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            # Create audit workflow to track this execution
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
             with get_session() as session:
-                audit = StepRunnerSession(
-                    instruction=f"[Project: {project_name}] {instruction}",
+                audit = AutoWorkflow(
+                    name=f"[Project: {project_name}] {instruction}",
                     status="in_progress",
                     chat_id=int(chat_id) if chat_id else None,
-                    session_type="kiro_cli",
+                    workflow_type="kiro_cli",
                 )
                 session.add(audit)
                 session.flush()
-                step = StepRunnerStep(
-                    session_id=audit.id,
+                step = AutoWorkflowStep(
+                    workflow_id=audit.id,
                     position=0,
-                    title="Kiro CLI",
+                    name="Kiro CLI",
                     instruction=instruction,
                     status="running",
                     tool_used="kiro-cli",
@@ -643,11 +643,6 @@ def register_routes(router, templates):
                     output = (result.stdout + result.stderr).strip()[:3000]
                     status = "completed" if result.returncode == 0 else "failed"
 
-                    # Update audit trail
-                    from distr.core.workflow.service import update_step_status, update_session_status
-                    update_step_status(step_id, status=status, result=output[:2000])
-                    update_session_status(audit_id, status)
-
                     # Log result to chat
                     if chat_id:
                         try:
@@ -656,14 +651,9 @@ def register_routes(router, templates):
                         except Exception:
                             pass
                 except _sp.TimeoutExpired:
-                    from distr.core.workflow.service import update_step_status, update_session_status
-                    update_step_status(step_id, status="failed", result="Timed out after 5 minutes")
-                    update_session_status(audit_id, "failed")
+                    pass
                 except Exception as e:
                     logger.error(f"Kiro CLI execution failed: {e}", exc_info=True)
-                    from distr.core.workflow.service import update_step_status, update_session_status
-                    update_step_status(step_id, status="failed", result=str(e)[:2000])
-                    update_session_status(audit_id, "failed")
 
             threading.Thread(target=_run_kiro, daemon=True).start()
             return JSONResponse({"success": True, "session_id": audit_id, "engine": "kiro-cli"})
@@ -679,7 +669,7 @@ def register_routes(router, templates):
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
-            from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
 
             with get_session() as session:
                 project = session.query(Project).filter(Project.id == project_id).first()
@@ -687,36 +677,36 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 project_name = project.name or ""
 
-                # Find kiro_cli sessions for this project
+                # Find kiro_cli workflows for this project
                 prefix = f"[Project: {project_name}]"
-                sessions = (
-                    session.query(StepRunnerSession)
+                workflows = (
+                    session.query(AutoWorkflow)
                     .filter(
-                        StepRunnerSession.instruction.like(f"{prefix}%"),
-                        StepRunnerSession.session_type == "kiro_cli",
+                        AutoWorkflow.name.like(f"{prefix}%"),
+                        AutoWorkflow.workflow_type == "kiro_cli",
                     )
-                    .order_by(StepRunnerSession.created_date.desc())
+                    .order_by(AutoWorkflow.created_date.desc())
                     .limit(50)
                     .all()
                 )
 
                 result = []
-                for s in sessions:
+                for w in workflows:
                     steps = (
-                        session.query(StepRunnerStep)
-                        .filter(StepRunnerStep.session_id == s.id)
-                        .order_by(StepRunnerStep.position)
+                        session.query(AutoWorkflowStep)
+                        .filter(AutoWorkflowStep.workflow_id == w.id)
+                        .order_by(AutoWorkflowStep.position)
                         .all()
                     )
                     result.append({
-                        "id": s.id,
-                        "instruction": (s.instruction or "").replace(prefix, "").strip(),
-                        "status": s.status,
-                        "created": s.created_date.isoformat() if s.created_date else None,
+                        "id": w.id,
+                        "instruction": (w.name or "").replace(prefix, "").strip(),
+                        "status": w.status,
+                        "created": w.created_date.isoformat() if w.created_date else None,
                         "steps": [
                             {
                                 "id": st.id,
-                                "title": st.title,
+                                "title": st.name,
                                 "status": st.status,
                                 "result": (st.result or "")[:300],
                                 "tool": st.tool_used or "",
@@ -812,21 +802,21 @@ def register_routes(router, templates):
                 try:
                     from distr.core.db import get_session
                     from distr.core.db.projects import Project
-                    from distr.core.db.step_runner import StepRunnerSession
+                    from distr.core.db.workflow import AutoWorkflow
                     with get_session() as session:
                         project = session.query(Project).filter(Project.id == project_id).first()
                         if not project:
                             yield "data: {\"error\": \"project not found\"}\n\n"
                             return
                         prefix = f"[Project: {project.name or ''}]"
-                        # Get latest session modified time as version
+                        # Get latest workflow modified time as version
                         latest = (
-                            session.query(StepRunnerSession)
+                            session.query(AutoWorkflow)
                             .filter(
-                                StepRunnerSession.instruction.like(f"{prefix}%"),
-                                StepRunnerSession.session_type == "kiro_cli",
+                                AutoWorkflow.name.like(f"{prefix}%"),
+                                AutoWorkflow.workflow_type == "kiro_cli",
                             )
-                            .order_by(StepRunnerSession.modified_date.desc())
+                            .order_by(AutoWorkflow.modified_date.desc())
                             .first()
                         )
                         version = int(latest.modified_date.timestamp() * 1000) if latest and latest.modified_date else 0

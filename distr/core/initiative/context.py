@@ -131,10 +131,10 @@ class ContextAssembler:
         return result
 
     def _fetch_scheduled_sessions(self) -> list:
-        from distr.core.workflow.service import list_sessions
-
-        sessions = list_sessions(session_type="scheduled")
-        return [s for s in sessions if s.get("enabled", True)]
+        """Fetch scheduled workflows."""
+        from distr.core.workflow.service import list_workflows
+        workflows = list_workflows(workflow_type="scheduled")
+        return [w for w in workflows if w.get("schedule_enabled")]
 
     def _fetch_kanban_summary(self, now: datetime) -> list:
         from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
@@ -227,7 +227,7 @@ class ContextAssembler:
         return summary
 
     def _fetch_stuck_tasks(self, now: datetime) -> list:
-        from distr.core.db.step_runner import StepRunnerSession
+        from distr.core.db.workflow import AutoWorkflow
         from distr.core.db import get_session
 
         stuck_cutoff = now - timedelta(minutes=30)
@@ -235,10 +235,10 @@ class ContextAssembler:
 
         with get_session() as session:
             rows = (
-                session.query(StepRunnerSession)
+                session.query(AutoWorkflow)
                 .filter(
-                    StepRunnerSession.status == "in_progress",
-                    StepRunnerSession.modified_date < stuck_cutoff,
+                    AutoWorkflow.status == "in_progress",
+                    AutoWorkflow.modified_date < stuck_cutoff,
                 )
                 .all()
             )
@@ -248,14 +248,14 @@ class ContextAssembler:
                 )
                 result.append({
                     "session_id": r.id,
-                    "instruction": (r.instruction or "")[:200],
+                    "instruction": (r.name or "")[:200],
                     "duration_minutes": duration_minutes,
                 })
 
         return result
 
     def _fetch_unfinished_workflows(self, now: datetime) -> list:
-        from distr.core.db.step_runner import StepRunnerSession
+        from distr.core.db.workflow import AutoWorkflow
         from distr.core.db import get_session
 
         unfinished_cutoff = now - timedelta(hours=24)
@@ -264,10 +264,10 @@ class ContextAssembler:
 
         with get_session() as session:
             rows = (
-                session.query(StepRunnerSession)
+                session.query(AutoWorkflow)
                 .filter(
-                    StepRunnerSession.status.notin_(terminal_statuses),
-                    StepRunnerSession.created_date < unfinished_cutoff,
+                    AutoWorkflow.status.notin_(terminal_statuses),
+                    AutoWorkflow.created_date < unfinished_cutoff,
                 )
                 .all()
             )
@@ -277,7 +277,7 @@ class ContextAssembler:
                 )
                 result.append({
                     "session_id": r.id,
-                    "instruction": (r.instruction or "")[:200],
+                    "instruction": (r.name or "")[:200],
                     "elapsed_hours": elapsed_hours,
                 })
 
@@ -353,7 +353,7 @@ class ContextAssembler:
 
     def _fetch_recent_audit(self, settings: dict) -> list:
         """Fetch recent tool audit entries from the current chat."""
-        from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+        from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
         from distr.core.db import get_session
 
         chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
@@ -361,29 +361,29 @@ class ContextAssembler:
             return []
 
         with get_session() as session:
-            # Find audit sessions for this chat
-            audit_sessions = (
-                session.query(StepRunnerSession)
+            # Find audit workflows for this chat
+            audit_workflows = (
+                session.query(AutoWorkflow)
                 .filter(
-                    StepRunnerSession.chat_id == int(chat_id),
-                    StepRunnerSession.session_type == "audit",
+                    AutoWorkflow.chat_id == int(chat_id),
+                    AutoWorkflow.workflow_type == "audit",
                 )
-                .order_by(StepRunnerSession.modified_date.desc())
+                .order_by(AutoWorkflow.modified_date.desc())
                 .limit(3)
                 .all()
             )
             result = []
-            for s in audit_sessions:
+            for w in audit_workflows:
                 steps = (
-                    session.query(StepRunnerStep)
-                    .filter(StepRunnerStep.session_id == s.id)
-                    .order_by(StepRunnerStep.position.desc())
+                    session.query(AutoWorkflowStep)
+                    .filter(AutoWorkflowStep.workflow_id == w.id)
+                    .order_by(AutoWorkflowStep.position.desc())
                     .limit(10)
                     .all()
                 )
                 for st in steps:
                     result.append({
-                        "tool": st.tool_used or st.title or "",
+                        "tool": st.tool_used or st.name or "",
                         "status": st.status,
                         "result": (st.result or "")[:200],
                     })

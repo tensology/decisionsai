@@ -342,7 +342,7 @@ def test_telegram_gate(action, level, boundaries):
     Property 8: Telegram gate (Requirements 14.1, 14.2)
 
     When initiative_allow_telegram=False, no call to send_to_telegram must
-    occur — neither via _send_telegram_if_allowed nor _send_telegram_or_queue.
+    occur — neither via _send_telegram_if_allowed nor _deliver_suggestion.
     """
     boundaries["initiative_allow_telegram"] = False
 
@@ -351,6 +351,7 @@ def test_telegram_gate(action, level, boundaries):
 
     service = InitiativeService.__new__(InitiativeService)
     service.telegram_manager = mock_telegram
+    service.chat_manager = None
     service._draft_queue = MagicMock()
     service._draft_queue.add = MagicMock()
 
@@ -361,8 +362,8 @@ def test_telegram_gate(action, level, boundaries):
     service._send_telegram_if_allowed("test message", settings)
     mock_telegram.send_to_telegram.assert_not_called()
 
-    # _send_telegram_or_queue must add to draft queue, not send
-    service._send_telegram_or_queue(action, settings, reason="test")
+    # _deliver_suggestion must not send via telegram when disabled
+    service._deliver_suggestion(action, settings)
     mock_telegram.send_to_telegram.assert_not_called()
 
 

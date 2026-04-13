@@ -303,18 +303,18 @@ class KanbanAgentCheckIn:
 
             # Log to audit trail
             try:
-                from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+                from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
                 with get_session() as db:
-                    audit = StepRunnerSession(
-                        instruction=f"[Project: {project_name}] Ticket #{ticket['id']}: {title}",
+                    audit = AutoWorkflow(
+                        name=f"[Project: {project_name}] Ticket #{ticket['id']}: {title}",
                         status=status,
-                        session_type="kiro_cli",
+                        workflow_type="kiro_cli",
                     )
                     db.add(audit)
                     db.flush()
-                    step = StepRunnerStep(
-                        session_id=audit.id, position=0,
-                        title=f"Ticket #{ticket['id']}", instruction=instruction[:500],
+                    step = AutoWorkflowStep(
+                        workflow_id=audit.id, position=0,
+                        name=f"Ticket #{ticket['id']}", instruction=instruction[:500],
                         status=status, result=output[:2000], tool_used="kiro-cli",
                     )
                     db.add(step)

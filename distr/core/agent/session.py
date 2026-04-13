@@ -429,6 +429,7 @@ class AgentSession:
             'openai':     ('openai',     'openai_voice',     DEFAULT_OPENAI_VOICE, {'api_key': 'openai_key'}),
             'coqui':      ('coqui',      'coqui_voice',      DEFAULT_COQUI_VOICE,  {'device': 'coqui_device'}),
             'f5tts':      ('f5tts',      'f5tts_voice',      'default',            {}),
+            'voxcpm':     ('voxcpm',     'voxcpm_voice',     'default',            {}),
         }
         vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
         tts_engine, voice_settings_key, voice_default, extra_keys = vp_entry
@@ -881,6 +882,48 @@ class AgentSession:
             # Pass TTS service to LLM service so tools can use it
             if hasattr(self, 'llm_service') and self.llm_service:
                 self.llm_service.set_tts_service(self.tts_service)
+        elif tts_config['engine'] == 'voxcpm':
+            from .services.tts.voxcpm import VoxCPMTTSService as _VoxCPMTTS
+            voice_name = tts_config.get('voice_name', 'default')
+            playback_speed = self.settings.get('playback_speed', 1.0)
+            playback_speed = max(SPEED_BOUNDS['voxcpm'][0], min(SPEED_BOUNDS['voxcpm'][1], playback_speed))
+
+            # Resolve reference audio for custom voice cloning
+            ref_audio = None
+            ref_text = None
+            if voice_name and voice_name.startswith('custom_'):
+                try:
+                    from distr.core.db import get_session as _gs, CustomVoice as _CV
+                    _db_id = int(voice_name.split('_', 1)[1])
+                    _sess = _gs()
+                    try:
+                        _cv = _sess.query(_CV).filter(
+                            _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
+                        ).first()
+                        if _cv and _cv.audio_dir:
+                            for _fn in os.listdir(_cv.audio_dir):
+                                if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                                    ref_audio = os.path.join(_cv.audio_dir, _fn)
+                                    break
+                            ref_text = getattr(_cv, 'system_prompt', None) or None
+                    finally:
+                        _sess.close()
+                except Exception:
+                    pass
+
+            self.tts_service = _VoxCPMTTS(
+                voice_name=voice_name,
+                reference_audio_path=ref_audio,
+                reference_text=ref_text,
+                stt_service=self.stt_service,
+                playback_speed=playback_speed,
+                event_queue=self.event_queue,
+                speech_volume=100,
+            )
+            self.tts_service.set_hands_free(self.is_hands_free)
+
+            if hasattr(self, 'llm_service') and self.llm_service:
+                self.llm_service.set_tts_service(self.tts_service)
         else:
             raise ValueError(f"Unsupported TTS engine: {tts_config['engine']}")
             
@@ -1237,6 +1280,38 @@ class AgentSession:
                     old_service.set_reference_voice(_get_default_ref_audio() or '', _DEFAULT_REF_TEXT)
                 self._apply_agent_name(new_agent_name)
                 self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
+                return
+
+        # --- VoxCPM: in-place reference voice swap ---
+        elif vp == 'voxcpm':
+            from .services.tts.voxcpm import VoxCPMTTSService
+            self.config['tts']['engine'] = 'voxcpm'
+            self.config['tts']['voice_name'] = voice_model or 'default'
+            if isinstance(old_service, VoxCPMTTSService):
+                if voice_model and voice_model.startswith('custom_'):
+                    try:
+                        from distr.core.db import get_session as _gs, CustomVoice as _CV
+                        import os as _os
+                        _db_id = int(voice_model.split('_', 1)[1])
+                        _sess = _gs()
+                        try:
+                            _cv = _sess.query(_CV).filter(
+                                _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
+                            ).first()
+                            if _cv and _cv.audio_dir:
+                                for _fn in _os.listdir(_cv.audio_dir):
+                                    if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                                        _ref = _os.path.join(_cv.audio_dir, _fn)
+                                        old_service.set_reference_voice(_ref, getattr(_cv, 'system_prompt', None))
+                                        break
+                        finally:
+                            _sess.close()
+                    except Exception as _e:
+                        self.logger.warning("VoxCPM hot-swap custom voice failed: %s", _e)
+                else:
+                    old_service.set_reference_voice(None)
+                self._apply_agent_name(new_agent_name)
+                self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
                 return
 
         else:

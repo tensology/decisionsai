@@ -6,13 +6,26 @@ async function populateProviderDropdowns() {
         const response = await fetch('/api/llms/available-providers');
         const data = response.ok ? await response.json() : { providers: [] };
         const providers = data.providers || [];
-        const llmTypes = ['conversational', 'coding', 'vision', 'image'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'step_runner', 'computer_use', 'kanban'];
+        const optionalTypes = ['step_runner', 'computer_use', 'kanban'];
+        const emptyLabels = {
+            'step_runner': 'Inherit from Conversational',
+            'computer_use': 'Disabled (accessibility tree only)',
+            'kanban': 'Inherit from Conversational',
+        };
         for (const type of llmTypes) {
             const sel = document.getElementById(`${type}_provider`);
             if (!sel) continue;
-            sel.innerHTML = providers.length
-                ? providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('')
-                : '<option value="ollama">Ollama</option>';
+            let html = '';
+            if (optionalTypes.includes(type)) {
+                html += `<option value="">${escapeHtml(emptyLabels[type] || 'Inherit')}</option>`;
+            }
+            if (providers.length) {
+                html += providers.map(p => `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`).join('');
+            } else if (!optionalTypes.includes(type)) {
+                html = '<option value="ollama">Ollama</option>';
+            }
+            sel.innerHTML = html;
         }
     } catch (e) {
         console.error('Error loading available providers:', e);
@@ -38,9 +51,10 @@ async function loadLLMsSettings() {
 
         document.getElementById('stt_model').value = settings.stt_model || 'vosk';
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'step_runner', 'computer_use', 'kanban'];
+        const optionalTypes = ['step_runner', 'computer_use', 'kanban'];
         for (const type of llmTypes) {
-            const provider = (settings[`${type}_provider`] || 'ollama').toLowerCase();
+            const provider = (settings[`${type}_provider`] || '').toLowerCase();
             const model = (settings[`${type}_model`] || '').trim();
 
             const providerSelect = document.getElementById(`${type}_provider`);
@@ -48,12 +62,19 @@ async function loadLLMsSettings() {
             if (providerSelect) {
                 providerSelect.value = provider;
                 if (providerSelect.value !== provider && providerSelect.options.length) {
-                    providerSelect.selectedIndex = 0;
+                    // For optional types, empty string is valid (inherit/disabled)
+                    if (optionalTypes.includes(type) && !provider) {
+                        providerSelect.value = '';
+                    } else {
+                        providerSelect.selectedIndex = 0;
+                    }
                     effectiveProvider = providerSelect.value;
                 }
             }
 
-            await loadLLMModels(type, effectiveProvider);
+            if (effectiveProvider) {
+                await loadLLMModels(type, effectiveProvider);
+            }
 
             const modelSelect = document.getElementById(`${type}_model`);
             if (modelSelect) {
@@ -95,7 +116,13 @@ async function saveLLMsSettings() {
             vision_provider: document.getElementById('vision_provider').value,
             vision_model: document.getElementById('vision_model').value,
             image_provider: document.getElementById('image_provider').value,
-            image_model: document.getElementById('image_model').value
+            image_model: document.getElementById('image_model').value,
+            step_runner_provider: document.getElementById('step_runner_provider').value,
+            step_runner_model: document.getElementById('step_runner_model').value,
+            computer_use_provider: document.getElementById('computer_use_provider').value,
+            computer_use_model: document.getElementById('computer_use_model').value,
+            kanban_provider: document.getElementById('kanban_provider').value,
+            kanban_model: document.getElementById('kanban_model').value
         };
 
         const response = await fetch('/api/llms', {
@@ -353,7 +380,7 @@ function filterOllamaBrowserList() {
 }
 
 function updateDownloadButtonVisibility() {
-    ['conversational', 'coding', 'vision', 'image'].forEach(function (type) {
+    ['conversational', 'coding', 'vision', 'image', 'step_runner', 'computer_use', 'kanban'].forEach(function (type) {
         const providerSelect = document.getElementById(type + '_provider');
         const downloadBtn = document.getElementById(type + '_download');
         if (!providerSelect || !downloadBtn) return;
@@ -399,12 +426,18 @@ if (document.readyState === 'loading') {
             updateDownloadButtonVisibility();
             initOllamaBrowserModal();
 
-            const llmTypes = ['conversational', 'coding', 'vision', 'image'];
+            const llmTypes = ['conversational', 'coding', 'vision', 'image', 'step_runner', 'computer_use', 'kanban'];
             llmTypes.forEach(type => {
                 const providerSelect = document.getElementById(`${type}_provider`);
                 if (providerSelect) {
                     providerSelect.addEventListener('change', function() {
-                        loadLLMModels(type, this.value);
+                        if (this.value) {
+                            loadLLMModels(type, this.value);
+                        } else {
+                            // Empty provider — clear model dropdown
+                            const modelSelect = document.getElementById(`${type}_model`);
+                            if (modelSelect) modelSelect.innerHTML = '<option value="">Select model...</option>';
+                        }
                         updateDownloadButtonVisibility();
                     });
                 }
@@ -424,12 +457,17 @@ if (document.readyState === 'loading') {
         updateDownloadButtonVisibility();
         initOllamaBrowserModal();
 
-        const llmTypes = ['conversational', 'coding', 'vision', 'image'];
+        const llmTypes = ['conversational', 'coding', 'vision', 'image', 'step_runner', 'computer_use', 'kanban'];
         llmTypes.forEach(type => {
             const providerSelect = document.getElementById(`${type}_provider`);
             if (providerSelect) {
                 providerSelect.addEventListener('change', function() {
-                    loadLLMModels(type, this.value);
+                    if (this.value) {
+                        loadLLMModels(type, this.value);
+                    } else {
+                        const modelSelect = document.getElementById(`${type}_model`);
+                        if (modelSelect) modelSelect.innerHTML = '<option value="">Select model...</option>';
+                    }
                     updateDownloadButtonVisibility();
                 });
             }

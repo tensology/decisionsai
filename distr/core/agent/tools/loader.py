@@ -37,8 +37,7 @@ def _get_tool_definitions(
     """Return the canonical list of (tool_name, kwargs) tuples.
 
     Shared by both ``load_tools`` and ``warm_tool_cache`` so the tool set
-    is defined in exactly one place.  Includes the Rube tool when enabled
-    in settings.
+    is defined in exactly one place.
     """
     defs = [
         # Smart Open - Handles URLs, applications, and files intelligently
@@ -183,16 +182,6 @@ def _get_tool_definitions(
         ("RequestToolTool", {}),
     ]
 
-    # Check if Rube is enabled before loading tools
-    from distr.core.utils import load_settings_from_db
-    settings = load_settings_from_db()
-    rube_enabled = settings.get('rube_enabled', False)
-    if rube_enabled:
-        defs.append(("RubeTool", {}))
-        logger.info("Rube is enabled - RubeTool will be loaded")
-    else:
-        logger.info("Rube is disabled - RubeTool will not be loaded")
-
     return defs
 
 
@@ -251,6 +240,24 @@ def warm_tool_cache(
                 tool = cls(**kwargs)
                 _tool_cache[tool.name] = tool
                 logger.debug("Cached accessibility tool: %s", tool_name)
+            except Exception as e:
+                logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
+
+        # Extended sidecar tools (screen intelligence, python executor, drag, scroll, wait)
+        _sidecar_extended_tools = [
+            ("ScreenAnalyzeTool",    ("input.sidecar_tools", "ScreenAnalyzeTool"),    {}),
+            ("RunPythonTool",        ("input.sidecar_tools", "RunPythonTool"),        {}),
+            ("DragToTool",           ("input.sidecar_tools", "DragToTool"),           {}),
+            ("ScrollTool",           ("input.sidecar_tools", "ScrollTool"),           {}),
+            ("WaitForElementTool",   ("input.sidecar_tools", "WaitForElementTool"),   {}),
+        ]
+        for tool_name, (submodule, class_name), kwargs in _sidecar_extended_tools:
+            try:
+                mod = importlib.import_module(f"{_BASE_PACKAGE}.{submodule}")
+                cls = getattr(mod, class_name)
+                tool = cls(**kwargs)
+                _tool_cache[tool.name] = tool
+                logger.debug("Cached sidecar tool: %s", tool_name)
             except Exception as e:
                 logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
 
@@ -354,7 +361,6 @@ TOOL_REGISTRY = {
     "SendFileToTelegramTool":  ("integrations.send_file_to_telegram", "SendFileToTelegramTool"),
     "SendVoiceNoteToTelegramTool": ("integrations.send_voice_note_to_telegram", "SendVoiceNoteToTelegramTool"),
     "GitOperationsTool":       ("integrations.git_operations", "GitOperationsTool"),
-    "RubeTool":                ("integrations.rube_tool", "RubeTool"),
     "CreateCursorTicketTool":  ("integrations.create_cursor_ticket", "CreateCursorTicketTool"),
     "KanbanTicketTool":        ("integrations.kanban_ticket", "KanbanTicketTool"),
     "PlaywrightTool":          ("integrations.playwright_tool", "PlaywrightTool"),
@@ -381,7 +387,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "MouseMovementTool": "Move the mouse pointer to a specific position, screen corner, or relative direction on the desktop.",
     "MouseActionsTool": "Perform mouse clicks (left, right, double) and scroll up or down at the current cursor position.",
     "FunctionKeyTool": "Press a function key from F1 through F12 in the active application.",
-    "SpecialKeyTool": "Press a special key such as Enter, Space, Tab, Escape, Alt, Control, or Command.",
+    "SpecialKeyTool": "Press any keyboard key: Enter, Space, Tab, Escape, arrows, F1-F24, letters, numbers, modifiers, and more.",
     "TypeTextTool": "Type out text character by character into the currently focused input field or editor.",
     # input/accessibility_tree
     "GetWindowTreeTool": "Get the accessibility tree of the frontmost window to inspect UI elements, buttons, text fields, and their hierarchy.",
@@ -464,7 +470,6 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
-    "RubeTool": "Execute multi-step API workflows using the Rube integration platform for connected third-party services.",
     "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
     "KanbanTicketTool": "Create, update, list, move, or manage kanban tickets, tasks, or cards on the project board.",
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
@@ -578,6 +583,24 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             cls = getattr(mod, class_name)
             tools.append(cls(**kwargs))
             logger.debug("Loaded accessibility tool: %s", tool_name)
+        except Exception as e:
+            logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
+
+    # Extended sidecar tools (screen intelligence, python executor, drag, scroll, wait)
+    sidecar_extended_tools = [
+        ("ScreenAnalyzeTool",    ("input.sidecar_tools", "ScreenAnalyzeTool"),    {}),
+        ("RunPythonTool",        ("input.sidecar_tools", "RunPythonTool"),        {}),
+        ("DragToTool",           ("input.sidecar_tools", "DragToTool"),           {}),
+        ("ScrollTool",           ("input.sidecar_tools", "ScrollTool"),           {}),
+        ("WaitForElementTool",   ("input.sidecar_tools", "WaitForElementTool"),   {}),
+    ]
+    for tool_name, (submodule, class_name), kwargs in sidecar_extended_tools:
+        try:
+            import importlib as _il
+            mod = _il.import_module(f"{_BASE_PACKAGE}.{submodule}")
+            cls = getattr(mod, class_name)
+            tools.append(cls(**kwargs))
+            logger.debug("Loaded sidecar tool: %s", tool_name)
         except Exception as e:
             logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
 

@@ -2,6 +2,30 @@
 
 ---
 
+## [2.8.0] - 2026-04-14
+
+### Sidecar Overhaul, Screen Intelligence, Workflow Agent Rewrite, LLM Settings Expansion
+
+**Sidecar got real tools** – The Go sidecar now has `screen_analyze`, `run_python`, `drag_to`, `scroll`, and `wait_for_element`. `screen_analyze` captures a screenshot and sends it to whatever vision or computer-use model you've configured — three modes: describe (what's on screen), locate (pixel coordinates of an element), and verify (did the action work). `run_python` executes arbitrary Python scripts with optional pip install, so the agent can do batch file ops, image processing, video editing, web scraping — anything Python can do — without needing a dedicated tool for each. `drag_to` does smooth Bézier drags between elements or coordinates via Quartz. `scroll` and `wait_for_element` round out the physical controls that were missing.
+
+**Workflow agent actually uses tools now** – The WorkflowAgent was calling the LLM without passing any tool definitions. It would get an instruction like "take a screenshot" and just talk about what it would do instead of doing it. Rewrote the entire execution engine to use each provider's native tool-calling API — OpenAI function calling for OpenAI/Groq/OpenRouter/KiloCode/Gemini, Anthropic tool_use for Claude, Ollama's tool format for local models. Same credentials, same tool format converters, same base URLs as the main chat. Full tool-call loop with a 25-iteration cap. If a model doesn't support tools, it retries without them instead of crashing.
+
+**Async steps now advance the workflow** – When an agent_instruction step finished, the callback stored the result but never routed to the next step. The workflow would just stop after every async step. Added `_record_result_and_route()` which records the result AND calls `StepRouter.route()` to dispatch the next step. Same fix for recording playback callbacks. Also added a timeout watchdog — if the agent hangs, the step fails after the configured timeout instead of running forever.
+
+**LLM settings page expanded** – The settings page now has all the model slots in one place: Conversational, Coding, Vision, Image, Computer Use, Step Runner (Workflows), and Kanban Agent. Previously the Step Runner model was buried in a modal inside the Workflows tab, and the Kanban Agent model was only in the board settings. Computer Use is new — set a provider with Computer Use support (Claude Sonnet/Opus) and the sidecar's `screen_analyze` tool uses it for pixel-precise element location. Leave it empty and it falls back to the accessibility tree. All slots support every provider (Ollama, OpenAI, Anthropic, Groq, OpenRouter, KiloCode, Google Gemini). Optional slots show "Inherit from Conversational" or "Disabled" as the default.
+
+**TTS after tool calls was silent** – When the LLM called a tool and then responded with a follow-up (like a transcription summary), the response showed up in the chat but was never spoken aloud. The `_handle_follow_up_content` method saved to chat history but never pushed a `TextFrame` to the TTS pipeline. Fixed — follow-up responses after tool calls are now spoken, unless they're raw file paths (which would sound terrible read aloud).
+
+**Coqui TTS was blocked from chat creation** – Selecting Coqui TTS as the voice provider and creating a new chat would fail with "Invalid voice provider: coqui." The validation whitelist in the chat creation endpoint was missing "coqui" even though the provider is fully supported everywhere else. Fixed both the create-chat and send-to-agent endpoints. Also fixed the voice key resolution in the chat JS — when Coqui was selected, it was falling through to the ElevenLabs voice key instead of `coqui_voice`, so the wrong default voice would load.
+
+**TTS provider notes** – We looked at adding more TTS providers this cycle. The short version: Coqui TTS works but the Python 3.12 support is fragile and the model quality doesn't justify the install complexity. F5-TTS and VoxCPM are in the codebase but niche — they're there if you want them, but Kokoro (offline, fast, voice cloning) and ElevenLabs (cloud, high quality) remain the recommended options. We're not adding more TTS providers for the sake of having more. The focus is on making the ones we have work reliably. The sub-agent LLM setting was added and then removed in the same session — it had no consumer and added noise to the settings page. It'll come back when there's an actual agent that needs it.
+
+**New sidecar tools registered in the agent** – Five new LangChain tool classes (`ScreenAnalyzeTool`, `RunPythonTool`, `DragToTool`, `ScrollTool`, `WaitForElementTool`) are loaded automatically when the sidecar is running. They're available to both the main voice agent and the workflow agent. If the sidecar isn't running, they're silently skipped.
+
+**Sidecar capabilities expanded** – The sidecar now registers `screen_intelligence` and `python_executor` capabilities alongside the existing ones. Windows gets stubs for the new desktop tools (drag, scroll, wait) — macOS has full implementations via Quartz/CoreGraphics. The sidecar README documents all 20 tools.
+
+---
+
 ## [2.7.0] - 2026-04-09
 
 ### Unified Workflows, Chat Setup, Remote Controls, Faster Local Models
@@ -274,17 +298,13 @@ You can now send images to any LLM provider – Anthropic, OpenRouter, Groq, Kil
 
 **Full Google Suite** – Direct integration with Google Calendar, Docs, Drive, Sheets, and Gmail through OAuth 2.0. Create events, check your schedule, create documents from markdown, list and upload files, read PDFs, check your inbox, send emails, create drafts, reply, and delete. Filter emails by type (inbox, sent, drafts, starred, important, unread, trash, spam).
 
-**Smart Routing** – When Google is connected, "email" always means Gmail. Google Workspace takes priority over Rube for all Google services. Real-time connection testing with streaming results and automatic API enablement reminders.
+**Smart Routing** – When Google is connected, "email" always means Gmail. Google Workspace takes priority for all Google services. Real-time connection testing with streaming results and automatic API enablement reminders.
 
 **Fixes** – Draft email creation works reliably now. Inbox shows all emails by default (not just unread). Fixed system prompt formatting errors that prevented startup. Better token storage and validation for OAuth.
 
 ---
 
 ## [2.1.1] - 2025-12-20
-
-### Rube.app Integration
-
-**500+ App Connections** – Rube.app integration brings cross-app automation for Google Workspace, Notion, Slack, GitHub, and hundreds more. Set it up once and the agent can interact with all of them.
 
 **About Window** – New tabbed interface with a built-in Changelog viewer. Enhanced emoji support and text replacements. Cleaner styling and layout. Fixed nested scrollbars in the changelog display.
 
@@ -481,7 +501,6 @@ DecisionsAI is like having a smart assistant that can control your computer with
 - It can take a screenshot of your screen and tell you what's on it.
 - It works mostly offline (if you use Ollama), so you don't need internet
 - It can automate boring tasks like sending emails or creating documents
-- It integrates with 500+ apps through Rube.app
 
 **Common Use Cases:**
 - **Writing Papers**: Use dictation mode to speak your essay, then ask the AI to improve it

@@ -24,6 +24,8 @@ def _tts_provider_to_internal(provider: str) -> str:
         return "coqui"
     if p in ("f5tts", "f5-tts", "f5-tts (offline)", "f5 tts (offline)", "f5 tts"):
         return "f5tts"
+    if p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
+        return "voxcpm"
     return p or "kokoro"
 
 
@@ -76,6 +78,12 @@ def _normalize_voice_for_provider(provider: str, voice: str, settings: dict) -> 
             return raw
         return raw if raw else "default"
 
+    # VoxCPM: custom voices pass through, default is "default"
+    if prov == "voxcpm":
+        if raw.startswith("custom_"):
+            return raw
+        return raw if raw else "default"
+
     # Coqui: validate speaker ID against known voices
     if prov == "coqui":
         try:
@@ -116,6 +124,8 @@ def generate_tts_audio(
             voice = (settings.get("coqui_voice") or "p225").strip()
         elif prov == "f5tts":
             voice = (settings.get("f5tts_voice") or "default").strip()
+        elif prov == "voxcpm":
+            voice = (settings.get("voxcpm_voice") or "default").strip()
         else:
             voice = "af_heart"
     else:
@@ -142,6 +152,8 @@ def generate_tts_audio(
         _generate_coqui(text, voice, speed, out_file)
     elif prov == "f5tts":
         _generate_f5tts(text, voice, speed, out_file)
+    elif prov == "voxcpm":
+        _generate_voxcpm(text, voice, speed, out_file)
     else:
         raise ValueError(f"Unknown TTS provider: {provider or prov}")
     return out_file
@@ -206,6 +218,8 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
         _generate_coqui(test_text, voice, speed, out_file)
     elif provider == 'f5tts':
         _generate_f5tts(test_text, voice, speed, out_file)
+    elif provider == 'voxcpm':
+        _generate_voxcpm(test_text, voice, speed, out_file)
     else:
         raise ValueError("Unknown TTS provider: %s", provider)
 
@@ -271,6 +285,23 @@ def _resolve_display_name(provider: str, voice: str, voice_name: str = None) -> 
                 pass
             return "Custom Voice"
         return voice.capitalize() if voice and voice != 'default' else "F5-TTS"
+
+    if provider == 'voxcpm':
+        if voice and voice.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(voice.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+            return "Custom Voice"
+        return voice.capitalize() if voice and voice != 'default' else "VoxCPM"
 
     return (voice_name or voice or "Assistant").strip()
 
@@ -624,3 +655,90 @@ def _generate_f5tts(text: str, voice: str, speed: float, out_file: str):
     audio, sr = _resample_audio(audio, sr, 48000)
     sf.write(out_file, audio, sr)
     logger.info("Wrote F5-TTS sample to %s", out_file)
+
+
+def _generate_voxcpm(text: str, voice: str, speed: float, out_file: str):
+    """Generate VoxCPM voice sample to WAV file.
+
+    Uses VoxCPM-0.5B with reduced inference steps for fast previews on CPU.
+    The full VoxCPM2 model is used only by the live pipeline (VoxCPMTTSService).
+    """
+    import numpy as np
+    import platform as _plat
+    if _plat.system() == "Darwin":
+        os.environ.setdefault("VOXCPM_DEVICE", "cpu")
+
+    try:
+        from voxcpm import VoxCPM  # noqa: F811
+    except ImportError:
+        raise ImportError("voxcpm is required. Install with: pip install voxcpm")
+
+    # Resolve reference audio and text for custom voices
+    ref_audio = None
+    ref_text = None
+
+    if voice and voice.startswith("custom_"):
+        try:
+            from distr.core.db import get_session, CustomVoice
+            db_id = int(voice.split("_", 1)[1])
+            session = get_session()
+            try:
+                cv = session.query(CustomVoice).filter(
+                    CustomVoice.id == db_id, CustomVoice.provider == "voxcpm", CustomVoice.status == "ready"
+                ).first()
+                if cv and cv.audio_dir and os.path.isdir(cv.audio_dir):
+                    for fname in os.listdir(cv.audio_dir):
+                        if fname.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
+                            ref_audio = os.path.join(cv.audio_dir, fname)
+                            break
+                    ref_text = getattr(cv, 'system_prompt', None) or None
+            finally:
+                session.close()
+        except Exception as e:
+            logger.warning("Failed to resolve VoxCPM custom voice %s: %s", voice, e)
+        if not ref_audio:
+            raise FileNotFoundError(f"No reference audio found for custom voice {voice}")
+
+    text = re.sub(r'\s+', ' ', text).strip()
+
+    # Use the lighter 0.5B model for previews — cached after first load
+    from distr.core.agent.services.tts.voxcpm import get_or_load_model
+    model = get_or_load_model("openbmb/VoxCPM-0.5B")
+
+    gen_kwargs = {
+        "text": text,
+        "cfg_value": 2.0,
+        "inference_timesteps": 3,
+    }
+
+    if ref_audio and os.path.isfile(ref_audio):
+        # VoxCPM-0.5B only supports prompt_wav_path (continuation cloning),
+        # NOT reference_wav_path (that's VoxCPM2-only)
+        kw_model = gen_kwargs.get("text", "")  # just for the check
+        import torch as _t
+        if _t.cuda.is_available():
+            # VoxCPM2: supports reference_wav_path
+            if ref_text:
+                gen_kwargs["prompt_wav_path"] = ref_audio
+                gen_kwargs["prompt_text"] = ref_text
+                gen_kwargs["reference_wav_path"] = ref_audio
+            else:
+                gen_kwargs["reference_wav_path"] = ref_audio
+        else:
+            # VoxCPM-0.5B: only prompt_wav_path + prompt_text
+            gen_kwargs["prompt_wav_path"] = ref_audio
+            gen_kwargs["prompt_text"] = ref_text or ""
+
+    wav = model.generate(**gen_kwargs)
+
+    if wav is None or len(wav) == 0:
+        raise ValueError("VoxCPM returned no audio")
+
+    audio = np.array(wav, dtype=np.float32)
+    if audio.ndim > 1:
+        audio = np.mean(audio, axis=1)
+
+    sr = model.tts_model.sample_rate if hasattr(model, 'tts_model') else 16000
+    audio, sr = _resample_audio(audio, sr, 48000)
+    sf.write(out_file, audio, sr)
+    logger.info("Wrote VoxCPM sample to %s", out_file)

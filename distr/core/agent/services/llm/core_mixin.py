@@ -1026,12 +1026,22 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(current_chat_id, tool.name, str(result), "completed", event_queue=self.event_queue)
 
-                    if self.chat_manager and current_chat_id:
-                        self.chat_manager.add_assistant_message(current_chat_id, result)
-                    self._messages.append({"role": "assistant", "content": result})
+                    # Convert raw tool result to a natural response for chat/TTS
+                    display_result = "Done"
+                    if result and isinstance(result, str):
+                        r = result.strip()
+                        if r.startswith("Error") or "error" in r.lower() or "failed" in r.lower():
+                            display_result = r[:200]
+                        elif r.startswith("{") and '"silent"' in r:
+                            display_result = ""  # Silent tool
+                        # Otherwise just "Done"
 
-                    if self._tts_service and self._speaker_enabled and result:
-                        cleaned = clean_text_for_tts(str(result))
+                    if self.chat_manager and current_chat_id and display_result:
+                        self.chat_manager.add_assistant_message(current_chat_id, display_result)
+                    self._messages.append({"role": "assistant", "content": display_result or "Done"})
+
+                    if self._tts_service and self._speaker_enabled and display_result:
+                        cleaned = clean_text_for_tts(display_result)
                         if cleaned:
                             await self.push_frame(TextFrame(text=cleaned))
                 except Exception as e:

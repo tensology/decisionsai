@@ -95,7 +95,6 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "groq_key",
         "kilo_key",
         "gemini_key",
-        "rube_token",
     ]
     response: Dict[str, Any] = {
         "ollama_url": settings.get("ollama_url", "http://localhost:11434/"),
@@ -107,7 +106,6 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
         "groq_enabled": settings.get("groq_enabled", False),
         "kilo_enabled": settings.get("kilo_enabled", False),
         "gemini_enabled": settings.get("gemini_enabled", False),
-        "rube_enabled": settings.get("rube_enabled", False),
     }
     for field in secret_fields:
         raw = (settings.get(field) or "").strip()

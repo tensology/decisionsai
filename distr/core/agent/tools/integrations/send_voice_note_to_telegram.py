@@ -63,6 +63,8 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                 resolved_voice = settings.get('openai_voice', 'alloy')
             elif 'elevenlabs' in tts_lower:
                 resolved_voice = settings.get('elevenlabs_voice', '')
+            elif 'voxcpm' in tts_lower:
+                resolved_voice = settings.get('voxcpm_voice', 'default')
             else:
                 resolved_voice = ''
             
@@ -218,6 +220,17 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                         
                 except Exception as e:
                     return f"Error generating voice note with ElevenLabs: {str(e)}"
+
+            elif 'voxcpm' in tts_lower:
+                # Use VoxCPM TTS with the resolved voice
+                try:
+                    from distr.core.audio.tts_handler import _generate_voxcpm
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                        temp_file_path = temp_file.name
+                    _generate_voxcpm(message, resolved_voice or 'default', 1.0, temp_file_path)
+                except Exception as e:
+                    return f"Error generating voice note with VoxCPM: {str(e)}"
+
             else:
                 return f"Error sending voice note: Unknown TTS provider: {tts_provider}"
             

@@ -26,6 +26,9 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	m["find_element"]    = handleFindElement
 	m["get_clipboard"]   = handleGetClipboard
 	m["set_clipboard"]   = handleSetClipboard
+	m["drag_to"]         = handleDragTo
+	m["scroll"]          = handleScroll
+	m["wait_for_element"] = handleWaitForElement
 }
 
 func platformCaptureScreen(outputPath string) error {
@@ -462,6 +465,188 @@ func findInCache(name, controlType string) []map[string]any {
 		matches = append(matches, el)
 	}
 	return matches
+}
+
+// ── drag_to ───────────────────────────────────────────────────────────────────
+// Drag from one position to another. Supports element IDs or raw coordinates.
+// from_element_id / to_element_id: use cached element centers
+// from_x,from_y / to_x,to_y: raw screen coordinates
+
+func handleDragTo(params map[string]any) (any, error) {
+	var fromX, fromY, toX, toY int
+
+	// Resolve source position
+	if fromID, ok := params["from_element_id"]; ok {
+		id := toInt(fromID)
+		elementCache.mu.Lock()
+		var rect map[string]any
+		if id >= 0 && id < len(elementCache.elements) {
+			if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
+				rect = r
+			}
+		}
+		elementCache.mu.Unlock()
+		if rect == nil {
+			return nil, fmt.Errorf("from element [%d] not in cache", id)
+		}
+		fromX = toInt(rect["x"]) + toInt(rect["w"])/2
+		fromY = toInt(rect["y"]) + toInt(rect["h"])/2
+	} else {
+		fromX = toInt(params["from_x"])
+		fromY = toInt(params["from_y"])
+	}
+
+	// Resolve destination position
+	if toID, ok := params["to_element_id"]; ok {
+		id := toInt(toID)
+		elementCache.mu.Lock()
+		var rect map[string]any
+		if id >= 0 && id < len(elementCache.elements) {
+			if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
+				rect = r
+			}
+		}
+		elementCache.mu.Unlock()
+		if rect == nil {
+			return nil, fmt.Errorf("to element [%d] not in cache", id)
+		}
+		toX = toInt(rect["x"]) + toInt(rect["w"])/2
+		toY = toInt(rect["y"]) + toInt(rect["h"])/2
+	} else {
+		toX = toInt(params["to_x"])
+		toY = toInt(params["to_y"])
+	}
+
+	durationMs := 500
+	if d, ok := params["duration_ms"].(float64); ok && d > 0 {
+		durationMs = int(d)
+	}
+
+	steps := 20
+	sleepPerStep := float64(durationMs) / 1000.0 / float64(steps)
+
+	py := fmt.Sprintf(`
+from Quartz.CoreGraphics import *
+import time
+steps = %d
+for i in range(steps + 1):
+    t = i / steps
+    x = %d + (%d - %d) * t
+    y = %d + (%d - %d) * t
+    pt = CGPointMake(x, y)
+    if i == 0:
+        ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseDown, pt, kCGMouseButtonLeft)
+    elif i == steps:
+        ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseUp, pt, kCGMouseButtonLeft)
+    else:
+        ev = CGEventCreateMouseEvent(None, kCGEventLeftMouseDragged, pt, kCGMouseButtonLeft)
+    CGEventPost(kCGHIDEventTap, ev)
+    time.sleep(%f)
+`, steps, fromX, toX, fromX, fromY, toY, fromY, sleepPerStep)
+
+	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(durationMs+5000)*time.Millisecond)
+	defer cancel()
+	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
+	if err != nil {
+		return nil, fmt.Errorf("drag_to failed: %w", err)
+	}
+	return map[string]any{"success": true, "from_x": fromX, "from_y": fromY, "to_x": toX, "to_y": toY}, nil
+}
+
+// ── scroll ────────────────────────────────────────────────────────────────────
+// Scroll at the current mouse position or at specified coordinates.
+// direction: "up", "down", "left", "right"
+// amount: number of scroll units (default 3)
+
+func handleScroll(params map[string]any) (any, error) {
+	direction, _ := params["direction"].(string)
+	if direction == "" {
+		direction = "down"
+	}
+	amount := 3
+	if a, ok := params["amount"].(float64); ok && a > 0 {
+		amount = int(a)
+	}
+
+	// Optional: scroll at specific coordinates (move mouse first)
+	if _, hasX := params["x"]; hasX {
+		x := toInt(params["x"])
+		y := toInt(params["y"])
+		platformMoveMouse(x, y)
+		time.Sleep(50 * time.Millisecond)
+	}
+
+	var deltaX, deltaY int
+	switch direction {
+	case "up":
+		deltaY = amount
+	case "down":
+		deltaY = -amount
+	case "left":
+		deltaX = amount
+	case "right":
+		deltaX = -amount
+	}
+
+	py := fmt.Sprintf(`
+from Quartz.CoreGraphics import *
+ev = CGEventCreateScrollWheelEvent(None, kCGScrollEventUnitLine, 2, %d, %d)
+CGEventPost(kCGHIDEventTap, ev)
+`, deltaY, deltaX)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
+	if err != nil {
+		return nil, fmt.Errorf("scroll failed: %w", err)
+	}
+	return map[string]any{"success": true, "direction": direction, "amount": amount}, nil
+}
+
+// ── wait_for_element ──────────────────────────────────────────────────────────
+// Poll the accessibility tree until an element matching name/control_type appears.
+// Returns the element when found, or error on timeout.
+
+func handleWaitForElement(params map[string]any) (any, error) {
+	name, _ := params["name"].(string)
+	controlType, _ := params["control_type"].(string)
+	if name == "" && controlType == "" {
+		return nil, fmt.Errorf("at least one of name or control_type is required")
+	}
+
+	timeoutMs := 10000
+	if t, ok := params["timeout"].(float64); ok && t > 0 {
+		timeoutMs = int(t)
+	}
+	intervalMs := 500
+	if i, ok := params["interval"].(float64); ok && i > 0 {
+		intervalMs = int(i)
+	}
+
+	deadline := time.Now().Add(time.Duration(timeoutMs) * time.Millisecond)
+	for time.Now().Before(deadline) {
+		// Refresh the tree
+		treeParams := make(map[string]any)
+		if appName, ok := params["app_name"]; ok {
+			treeParams["app_name"] = appName
+		}
+		if pid, ok := params["pid"]; ok {
+			treeParams["pid"] = pid
+		}
+		handleGetWindowTree(treeParams)
+
+		elementCache.mu.Lock()
+		matches := findInCache(name, controlType)
+		elementCache.mu.Unlock()
+
+		if len(matches) > 0 {
+			return map[string]any{"found": true, "match_count": len(matches), "elements": matches}, nil
+		}
+
+		time.Sleep(time.Duration(intervalMs) * time.Millisecond)
+	}
+
+	return map[string]any{"found": false, "match_count": 0, "elements": []any{}}, nil
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────

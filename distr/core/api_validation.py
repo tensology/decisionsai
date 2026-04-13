@@ -109,15 +109,6 @@ def validate_assemblyai(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
-def validate_rube(token: str) -> tuple[bool, str]:
-    """Validate Rube MCP token."""
-    # For Rube, we just check if the token is non-empty and has minimum length
-    # Actual validation would require MCP connection which is complex
-    if len(token.strip()) >= 20:
-        return True, ""
-    return False, "Token too short (minimum 20 characters)"
-
-
 def validate_openrouter(api_key: str) -> tuple[bool, str]:
     """Validate OpenRouter API key."""
     try:
@@ -248,7 +239,6 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "anthropic": validate_anthropic,
         "elevenlabs": validate_elevenlabs,
         "assemblyai": validate_assemblyai,
-        "rube": validate_rube,
         "openrouter": validate_openrouter,
         "groq": validate_groq,
         "kilocode": validate_kilocode,

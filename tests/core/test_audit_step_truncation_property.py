@@ -54,9 +54,9 @@ def _session_ctx(factory):
 
 
 def _patch_get_session(factory):
-    """Return a patcher that replaces get_session in the workflow service."""
+    """Return a patcher that replaces get_session in the workflow audit module."""
     return patch(
-        "distr.core.workflow.service.get_session",
+        "distr.core.workflow.audit.get_session",
         lambda: _session_ctx(factory),
     )
 

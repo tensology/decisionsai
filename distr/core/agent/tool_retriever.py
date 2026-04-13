@@ -48,6 +48,7 @@ _MICRO_ALLOWLIST: list[str] = ["smollm", "tinyllama", "phi-1", "phi-1.5"]
 
 _retriever_instance: Optional["ToolRetriever"] = None
 _retriever_lock = threading.Lock()
+_build_started = threading.Event()  # guards against duplicate build_index_async calls
 
 
 def get_tool_retriever() -> "ToolRetriever":
@@ -61,7 +62,13 @@ def get_tool_retriever() -> "ToolRetriever":
 
 
 def build_index_async(tools: list) -> None:
-    """Trigger background index build in a daemon thread."""
+    """Trigger background index build in a daemon thread.
+
+    Idempotent — if a build is already in progress or complete, this is a no-op.
+    """
+    if _build_started.is_set():
+        return
+    _build_started.set()
 
     def _build() -> None:
         retriever = get_tool_retriever()
@@ -91,6 +98,7 @@ def build_index_async(tools: list) -> None:
 # ---------------------------------------------------------------------------
 
 _DEFAULT_K = 15
+_SMALL_MODEL_K = 4  # small models get a tight tool set — fewer choices = less hallucination
 
 
 def _resolve_k() -> int:
@@ -138,15 +146,41 @@ class ToolRetriever:
 
     @staticmethod
     def classify_model_tier(model_name: str) -> str:
-        """Return ``"micro"`` or ``"standard"``. Never raises."""
+        """Return ``"micro"``, ``"small"``, or ``"standard"``. Never raises."""
         try:
             lower = model_name.lower()
             for entry in _MICRO_ALLOWLIST:
                 if entry in lower:
                     return "micro"
-            match = re.search(r"\b(\d+\.?\d*)b\b", lower)
-            if match and float(match.group(1)) <= 1.5:
-                return "micro"
+            # Parameter suffix grammar (Requirement 1.4):
+            # 1. Find the last ':' or '-' separated token.
+            # 2. Strip leading non-numeric prefix characters from that token.
+            # 3. Extract the contiguous decimal number followed by 'b' (case-insensitive).
+            # 4. Treat the number as billions.
+            # Examples: gemma3:4b→4, gemma4:e2b→2, llama3.2:3b→3, qwen3:0.6b→0.6
+            param_count: float | None = None
+            # Split on ':' or '-' and take the last token
+            tokens = re.split(r"[:\-]", lower)
+            for token in reversed(tokens):
+                token = token.strip()
+                if not token:
+                    continue
+                # Strip leading non-numeric prefix (letters, underscores, etc.)
+                stripped = re.sub(r"^[^0-9]+", "", token)
+                if not stripped:
+                    continue
+                # Match a decimal number followed by 'b' (optionally followed by
+                # non-alphanumeric chars like '/', ' ', etc.)
+                m = re.match(r"^(\d+\.?\d*)b(?:[^a-z0-9]|$)", stripped)
+                if m:
+                    param_count = float(m.group(1))
+                    break
+            if param_count is not None:
+                if param_count <= 1.5:
+                    return "micro"
+                if param_count <= 4.0:
+                    return "small"
+                return "standard"
             return "standard"
         except Exception:
             return "standard"
@@ -198,7 +232,11 @@ class ToolRetriever:
             return False
 
     def build_index(self, tools: list) -> None:
-        """Encode tool descriptions. Tries sbert, falls back to TF-IDF."""
+        """Encode tool descriptions. Tries sbert, falls back to TF-IDF.
+
+        Always builds TF-IDF alongside sbert so small-tier models can use
+        the lightweight retriever without sbert GPU overhead per request.
+        """
         with self._build_lock:
             if not tools:
                 logger.warning("build_index called with empty tool list")
@@ -211,6 +249,12 @@ class ToolRetriever:
             if not ok:
                 logger.warning("All embedding backends failed; retrieval disabled")
                 return
+
+            # Always build TF-IDF as a lightweight fallback for small-tier models,
+            # even when sbert succeeded — it's fast (~10ms) and avoids per-request
+            # GPU inference for 2-4B models.
+            if self._backend == "sbert" and self._tfidf_matrix is None:
+                self._try_build_tfidf(descriptions)
 
             self._names = names
             self._index_ready.set()
@@ -259,10 +303,12 @@ class ToolRetriever:
             return result
 
         if k is None:
-            k = _resolve_k()
+            k = _SMALL_MODEL_K if tier == "small" else _resolve_k()
 
-        # Retrieve using whichever backend built the index
-        if self._backend == "sbert":
+        # Small tier — use TF-IDF if available (avoids sbert GPU overhead on every request)
+        if tier == "small" and self._backend == "sbert" and self._tfidf_matrix is not None:
+            retrieved = self._retrieve_tfidf(user_message, k)
+        elif self._backend == "sbert":
             retrieved = self._retrieve_sbert(user_message, k)
         elif self._backend == "tfidf":
             retrieved = self._retrieve_tfidf(user_message, k)

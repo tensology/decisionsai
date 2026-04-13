@@ -881,20 +881,20 @@ source: kanban_ticket_{t.id}
 
         instruction = f"{title}\n\n{description}".strip() if description else title
 
-        # Create audit trail
-        from distr.core.db.step_runner import StepRunnerSession, StepRunnerStep
+        # Create audit trail using AutoWorkflow models
+        from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
         audit_id = step_id = None
         try:
             with get_session() as s:
-                audit = StepRunnerSession(
-                    instruction=f"[Project: {project_name}] Ticket #{tid}: {title}",
-                    status="in_progress", session_type="kiro_cli",
+                audit = AutoWorkflow(
+                    name=f"[Project: {project_name}] Ticket #{tid}: {title}",
+                    status="in_progress", workflow_type="kiro_cli",
                 )
                 s.add(audit)
                 s.flush()
-                step = StepRunnerStep(
-                    session_id=audit.id, position=0,
-                    title=f"Ticket #{tid}", instruction=instruction[:500],
+                step = AutoWorkflowStep(
+                    workflow_id=audit.id, position=0,
+                    name=f"Ticket #{tid}", instruction=instruction[:500],
                     status="running", tool_used="kiro-cli",
                 )
                 s.add(step)
@@ -918,12 +918,7 @@ source: kanban_ticket_{t.id}
                 output, status = f"Kiro CLI error: {e}", "failed"
 
             if audit_id and step_id:
-                try:
-                    from distr.core.workflow.service import update_step_status, update_session_status
-                    update_step_status(step_id, status=status, result=output[:2000])
-                    update_session_status(audit_id, status)
-                except Exception:
-                    pass
+                pass  # Legacy StepRunner audit trail removed (task 6.3)
 
         threading.Thread(target=_run_cli, daemon=True).start()
 
