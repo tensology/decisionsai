@@ -4,7 +4,7 @@
 
 ## [2.8.0] - 2026-04-14
 
-### Sidecar Tools, Workflow Engine, Small Model Tool Calling, VoxCPM, Initiative System
+### Sidecar Tools, Workflow Engine, Small Model Tool Calling, Coqui TTS, Initiative System
 
 **Sidecar got five new tools** – `screen_analyze` captures a screenshot and sends it to your configured vision or computer-use model for analysis — describe what's on screen, locate a specific element by pixel coordinates, or verify an action worked. `run_python` lets the agent write and execute Python scripts on the fly — file management, image processing, web scraping, whatever Python can do. `drag_to` does smooth drags between elements or coordinates. `scroll` and `wait_for_element` round out the physical controls. All five are available to both the main agent and the workflow engine when the sidecar is running.
 
@@ -14,9 +14,9 @@
 
 **LLM settings page** – All model slots are now in one place: Conversational, Coding, Vision, Image, Computer Use, Workflows, and Kanban Agent. Previously the workflow model was buried in a modal inside the Workflows tab, and the kanban model was only in board settings. Computer Use is new — set a provider with Computer Use support (like Claude) and the sidecar uses it for pixel-precise element location. Every slot supports every provider. Optional ones show "Inherit from Conversational" when empty.
 
-**VoxCPM TTS** – New voice provider. Uses VoxCPM2 (2B, 48kHz, streaming) on CUDA and VoxCPM-0.5B on CPU. Supports voice cloning from reference audio. Added to the voice provider dropdown alongside Kokoro, OpenAI, ElevenLabs, and F5-TTS.
+**VoxCPM TTS tested** – We built out a full VoxCPM integration (2B model on CUDA, 0.5B on CPU, voice cloning support). After testing it didn't make the cut — latency was too high for real conversations and the quality wasn't there compared to what we already have. The code is in the repo if someone wants to experiment, but it's not a recommended provider. Instead we brought Coqui TTS back properly — fixed the validation that was blocking it from chat creation, wired up the voice key resolution, and made sure all 100+ VCTK speakers load correctly from the voice library.
 
-**TTS provider notes** – We looked at the full TTS landscape this cycle. Coqui TTS works but Python 3.12 support is fragile and the quality doesn't justify the install pain — it was blocked from chat creation entirely (validation whitelist was missing "coqui"), which is now fixed. F5-TTS and VoxCPM are there if you want them, but Kokoro (offline, fast, cloning) and ElevenLabs (cloud, high quality) remain the recommended pair. We're not adding providers for the sake of having more — the focus is making the ones we have reliable. Rube integration was removed (discontinued service).
+**TTS provider notes** – We looked at the full TTS landscape this cycle. Coqui TTS works and has a great speaker library (100+ voices with English, Scottish, Irish, Welsh accents), but Python 3.12 support is fragile — it's there if you want it, just know it might need some coaxing. F5-TTS is also available for anyone who wants it. Kokoro (offline, fast, cloning) and ElevenLabs (cloud, high quality) remain the recommended pair. We're not adding providers for the sake of having more — the focus is making the ones we have reliable. Rube integration was removed (discontinued service).
 
 **Initiative system** – The proactive agent now has four levels: observe (passive), assist (suggests next steps), operate (follows up on stuck work), and own (manages outcomes end-to-end). Runs on two timers — idle detection after 5 minutes and periodic checks every 60 seconds. Each cycle assembles context from chat history, kanban, and workflows, asks the LLM to propose one action, and evaluates it against a policy gate before dispatching.
 
