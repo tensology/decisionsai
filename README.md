@@ -99,6 +99,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 |---|---|
 | [Whisper.cpp](https://github.com/ggerganov/whisper.cpp) | Fast, accurate offline speech recognition |
 | [Kokoro](https://github.com/thewh1teagle/kokoro-onnx) | High-quality offline TTS + custom voice cloning (on-device) |
+| [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK voices — 100+ speakers with accents) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
 | **Sidecar (Go)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
