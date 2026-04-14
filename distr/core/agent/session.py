@@ -882,6 +882,27 @@ class AgentSession:
             # Pass TTS service to LLM service so tools can use it
             if hasattr(self, 'llm_service') and self.llm_service:
                 self.llm_service.set_tts_service(self.tts_service)
+        elif tts_config['engine'] == 'coqui':
+            from .services.tts.coqui import CoquiTTSService as _CoquiTTS, COQUI_AVAILABLE
+            if not COQUI_AVAILABLE or _CoquiTTS is None:
+                raise ImportError("CoquiTTSService is not available. Install with: pip install coqui-tts")
+            voice_id = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
+            voice_name = tts_config.get('voice_name') or voice_id
+            device = tts_config.get('device') or self.settings.get('coqui_device') or None
+            playback_speed = self.settings.get('playback_speed', 1.0)
+            playback_speed = max(SPEED_BOUNDS['coqui'][0], min(SPEED_BOUNDS['coqui'][1], playback_speed))
+            self.tts_service = _CoquiTTS(
+                voice_id=voice_id,
+                voice_name=voice_name,
+                device=device,
+                stt_service=self.stt_service,
+                playback_speed=playback_speed,
+                event_queue=self.event_queue,
+                speech_volume=100,
+            )
+            self.tts_service.set_hands_free(self.is_hands_free)
+            if hasattr(self, 'llm_service') and self.llm_service:
+                self.llm_service.set_tts_service(self.tts_service)
         elif tts_config['engine'] == 'voxcpm':
             from .services.tts.voxcpm import VoxCPMTTSService as _VoxCPMTTS
             voice_name = tts_config.get('voice_name', 'default')

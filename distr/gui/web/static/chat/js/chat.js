@@ -106,7 +106,7 @@ async function createDefaultChat() {
             const general = await generalRes.json();
             const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
             if (vp) voiceProvider = vp;
-            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
+            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
             const v = (general[key] || '').trim();
             if (v && v !== '—') voiceModel = v;
         }
@@ -2436,7 +2436,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;

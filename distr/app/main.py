@@ -936,7 +936,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             vp = (settings.get("tts_provider") or "kokoro").strip()
             from distr.core.agent.constants import normalize_voice_provider
             vp_id = normalize_voice_provider(vp)
-            _display = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "voxcpm": "VoxCPM"}
+            _display = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "coqui": "Coqui TTS", "voxcpm": "VoxCPM"}
             voice_provider = _display.get(vp_id, vp_id.title())
             voice_model = (settings.get("kokoro_voice") or settings.get("openai_voice") or settings.get("elevenlabs_voice") or "").strip() or None
             ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New Chat", starting_question=None)

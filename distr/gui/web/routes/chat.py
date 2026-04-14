@@ -361,7 +361,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             model_name = (settings.get("conversational_llm_model") or "").strip() or "—"
             voice_provider_raw = (settings.get("tts_provider") or "Kokoro").strip()
             voice_provider_id = normalize_voice_provider(voice_provider_raw)
-            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "f5tts": "F5-TTS", "voxcpm": "VoxCPM"}
+            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "coqui": "Coqui TTS", "f5tts": "F5-TTS", "voxcpm": "VoxCPM"}
             voice_provider = _display_map.get(voice_provider_id, voice_provider_id.title())
             voice_model_raw = (
                 settings.get("kokoro_voice")
@@ -471,6 +471,8 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("openai_voice") or "")
                 elif "elevenlabs" in vp_lower:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("elevenlabs_voice") or "")
+                elif "coqui" in vp_lower:
+                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("coqui_voice") or "p225")
                 elif "f5tts" in vp_lower:
                     voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("f5tts_voice") or "default")
                 elif "voxcpm" in vp_lower:

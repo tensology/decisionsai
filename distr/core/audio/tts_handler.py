@@ -84,13 +84,17 @@ def _normalize_voice_for_provider(provider: str, voice: str, settings: dict) -> 
             return raw
         return raw if raw else "default"
 
-    # Coqui: validate speaker ID against known voices
+    # Coqui: validate speaker ID against known voices, pass through custom_ voices
     if prov == "coqui":
+        if raw.startswith("custom_"):
+            return raw
         try:
             from distr.core.agent.constants import COQUI_VOICES, DEFAULT_COQUI_VOICE
             if raw in COQUI_VOICES:
                 return raw
             configured = (settings.get("coqui_voice") or "").strip()
+            if configured.startswith("custom_"):
+                return configured
             if configured in COQUI_VOICES:
                 return configured
             return DEFAULT_COQUI_VOICE
@@ -262,6 +266,20 @@ def _resolve_display_name(provider: str, voice: str, voice_name: str = None) -> 
         return voice.capitalize() if voice else "Alloy"
 
     if provider == 'coqui':
+        if voice and voice.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(voice.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+            return "Custom Voice"
         try:
             from distr.core.agent.constants import COQUI_VOICES
             return COQUI_VOICES.get(voice, voice)

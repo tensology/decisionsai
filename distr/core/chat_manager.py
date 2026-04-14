@@ -157,6 +157,15 @@ class ChatManagerCore:
                             getattr(settings, "openai_voice", "alloy") or "alloy"
                         )
                         agent_name = openai_voice.capitalize()
+                    elif tts_provider == "Coqui TTS (Offline)":
+                        coqui_voice = (
+                            getattr(settings, "coqui_voice", "p225") or "p225"
+                        )
+                        try:
+                            from distr.core.agent.constants import COQUI_VOICES
+                            agent_name = COQUI_VOICES.get(coqui_voice, coqui_voice)
+                        except Exception:
+                            agent_name = coqui_voice
                     elif tts_provider == "F5-TTS (Offline)":
                         f5tts_voice = (
                             getattr(settings, "f5tts_voice", "default") or "default"

@@ -61,7 +61,7 @@ def register_routes(router, templates):
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "elevenlabs", "f5tts", "voxcpm"):
+        if provider_id in ("kokoro", "elevenlabs", "coqui", "f5tts", "voxcpm"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text

@@ -116,7 +116,7 @@ DEFAULT_COQUI_AGENT = "Sarah"
 # Coqui VCTK voices — loaded from playground/coqui-ai-voices.json
 # Keyed by speaker ID (e.g. "p225") -> display name (e.g. "Sarah")
 import json as _json, os as _os
-_COQUI_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), '../../../playground/coqui-ai-voices.json')
+_COQUI_JSON = _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), 'data/coqui-voices.json')
 try:
     with open(_COQUI_JSON, 'r') as _f:
         _coqui_raw = _json.load(_f)

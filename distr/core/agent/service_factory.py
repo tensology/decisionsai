@@ -362,6 +362,20 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
             return (settings or {}).get('elevenlabs_voice', '') or DEFAULT_ELEVENLABS_AGENT
         if 'coqui' in vp:
             v = (settings or {}).get('coqui_voice', DEFAULT_COQUI_VOICE)
+            if v and v.startswith('custom_'):
+                try:
+                    from distr.core.db import get_session, CustomVoice
+                    db_id = int(v.split('_', 1)[1])
+                    session = get_session()
+                    try:
+                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                        if cv:
+                            return cv.name
+                    finally:
+                        session.close()
+                except Exception:
+                    pass
+                return DEFAULT_COQUI_AGENT
             try:
                 from distr.core.agent.constants import COQUI_VOICES
                 return COQUI_VOICES.get(v, v)
@@ -421,6 +435,20 @@ def resolve_voice_to_display_name(voice_provider: str, voice_model: str, setting
     if 'openai' in vp:
         return vm.capitalize()
     if 'coqui' in vp:
+        if vm.startswith('custom_'):
+            try:
+                from distr.core.db import get_session, CustomVoice
+                db_id = int(vm.split('_', 1)[1])
+                session = get_session()
+                try:
+                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                    if cv:
+                        return cv.name
+                finally:
+                    session.close()
+            except Exception:
+                pass
+            return DEFAULT_COQUI_AGENT
         try:
             from distr.core.agent.constants import COQUI_VOICES
             return COQUI_VOICES.get(vm, vm)

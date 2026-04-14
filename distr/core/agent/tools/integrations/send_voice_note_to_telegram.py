@@ -63,6 +63,8 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                 resolved_voice = settings.get('openai_voice', 'alloy')
             elif 'elevenlabs' in tts_lower:
                 resolved_voice = settings.get('elevenlabs_voice', '')
+            elif 'coqui' in tts_lower:
+                resolved_voice = settings.get('coqui_voice', 'p225')
             elif 'voxcpm' in tts_lower:
                 resolved_voice = settings.get('voxcpm_voice', 'default')
             else:
@@ -220,6 +222,15 @@ class SendVoiceNoteToTelegramTool(BaseTool):
                         
                 except Exception as e:
                     return f"Error generating voice note with ElevenLabs: {str(e)}"
+
+            elif 'coqui' in tts_lower:
+                try:
+                    from distr.core.audio.tts_handler import _generate_coqui
+                    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as temp_file:
+                        temp_file_path = temp_file.name
+                    _generate_coqui(message, resolved_voice or 'p225', 1.0, temp_file_path)
+                except Exception as e:
+                    return f"Error generating voice note with Coqui TTS: {str(e)}"
 
             elif 'voxcpm' in tts_lower:
                 # Use VoxCPM TTS with the resolved voice
