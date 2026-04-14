@@ -2,33 +2,33 @@
 
 ---
 
-## [2.8.0] - 2026-04-14
+## [2.7.6] - 2026-04-14
 
 ### Sidecar Tools, Workflow Engine, Small Model Tool Calling, Coqui TTS, Initiative System
 
-**Sidecar got five new tools** – `screen_analyze` captures a screenshot and sends it to your configured vision or computer-use model for analysis — describe what's on screen, locate a specific element by pixel coordinates, or verify an action worked. `run_python` lets the agent write and execute Python scripts on the fly — file management, image processing, web scraping, whatever Python can do. `drag_to` does smooth drags between elements or coordinates. `scroll` and `wait_for_element` round out the physical controls. All five are available to both the main agent and the workflow engine when the sidecar is running.
+**Sidecar tools** – Sidecar is the companion process that runs next to the main app (named after a motorcycle sidecar: attached, but separate). We built it so the agent can execute machine-control tools on your actual computer over a persistent connection (and expose the same tools locally over HTTP), instead of trying to do OS-level actions inside the main app process. It is written in Go so it ships as a small cross-platform binary, starts fast, and runs reliably as a background service on macOS/Windows/Linux. Sidecar now includes five new tools: `screen_analyze`, `run_python`, `drag_to`, `scroll`, and `wait_for_element` for better screen understanding, more reliable UI control, and quick Python task execution. These tools are available in regular chat and in workflows whenever sidecar is enabled.
 
-**Workflow engine rewrite** – The workflow service was one massive file doing everything. It's now split into focused modules: dispatcher, router, verification, planning, import/export, migration, and audit. The workflow agent can actually use tools now — previously it called the LLM without passing any tool definitions, so it would describe what it would do instead of doing it. Now it uses each provider's native tool-calling API (OpenAI function calling, Anthropic tool_use, Ollama tools) with a proper loop and a 25-iteration cap. Async steps (agent instructions, recordings) now advance to the next step when they finish instead of stalling the whole run. There's a timeout watchdog too — if a step hangs, it fails after the configured timeout instead of running forever.
+**Workflow engine rewrite** – Workflow internals were split into clear modules (dispatcher, router, verification, planning, import/export, migration, audit) instead of one giant file. The workflow agent now uses tools during runs (with provider-native tool calling and a safety loop cap), so it acts instead of just describing actions. Async steps now continue properly when they finish, and hung steps now fail on timeout instead of running forever.
 
-**Small model tool calling** – Ollama models that don't support native function calling (the small ones — under ~4B params) now get tool access through text extraction. The system injects a tool hint block into the prompt, the model responds with a `TOOL: tool_name(args)` line, and an intent parser extracts and executes it. Fuzzy matching catches hallucinated tool names. Prompt injection detection prevents users from triggering tools through crafted input. Type coercion maps string args to the schema's declared types.
+**Small model tool calling** – Smaller Ollama models that do not support native function calling now still get tool access. The system adds a tool hint block, reads `TOOL: ...` intents from model output, and runs the matching tool. It also adds guardrails: hallucinated tool-name matching, prompt-injection checks, and argument type coercion.
 
-**LLM settings page** – All model slots are now in one place: Conversational, Coding, Vision, Image, Computer Use, Workflows, and Kanban Agent. Previously the workflow model was buried in a modal inside the Workflows tab, and the kanban model was only in board settings. Computer Use is new — set a provider with Computer Use support (like Claude) and the sidecar uses it for pixel-precise element location. Every slot supports every provider. Optional ones show "Inherit from Conversational" when empty.
+**LLM settings page** – All model slots are now in one place: Conversational, Coding, Vision, Image, Computer Use, Workflows, and Kanban Agent. Workflow and Kanban model settings are no longer hidden in separate screens. Computer Use is new for pixel-precise element location, and optional slots can inherit from Conversational when left empty.
 
-**VoxCPM TTS tested** – We built out a full VoxCPM integration (2B model on CUDA, 0.5B on CPU, voice cloning support). After testing it didn't make the cut — latency was too high for real conversations and the quality wasn't there compared to what we already have. The code is in the repo if someone wants to experiment, but it's not a recommended provider.
+**VoxCPM TTS tested** – VoxCPM integration was built and tested, including voice cloning. After real-use testing, it was not recommended due to latency and output quality. The code is still in the repo for anyone who wants to experiment.
 
-**Coqui TTS voice cloning** – Coqui TTS now supports voice cloning via XTTS v2. Upload a 6-15 second audio clip through the custom voice UI (same flow as Kokoro and ElevenLabs), and it generates speech using zero-shot cloning — no training, runs entirely on your machine. The 100+ built-in VCTK speakers (English, Scottish, Irish, Welsh accents) still use the lightweight VITS model. Custom cloned voices show up in the dropdown with a ⭐ prefix. Also fixed the validation that was blocking Coqui from chat creation and wired up the voice key resolution properly.
+**Coqui TTS voice cloning** – Coqui now supports custom voice cloning via XTTS v2 in the same custom-voice flow as Kokoro and ElevenLabs. Built-in VCTK speakers are still available, and cloned voices appear with a ⭐ prefix in the voice picker. Coqui chat-creation validation and voice-key resolution were also fixed.
 
-**TTS provider notes** – We looked at the full TTS landscape this cycle. Coqui TTS has a great speaker library and now has cloning, but Python 3.12 support is fragile — it's there if you want it, just know it might need some coaxing. F5-TTS is also available for anyone who wants it. Kokoro (offline, fast, cloning) and ElevenLabs (cloud, high quality) remain the recommended pair. We're not adding providers for the sake of having more — the focus is making the ones we have reliable. Rube integration was removed (discontinued service).
+**TTS provider notes** – Coqui has strong speaker coverage and now cloning, but Python 3.12 support can still be finicky. F5-TTS remains available for users who want it. Kokoro (offline) and ElevenLabs (cloud) remain the recommended pair while we focus on reliability over provider count. Rube integration was removed.
 
-**Initiative system** – The proactive agent now has four levels: observe (passive), assist (suggests next steps), operate (follows up on stuck work), and own (manages outcomes end-to-end). Runs on two timers — idle detection after 5 minutes and periodic checks every 60 seconds. Each cycle assembles context from chat history, kanban, and workflows, asks the LLM to propose one action, and evaluates it against a policy gate before dispatching.
+**Initiative system** – The proactive agent now has four levels: observe, assist, operate, and own. It runs on two timers: idle checks (5 minutes) and scheduled checks (every 60 seconds). Each cycle gathers context, proposes one action, and runs that action through policy checks before dispatch.
 
-**Autostart** – The app can now register itself to launch on system startup. macOS uses a LaunchAgent plist, Windows uses a registry key. Toggle it from settings.
+**Autostart** – The app can now start automatically on system login. You can toggle this from settings.
 
-**Voice Provider Guide** – New `VOICE_PROVIDER_GUIDE.md` documenting every TTS provider, how to set them up, quality comparisons, and recommendations.
+**Voice Provider Guide** – Added `VOICE_PROVIDER_GUIDE.md` with setup details, quality notes, and recommendations for all supported TTS providers.
 
-**Legacy Step Runner removed** – The old Step Runner database models, JS, tools, and service code are gone. Everything migrated to the unified Workflow system in 2.7.0 — this cleans up the leftover code.
+**Legacy Step Runner removed** – Remaining legacy Step Runner models, frontend code, tools, and service code were removed. Workflows stay on the unified system introduced in `2.7.0`.
 
-**Bug fixes** – TTS was silent after tool calls — the follow-up response showed in chat but never got spoken. Fixed. Coqui TTS voice key resolution was falling through to ElevenLabs instead of `coqui_voice`. Fixed. Oracle skin animations got new WebM assets. Model recommendations JSON refreshed. Various test updates for the new workflow modules.
+**Bug fixes** – Fixed silent TTS after tool calls. Fixed Coqui voice key resolution falling through to ElevenLabs instead of `coqui_voice`. Updated Oracle skin WebM animation assets. Refreshed model recommendations data. Added test updates for the new workflow modules.
 
 ---
 
