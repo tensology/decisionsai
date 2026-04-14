@@ -318,19 +318,43 @@ class WhatsAppWebSocketManager(QObject):
         jid = data.get("jid", "")
         chat_type = data.get("chat_type", "private")
         sender = data.get("sender", {})
-        text = data.get("text", "")
+        text_content = data.get("text", "")
         caption = data.get("caption", "")
         media = data.get("media")
         message_id = data.get("message_id", "")
+        wa_timestamp = data.get("timestamp")
+        from_me = data.get("from_me", False)
 
         # Determine display text
-        display_text = text or caption or ""
+        display_text = text_content or caption or ""
         if media and not display_text:
             media_type = media.get("type", "media") if isinstance(media, dict) else "media"
             display_text = f"[WhatsApp {media_type}]"
 
-        if not display_text:
+        if not display_text and not message_id:
             return  # Skip empty messages
+
+        # Persist to database first
+        db_id = self._persist_message({
+            "message_id": message_id,
+            "jid": jid,
+            "jid_phone": data.get("jid_phone", jid.split("@")[0].split(":")[0] if jid else ""),
+            "chat_type": chat_type,
+            "sender_jid": sender.get("jid", ""),
+            "sender_phone": sender.get("phone", ""),
+            "sender_push_name": sender.get("push_name", ""),
+            "text": text_content,
+            "caption": caption,
+            "media_type": media.get("type") if isinstance(media, dict) else None,
+            "media_mime_type": media.get("mime_type") if isinstance(media, dict) else None,
+            "media_filename": media.get("filename") if isinstance(media, dict) else None,
+            "whatsapp_timestamp": wa_timestamp,
+            "from_me": from_me,
+            "raw_data": data,
+        })
+
+        if not display_text:
+            return
 
         # Prefix with sender info
         sender_phone = sender.get("phone", "Unknown")
@@ -344,9 +368,9 @@ class WhatsAppWebSocketManager(QObject):
 
         full_text = prefix + display_text
 
-        logger.info(f"WhatsApp: Message from {sender_phone} ({chat_type}): {display_text[:80]}...")
+        logger.info(f"WhatsApp: Message from {sender_phone} ({chat_type}): {display_text[:80]}... (db_id={db_id})")
 
-        # Emit to the agent
+        # Emit to the agent — is_external=True (suppresses TTS like Telegram)
         try:
             from distr.core.signals import signal_manager
             signal_manager.send_text_input.emit(full_text, True, None, None)
@@ -366,12 +390,14 @@ class WhatsAppWebSocketManager(QObject):
         caption = data.get("caption", "")
         jid = data.get("jid", "")
         sender_jid = data.get("sender_jid", "")
+        file_length = data.get("file_length", 0)
 
         if not data_b64:
             logger.warning(f"WhatsApp: Media message with no data: {message_id}")
             return
 
         # Save media to disk
+        local_path = None
         try:
             import base64
             from datetime import datetime
@@ -398,26 +424,88 @@ class WhatsAppWebSocketManager(QObject):
             with open(dest, "wb") as f:
                 f.write(media_bytes)
 
+            local_path = str(dest)
             logger.info(f"WhatsApp: Saved {media_type} ({len(media_bytes)} bytes) → {dest}")
-
-            # Build agent message
-            sender_phone = sender_jid.split("@")[0].split(":")[0] if sender_jid else "Unknown"
-            size_str = f"{len(media_bytes) / 1024:.1f} KB" if len(media_bytes) < 1024 * 1024 else f"{len(media_bytes) / 1024 / 1024:.1f} MB"
-            text = f"[WhatsApp: {sender_phone}] Received {media_type}: {dest.name} ({size_str})"
-            if caption:
-                text += f" — {caption}"
-
-            # Send to agent with image path for vision (photos)
-            image_path = str(dest) if media_type == "photo" else None
-
-            try:
-                from distr.core.signals import signal_manager
-                signal_manager.send_text_input.emit(text, True, image_path, None)
-            except Exception as e:
-                logger.error(f"WhatsApp: Failed to emit media to agent: {e}")
 
         except Exception as e:
             logger.error(f"WhatsApp: Failed to save media: {e}", exc_info=True)
+            return
+
+        # Update the existing message record with local path and file length
+        self._update_media_info(message_id, local_path, file_length)
+
+        # Build agent message
+        sender_phone = sender_jid.split("@")[0].split(":")[0] if sender_jid else "Unknown"
+        size_str = f"{file_length / 1024:.1f} KB" if file_length < 1024 * 1024 else f"{file_length / 1024 / 1024:.1f} MB"
+        agent_text = f"[WhatsApp: {sender_phone}] Received {media_type}: {Path(local_path).name if local_path else filename} ({size_str})"
+        if caption:
+            agent_text += f" — {caption}"
+
+        # Send to agent with image path for vision (photos)
+        image_path = local_path if media_type == "photo" else None
+
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.send_text_input.emit(agent_text, True, image_path, None)
+        except Exception as e:
+            logger.error(f"WhatsApp: Failed to emit media to agent: {e}")
+
+    # ═════════════════════════════════════════════════════════════════════════
+    # Database Persistence
+    # ═════════════════════════════════════════════════════════════════════════
+
+    def _persist_message(self, msg_data: dict) -> Optional[int]:
+        """Store a WhatsApp message in the whatsapp_messages table.
+        Returns the database row ID, or None on failure.
+        """
+        try:
+            from distr.core.db import get_session, WhatsAppMessage
+            with get_session() as session:
+                # Deduplicate by message_id
+                existing = session.query(WhatsAppMessage).filter_by(
+                    message_id=msg_data.get("message_id", "")
+                ).first()
+                if existing:
+                    return existing.id
+
+                row = WhatsAppMessage(
+                    message_id=msg_data.get("message_id", ""),
+                    jid=msg_data.get("jid", ""),
+                    jid_phone=msg_data.get("jid_phone", ""),
+                    chat_type=msg_data.get("chat_type"),
+                    sender_jid=msg_data.get("sender_jid", ""),
+                    sender_phone=msg_data.get("sender_phone", ""),
+                    sender_push_name=msg_data.get("sender_push_name", ""),
+                    text=msg_data.get("text"),
+                    caption=msg_data.get("caption"),
+                    media_type=msg_data.get("media_type"),
+                    media_mime_type=msg_data.get("media_mime_type"),
+                    media_filename=msg_data.get("media_filename"),
+                    whatsapp_timestamp=msg_data.get("whatsapp_timestamp"),
+                    from_me=msg_data.get("from_me", False),
+                    raw_data=json.dumps(msg_data.get("raw_data", {}), default=str),
+                    processed=False,
+                )
+                session.add(row)
+                session.commit()
+                session.refresh(row)
+                return row.id
+        except Exception as e:
+            logger.error(f"WhatsApp: Failed to persist message: {e}", exc_info=True)
+            return None
+
+    def _update_media_info(self, message_id: str, local_path: str, file_length: int):
+        """Update an existing message record with media file info after download."""
+        try:
+            from distr.core.db import get_session, WhatsAppMessage
+            with get_session() as session:
+                row = session.query(WhatsAppMessage).filter_by(message_id=message_id).first()
+                if row:
+                    row.media_local_path = local_path
+                    row.media_file_length = file_length
+                    session.commit()
+        except Exception as e:
+            logger.error(f"WhatsApp: Failed to update media info: {e}")
 
     # ═════════════════════════════════════════════════════════════════════════
     # Settings Persistence

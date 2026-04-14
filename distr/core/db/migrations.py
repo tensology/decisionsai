@@ -1474,3 +1474,43 @@ def run_migrations():
                 logger.info("Added load_on_startup column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add load_on_startup column: {e}")
+
+    # Handle database migration for whatsapp_messages table
+    try:
+        with Session() as session:
+            session.execute(text("SELECT id FROM whatsapp_messages LIMIT 1"))
+    except Exception:
+        # Table doesn't exist, create it
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS whatsapp_messages (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        message_id VARCHAR NOT NULL UNIQUE,
+                        jid VARCHAR NOT NULL,
+                        jid_phone VARCHAR,
+                        chat_type VARCHAR,
+                        sender_jid VARCHAR,
+                        sender_phone VARCHAR,
+                        sender_push_name VARCHAR,
+                        text TEXT,
+                        caption TEXT,
+                        media_type VARCHAR,
+                        media_mime_type VARCHAR,
+                        media_filename VARCHAR,
+                        media_local_path VARCHAR,
+                        media_file_length INTEGER,
+                        whatsapp_timestamp INTEGER,
+                        from_me BOOLEAN DEFAULT 0,
+                        raw_data TEXT,
+                        processed BOOLEAN DEFAULT 0,
+                        processed_date DATETIME,
+                        agent_chat_id INTEGER,
+                        created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        modified_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.commit()
+                logger.info("Created whatsapp_messages table")
+        except Exception as e:
+            logger.warning(f"Could not create whatsapp_messages table: {e}")

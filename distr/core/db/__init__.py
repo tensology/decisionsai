@@ -405,6 +405,53 @@ class TelegramGroupMessage(Base):
     )
 
 
+class WhatsAppMessage(Base):
+    """Store WhatsApp messages received via Baileys relay."""
+    __tablename__ = 'whatsapp_messages'
+
+    id = Column(Integer, primary_key=True)
+
+    # WhatsApp message identifiers
+    message_id = Column(String, nullable=False, unique=True)  # WhatsApp's message ID (e.g. '3EB0...')
+    jid = Column(String, nullable=False)  # Chat JID (e.g. '27634103646@s.whatsapp.net' or group JID)
+    jid_phone = Column(String)  # Phone number extracted from JID
+    chat_type = Column(String)  # 'private', 'group'
+
+    # Sender information
+    sender_jid = Column(String)  # Sender's JID (differs from chat JID in groups)
+    sender_phone = Column(String)  # Sender's phone number
+    sender_push_name = Column(String)  # WhatsApp display name (push name)
+
+    # Message content
+    text = Column(Text)  # Message text
+    caption = Column(Text)  # Caption for media messages
+    media_type = Column(String)  # 'photo', 'voice', 'audio', 'video', 'document', 'sticker', or None
+    media_mime_type = Column(String)  # MIME type of media
+    media_filename = Column(String)  # Original filename (for documents)
+    media_local_path = Column(String)  # Local path where media was saved
+    media_file_length = Column(Integer)  # File size in bytes
+
+    # Metadata
+    whatsapp_timestamp = Column(Integer)  # Unix timestamp from WhatsApp
+    from_me = Column(Boolean, default=False)  # Whether this was sent by us
+
+    # Full raw data for later processing
+    raw_data = Column(Text)  # JSON string of complete message data
+
+    # Processing status
+    processed = Column(Boolean, default=False)  # Whether message was processed by agent
+    processed_date = Column(DateTime, nullable=True)
+    agent_chat_id = Column(Integer, nullable=True)  # Link to Chat row if message was added to a chat
+
+    # Timestamps
+    created_date = Column(DateTime, default=datetime.utcnow)
+    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    __table_args__ = (
+        {'sqlite_autoincrement': True},
+    )
+
+
 # Create the database file if it doesn't exist
 if not os.path.exists(DB_DIR):
     os.makedirs(DB_DIR)
