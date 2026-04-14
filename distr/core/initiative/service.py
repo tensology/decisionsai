@@ -150,6 +150,15 @@ class InitiativeService:
         except Exception:
             logger.error("InitiativeService: failed to run settings migration on init", exc_info=True)
 
+        # Pre-load tools for the context assembler (use_navigation_tools=True
+        # so the initiative service has full tool context)
+        try:
+            from distr.core.agent.tools.loader import load_tools as _load_tools
+            self._tools = _load_tools(use_navigation_tools=True)
+        except Exception:
+            logger.debug("InitiativeService: could not pre-load tools, will use defaults")
+            self._tools = []
+
     # ------------------------------------------------------------------
     # Lifecycle
     # ------------------------------------------------------------------
@@ -348,20 +357,23 @@ class InitiativeService:
     def _call_llm(self, bundle, settings: dict, level: str) -> str:
         import litellm
 
-        provider = (
-            (settings.get("conversational_llm_provider") or "").strip()
-            or (settings.get("agent_provider") or "").strip()
-            or "ollama"
-        ).strip().lower()
-        model = (
-            (settings.get("conversational_llm_model") or "").strip()
-            or (settings.get("agent_model") or "").strip()
-            or ""
-        )
-        if not model and provider == "ollama":
-            model = "llama3.2"
+        # Collect candidate providers in priority order:
+        #   1. conversational_llm_provider/model (preferred for lightweight calls)
+        #   2. agent_provider/model (main agent model — may be expensive)
+        #   3. ollama fallback (always available locally)
+        candidates = []
 
-        litellm_model = _litellm_model(provider, model, settings)
+        conv_provider = (settings.get("conversational_llm_provider") or "").strip().lower()
+        conv_model = (settings.get("conversational_llm_model") or "").strip()
+        agent_provider = (settings.get("agent_provider") or "").strip().lower()
+        agent_model = (settings.get("agent_model") or "").strip()
+
+        if conv_provider and conv_model:
+            candidates.append((conv_provider, conv_model))
+        if agent_provider and agent_model and (agent_provider, agent_model) != (conv_provider, conv_model):
+            candidates.append((agent_provider, agent_model))
+        # Always add Ollama as final fallback
+        candidates.append(("ollama", "llama3.2"))
 
         system_prompt = self._build_system_prompt(settings, bundle, level)
         user_prompt = json.dumps({
@@ -374,17 +386,39 @@ class InitiativeService:
             "snippets": bundle.snippets[:10],
             "recent_audit": bundle.recent_audit[:10],
         }, ensure_ascii=False)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
 
-        response = litellm.completion(
-            model=litellm_model,
-            messages=[
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ],
-            max_tokens=512,
-            temperature=0.4,
-        )
-        return response.choices[0].message.content
+        last_error = None
+        for provider, model in candidates:
+            litellm_model = _litellm_model(provider, model, settings)
+            try:
+                response = litellm.completion(
+                    model=litellm_model,
+                    messages=messages,
+                    max_tokens=512,
+                    temperature=0.4,
+                )
+                return response.choices[0].message.content
+            except litellm.AuthenticationError as e:
+                logger.warning(
+                    "InitiativeService: auth error for %s/%s, trying next provider: %s",
+                    provider, model, e,
+                )
+                last_error = e
+                continue
+            except Exception as e:
+                logger.warning(
+                    "InitiativeService: LLM call failed for %s/%s, trying next provider: %s",
+                    provider, model, e,
+                )
+                last_error = e
+                continue
+
+        # All providers exhausted
+        raise last_error or RuntimeError("InitiativeService: no LLM providers available")
 
     @staticmethod
     def _build_system_prompt(settings: dict, bundle, level: str) -> str:

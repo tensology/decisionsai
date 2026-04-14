@@ -291,6 +291,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
         current_chat_id = None
         full_response = ""
+        _signals_emitted = False  # Track whether stream-finished signals were emitted
 
         try:
             # 1. Load history & rebuild system prompt
@@ -495,12 +496,18 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     if full_response:
                         full_response = clean_text_for_tts(full_response, strip_whitespace=True)
                     if current_chat_id and full_response:
+                        # DB save is Python-only — should never fail due to Qt lifecycle
                         try:
                             self.chat_manager.add_assistant_message(current_chat_id, full_response)
+                        except Exception as e:
+                            logger.warning("Could not save assistant message: %s", e)
+                        # Signal emissions may fail in agent subprocess (Qt C++ object deleted)
+                        try:
                             signal_manager.chat_stream_finished.emit(current_chat_id)
                             signal_manager.typing_indicator_changed.emit(False)
-                        except (RuntimeError, Exception) as e:
-                            logger.warning("Could not save/signal: %s", e)
+                            _signals_emitted = True
+                        except RuntimeError:
+                            pass  # Expected in agent subprocess where Qt objects are GC'd
                     if full_response:
                         self._messages.append({"role": "assistant", "content": full_response})
                 # Return early — do NOT fall through to the standard path
@@ -616,12 +623,18 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if current_chat_id and full_response:
                 if tool_calls and any(tc.get('function', {}).get('name') == 'clear_chat' for tc in tool_calls):
                     return
+                # DB save is Python-only — should never fail due to Qt lifecycle
                 try:
                     self.chat_manager.add_assistant_message(current_chat_id, full_response)
+                except Exception as e:
+                    logger.warning("Could not save assistant message: %s", e)
+                # Signal emissions may fail in agent subprocess (Qt C++ object deleted)
+                try:
                     signal_manager.chat_stream_finished.emit(current_chat_id)
                     signal_manager.typing_indicator_changed.emit(False)
-                except (RuntimeError, Exception) as e:
-                    logger.warning("Could not save/signal: %s", e)
+                    _signals_emitted = True
+                except RuntimeError:
+                    pass
             if full_response:
                 self._messages.append({"role": "assistant", "content": full_response})
 
@@ -636,6 +649,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # Don't emit telegram response for cancelled tasks, but stop typing indicator
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
+            _signals_emitted = True  # cancellation handles its own cleanup
             return
         except Exception as e:
             logger.error("LLM Error (%.3fs): %s", time.time() - start_time, e, exc_info=True)
@@ -645,14 +659,14 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             self._emit_telegram_response(full_response)
             if not self._cancelled:
                 await self.push_frame(LLMFullResponseEndFrame())
-                # Safety net: always emit chat_stream_finished so the Step
-                # Runner (and any other listener) never gets stuck waiting.
-                if current_chat_id:
+                # Safety net: emit chat_stream_finished only if not already emitted
+                # so the Step Runner (and other listeners) never gets stuck waiting.
+                if current_chat_id and not _signals_emitted:
                     try:
                         signal_manager.typing_indicator_changed.emit(False)
                         signal_manager.chat_stream_finished.emit(current_chat_id)
                     except RuntimeError:
-                        pass
+                        pass  # Expected in agent subprocess
             self._cleanup_telegram_flags()
 
     # ------------------------------------------------------------------

@@ -1061,8 +1061,10 @@ class KokoroTTSService(TTSService):
                             logger.debug(f"TTS: Found analyzed screenshot for Telegram response: {analyzed_image_path}")
                             logger.debug(f"[Telegram TTS] 📸 Including screenshot with analysis: {analyzed_image_path}")
                         elif not analyzed_image_path:
-                            logger.warning(f"TTS: Telegram request but no screenshot found in thread - screenshot should have been stored!")
-                            logger.debug(f"[Telegram TTS] ⚠️ No screenshot found for Telegram response")
+                            # Welcome messages never have a screenshot context — that's expected, not a warning
+                            if not is_welcome_message:
+                                logger.warning("TTS: Telegram request but no screenshot found in thread - screenshot should have been stored!")
+                                logger.debug("[Telegram TTS] \u26a0\ufe0f No screenshot found for Telegram response")
                             # Try to get it from raw screenshot if available
                             if has_raw_screenshot:
                                 analyzed_image_path = threading.current_thread().telegram_send_raw_screenshot

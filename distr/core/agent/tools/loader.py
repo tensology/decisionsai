@@ -476,6 +476,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "KiroCliTool": "Delegate coding tasks to the Kiro AI coding agent for project-level code generation and editing.",
     # meta/
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",
+    # sidecar (screen intelligence, Python execution, physical interaction)
+    "ScreenAnalyzeTool": "Capture a screenshot and analyze it with AI vision. Three modes: describe (what is on screen), locate (find element coordinates), verify (confirm visual state). Use when the accessibility tree is insufficient or for visual content like images, video editors, and custom UIs.",
+    "RunPythonTool": "Execute arbitrary Python code on the user's machine for complex tasks without dedicated tools: batch file operations, image processing, data transformation, web scraping, GUI automation. Optional pip install of packages before execution.",
+    "DragToTool": "Drag from one position to another using element IDs from get_window_tree or raw screen coordinates. Supports element-to-element, element-to-coordinate, and coordinate-to-coordinate dragging.",
+    "ScrollTool": "Scroll at the current mouse position or at specified coordinates. Supports up, down, left, right directions with configurable scroll amount.",
+    "WaitForElementTool": "Wait until a UI element appears in the accessibility tree, polling repeatedly until found or timeout. Find by name, control_type, or app_name."
 }
 
 

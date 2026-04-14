@@ -685,6 +685,14 @@ class TelegramWebSocketManager(
         )
         self._log_detailed(f"ERROR: {err_str} (code={error_code})")
 
+        # Trigger immediate reconnect for connection-level errors (TLS, remote closed, etc.)
+        # Reset backoff so the first retry is fast, then grow on repeated failures.
+        if not self._active_disconnect:
+            self._reconnect_delay_current_ms = self._reconnect_delay_ms  # reset to base
+            if not self._reconnect_timer.isActive():
+                logger.info("[Telegram] 🔄 Triggering immediate reconnect after socket error")
+                self._reconnect_timer.start(min(self._reconnect_delay_ms, 1000))  # 1s initial retry
+
     # ── Sleep prevention ──
 
     def _inhibit_sleep(self):

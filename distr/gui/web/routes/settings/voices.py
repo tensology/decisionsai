@@ -24,8 +24,18 @@ CUSTOM_VOICE_AUDIO_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.ab
 
 def register_routes(router, templates):
 
+    _voices_cache: dict = {}       # provider_id -> (voices_list, timestamp)
+    _voices_cache_ttl = 30.0       # seconds before re-fetching
+
     async def _get_voices_for_provider(provider_id: str):
         """Fetch voice list for a provider. Includes custom voices from DB."""
+        # Return cached result if still fresh
+        import time as _time
+        cached = _voices_cache.get(provider_id)
+        if cached and (_time.time() - cached[1]) < _voices_cache_ttl:
+            logger.debug("Voices cache hit for %s (age: %.1fs)", provider_id, _time.time() - cached[1])
+            return cached[0]
+
         voices = []
         try:
             if provider_id == "kokoro":
@@ -69,7 +79,7 @@ def register_routes(router, templates):
                 try:
                     rows = session.execute(text(
                         "SELECT id, name, provider_voice_id, status FROM custom_voices "
-                        "WHERE provider = :p"
+                        "WHERE provider = :p AND status != 'failed'"
                     ), {"p": provider_id}).fetchall()
                     logger.info("Custom voices for %s: %s", provider_id, [(r[0], r[1], r[2], r[3]) for r in rows])
                     custom_provider_ids = set()
@@ -97,6 +107,9 @@ def register_routes(router, templates):
             except Exception as e:
                 logger.warning("Could not load custom voices for %s: %s", provider_id, e)
 
+        # Cache the result
+        import time as _time
+        _voices_cache[provider_id] = (voices, _time.time())
         return voices
 
     @router.get("/tts/providers")

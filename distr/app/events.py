@@ -44,6 +44,16 @@ class EventHandlerMixin:
         """
         import queue as _queue
 
+        # Lazy-init event dedup cache
+        if not hasattr(self, '_event_dedup_cache'):
+            self._event_dedup_cache = {}
+        else:
+            # Periodic cleanup: remove entries older than 10s to prevent unbounded growth
+            now = time.time()
+            self._event_dedup_cache = {
+                k: v for k, v in self._event_dedup_cache.items() if now - v < 10.0
+            }
+
         for _ in range(50):
             try:
                 event, data = self.agent_event_queue.get_nowait()
@@ -198,7 +208,16 @@ class EventHandlerMixin:
         elif event == 'tts_stopped':
             duration = data.get('duration', 0.0)
             logger.info(f"[EVENT QUEUE] TTS stopped event received, duration: {duration}")
+            # Dedup: skip duplicate tts_stopped with duration <= 0 within 0.5s
+            # These arrive in bursts during PTT activation and cause redundant stop/animation resets
             if duration <= 0.0:
+                dedup_key = ('tts_stopped_interrupt',)
+                now = time.time()
+                last_time = self._event_dedup_cache.get(dedup_key, 0)
+                if now - last_time < 0.5:
+                    logger.debug("[EVENT QUEUE] Dedup: skipping duplicate tts_stopped interrupt")
+                    return
+                self._event_dedup_cache[dedup_key] = now
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
@@ -318,6 +337,8 @@ class EventHandlerMixin:
 
     def _evt_chat_stream(self, event, data):
         if event == 'chat_stream_started':
+            # Dedup: reset finished flag when a new stream starts
+            self._last_stream_finished_chat_id = None
             signal_manager.chat_stream_started.emit(data.get('chat_id'))
         elif event == 'chat_stream_token':
             signal_manager.chat_stream_token.emit(data.get('token'))
@@ -325,6 +346,14 @@ class EventHandlerMixin:
             chat_id = data.get('chat_id')
             response_text = data.get('response_text')
             self._last_stream_response_text = response_text
+            # Dedup: skip duplicate chat_stream_finished for the same chat_id within 2s
+            dedup_key = ('chat_stream_finished', chat_id)
+            now = time.time()
+            last_time = self._event_dedup_cache.get(dedup_key, 0)
+            if now - last_time < 2.0:
+                logger.debug("[EVENT QUEUE] Dedup: skipping duplicate chat_stream_finished for chat_id=%s", chat_id)
+                return
+            self._event_dedup_cache[dedup_key] = now
             signal_manager.chat_stream_finished.emit(chat_id)
         elif event == 'chat_stream_error':
             error = data.get('error')
@@ -332,6 +361,14 @@ class EventHandlerMixin:
             signal_manager.chat_stream_error.emit(error)
         elif event == 'typing_indicator_changed':
             show = data.get('show')
+            # Dedup: skip duplicate typing_indicator_changed with same value within 1s
+            dedup_key = ('typing_indicator_changed', show)
+            now = time.time()
+            last_time = self._event_dedup_cache.get(dedup_key, 0)
+            if now - last_time < 1.0:
+                logger.debug("[EVENT QUEUE] Dedup: skipping duplicate typing_indicator_changed show=%s", show)
+                return
+            self._event_dedup_cache[dedup_key] = now
             signal_manager.typing_indicator_changed.emit(show)
             # Also stop the Telegram typing loop when typing indicator is turned off
             if not show and hasattr(self, 'telegram_manager') and self.telegram_manager:
