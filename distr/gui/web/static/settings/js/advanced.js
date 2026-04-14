@@ -687,7 +687,9 @@ function connectWhatsApp() {
         var status = data.status;
 
         if (status === 'connected' && data.phone) {
-            document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
+            // Already connected — save to DB
+            fetch(settingsBase + '/api/advanced/whatsapp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: data.phone.jid || '', name: data.phone.name || '', push_name: data.phone.pushName || data.phone.notify || '' }) }).then(function () { updateConnectionStatus(); });
+            document.getElementById('whatsapp_qr_container').innerHTML = '\u003cp class="text-green-500 text-lg"\u003e✓ Connected\u003c/p\u003e';
             document.getElementById('whatsapp_status').textContent = 'WhatsApp is connected: ' + (data.phone.name || data.phone.jid || '');
             document.getElementById('whatsapp_status').className = 'text-sm text-green-400 text-center';
             document.getElementById('whatsapp_connected_info').classList.remove('hidden');
@@ -730,7 +732,9 @@ function connectWhatsApp() {
             fetch(settingsBase + '/api/advanced/whatsapp/status').then(function (r) { return r.json(); }).then(function (st) {
                 if (st.status === 'connected' && st.phone) {
                     clearInterval(whatsappPollInterval);
-                    document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
+                    // Save to DB
+                    fetch(settingsBase + '/api/advanced/whatsapp/save', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jid: st.phone.jid || '', name: st.phone.name || '', push_name: st.phone.pushName || st.phone.notify || '' }) });
+                    document.getElementById('whatsapp_qr_container').innerHTML = '\u003cp class="text-green-500 text-lg"\u003e✓ Connected\u003c/p\u003e';
                     document.getElementById('whatsapp_status').textContent = 'WhatsApp connected: ' + (st.phone.name || st.phone.jid || '');
                     document.getElementById('whatsapp_status').className = 'text-sm text-green-400 text-center';
                     document.getElementById('whatsapp_connected_info').classList.remove('hidden');

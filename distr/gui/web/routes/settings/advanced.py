@@ -411,6 +411,31 @@ def register_routes(router, templates):
             logger.error(f"WhatsApp disconnect proxy: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    @router.post("/advanced/whatsapp/save")
+    async def whatsapp_save(body: dict):
+        """Save WhatsApp connection to connected_accounts."""
+        try:
+            from distr.core.settings import load_settings_from_db, save_settings_to_db
+            jid = body.get("jid") or ""
+            name = body.get("name") or ""
+            push_name = body.get("push_name") or ""
+            settings = load_settings_from_db()
+            connected_accounts = parse_connected_accounts(settings)
+            existing = next((a for a in connected_accounts if isinstance(a, dict) and a.get("provider") == "whatsapp"), None)
+            if not existing:
+                connected_accounts.append({"provider": "whatsapp", "jid": jid, "name": name, "push_name": push_name, "status": "connected"})
+            else:
+                existing["jid"] = jid
+                existing["name"] = name
+                existing["push_name"] = push_name
+                existing["status"] = "connected"
+            settings["connected_accounts"] = connected_accounts
+            save_settings_to_db(settings)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error(f"WhatsApp save: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)})
+
     @router.post("/advanced/validate/jira")
     async def validate_jira(body: dict):
         """Validate Jira credentials (same logic as native CredentialValidationThread._validate_jira)."""
