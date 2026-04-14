@@ -868,6 +868,10 @@
         document.querySelectorAll(".kb-bm-pane").forEach(function(pane) { pane.classList.add("hidden"); });
         var pane = document.getElementById("kb-bm-tab-" + tab);
         if (pane) pane.classList.remove("hidden");
+        // Load WhatsApp links when switching to that tab
+        if (tab === "whatsapp" && editingBoardId) {
+            loadBoardWaLinks(editingBoardId);
+        }
     }
 
     function switchTicketTab(tab) {
@@ -1319,6 +1323,491 @@
         document.getElementById("kb-copy-modal").addEventListener("click", function(e) {
         });
 
+    // ═══════════════════════════════════════════════════════════════════
+    // WhatsApp Chat/Messages Integration
+    // ═══════════════════════════════════════════════════════════════════
+
+    var waChats = [];
+    var waSelectedJid = null;
+    var waCtxMenuData = null;  // { jid, phone, name }
+    var waMsgCtxData = null;   // { message_id (db id) }
+
+    function loadWhatsAppChats(forceRefresh) {
+        var el = document.getElementById("kb-wa-status");
+        var chatListEl = document.getElementById("kb-wa-chats");
+        var searchEl = document.getElementById("kb-wa-search");
+
+        el.textContent = "Loading...";
+        apiFetch("/api/kanban/whatsapp/chats?limit=100").then(function(data) {
+            waChats = data.chats || [];
+            if (data.error) {
+                el.textContent = data.error;
+                chatListEl.innerHTML = "";
+                searchEl.classList.add("hidden");
+                return;
+            }
+            el.textContent = "";
+            searchEl.classList.remove("hidden");
+            renderWhatsAppChatList();
+        }).catch(function(err) {
+            el.textContent = "WhatsApp not connected";
+            chatListEl.innerHTML = "";
+            searchEl.classList.add("hidden");
+        });
+    }
+
+    function renderWhatsAppChatList() {
+        var chatListEl = document.getElementById("kb-wa-chats");
+        var searchVal = (document.getElementById("kb-wa-search").value || "").toLowerCase();
+        var filtered = waChats;
+        if (searchVal) {
+            filtered = waChats.filter(function(c) {
+                return (c.name || "").toLowerCase().includes(searchVal) || (c.id || "").includes(searchVal);
+            });
+        }
+        if (!filtered.length) {
+            chatListEl.innerHTML = '<div class="text-xs text-gray-500 italic py-2">No chats found</div>';
+            return;
+        }
+        var html = "";
+        filtered.forEach(function(chat) {
+            var phone = (chat.id || "").split("@")[0].split(":")[0];
+            var name = esc(chat.name || phone);
+            var isGroup = chat.is_group;
+            var unread = chat.unread_count || 0;
+            var active = waSelectedJid === chat.id ? " bg-[#25D366]/10 border-l-2 border-[#25D366]" : "";
+            var lastTs = chat.last_message_timestamp;
+            var timeStr = "";
+            if (lastTs) {
+                var d = new Date(lastTs * 1000);
+                timeStr = d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
+            }
+            html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5' + active + '" data-wa-jid="' + esc(chat.id) + '" data-wa-phone="' + esc(phone) + '" data-wa-name="' + esc(name) + '">';
+            html += '<div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-xs font-bold flex-shrink-0">';
+            html += esc(name.charAt(0).toUpperCase());
+            html += '</div>';
+            html += '<div class="flex-1 min-w-0">';
+            html += '<div class="flex items-center justify-between">';
+            html += '<span class="text-white truncate">' + (isGroup ? '👥 ' : '') + name + '</span>';
+            html += '<span class="text-gray-500 text-[10px] ml-1 flex-shrink-0">' + timeStr + '</span>';
+            html += '</div>';
+            html += '<div class="text-gray-500 truncate">' + esc(phone) + (unread ? ' <span class="text-[#25D366] font-bold">(' + unread + ')</span>' : '') + '</div>';
+            html += '</div></div>';
+        });
+        chatListEl.innerHTML = html;
+
+        // Click handlers
+        chatListEl.querySelectorAll("[data-wa-jid]").forEach(function(el) {
+            el.addEventListener("click", function() {
+                waSelectedJid = el.dataset.waJid;
+                renderWhatsAppChatList();
+                openWhatsAppMessagePanel(el.dataset.waJid, el.dataset.waPhone, el.dataset.waName);
+            });
+            el.addEventListener("contextmenu", function(e) {
+                e.preventDefault();
+                waCtxMenuData = { jid: el.dataset.waJid, phone: el.dataset.waPhone, name: el.dataset.waName };
+                showWaChatContextMenu(e.clientX, e.clientY);
+            });
+        });
+    }
+
+    function openWhatsAppMessagePanel(jid, phone, name) {
+        var panel = document.getElementById("kb-wa-msg-panel");
+        var title = document.getElementById("kb-wa-msg-title");
+        var msgList = document.getElementById("kb-wa-msg-list");
+        var countEl = document.getElementById("kb-wa-msg-count");
+
+        title.textContent = name;
+        countEl.textContent = "Loading...";
+        msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>';
+        panel.classList.remove("hidden");
+
+        apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=200").then(function(data) {
+            var messages = data.messages || [];
+            countEl.textContent = messages.length + " messages";
+            if (!messages.length) {
+                msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">No messages from this number yet</div>';
+                return;
+            }
+            var html = "";
+            messages.forEach(function(msg) {
+                var isMine = msg.from_me;
+                var align = isMine ? "justify-end" : "justify-start";
+                var bg = isMine ? "bg-[#005c4b]" : "bg-[#1f2c34]";
+                var timestamp = msg.whatsapp_timestamp ? new Date(msg.whatsapp_timestamp * 1000) : null;
+                var timeStr = timestamp ? timestamp.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
+                var senderName = esc(msg.sender_push_name || msg.sender_phone || "");
+
+                html += '<div class="flex ' + align + '" data-wa-msg-id="' + msg.id + '">';
+                html += '<div class="max-w-[85%] rounded-lg px-3 py-2 ' + bg + '" style="border-radius: 8px;">';
+
+                // Sender name (for group chats)
+                if (!isMine && msg.chat_type === "group") {
+                    html += '<div class="text-xs text-[#25D366] mb-1">' + senderName + '</div>';
+                }
+
+                // Media preview
+                if (msg.media_type && msg.media_local_path) {
+                    var mediaPath = "/api/kanban/whatsapp/media?path=" + encodeURIComponent(msg.media_local_path);
+                    if (msg.media_type === "photo" || msg.media_type === "image") {
+                        html += '<div class="mb-1 rounded overflow-hidden"><img src="' + esc(mediaPath) + '" class="max-w-full max-h-[300px] rounded cursor-pointer" loading="lazy" onclick="window.open(\'' + esc(mediaPath) + '\', \'_blank\')"></div>';
+                    } else if (msg.media_type === "voice" || msg.media_type === "audio") {
+                        html += '<div class="mb-1"><audio controls class="max-w-full" style="height:36px;"><source src="' + esc(mediaPath) + '" type="' + esc(msg.media_mime_type || "audio/ogg") + '"></audio></div>';
+                    } else if (msg.media_type === "video") {
+                        html += '<div class="mb-1 rounded overflow-hidden"><video controls class="max-w-full max-h-[300px]"><source src="' + esc(mediaPath) + '" type="' + esc(msg.media_mime_type || "video/mp4") + '"></video></div>';
+                    } else {
+                        // Document / sticker / other
+                        var icon = msg.media_type === "sticker" ? "🏷️" : "📎";
+                        var fname = esc(msg.media_filename || msg.media_local_path.split("/").pop());
+                        var sizeStr = msg.media_file_length ? (msg.media_file_length < 1024*1024 ? (msg.media_file_length/1024).toFixed(1) + " KB" : (msg.media_file_length/1024/1024).toFixed(1) + " MB") : "";
+                        html += '<div class="mb-1 flex items-center gap-2 px-2 py-1 bg-black/20 rounded">';
+                        html += '<span>' + icon + '</span>';
+                        html += '<a href="' + esc(mediaPath) + '" class="text-blue-400 underline text-xs truncate flex-1" target="_blank">' + fname + '</a>';
+                        html += '<span class="text-gray-500 text-[10px]">' + sizeStr + '</span>';
+                        html += '</div>';
+                    }
+                } else if (msg.media_type && !msg.media_local_path) {
+                    // Media not yet downloaded
+                    var mediaIcon = { photo: "🖼️", voice: "🎙️", audio: "🎵", video: "🎬", document: "📄", sticker: "🏷️" };
+                    html += '<div class="mb-1 px-2 py-1 bg-black/20 rounded text-xs text-gray-400">' + (mediaIcon[msg.media_type] || "📎") + ' ' + esc(msg.media_type) + (msg.media_filename ? ": " + esc(msg.media_filename) : "") + '</div>';
+                }
+
+                // Caption (for media messages)
+                if (msg.caption) {
+                    html += '<div class="text-sm text-white whitespace-pre-wrap">' + esc(msg.caption) + '</div>';
+                }
+
+                // Text message
+                if (msg.text) {
+                    html += '<div class="text-sm text-white whitespace-pre-wrap">' + esc(msg.text) + '</div>';
+                }
+
+                // Timestamp + status
+                html += '<div class="flex items-center justify-end gap-1 mt-0.5">';
+                html += '<span class="text-[10px] text-gray-500">' + timeStr + '</span>';
+                if (isMine) html += '<span class="text-[10px] text-blue-400">✓✓</span>';
+                if (msg.processed) html += '<span class="text-[10px] text-green-400" title="Processed">✓</span>';
+                html += '</div>';
+
+                html += '</div></div>';
+            });
+            msgList.innerHTML = html;
+
+            // Right-click on messages
+            msgList.querySelectorAll("[data-wa-msg-id]").forEach(function(el) {
+                el.addEventListener("contextmenu", function(e) {
+                    e.preventDefault();
+                    waMsgCtxData = { message_id: parseInt(el.dataset.waMsgId) };
+                    showWaMsgContextMenu(e.clientX, e.clientY);
+                });
+            });
+        }).catch(function(err) {
+            countEl.textContent = "Error";
+            msgList.innerHTML = '<div class="text-sm text-red-400 text-center py-8">Failed to load messages</div>';
+        });
+    }
+
+    function showWaChatContextMenu(x, y) {
+        var menu = document.getElementById("kb-wa-ctx-menu");
+        menu.style.left = x + "px";
+        menu.style.top = y + "px";
+        menu.classList.remove("hidden");
+        // Position adjustment if off-screen
+        setTimeout(function() {
+            var rect = menu.getBoundingClientRect();
+            if (rect.right > window.innerWidth) menu.style.left = (x - rect.width) + "px";
+            if (rect.bottom > window.innerHeight) menu.style.top = (y - rect.height) + "px";
+        }, 0);
+    }
+
+    function hideWaChatContextMenu() {
+        document.getElementById("kb-wa-ctx-menu").classList.add("hidden");
+    }
+
+    function showWaMsgContextMenu(x, y) {
+        var menu = document.getElementById("kb-wa-msg-ctx-menu");
+        menu.style.left = x + "px";
+        menu.style.top = y + "px";
+        menu.classList.remove("hidden");
+        setTimeout(function() {
+            var rect = menu.getBoundingClientRect();
+            if (rect.right > window.innerWidth) menu.style.left = (x - rect.width) + "px";
+            if (rect.bottom > window.innerHeight) menu.style.top = (y - rect.height) + "px";
+        }, 0);
+    }
+
+    function hideWaMsgContextMenu() {
+        document.getElementById("kb-wa-msg-ctx-menu").classList.add("hidden");
+    }
+
+    // ── WhatsApp chat context menu actions ──
+
+    function waCtxViewMessages() {
+        hideWaChatContextMenu();
+        if (!waCtxMenuData) return;
+        waSelectedJid = waCtxMenuData.jid;
+        renderWhatsAppChatList();
+        openWhatsAppMessagePanel(waCtxMenuData.jid, waCtxMenuData.phone, waCtxMenuData.name);
+    }
+
+    function waCtxLinkToBoard() {
+        hideWaChatContextMenu();
+        if (!waCtxMenuData) return;
+        openWaLinkModal(waCtxMenuData);
+    }
+
+    function waCtxSnapshotToBoard() {
+        hideWaChatContextMenu();
+        if (!waCtxMenuData) return;
+        // First show board picker, then snapshot all unprocessed messages
+        var phone = waCtxMenuData.phone;
+        // Get db boards for selection
+        apiFetch("/api/kanban/boards").then(function(boards) {
+            var dbBs = boards.filter(function(b) { return b.source === "database"; });
+            if (!dbBs.length) { showSnackbar("No database boards to snapshot into"); return; }
+            // Use current board or first board
+            var targetBoard = (currentBoard && currentBoard.source === "database") ? currentBoard.id : dbBs[0].id;
+            // Fetch unprocessed messages for this phone
+            apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500&unprocessed_only=true").then(function(data) {
+                var msgs = data.messages || [];
+                if (!msgs.length) { showSnackbar("No unprocessed messages from " + waCtxMenuData.name); return; }
+                var created = 0, errors = 0;
+                var promises = msgs.map(function(msg) {
+                    return apiFetch("/api/kanban/tickets/from-whatsapp/" + msg.id, {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({ board_id: targetBoard })
+                    }).then(function(r) {
+                        if (r.success) created++;
+                    }).catch(function() { errors++; });
+                });
+                Promise.all(promises).then(function() {
+                    showSnackbar("Created " + created + " ticket(s) from WhatsApp messages" + (errors ? " (" + errors + " errors)" : ""));
+                    reloadCurrentDatabaseBoard();
+                });
+            });
+        });
+    }
+
+    // ── WhatsApp link modal ──
+
+    function openWaLinkModal(chatData) {
+        var modal = document.getElementById("kb-wa-link-modal");
+        var phoneEl = document.getElementById("kb-wa-link-phone");
+        var boardSelect = document.getElementById("kb-wa-link-board");
+
+        phoneEl.textContent = (chatData.name || "") + " (" + chatData.phone + ")";
+
+        // Populate board dropdown
+        apiFetch("/api/kanban/boards").then(function(boards) {
+            var dbBs = boards.filter(function(b) { return b.source === "database"; });
+            boardSelect.innerHTML = '<option value="">Select a board...</option>';
+            dbBs.forEach(function(b) {
+                var selected = (currentBoard && currentBoard.id === b.id) ? " selected" : "";
+                boardSelect.innerHTML += '<option value="' + b.id + '"' + selected + '>' + esc(b.name) + '</option>';
+            });
+        });
+
+        modal.classList.remove("hidden");
+    }
+
+    function confirmWaLink() {
+        var boardId = parseInt(document.getElementById("kb-wa-link-board").value);
+        if (!boardId) { showSnackbar("Select a board"); return; }
+        var autoSnapshot = document.getElementById("kb-wa-link-auto").checked;
+
+        apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({
+                phone_jid: waCtxMenuData.jid,
+                phone_number: waCtxMenuData.phone,
+                contact_name: waCtxMenuData.name,
+                auto_snapshot: autoSnapshot,
+            })
+        }).then(function(r) {
+            if (r.success) {
+                showSnackbar("Linked " + waCtxMenuData.name + " to board");
+                document.getElementById("kb-wa-link-modal").classList.add("hidden");
+            }
+        }).catch(function(err) {
+            showSnackbar("Failed to link: " + err.message);
+        });
+    }
+
+    // ── WhatsApp message context menu actions ──
+
+    function waMsgCtxCreateTicket() {
+        hideWaMsgContextMenu();
+        if (!waMsgCtxData) return;
+        var boardId = (currentBoard && currentBoard.source === "database") ? currentBoard.id : null;
+        if (!boardId) {
+            // Get first db board
+            apiFetch("/api/kanban/boards").then(function(boards) {
+                var dbBs = boards.filter(function(b) { return b.source === "database"; });
+                if (!dbBs.length) { showSnackbar("No boards available"); return; }
+                createTicketFromWaMsg(waMsgCtxData.message_id, dbBs[0].id);
+            });
+        } else {
+            createTicketFromWaMsg(waMsgCtxData.message_id, boardId);
+        }
+    }
+
+    function createTicketFromWaMsg(msgId, boardId) {
+        apiFetch("/api/kanban/tickets/from-whatsapp/" + msgId, {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ board_id: boardId })
+        }).then(function(r) {
+            if (r.success) {
+                showSnackbar("Created ticket from WhatsApp message");
+                reloadCurrentDatabaseBoard();
+            }
+        }).catch(function(err) {
+            showSnackbar("Failed to create ticket: " + err.message);
+        });
+    }
+
+    function waMsgCtxMarkProcessed() {
+        hideWaMsgContextMenu();
+        if (!waMsgCtxData) return;
+        // Mark a message as processed directly in the DB
+        apiFetch("/api/kanban/whatsapp/messages/" + waMsgCtxData.message_id + "/processed", {
+            method: "POST"
+        }).then(function(r) {
+            if (r.success) {
+                showSnackbar("Marked as processed");
+                // Refresh the message panel if open
+                if (waSelectedJid) {
+                    var phone = waSelectedJid.split("@")[0].split(":")[0];
+                    var name = waCtxMenuData ? waCtxMenuData.name : phone;
+                    openWhatsAppMessagePanel(waSelectedJid, phone, name);
+                }
+            }
+        }).catch(function(err) {
+            showSnackbar("Failed to mark processed: " + err.message);
+        });
+    }
+
+    // ── Board modal WhatsApp tab ──
+
+    function loadBoardWaLinks(boardId) {
+        var linksEl = document.getElementById("kb-bm-wa-links");
+        linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Loading...</div>';
+        apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links").then(function(links) {
+            if (!links.length) {
+                linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">No WhatsApp numbers linked</div>';
+                return;
+            }
+            var html = "";
+            links.forEach(function(l) {
+                html += '<div class="flex items-center justify-between px-3 py-2 bg-[#152054] rounded border border-white/10">';
+                html += '<div class="flex items-center gap-2">';
+                html += '<div class="w-6 h-6 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-[10px] font-bold">' + esc((l.contact_name || l.phone_number || "?").charAt(0).toUpperCase()) + '</div>';
+                html += '<div>';
+                html += '<div class="text-sm text-white">' + esc(l.contact_name || l.phone_number) + '</div>';
+                html += '<div class="text-[10px] text-gray-500">' + esc(l.phone_number) + '</div>';
+                html += '</div></div>';
+                html += '<div class="flex items-center gap-2">';
+                html += '<label class="flex items-center gap-1 cursor-pointer select-none" title="Auto-snapshot new messages as tickets">';
+                html += '<input type="checkbox" class="accent-[#25D366] w-3 h-3 kb-wa-link-auto-toggle" data-link-id="' + l.id + '" data-board-id="' + boardId + '"' + (l.auto_snapshot ? ' checked' : '') + '>'; 
+                html += '<span class="text-[10px] text-gray-500">Auto</span>';
+                html += '</label>';
+                html += '<button type="button" class="kb-wa-link-remove text-red-400 hover:text-red-300 text-xs px-1" data-link-id="' + l.id + '" data-board-id="' + boardId + '" title="Unlink">✕</button>';
+                html += '</div></div>';
+            });
+            linksEl.innerHTML = html;
+
+            // Auto-toggle handlers
+            linksEl.querySelectorAll(".kb-wa-link-auto-toggle").forEach(function(el) {
+                el.addEventListener("change", function() {
+                    var lid = el.dataset.linkId;
+                    var bid = el.dataset.boardId;
+                    apiFetch("/api/kanban/boards/" + bid + "/whatsapp-links/" + lid, {
+                        method: "PATCH",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({ auto_snapshot: el.checked })
+                    });
+                });
+            });
+
+            // Remove handlers
+            linksEl.querySelectorAll(".kb-wa-link-remove").forEach(function(el) {
+                el.addEventListener("click", function() {
+                    var lid = el.dataset.linkId;
+                    var bid = el.dataset.boardId;
+                    apiFetch("/api/kanban/boards/" + bid + "/whatsapp-links/" + lid, { method: "DELETE" }).then(function() {
+                        loadBoardWaLinks(bid);
+                    });
+                });
+            });
+        });
+    }
+
+    function addWaLinkFromBoardModal() {
+        var phone = document.getElementById("kb-bm-wa-add-phone").value.trim();
+        var name = document.getElementById("kb-bm-wa-add-name").value.trim();
+        if (!phone) { showSnackbar("Enter a phone number"); return; }
+        var boardId = editingBoardId;
+        if (!boardId) { showSnackbar("Save the board first"); return; }
+        // Build JID from phone number
+        var jid = phone + "@s.whatsapp.net";
+        apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links", {
+            method: "POST",
+            headers: {"Content-Type": "application/json"},
+            body: JSON.stringify({ phone_jid: jid, phone_number: phone, contact_name: name })
+        }).then(function(r) {
+            if (r.success) {
+                showSnackbar("Linked " + (name || phone) + " to board");
+                document.getElementById("kb-bm-wa-add-phone").value = "";
+                document.getElementById("kb-bm-wa-add-name").value = "";
+                loadBoardWaLinks(boardId);
+            }
+        });
+    }
+
+    // Initialize WhatsApp section
+    function initWhatsApp() {
+        document.getElementById("kb-wa-refresh").addEventListener("click", function() { loadWhatsAppChats(true); });
+        document.getElementById("kb-wa-search").addEventListener("input", renderWhatsAppChatList);
+
+        // Chat context menu
+        document.querySelector(".kb-wa-ctx-view").addEventListener("click", waCtxViewMessages);
+        document.querySelector(".kb-wa-ctx-link").addEventListener("click", waCtxLinkToBoard);
+        document.querySelector(".kb-wa-ctx-snapshot").addEventListener("click", waCtxSnapshotToBoard);
+
+        // Close context menus on outside click
+        document.addEventListener("click", function(e) {
+            if (!e.target.closest("#kb-wa-ctx-menu")) hideWaChatContextMenu();
+            if (!e.target.closest("#kb-wa-msg-ctx-menu")) hideWaMsgContextMenu();
+        });
+
+        // Message panel close
+        document.getElementById("kb-wa-msg-close").addEventListener("click", function() {
+            document.getElementById("kb-wa-msg-panel").classList.add("hidden");
+        });
+
+        // Link modal
+        document.getElementById("kb-wa-link-cancel").addEventListener("click", function() {
+            document.getElementById("kb-wa-link-modal").classList.add("hidden");
+        });
+        document.getElementById("kb-wa-link-confirm").addEventListener("click", confirmWaLink);
+
+        // Message context menu
+        document.querySelector(".kb-wa-msgctx-ticket").addEventListener("click", waMsgCtxCreateTicket);
+        document.querySelector(".kb-wa-msgctx-mark-processed").addEventListener("click", waMsgCtxMarkProcessed);
+
+        // Board modal: WhatsApp tab — add link button
+        document.getElementById("kb-bm-wa-add-btn").addEventListener("click", addWaLinkFromBoardModal);
+
+        // Load chats
+        loadWhatsAppChats();
+    }
+
+    // ═══════════════════════════════════════════════════════════════════
+    // End WhatsApp Integration
+    // ═══════════════════════════════════════════════════════════════════
+
         // Context menu
         document.querySelector(".kb-ctx-activate").addEventListener("click", ctxActivateBoard);
         document.querySelector(".kb-ctx-edit").addEventListener("click", ctxEditBoard);
@@ -1331,6 +1820,7 @@
 
         // Load initial data
         loadBoards();
+        initWhatsApp();
     }
 
     // Auto-refresh provider dropdowns when third-party keys are saved (same page)

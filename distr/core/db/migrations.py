@@ -1514,3 +1514,42 @@ def run_migrations():
                 logger.info("Created whatsapp_messages table")
         except Exception as e:
             logger.warning(f"Could not create whatsapp_messages table: {e}")
+
+    # ── WhatsApp phone links table ──────────────────────────────────────────
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='whatsapp_phone_links'"))
+            if not result.fetchone():
+                conn.execute(text("""
+                    CREATE TABLE whatsapp_phone_links (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        board_id INTEGER NOT NULL REFERENCES kanban_boards(id),
+                        phone_jid VARCHAR NOT NULL,
+                        phone_number VARCHAR,
+                        contact_name VARCHAR,
+                        auto_snapshot BOOLEAN DEFAULT 0,
+                        created_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                    )
+                """))
+                conn.commit()
+                logger.info("Created whatsapp_phone_links table")
+    except Exception as e:
+        logger.warning(f"Could not create whatsapp_phone_links table: {e}")
+
+    # ── Add whatsapp_message_id / whatsapp_message_wa_id to kanban_tickets ──
+    for _wcol, _wtype, _wdef in [
+        ("whatsapp_message_id", "INTEGER", "NULL"),
+        ("whatsapp_message_wa_id", "VARCHAR", "NULL"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_wcol} FROM kanban_tickets LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE kanban_tickets ADD COLUMN {_wcol} {_wtype} DEFAULT {_wdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_wcol} column to kanban_tickets table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_wcol} to kanban_tickets: {e}")

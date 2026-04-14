@@ -507,6 +507,73 @@ class WhatsAppWebSocketManager(QObject):
         except Exception as e:
             logger.error(f"WhatsApp: Failed to update media info: {e}")
 
+    # =====================================================================
+    # Chat & Contact Retrieval
+    # =====================================================================
+
+    def get_chats(self, limit=100, offset=0, search="") -> dict:
+        """Fetch the WhatsApp chat list from the Baileys service (like WhatsApp Web left panel)."""
+        try:
+            import requests
+            resp = requests.get(f"{self.api_base}/chats", params={"limit": limit, "offset": offset, "search": search}, timeout=10)
+            return resp.json()
+        except Exception as e:
+            logger.error(f"WhatsApp: get_chats failed: {e}")
+            return {"chats": [], "total": 0, "error": str(e)}
+
+    def get_contacts(self, limit=500, search="") -> dict:
+        """Fetch the WhatsApp contact list from the Baileys service."""
+        try:
+            import requests
+            resp = requests.get(f"{self.api_base}/contacts", params={"limit": limit, "search": search}, timeout=10)
+            return resp.json()
+        except Exception as e:
+            logger.error(f"WhatsApp: get_contacts failed: {e}")
+            return {"contacts": [], "total": 0, "error": str(e)}
+
+    def get_stored_messages(self, jid_phone: str = None, limit=100, offset=0, unprocessed_only=False) -> dict:
+        """Fetch stored WhatsApp messages from the local database.
+        If jid_phone is provided, filter to that phone number\'s messages."""
+        try:
+            from distr.core.db import get_session, WhatsAppMessage
+            with get_session() as session:
+                query = session.query(WhatsAppMessage)
+                if jid_phone:
+                    query = query.filter(WhatsAppMessage.jid_phone == jid_phone)
+                if unprocessed_only:
+                    query = query.filter(WhatsAppMessage.processed == False)
+                query = query.order_by(WhatsAppMessage.whatsapp_timestamp.desc())
+                total = query.count()
+                rows = query.offset(offset).limit(limit).all()
+                messages = []
+                for r in rows:
+                    msg = {
+                        "id": r.id,
+                        "message_id": r.message_id,
+                        "jid": r.jid,
+                        "jid_phone": r.jid_phone,
+                        "chat_type": r.chat_type,
+                        "sender_phone": r.sender_phone,
+                        "sender_push_name": r.sender_push_name,
+                        "text": r.text,
+                        "caption": r.caption,
+                        "media_type": r.media_type,
+                        "media_mime_type": r.media_mime_type,
+                        "media_filename": r.media_filename,
+                        "media_local_path": r.media_local_path,
+                        "media_file_length": r.media_file_length,
+                        "whatsapp_timestamp": r.whatsapp_timestamp,
+                        "from_me": r.from_me,
+                        "processed": r.processed,
+                        "processed_date": r.processed_date.isoformat() if r.processed_date else None,
+                        "created_date": r.created_date.isoformat() if r.created_date else None,
+                    }
+                    messages.append(msg)
+                return {"messages": messages, "total": total, "offset": offset, "limit": limit}
+        except Exception as e:
+            logger.error(f"WhatsApp: get_stored_messages failed: {e}", exc_info=True)
+            return {"messages": [], "total": 0, "error": str(e)}
+
     # ═════════════════════════════════════════════════════════════════════════
     # Settings Persistence
     # ═════════════════════════════════════════════════════════════════════════

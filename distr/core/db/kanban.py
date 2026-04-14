@@ -88,6 +88,10 @@ class KanbanTicket(Base):
 
     send_to_cli = Column(Boolean, default=False)  # if True, send directly to project CLI instead of workflow
 
+    # WhatsApp source (if ticket was created from a WhatsApp message)
+    whatsapp_message_id = Column(Integer, nullable=True)  # FK to whatsapp_messages.id
+    whatsapp_message_wa_id = Column(String, nullable=True)  # WhatsApp's own message ID
+
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

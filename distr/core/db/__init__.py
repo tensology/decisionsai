@@ -405,6 +405,22 @@ class TelegramGroupMessage(Base):
     )
 
 
+class WhatsAppPhoneLink(Base):
+    """Link a WhatsApp phone JID to a Kanban board.
+    When a number is linked, its messages show up in the board's WhatsApp tab,
+    and the agent check-in can auto-create tickets from unlinked messages.
+    """
+    __tablename__ = 'whatsapp_phone_links'
+
+    id = Column(Integer, primary_key=True)
+    board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=False)
+    phone_jid = Column(String, nullable=False)  # e.g. '27634103646@s.whatsapp.net'
+    phone_number = Column(String)  # e.g. '27634103646'
+    contact_name = Column(String)  # display name from WhatsApp contacts
+    auto_snapshot = Column(Boolean, default=False)  # auto-create ticket on new message?
+    created_date = Column(DateTime, default=datetime.utcnow)
+
+
 class WhatsAppMessage(Base):
     """Store WhatsApp messages received via Baileys relay."""
     __tablename__ = 'whatsapp_messages'

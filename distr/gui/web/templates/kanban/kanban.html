@@ -54,6 +54,10 @@
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
 /* Confirm dialog above ticket / board modals */
 .kb-confirm-overlay { z-index: 120; }
+/* WhatsApp message bubbles */
+.wa-msg-bubble { max-width: 85%; border-radius: 8px; padding: 8px 12px; }
+.wa-msg-mine { background: #005c4b; }
+.wa-msg-theirs { background: #1f2c34; }
 </style>
 {% endblock %}
 
@@ -86,6 +90,19 @@
                         </div>
                     </div>
                     <div id="kb-db-boards" class="space-y-1"></div>
+                </div>
+                <!-- WhatsApp Messages section -->
+                <div class="mb-3">
+                    <div class="flex items-center justify-between mb-2">
+                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
+                            <svg class="w-3.5 h-3.5 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+                            Messages
+                        </span>
+                        <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Refresh WhatsApp chats">Refresh</button>
+                    </div>
+                    <div id="kb-wa-status" class="text-xs text-gray-500 italic px-1 py-1"></div>
+                    <input type="text" id="kb-wa-search" placeholder="Search chats..." class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-xs mb-2 hidden">
+                    <div id="kb-wa-chats" class="space-y-0.5 max-h-[300px] overflow-y-auto"></div>
                 </div>
                 <!-- Trello boards -->
                 <div class="mb-3">
@@ -134,6 +151,62 @@
         </div>
     </div>
 </div>
+
+<!-- WhatsApp chat context menu (right-click on chat) -->
+<div id="kb-wa-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-wa-ctx-view w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">View Messages</button>
+    <button type="button" class="kb-wa-ctx-link w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Link to Board</button>
+    <button type="button" class="kb-wa-ctx-snapshot w-full text-left px-4 py-2 text-sm text-[#25D366] hover:bg-[#25D366]/20 flex items-center gap-2">Snapshot All to Board</button>
+</div>
+
+<!-- WhatsApp message viewer panel -->
+<div id="kb-wa-msg-panel" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: 800px; max-height: 85vh;">
+        <div class="flex items-center justify-between px-6 pt-5 pb-0">
+            <h3 id="kb-wa-msg-title" class="text-lg font-semibold text-white">WhatsApp Messages</h3>
+            <div class="flex items-center gap-2">
+                <span id="kb-wa-msg-count" class="text-xs text-gray-500"></span>
+                <button type="button" id="kb-wa-msg-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+            </div>
+        </div>
+        <div id="kb-wa-msg-list" class="px-6 py-4 space-y-2 overflow-y-auto" style="max-height: 65vh;">
+            <div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>
+        </div>
+    </div>
+</div>
+
+<!-- Link to board dialog -->
+<div id="kb-wa-link-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-6" style="width: 400px;">
+        <h3 class="text-lg font-semibold text-white mb-4">Link WhatsApp Number to Board</h3>
+        <div class="mb-3">
+            <label class="text-sm text-gray-400">Phone</label>
+            <div id="kb-wa-link-phone" class="px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm"></div>
+        </div>
+        <div class="mb-3">
+            <label class="block text-sm text-gray-400 mb-1">Board</label>
+            <select id="kb-wa-link-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#25D366] focus:outline-none">
+                <option value="">Select a board...</option>
+            </select>
+        </div>
+        <div class="mb-4 flex items-center gap-2">
+            <input type="checkbox" id="kb-wa-link-auto" class="accent-[#25D366] w-4 h-4">
+            <label for="kb-wa-link-auto" class="text-sm text-gray-300">Auto-snapshot new messages as tickets</label>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button type="button" id="kb-wa-link-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-wa-link-confirm" class="px-4 py-2 rounded bg-[#25D366] text-white text-sm hover:bg-[#1da851]">Link</button>
+        </div>
+    </div>
+</div>
+
+<!-- WhatsApp message context menu (right-click on individual message) -->
+<div id="kb-wa-msg-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-wa-msgctx-ticket w-full text-left px-4 py-2 text-sm text-[#f97316] hover:bg-[#f97316]/20 flex items-center gap-2">Create Ticket</button>
+    <button type="button" class="kb-wa-msgctx-mark-processed w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Mark Processed</button>
+</div>
+
+<!-- Board settings WhatsApp tab (added dynamically) -->
 
 <!-- Ticket detail modal -->
 <div id="kb-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
@@ -291,6 +364,10 @@
         <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-tab="details">Details</button>
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="advanced">Advanced</button>
+            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="whatsapp">
+                <svg class="w-3.5 h-3.5 inline -mt-0.5 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+                WhatsApp
+            </button>
         </div>
         <!-- Details tab -->
         <div id="kb-bm-tab-details" class="kb-bm-pane p-6 space-y-3">
@@ -334,6 +411,16 @@
                         <option value="">None</option>
                     </select>
                 </div>
+            </div>
+        </div>
+        <!-- WhatsApp tab (board phone number links) -->
+        <div id="kb-bm-tab-whatsapp" class="kb-bm-pane hidden p-6 space-y-4">
+            <p class="text-xs text-gray-500">Link WhatsApp phone numbers to this board. Messages from linked numbers can be viewed and snapshotted into tickets.</p>
+            <div id="kb-bm-wa-links" class="space-y-2"></div>
+            <div class="flex gap-2">
+                <input type="text" id="kb-bm-wa-add-phone" placeholder="Phone number (e.g. 27634103646)" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
+                <input type="text" id="kb-bm-wa-add-name" placeholder="Contact name" class="w-40 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
+                <button type="button" id="kb-bm-wa-add-btn" class="px-3 py-2 rounded bg-[#25D366] text-white text-xs hover:bg-[#1da851]">+ Link</button>
             </div>
         </div>
         <!-- Footer -->

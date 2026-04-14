@@ -327,6 +327,9 @@ def create_routes():
             board = s.query(KanbanBoard).get(board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
+            # Get WhatsApp links for this board
+            from distr.core.db import WhatsAppPhoneLink
+            whatsapp_links = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id).all()
             lanes = []
             for lane in board.lanes:
                 tickets = []
@@ -343,6 +346,8 @@ def create_routes():
                         "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
                         "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                         "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
+                        "whatsapp_message_id": t.whatsapp_message_id,
+                        "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
                     })
                 lanes.append({"id": lane.id, "name": lane.name, "position": lane.position, "tickets": tickets})
             return JSONResponse({
@@ -357,6 +362,7 @@ def create_routes():
                 "color": board.color or "",
                 "agent_enabled": getattr(board, 'agent_enabled', False) or False,
                 "in_use": getattr(board, 'in_use', False) or False,
+                "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
 
     # ── Tickets ──
@@ -401,6 +407,8 @@ def create_routes():
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
                 "send_to_cli": t.send_to_cli or False,
+                "whatsapp_message_id": t.whatsapp_message_id,
+                "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
                 "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
                 "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                 "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
@@ -973,5 +981,230 @@ source: kanban_ticket_{t.id}
             "processed_count": s.processed_count,
             "current_run_id": s.current_run_id,
         })
+
+    # ── WhatsApp ↔ Board Integration ──
+
+    @router.get("/kanban/boards/{board_id}/whatsapp-links")
+    async def get_whatsapp_links(board_id: int):
+        """Get WhatsApp phone numbers linked to this board."""
+        from distr.core.db import WhatsAppPhoneLink
+        with get_session() as s:
+            links = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id).all()
+            return JSONResponse([{
+                "id": l.id,
+                "board_id": l.board_id,
+                "phone_jid": l.phone_jid,
+                "phone_number": l.phone_number or "",
+                "contact_name": l.contact_name or "",
+                "auto_snapshot": l.auto_snapshot or False,
+            } for l in links])
+
+    @router.post("/kanban/boards/{board_id}/whatsapp-links")
+    async def add_whatsapp_link(board_id: int, payload: dict):
+        """Link a WhatsApp phone number to this board."""
+        from distr.core.db import WhatsAppPhoneLink
+        phone_jid = payload.get("phone_jid", "")
+        if not phone_jid:
+            raise HTTPException(400, "phone_jid is required")
+        with get_session() as s:
+            # Prevent duplicate links
+            existing = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id, phone_jid=phone_jid).first()
+            if existing:
+                return JSONResponse({"success": True, "id": existing.id, "message": "Already linked"})
+            link = WhatsAppPhoneLink(
+                board_id=board_id,
+                phone_jid=phone_jid,
+                phone_number=payload.get("phone_number", phone_jid.split("@")[0].split(":")[0]),
+                contact_name=payload.get("contact_name", ""),
+                auto_snapshot=payload.get("auto_snapshot", False),
+            )
+            s.add(link)
+            s.flush()
+            return JSONResponse({"success": True, "id": link.id})
+
+    @router.delete("/kanban/boards/{board_id}/whatsapp-links/{link_id}")
+    async def delete_whatsapp_link(board_id: int, link_id: int):
+        """Unlink a WhatsApp phone number from this board."""
+        from distr.core.db import WhatsAppPhoneLink
+        with get_session() as s:
+            link = s.query(WhatsAppPhoneLink).filter_by(id=link_id, board_id=board_id).first()
+            if not link:
+                raise HTTPException(404, "Link not found")
+            s.delete(link)
+            return JSONResponse({"success": True})
+
+    @router.patch("/kanban/boards/{board_id}/whatsapp-links/{link_id}")
+    async def update_whatsapp_link(board_id: int, link_id: int, payload: dict):
+        """Update a WhatsApp link (e.g. toggle auto_snapshot)."""
+        from distr.core.db import WhatsAppPhoneLink
+        with get_session() as s:
+            link = s.query(WhatsAppPhoneLink).filter_by(id=link_id, board_id=board_id).first()
+            if not link:
+                raise HTTPException(404, "Link not found")
+            if "auto_snapshot" in payload:
+                link.auto_snapshot = payload["auto_snapshot"]
+            if "contact_name" in payload:
+                link.contact_name = payload["contact_name"]
+            return JSONResponse({"success": True})
+
+    @router.get("/kanban/whatsapp/messages")
+    async def get_whatsapp_messages(jid_phone: str = "", limit: int = 50, offset: int = 0, unprocessed_only: bool = False):
+        """Get WhatsApp messages stored in the local database."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            _app = QApplication.instance()
+            whatsapp_manager = getattr(_app, 'whatsapp_manager', None) if _app else None
+            if not whatsapp_manager:
+                return JSONResponse({"messages": [], "total": 0, "error": "WhatsApp not connected"})
+            result = whatsapp_manager.get_stored_messages(
+                jid_phone=jid_phone or None,
+                limit=limit,
+                offset=offset,
+                unprocessed_only=unprocessed_only,
+            )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error(f"WhatsApp message query error: {e}")
+            return JSONResponse({"messages": [], "total": 0, "error": str(e)})
+
+    @router.post("/kanban/whatsapp/messages/{message_id}/processed")
+    async def mark_whatsapp_message_processed(message_id: int):
+        """Mark a WhatsApp message as processed."""
+        from distr.core.db import WhatsAppMessage
+        with get_session() as s:
+            msg = s.query(WhatsAppMessage).get(message_id)
+            if not msg:
+                raise HTTPException(404, "Message not found")
+            msg.processed = True
+            msg.processed_date = datetime.utcnow()
+            return JSONResponse({"success": True})
+
+    @router.get("/kanban/whatsapp/media")
+    async def get_whatsapp_media(path: str = ""):
+        """Serve a WhatsApp media file for display in the UI."""
+        import os as _os
+        from fastapi.responses import FileResponse
+        if not path:
+            raise HTTPException(400, "path parameter required")
+        # Security: only allow files under ~/Downloads/DecisionsAI/
+        home = _os.path.expanduser("~")
+        allowed_dir = _os.path.join(home, "Downloads", "DecisionsAI")
+        realpath = _os.path.realpath(path)
+        if not realpath.startswith(_os.path.realpath(allowed_dir)):
+            raise HTTPException(403, "Access denied")
+        if not _os.path.exists(realpath):
+            raise HTTPException(404, "File not found")
+        # Determine media type from extension
+        ext_media = {
+            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
+            ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".opus": "audio/opus",
+            ".mp4": "video/mp4", ".3gp": "video/3gpp",
+            ".pdf": "application/pdf",
+        }
+        ext = _os.path.splitext(realpath)[1].lower()
+        media_type = ext_media.get(ext, "application/octet-stream")
+        return FileResponse(realpath, media_type=media_type)
+
+    @router.get("/kanban/whatsapp/chats")
+    async def get_whatsapp_chats(limit: int = 100, offset: int = 0, search: str = ""):
+        """Get the WhatsApp chat list from the Baileys service."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            _app = QApplication.instance()
+            whatsapp_manager = getattr(_app, 'whatsapp_manager', None) if _app else None
+            if not whatsapp_manager:
+                return JSONResponse({"chats": [], "total": 0, "error": "WhatsApp not connected"})
+            result = whatsapp_manager.get_chats(limit=limit, offset=offset, search=search)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error(f"WhatsApp chats query error: {e}")
+            return JSONResponse({"chats": [], "total": 0, "error": str(e)})
+
+    @router.post("/kanban/tickets/from-whatsapp/{message_id}")
+    async def create_ticket_from_whatsapp(message_id: int, payload: dict):
+        """Create a Kanban ticket from a WhatsApp message."""
+        from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink
+        with get_session() as s:
+            msg = s.query(WhatsAppMessage).get(message_id)
+            if not msg:
+                raise HTTPException(404, "WhatsApp message not found")
+
+            board_id = payload.get("board_id")
+            if not board_id:
+                raise HTTPException(400, "board_id is required")
+
+            board = s.query(KanbanBoard).get(board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+
+            # Find source lane (use board default or first lane)
+            source_lane_name = board.agent_source_lane or ""
+            lane = None
+            if source_lane_name:
+                lane = s.query(KanbanLane).filter_by(board_id=board_id, name=source_lane_name).first()
+            if not lane:
+                lane = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position).first()
+            if not lane:
+                raise HTTPException(400, "Board has no lanes")
+
+            # Build ticket title from message
+            sender = msg.sender_push_name or msg.sender_phone or msg.jid_phone or "Unknown"
+            title = f"[WA] {sender}: {msg.text[:80]}" if msg.text else f"[WA] {sender}: {msg.media_type or 'message'}"
+            if msg.caption:
+                title = f"[WA] {sender}: {msg.caption[:80]}"
+
+            # Build description
+            desc_parts = [f"WhatsApp message from {sender}"]
+            if msg.sender_phone:
+                desc_parts.append(f"Phone: {msg.sender_phone}")
+            if msg.text:
+                desc_parts.append(f"\n{msg.text}")
+            if msg.caption:
+                desc_parts.append(f"Caption: {msg.caption}")
+            if msg.media_type:
+                desc_parts.append(f"Media: {msg.media_type}")
+                if msg.media_filename:
+                    desc_parts.append(f"File: {msg.media_filename}")
+                if msg.media_local_path:
+                    desc_parts.append(f"Path: {msg.media_local_path}")
+            description = "\n".join(desc_parts)
+
+            # Check if ticket already exists for this message
+            existing = s.query(KanbanTicket).filter_by(whatsapp_message_id=message_id).first()
+            if existing:
+                return JSONResponse({"success": True, "id": existing.id, "message": "Ticket already exists"})
+
+            max_pos = max([t.position for t in lane.tickets], default=-1)
+            ticket = KanbanTicket(
+                lane_id=lane.id,
+                title=title,
+                description=description,
+                priority="medium",
+                position=max_pos + 1,
+                whatsapp_message_id=message_id,
+                whatsapp_message_wa_id=msg.message_id,
+            )
+            s.add(ticket)
+
+            # Mark message as processed
+            msg.processed = True
+            msg.processed_date = datetime.utcnow()
+
+            # If message has media, add as ticket file
+            if msg.media_local_path and os.path.exists(msg.media_local_path):
+                safe_name = os.path.basename(msg.media_local_path)
+                ticket_file = KanbanTicketFile(
+                    ticket_id=ticket.id if ticket.id else 0,  # Will be set after flush
+                    filename=safe_name,
+                    file_path=msg.media_local_path,
+                    description=f"WhatsApp {msg.media_type}: {safe_name}" if msg.media_type else safe_name,
+                )
+                # Need to flush ticket first to get ID
+                s.flush()
+                ticket_file.ticket_id = ticket.id
+                s.add(ticket_file)
+
+            s.flush()
+            return JSONResponse({"success": True, "id": ticket.id})
 
     return router
