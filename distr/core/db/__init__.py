@@ -413,7 +413,7 @@ class WhatsAppPhoneLink(Base):
     __tablename__ = 'whatsapp_phone_links'
 
     id = Column(Integer, primary_key=True)
-    board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=False)
+    board_id = Column(Integer, nullable=False)  # References kanban_boards.id (no FK to avoid circular import)
     phone_jid = Column(String, nullable=False)  # e.g. '27634103646@s.whatsapp.net'
     phone_number = Column(String)  # e.g. '27634103646'
     contact_name = Column(String)  # display name from WhatsApp contacts
