@@ -265,6 +265,11 @@ function updateConnectionStatus() {
             googleBtn.className = data.google_connected ? connectedClass : 'px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors';
             googleBtn.innerHTML = data.google_connected ? '✓ Google' : 'Google';
         }
+        var whatsappBtn = document.getElementById('whatsapp_connect_btn');
+        if (whatsappBtn) {
+            whatsappBtn.className = data.whatsapp_connected ? connectedClass : 'px-6 py-2.5 bg-[#25D366] hover:bg-[#1da851] text-white rounded-md text-sm font-medium transition-colors';
+            whatsappBtn.innerHTML = data.whatsapp_connected ? '✓ WhatsApp' : 'WhatsApp';
+        }
         if (telegramBtn) {
             telegramBtn.className = data.telegram_connected ? connectedClass : 'px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors';
             telegramBtn.innerHTML = data.telegram_connected ? '✓ Telegram' : 'Telegram';
@@ -647,6 +652,98 @@ function connectTelegram() {
     });
 }
 
+var whatsappPollInterval = null;
+function connectWhatsApp() {
+    var modal = document.getElementById('whatsapp_modal');
+    if (!modal) return;
+    modal.classList.remove('hidden');
+    document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-[#565869]">Loading QR code...</p>';
+    document.getElementById('whatsapp_status').textContent = 'Requesting QR code...';
+    document.getElementById('whatsapp_status').className = 'text-sm text-[#9ca3af] text-center';
+    document.getElementById('whatsapp_connected_info').classList.add('hidden');
+
+    modal.querySelectorAll('.whatsapp_modal_close').forEach(function (btn) { btn.onclick = function () { clearInterval(whatsappPollInterval); modal.classList.add('hidden'); }; });
+    document.getElementById('whatsapp_disconnect_btn').onclick = function () {
+        fetch(settingsBase + '/api/advanced/whatsapp/disconnect', { method: 'POST' }).then(function (r) { return r.json(); }).then(function (data) {
+            if (data.success) {
+                document.getElementById('whatsapp_status').textContent = 'Disconnected. Requesting new QR code...';
+                document.getElementById('whatsapp_connected_info').classList.add('hidden');
+                updateConnectionStatus();
+                setTimeout(function () { connectWhatsApp(); }, 2000);
+            } else {
+                if (typeof window.showNotification === 'function') window.showNotification(data.error || 'Disconnect failed', 'error');
+            }
+        }).catch(function () { if (typeof window.showNotification === 'function') window.showNotification('Disconnect failed', 'error'); });
+    };
+
+    fetch(settingsBase + '/api/advanced/whatsapp/qr').then(function (r) { return r.json(); }).then(function (data) {
+        if (data.error && data.status === 'service_down') {
+            document.getElementById('whatsapp_status').textContent = 'WhatsApp service is not running on the server.';
+            document.getElementById('whatsapp_status').className = 'text-sm text-yellow-400 text-center';
+            document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-yellow-600">Service Unavailable</p><p class="text-sm text-[#565869] mt-2">The WhatsApp service needs to be running on the server. Contact your admin.</p>';
+            return;
+        }
+        var qr = data.qr_code;
+        var status = data.status;
+
+        if (status === 'connected' && data.phone) {
+            document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
+            document.getElementById('whatsapp_status').textContent = 'WhatsApp is connected: ' + (data.phone.name || data.phone.jid || '');
+            document.getElementById('whatsapp_status').className = 'text-sm text-green-400 text-center';
+            document.getElementById('whatsapp_connected_info').classList.remove('hidden');
+            document.getElementById('whatsapp_phone_info').textContent = data.phone.name || data.phone.jid || 'Unknown';
+            updateConnectionStatus();
+            return;
+        }
+
+        if (qr) {
+            // The QR code is a WhatsApp pairing string — generate a scannable image
+            var qrContainer = document.getElementById('whatsapp_qr_container');
+            qrContainer.innerHTML = '';
+            // Use a simple canvas-based QR renderer or just display the raw string
+            // For now, create a text display and let the user copy it
+            var qrDiv = document.createElement('div');
+            qrDiv.className = 'text-center';
+            // Try using a QR code library if available, otherwise show a simple text box
+            qrDiv.innerHTML = '<p class="text-sm text-[#ececf1] mb-2">Scan this code in WhatsApp:</p>' +
+                '<div class="bg-white p-4 rounded inline-block"><p class="text-xs text-black break-all font-mono" style="max-width:250px;word-break:break-all;">' + escapeHtml(qr) + '</p></div>';
+            qrContainer.appendChild(qrDiv);
+            document.getElementById('whatsapp_status').textContent = 'Scan with WhatsApp: Settings → Linked Devices → Link a Device';
+            document.getElementById('whatsapp_status').className = 'text-sm text-green-500 text-center';
+        } else if (status === 'qr_ready') {
+            document.getElementById('whatsapp_status').textContent = 'Waiting for QR code...';
+            document.getElementById('whatsapp_status').className = 'text-sm text-[#9ca3af] text-center';
+        } else {
+            document.getElementById('whatsapp_status').textContent = data.error || 'Could not get QR code.';
+            document.getElementById('whatsapp_status').className = 'text-sm text-red-400 text-center';
+        }
+
+        // Poll for connection status
+        whatsappPollInterval = setInterval(function () {
+            fetch(settingsBase + '/api/advanced/whatsapp/status').then(function (r) { return r.json(); }).then(function (st) {
+                if (st.status === 'connected' && st.phone) {
+                    clearInterval(whatsappPollInterval);
+                    document.getElementById('whatsapp_qr_container').innerHTML = '<p class="text-green-500 text-lg">✓ Connected</p>';
+                    document.getElementById('whatsapp_status').textContent = 'WhatsApp connected: ' + (st.phone.name || st.phone.jid || '');
+                    document.getElementById('whatsapp_status').className = 'text-sm text-green-400 text-center';
+                    document.getElementById('whatsapp_connected_info').classList.remove('hidden');
+                    document.getElementById('whatsapp_phone_info').textContent = st.phone.name || st.phone.jid || 'Unknown';
+                    updateConnectionStatus();
+                    if (typeof window.showNotification === 'function') window.showNotification('WhatsApp connected', 'success');
+                } else if (st.status === 'qr_ready' && st.qr_code && !data.qr_code) {
+                    // New QR available, refresh the display
+                    data.qr_code = st.qr_code;
+                    connectWhatsApp(); // restart with new QR
+                    clearInterval(whatsappPollInterval);
+                }
+            });
+        }, 3000);
+    }).catch(function () {
+        document.getElementById('whatsapp_status').textContent = 'Failed to connect to WhatsApp service.';
+        document.getElementById('whatsapp_status').className = 'text-sm text-red-400 text-center';
+    });
+}
+
 function initAdvancedTab() {
     var treeEl = document.getElementById('directory_tree');
     if (treeEl) {
@@ -670,6 +767,8 @@ if (document.readyState === 'loading') {
             if (googleBtn) googleBtn.addEventListener('click', connectGoogle);
             var telegramBtn = document.getElementById('telegram_connect_btn');
             if (telegramBtn) telegramBtn.addEventListener('click', connectTelegram);
+            var whatsappBtn = document.getElementById('whatsapp_connect_btn');
+            if (whatsappBtn) whatsappBtn.addEventListener('click', connectWhatsApp);
             var trelloBtn = document.getElementById('trello_connect_btn');
             if (trelloBtn) trelloBtn.addEventListener('click', connectTrello);
             var jiraBtn = document.getElementById('jira_connect_btn');
@@ -686,6 +785,8 @@ if (document.readyState === 'loading') {
         if (googleBtn) googleBtn.addEventListener('click', connectGoogle);
         var telegramBtn = document.getElementById('telegram_connect_btn');
         if (telegramBtn) telegramBtn.addEventListener('click', connectTelegram);
+        var whatsappBtn = document.getElementById('whatsapp_connect_btn');
+        if (whatsappBtn) whatsappBtn.addEventListener('click', connectWhatsApp);
         var trelloBtn = document.getElementById('trello_connect_btn');
         if (trelloBtn) trelloBtn.addEventListener('click', connectTrello);
         var jiraBtn = document.getElementById('jira_connect_btn');

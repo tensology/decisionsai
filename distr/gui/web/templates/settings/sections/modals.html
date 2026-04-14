@@ -184,6 +184,31 @@
     </div>
 </div>
 
+<!-- WhatsApp Connect Modal -->
+<div id="whatsapp_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 whatsapp_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-md w-full pointer-events-auto">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-white">Connect WhatsApp</h2>
+                <button type="button" class="whatsapp_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="p-5 space-y-4">
+                <p class="text-sm text-[#ececf1]">Scan the QR code with your WhatsApp app: Settings → Linked Devices → Link a Device</p>
+                <div id="whatsapp_qr_container" class="flex justify-center bg-white rounded-lg p-4 min-h-[200px] items-center">
+                    <p class="text-[#565869]">Loading QR code...</p>
+                </div>
+                <p id="whatsapp_status" class="text-sm text-[#9ca3af] text-center"></p>
+                <div id="whatsapp_connected_info" class="hidden text-center space-y-2">
+                    <p class="text-sm text-green-400">&check; Connected</p>
+                    <p id="whatsapp_phone_info" class="text-sm text-[#ececf1]"></p>
+                    <button type="button" id="whatsapp_disconnect_btn" class="px-4 py-2 bg-red-600 hover:bg-red-700 text-white rounded-md text-sm font-medium transition-colors">Disconnect</button>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Telegram Connect Modal -->
 <div id="telegram_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
     <div class="fixed inset-0 bg-black/60 telegram_modal_backdrop"></div>

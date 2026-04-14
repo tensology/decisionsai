@@ -314,6 +314,10 @@ def register_routes(router, templates):
             from distr.gui.web.oauth import load_google_oauth_config
             if not load_google_oauth_config():
                 google_connected = False
+        whatsapp_connected = any(
+            isinstance(acc, dict) and acc.get("provider") == "whatsapp" and acc.get("status") == "connected"
+            for acc in connected_accounts
+        )
         telegram_connected = any(
             isinstance(acc, dict) and acc.get("provider") == "telegram" and (acc.get("app_user_id") or acc.get("user_id"))
             for acc in connected_accounts
@@ -324,6 +328,7 @@ def register_routes(router, templates):
         trello_has_valid = sum(1 for a in trello_accounts if a.get("is_valid", False)) > 0
         return JSONResponse({
             "google_connected": google_connected,
+            "whatsapp_connected": whatsapp_connected,
             "telegram_connected": telegram_connected,
             "jira_accounts": jira_accounts,
             "trello_accounts": trello_accounts,
@@ -350,6 +355,61 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Google disconnect: {e}", exc_info=True)
             return JSONResponse(status_code=500, content={"success": False, "error": str(e)})
+
+    # ── WhatsApp proxy endpoints ──────────────────────────────────────────
+
+    @router.get("/advanced/whatsapp/qr")
+    async def get_whatsapp_qr():
+        """Proxy: get current WhatsApp QR code from the Baileys service."""
+        try:
+            import httpx
+            base_url = "https://www.decisionsai.net/api/whatsapp"
+            if os.environ.get("DEBUG", "").upper() == "TRUE":
+                base_url = "http://localhost:8090/api/whatsapp"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{base_url}/qr")
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp QR proxy: {e}")
+            return JSONResponse({"status": "error", "qr_code": None, "error": str(e)}, status_code=500)
+
+    @router.get("/advanced/whatsapp/status")
+    async def get_whatsapp_status():
+        """Proxy: get current WhatsApp connection status."""
+        try:
+            import httpx
+            base_url = "https://www.decisionsai.net/api/whatsapp"
+            if os.environ.get("DEBUG", "").upper() == "TRUE":
+                base_url = "http://localhost:8090/api/whatsapp"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.get(f"{base_url}/status")
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp status proxy: {e}")
+            return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
+
+    @router.post("/advanced/whatsapp/disconnect")
+    async def disconnect_whatsapp():
+        """Proxy: disconnect WhatsApp and clear session."""
+        try:
+            import httpx
+            base_url = "https://www.decisionsai.net/api/whatsapp"
+            if os.environ.get("DEBUG", "").upper() == "TRUE":
+                base_url = "http://localhost:8090/api/whatsapp"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(f"{base_url}/disconnect")
+                data = resp.json()
+                if data.get("success"):
+                    # Also remove from connected_accounts
+                    settings = load_settings_from_db()
+                    connected_accounts = parse_connected_accounts(settings)
+                    connected_accounts = [a for a in connected_accounts if not (isinstance(a, dict) and a.get("provider") == "whatsapp")]
+                    settings["connected_accounts"] = connected_accounts
+                    save_settings_to_db(settings)
+                return JSONResponse(content=data, status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp disconnect proxy: {e}")
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @router.post("/advanced/validate/jira")
     async def validate_jira(body: dict):
