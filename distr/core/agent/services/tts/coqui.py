@@ -166,12 +166,50 @@ class CoquiTTSService(TTSService):
 
     def _generate_audio(self, text: str):
         """Blocking call — runs in executor. Returns (audio_float32, sample_rate)."""
-        wav = self._tts.tts(text=text, speaker=self.voice_id)
+        # Custom voice — use XTTS v2 with reference audio
+        if self.voice_id and self.voice_id.startswith("custom_"):
+            ref_path = self._resolve_reference_audio()
+            if ref_path:
+                if not hasattr(self, '_xtts') or self._xtts is None:
+                    logger.info("Coqui TTS: loading XTTS v2 for voice cloning")
+                    self._xtts = _CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(self._device != "cpu"))
+                wav = self._xtts.tts(text=text, speaker_wav=ref_path, language="en")
+                audio = np.array(wav, dtype=np.float32)
+                if audio.ndim > 1:
+                    audio = np.mean(audio, axis=1)
+                sr = self._xtts.synthesizer.output_sample_rate
+                return audio, sr
+            else:
+                logger.warning("Coqui TTS: no reference audio for %s, using default speaker", self.voice_id)
+
+        # Built-in VCTK speaker
+        speaker = self.voice_id if not self.voice_id.startswith("custom_") else "p225"
+        wav = self._tts.tts(text=text, speaker=speaker)
         audio = np.array(wav, dtype=np.float32)
         if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
         sr = self._tts.synthesizer.output_sample_rate
         return audio, sr
+
+    def _resolve_reference_audio(self):
+        """Find the reference audio file for the current custom voice."""
+        try:
+            from distr.core.db import get_session, CustomVoice
+            db_id = int(self.voice_id.split("_", 1)[1])
+            with get_session() as session:
+                cv = session.query(CustomVoice).filter(
+                    CustomVoice.id == db_id,
+                    CustomVoice.provider == "coqui",
+                    CustomVoice.status == "ready",
+                ).first()
+                if cv and cv.audio_dir:
+                    import os as _os
+                    for fn in _os.listdir(cv.audio_dir):
+                        if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
+                            return _os.path.join(cv.audio_dir, fn)
+        except Exception as e:
+            logger.warning("Could not resolve Coqui reference audio: %s", e)
+        return None
 
     # ------------------------------------------------------------------
     # Pipeline frame contract

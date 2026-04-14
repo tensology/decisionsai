@@ -552,7 +552,11 @@ def _generate_openai(text: str, voice: str, speed: float, out_file: str):
 
 
 def _generate_coqui(text: str, voice: str, speed: float, out_file: str):
-    """Generate Coqui TTS (VCTK multi-speaker) voice sample and write WAV file."""
+    """Generate Coqui TTS voice sample and write WAV file.
+
+    Uses XTTS v2 for custom voices (voice cloning from reference audio).
+    Uses VCTK VITS for built-in speaker IDs (p225, p226, etc.).
+    """
     import numpy as np
 
     try:
@@ -560,6 +564,25 @@ def _generate_coqui(text: str, voice: str, speed: float, out_file: str):
     except ImportError:
         raise ImportError("TTS package is required for Coqui TTS. Install with: pip install TTS")
 
+    # Custom voice — use XTTS v2 with reference audio
+    if voice and voice.startswith("custom_"):
+        ref_path = _resolve_coqui_reference_audio(voice)
+        if ref_path:
+            tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+            wav = tts.tts(text=text, speaker_wav=ref_path, language="en")
+            audio = np.array(wav, dtype=np.float32)
+            if audio.ndim > 1:
+                audio = np.mean(audio, axis=1)
+            sr = tts.synthesizer.output_sample_rate
+            audio, sr = _resample_audio(audio, sr, 48000)
+            sf.write(out_file, audio, sr)
+            logger.info("Wrote Coqui XTTS cloned voice sample to %s", out_file)
+            return
+        else:
+            logger.warning("Coqui clone: no reference audio found for %s, falling back to VCTK", voice)
+            voice = "p225"
+
+    # Built-in VCTK speaker
     tts = CoquiTTS("tts_models/en/vctk/vits", gpu=False)
     wav = tts.tts(text=text, speaker=voice)
     audio = np.array(wav, dtype=np.float32)
@@ -569,6 +592,27 @@ def _generate_coqui(text: str, voice: str, speed: float, out_file: str):
     audio, sr = _resample_audio(audio, sr, 48000)
     sf.write(out_file, audio, sr)
     logger.info("Wrote Coqui TTS sample to %s", out_file)
+
+
+def _resolve_coqui_reference_audio(voice_id: str):
+    """Find the reference audio file for a Coqui custom voice."""
+    try:
+        from distr.core.db import get_session, CustomVoice
+        db_id = int(voice_id.split("_", 1)[1])
+        with get_session() as session:
+            cv = session.query(CustomVoice).filter(
+                CustomVoice.id == db_id,
+                CustomVoice.provider == "coqui",
+                CustomVoice.status == "ready",
+            ).first()
+            if cv and cv.audio_dir:
+                import os
+                for fn in os.listdir(cv.audio_dir):
+                    if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
+                        return os.path.join(cv.audio_dir, fn)
+    except Exception as e:
+        logger.warning("Could not resolve Coqui reference audio for %s: %s", voice_id, e)
+    return None
 
 
 def _generate_f5tts(text: str, voice: str, speed: float, out_file: str):

@@ -91,7 +91,8 @@ TTS_PROVIDERS = [
         "enabled": True,
         "default_voice": "p225",
         "settings_key": "coqui_voice",
-        "supports_custom_voices": False,
+        "supports_custom_voices": True,
+        "custom_voice_limit": 0,
     },
     {
         "id": "voxcpm",

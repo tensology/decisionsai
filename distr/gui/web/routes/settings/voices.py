@@ -185,13 +185,31 @@ def register_routes(router, templates):
 
     @router.get("/voices/coqui")
     async def get_coqui_voices():
-        """Return Coqui VCTK voice list (from coqui-ai-voices.json via constants)."""
+        """Return Coqui VCTK voice list plus any custom cloned voices (XTTS v2)."""
         try:
             from distr.core.agent.constants import COQUI_VOICES
-            return [{"id": vid, "name": name} for vid, name in COQUI_VOICES.items()]
+            voices = [{"id": vid, "name": name} for vid, name in COQUI_VOICES.items()]
         except Exception as e:
             logger.warning("Could not load COQUI_VOICES: %s", e)
-            return [{"id": "p225", "name": "Sarah"}]
+            voices = [{"id": "p225", "name": "Sarah"}]
+
+        # Append custom cloned voices
+        try:
+            from distr.core.db import get_session, CustomVoice
+            session = get_session()
+            try:
+                customs = session.query(CustomVoice).filter(
+                    CustomVoice.provider == 'coqui', CustomVoice.status == 'ready'
+                ).all()
+                for cv in customs:
+                    vid = cv.provider_voice_id or f"custom_{cv.id}"
+                    voices.append({"id": vid, "name": f"⭐ {cv.name}", "custom": True})
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug("Could not load Coqui custom voices: %s", e)
+
+        return voices
 
     @router.get("/voices/f5tts")
     async def get_f5tts_voices():
@@ -282,8 +300,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("elevenlabs", "kokoro", "f5tts", "voxcpm"):
-            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, f5tts, or voxcpm"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro", "coqui", "f5tts", "voxcpm"):
+            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, f5tts, or voxcpm"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()
