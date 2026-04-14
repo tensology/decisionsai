@@ -47,13 +47,7 @@ from .libs import (
 )
 from distr.core.agent.transport import HotSwappableLocalAudioTransport
 from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller
-from .services import WhisperSTTService, KokoroTTSService, ElevenLabsTTSService
-try:
-    from .services import OpenAITTSService
-    OPENAI_TTS_AVAILABLE = (OpenAITTSService is not None)
-except ImportError:
-    OPENAI_TTS_AVAILABLE = False
-    OpenAITTSService = None
+from .services import WhisperSTTService
 try:
     from .services import VoskSTTService
     VOSK_AVAILABLE = (VoskSTTService is not None)
@@ -423,14 +417,9 @@ class AgentSession:
         voice_model_from_chat = chat_voice_model
 
         # Voice settings lookup table: provider -> (engine, voice_key, default, extra_keys)
-        _VOICE_SETTINGS = {
-            'kokoro':     ('kokoro',     'kokoro_voice',     DEFAULT_KOKORO_VOICE, {}),
-            'elevenlabs': ('elevenlabs', 'elevenlabs_voice', '',                   {'api_key': 'elevenlabs_key'}),
-            'openai':     ('openai',     'openai_voice',     DEFAULT_OPENAI_VOICE, {'api_key': 'openai_key'}),
-            'coqui':      ('coqui',      'coqui_voice',      DEFAULT_COQUI_VOICE,  {'device': 'coqui_device'}),
-            'f5tts':      ('f5tts',      'f5tts_voice',      'default',            {}),
-            'voxcpm':     ('voxcpm',     'voxcpm_voice',     'default',            {}),
-        }
+        # Built dynamically from the TTS provider registry.
+        from distr.core.agent.services.tts.registry import tts_registry
+        _VOICE_SETTINGS = {d.id: d.get_voice_settings_entry() for d in tts_registry.all_providers()}
         vp_entry = _VOICE_SETTINGS.get(voice_provider, _VOICE_SETTINGS['kokoro'])
         tts_engine, voice_settings_key, voice_default, extra_keys = vp_entry
         config['tts']['engine'] = tts_engine
@@ -701,252 +690,23 @@ class AgentSession:
         self._create_llm_service_only()
         self.logger.debug(f"LLM service created: {self.config['llm']['engine']} / {self.config['llm'].get('model_name')}")
         
-        # Create TTS service
+        # Create TTS service via the registry-based service factory
+        self._create_tts_service_only()
+
+        # For ElevenLabs, update agent name with the resolved voice name
         tts_config = self.config['tts']
+        if tts_config['engine'] == 'elevenlabs' and hasattr(self.tts_service, '_resolved_voice_name'):
+            self._apply_agent_name(self.tts_service._resolved_voice_name)
+
+        # For Kokoro custom voices, load custom voice personality
         if tts_config['engine'] == 'kokoro':
-            kokoro_model = os.path.join(models_dir, KOKORO_MODEL_FILE)
-            kokoro_voices = os.path.join(models_dir, KOKORO_VOICES_FILE)
-            
-            if not os.path.exists(kokoro_model):
-                raise FileNotFoundError(f"Kokoro model not found at {kokoro_model}")
-            
-            # Get playback speed from settings (clamp to Kokoro's supported range: 0.5-2.0)
-            playback_speed = self.settings.get('playback_speed', 1.0)
-            playback_speed = max(SPEED_BOUNDS['kokoro'][0], min(SPEED_BOUNDS['kokoro'][1], playback_speed))
-            if playback_speed != self.settings.get('playback_speed', 1.0):
-                logger.warning(f"Playback speed clamped from {self.settings.get('playback_speed', 1.0):.1f}x to {playback_speed:.1f}x (Kokoro supports 0.5-2.0x)")
-            
-            # We handle volume in Transport for real-time updates
-            # Pass 100 to TTS so it generates full volume audio (avoid double scaling)
-            
-            # Resolve custom voice reference clip for voice cloning (Kanade)
-            _kokoro_ref_voice_path = None
-            _kokoro_voice_name = tts_config['voice_name']
+            _kokoro_voice_name = tts_config.get('voice_name', '')
             if _kokoro_voice_name and _kokoro_voice_name.startswith('custom_'):
-                _kokoro_ref_voice_path, _kokoro_voice_name = self._resolve_kokoro_custom_voice(_kokoro_voice_name)
-                if _kokoro_ref_voice_path:
-                    self._load_custom_voice_personality('kokoro', tts_config['voice_name'])
-                    self.logger.debug("Kokoro voice cloning: ref=%s", _kokoro_ref_voice_path)
+                self._load_custom_voice_personality('kokoro', _kokoro_voice_name)
 
-            self.tts_service = KokoroTTSService(
-                model_path=kokoro_model,
-                voices_path=kokoro_voices,
-                voice_name=_kokoro_voice_name,
-                stt_service=self.stt_service,
-                playback_speed=playback_speed,
-                event_queue=self.event_queue,
-                speech_volume=100,
-                reference_voice_path=_kokoro_ref_voice_path,
-            )
-            self.tts_service.set_hands_free(self.is_hands_free)
-
-            # Pass TTS service to LLM service so tools can use it
-            if hasattr(self, 'llm_service') and self.llm_service:
-                self.llm_service.set_tts_service(self.tts_service)
-        elif tts_config['engine'] == 'elevenlabs':
-            api_key = tts_config.get('api_key', '')
-            voice_id_or_name = tts_config.get('voice_id', '')
-            
-            if not api_key:
-                raise ValueError("ElevenLabs API key is required but not found in settings")
-            if not voice_id_or_name:
-                raise ValueError("ElevenLabs voice ID is required but not found in settings")
-            
-            logger.debug(f"ElevenLabs voice setting value: '{voice_id_or_name}' (type: {type(voice_id_or_name).__name__})")
-            
-            # Resolve voice_id - it might be a name or an ID
-            voice_id = None
-            voice_name = voice_id_or_name  # Default to what we have
-            
-            try:
-                if not ElevenLabs:
-                    raise ImportError("ElevenLabs library not installed")
-                    
-                client = ElevenLabs(api_key=api_key)
-                voices = client.voices.get_all().voices
-                
-                if not voices:
-                    raise ValueError("No voices available in ElevenLabs account")
-                
-                # Check if voice_id_or_name is actually a voice_id (UUID-like string)
-                # Voice IDs are typically long alphanumeric strings without spaces (usually 20+ chars)
-                # Check for alphanumeric string without spaces that's at least 15 characters
-                # Also check if it contains only alphanumeric characters (no spaces, punctuation that would be in names)
-                is_likely_id = (len(voice_id_or_name) >= 15 and 
-                               ' ' not in voice_id_or_name and 
-                               voice_id_or_name.replace('_', '').replace('-', '').isalnum())
-                
-                logger.debug(f"Resolving ElevenLabs voice: '{voice_id_or_name}' (likely_id={is_likely_id})")
-                logger.debug(f"Available voices: {[v.name for v in voices]}")
-                
-                # First, try to match by voice_id if it looks like an ID
-                if is_likely_id:
-                    for voice in voices:
-                        if voice.voice_id == voice_id_or_name:
-                            voice_id = voice.voice_id
-                            voice_name = voice.name
-                            logger.debug(f"Found voice by ID: {voice_name} (ID: {voice_id})")
-                            break
-                
-                # If not found by ID, try to match by name (case-insensitive)
-                if not voice_id:
-                    voice_id_or_name_lower = voice_id_or_name.lower().strip()
-                    for voice in voices:
-                        if voice.name.lower().strip() == voice_id_or_name_lower:
-                            voice_id = voice.voice_id
-                            voice_name = voice.name
-                            logger.debug(f"Found voice by name (case-insensitive): {voice_name} (ID: {voice_id})")
-                            break
-                
-                # If we still don't have a voice_id, use the first voice as fallback
-                if not voice_id:
-                    logger.warning(f"Could not find voice '{voice_id_or_name}' in available voices: {[v.name for v in voices]}. Using first available voice.")
-                    voice_id = voices[0].voice_id
-                    voice_name = voices[0].name
-                    
-            except Exception as e:
-                logger.error(f"Error resolving ElevenLabs voice: {e}", exc_info=True)
-                raise ValueError(f"Could not resolve ElevenLabs voice '{voice_id_or_name}': {str(e)}")
-            
-            if not voice_id:
-                raise ValueError(f"Could not resolve ElevenLabs voice ID from '{voice_id_or_name}'")
-            
-            logger.debug(f"Using ElevenLabs voice: {voice_name} (ID: {voice_id})")
-            
-            # Get playback speed from settings
-            playback_speed = self.settings.get('playback_speed', 1.0)
-            stability = float(self.settings.get('elevenlabs_stability', ELEVENLABS_DEFAULTS['stability']))
-            similarity_boost = float(self.settings.get('elevenlabs_similarity_boost', ELEVENLABS_DEFAULTS['similarity_boost']))
-            style = float(self.settings.get('elevenlabs_style', ELEVENLABS_DEFAULTS['style']))
-            use_speaker_boost = bool(self.settings.get('elevenlabs_use_speaker_boost', ELEVENLABS_DEFAULTS['use_speaker_boost']))
-            
-            # We handle volume in Transport for real-time updates
-            # Pass 100 to TTS so it generates full volume audio (avoid double scaling)
-            
-            self.tts_service = ElevenLabsTTSService(
-                api_key=api_key,
-                voice_id=voice_id,
-                voice_name=voice_name,
-                stt_service=self.stt_service,
-                playback_speed=playback_speed,
-                event_queue=self.event_queue,
-                speech_volume=100,
-                stability=stability,
-                similarity_boost=similarity_boost,
-                style=style,
-                use_speaker_boost=use_speaker_boost,
-                on_quota_exceeded=self._do_elevenlabs_quota_fallback,
-            )
-            # Initialize TTS with current hands-free state
-            self.tts_service.set_hands_free(self.is_hands_free)
-            
-            # Update agent name with the resolved voice name
-            self._apply_agent_name(voice_name)
-
-            # Pass TTS service to LLM service so tools can use it
-            if hasattr(self, 'llm_service') and self.llm_service:
-                self.llm_service.set_tts_service(self.tts_service)
-        elif tts_config['engine'] == 'openai':
-            api_key = tts_config.get('api_key', '')
-            voice_id = tts_config.get('voice_id', DEFAULT_OPENAI_VOICE)
-            
-            if not api_key:
-                raise ValueError("OpenAI API key is required but not found in settings")
-            if not voice_id:
-                raise ValueError("OpenAI voice ID is required but not found in settings")
-            
-            if not OpenAITTSService:
-                raise ImportError("OpenAITTSService is not available. Please ensure openai library is installed.")
-            
-            logger.debug(f"Using OpenAI TTS voice: {voice_id}")
-            
-            # Get playback speed from settings (clamp to OpenAI's supported range: 0.25-4.0)
-            playback_speed = self.settings.get('playback_speed', 1.0)
-            playback_speed = max(SPEED_BOUNDS['openai'][0], min(SPEED_BOUNDS['openai'][1], playback_speed))
-            if playback_speed != self.settings.get('playback_speed', 1.0):
-                logger.warning(f"Playback speed clamped from {self.settings.get('playback_speed', 1.0):.1f}x to {playback_speed:.1f}x (OpenAI supports 0.25-4.0x)")
-            
-            # We handle volume in Transport for real-time updates
-            self.tts_service = OpenAITTSService(
-                api_key=api_key,
-                voice_id=voice_id,
-                voice_name=voice_id,
-                stt_service=self.stt_service,
-                playback_speed=playback_speed,
-                event_queue=self.event_queue,
-                speech_volume=100
-            )
-            # Initialize TTS with current hands-free state
-            self.tts_service.set_hands_free(self.is_hands_free)
-            
-            # Pass TTS service to LLM service so tools can use it
-            if hasattr(self, 'llm_service') and self.llm_service:
-                self.llm_service.set_tts_service(self.tts_service)
-        elif tts_config['engine'] == 'coqui':
-            from .services.tts.coqui import CoquiTTSService as _CoquiTTS, COQUI_AVAILABLE
-            if not COQUI_AVAILABLE or _CoquiTTS is None:
-                raise ImportError("CoquiTTSService is not available. Install with: pip install coqui-tts")
-            voice_id = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
-            voice_name = tts_config.get('voice_name') or voice_id
-            device = tts_config.get('device') or self.settings.get('coqui_device') or None
-            playback_speed = self.settings.get('playback_speed', 1.0)
-            playback_speed = max(SPEED_BOUNDS['coqui'][0], min(SPEED_BOUNDS['coqui'][1], playback_speed))
-            self.tts_service = _CoquiTTS(
-                voice_id=voice_id,
-                voice_name=voice_name,
-                device=device,
-                stt_service=self.stt_service,
-                playback_speed=playback_speed,
-                event_queue=self.event_queue,
-                speech_volume=100,
-            )
-            self.tts_service.set_hands_free(self.is_hands_free)
-            if hasattr(self, 'llm_service') and self.llm_service:
-                self.llm_service.set_tts_service(self.tts_service)
-        elif tts_config['engine'] == 'voxcpm':
-            from .services.tts.voxcpm import VoxCPMTTSService as _VoxCPMTTS
-            voice_name = tts_config.get('voice_name', 'default')
-            playback_speed = self.settings.get('playback_speed', 1.0)
-            playback_speed = max(SPEED_BOUNDS['voxcpm'][0], min(SPEED_BOUNDS['voxcpm'][1], playback_speed))
-
-            # Resolve reference audio for custom voice cloning
-            ref_audio = None
-            ref_text = None
-            if voice_name and voice_name.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session as _gs, CustomVoice as _CV
-                    _db_id = int(voice_name.split('_', 1)[1])
-                    _sess = _gs()
-                    try:
-                        _cv = _sess.query(_CV).filter(
-                            _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
-                        ).first()
-                        if _cv and _cv.audio_dir:
-                            for _fn in os.listdir(_cv.audio_dir):
-                                if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                                    ref_audio = os.path.join(_cv.audio_dir, _fn)
-                                    break
-                            ref_text = getattr(_cv, 'system_prompt', None) or None
-                    finally:
-                        _sess.close()
-                except Exception:
-                    pass
-
-            self.tts_service = _VoxCPMTTS(
-                voice_name=voice_name,
-                reference_audio_path=ref_audio,
-                reference_text=ref_text,
-                stt_service=self.stt_service,
-                playback_speed=playback_speed,
-                event_queue=self.event_queue,
-                speech_volume=100,
-            )
-            self.tts_service.set_hands_free(self.is_hands_free)
-
-            if hasattr(self, 'llm_service') and self.llm_service:
-                self.llm_service.set_tts_service(self.tts_service)
-        else:
-            raise ValueError(f"Unsupported TTS engine: {tts_config['engine']}")
+        # Pass TTS service to LLM service so tools can use it
+        if hasattr(self, 'llm_service') and self.llm_service:
+            self.llm_service.set_tts_service(self.tts_service)
             
     def _setup_signal_bridging(self):
         """Bridge signals from ChatManager and SignalManager to event_queue"""
@@ -1198,8 +958,9 @@ class AgentSession:
 
     def _hot_swap_tts_service(self, voice_provider: str, voice_model: str):
         """Swap TTS service in the running pipeline without restarting."""
-        from .constants import normalize_voice_provider, KOKORO_VOICE_BY_DISPLAY_NAME
+        from .constants import normalize_voice_provider
         from . import service_factory
+        from distr.core.agent.services.tts.registry import tts_registry
 
         vp = normalize_voice_provider(voice_provider)
         self.logger.debug("HOT-SWAP TTS: provider=%s model=%s", vp, voice_model)
@@ -1212,132 +973,85 @@ class AgentSession:
         new_agent_name = service_factory.resolve_voice_to_display_name(vp, voice_model or '', self.settings or {})
         self._load_custom_voice_personality(vp, voice_model or '')
 
-        # --- Kokoro: in-place voice swap (no processor replacement needed) ---
-        if vp == 'kokoro':
-            self._custom_voice_personality = ''
-            self.config['tts']['engine'] = 'kokoro'
-            from .services import KokoroTTSService
-            resolved = (voice_model or '').strip()
-            if resolved in KOKORO_VOICE_BY_DISPLAY_NAME:
-                resolved = KOKORO_VOICE_BY_DISPLAY_NAME[resolved]
-            elif resolved not in KOKORO_VOICES and not resolved.startswith('custom_'):
-                resolved = resolved or DEFAULT_KOKORO_VOICE
-            self.config['tts']['voice_name'] = resolved
-            self._load_custom_voice_personality('kokoro', resolved)
-
-            if resolved.startswith('custom_'):
-                _ref_path, _base_voice = self._resolve_kokoro_custom_voice(resolved)
-                new_agent_name = service_factory.resolve_voice_to_display_name('kokoro', resolved, self.settings or {})
-                if isinstance(old_service, KokoroTTSService):
-                    old_service.set_voice(_base_voice)
-                    old_service.set_reference_voice(_ref_path)
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug("HOT-SWAP TTS: complete (voice cloning, ref=%s)", _ref_path)
-                    return
-            else:
-                new_agent_name = KOKORO_VOICES.get(resolved, DEFAULT_KOKORO_AGENT)
-                if isinstance(old_service, KokoroTTSService):
-                    old_service.set_voice(resolved)
-                    old_service.set_reference_voice(None)
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug("HOT-SWAP TTS: complete (in-place voice=%s)", resolved)
-                    return
-
-        # --- OpenAI ---
-        elif vp == 'openai':
-            self._custom_voice_personality = ''
-            self.config['tts']['engine'] = 'openai'
-            self.config['tts']['voice_id'] = voice_model or DEFAULT_OPENAI_VOICE
-            self.config['tts']['api_key'] = (self.settings.get('openai_key') or '').strip()
-            # Unload Kanade if we were using a custom Kokoro voice
-            try:
-                from distr.core.audio.voice_cloner import unload_model
-                unload_model()
-            except Exception:
-                pass
-
-        # --- ElevenLabs ---
-        elif vp == 'elevenlabs':
-            self.config['tts']['engine'] = 'elevenlabs'
-            self.config['tts']['voice_id'] = voice_model or ''
-            self.config['tts']['api_key'] = (self.settings.get('elevenlabs_key') or '').strip()
-            # Unload Kanade if we were using a custom Kokoro voice
-            try:
-                from distr.core.audio.voice_cloner import unload_model
-                unload_model()
-            except Exception:
-                pass
-
-        # --- F5-TTS: in-place reference voice swap ---
-        elif vp == 'f5tts':
-            from .services.tts.f5tts import F5TTSTTSService
-            self.config['tts']['engine'] = 'f5tts'
-            self.config['tts']['voice_name'] = voice_model or 'default'
-            # If the service is already F5-TTS, hot-swap the reference voice in-place
-            if isinstance(old_service, F5TTSTTSService):
-                if voice_model and voice_model.startswith('custom_'):
-                    try:
-                        from distr.core.db import get_session as _gs, CustomVoice as _CV
-                        import os as _os
-                        _db_id = int(voice_model.split('_', 1)[1])
-                        _sess = _gs()
-                        try:
-                            _cv = _sess.query(_CV).filter(
-                                _CV.id == _db_id, _CV.provider == 'f5tts', _CV.status == 'ready'
-                            ).first()
-                            if _cv and _cv.audio_dir:
-                                for _fn in _os.listdir(_cv.audio_dir):
-                                    if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                                        _ref = _os.path.join(_cv.audio_dir, _fn)
-                                        old_service.set_reference_voice(_ref, getattr(_cv, 'system_prompt', None))
-                                        break
-                        finally:
-                            _sess.close()
-                    except Exception as _e:
-                        self.logger.warning("F5-TTS hot-swap custom voice failed: %s", _e)
-                else:
-                    # Reset to default reference audio
-                    from .services.tts.f5tts import _get_default_ref_audio, _DEFAULT_REF_TEXT
-                    old_service.set_reference_voice(_get_default_ref_audio() or '', _DEFAULT_REF_TEXT)
-                self._apply_agent_name(new_agent_name)
-                self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
-                return
-
-        # --- VoxCPM: in-place reference voice swap ---
-        elif vp == 'voxcpm':
-            from .services.tts.voxcpm import VoxCPMTTSService
-            self.config['tts']['engine'] = 'voxcpm'
-            self.config['tts']['voice_name'] = voice_model or 'default'
-            if isinstance(old_service, VoxCPMTTSService):
-                if voice_model and voice_model.startswith('custom_'):
-                    try:
-                        from distr.core.db import get_session as _gs, CustomVoice as _CV
-                        import os as _os
-                        _db_id = int(voice_model.split('_', 1)[1])
-                        _sess = _gs()
-                        try:
-                            _cv = _sess.query(_CV).filter(
-                                _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
-                            ).first()
-                            if _cv and _cv.audio_dir:
-                                for _fn in _os.listdir(_cv.audio_dir):
-                                    if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                                        _ref = _os.path.join(_cv.audio_dir, _fn)
-                                        old_service.set_reference_voice(_ref, getattr(_cv, 'system_prompt', None))
-                                        break
-                        finally:
-                            _sess.close()
-                    except Exception as _e:
-                        self.logger.warning("VoxCPM hot-swap custom voice failed: %s", _e)
-                else:
-                    old_service.set_reference_voice(None)
-                self._apply_agent_name(new_agent_name)
-                self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
-                return
-
-        else:
+        # Look up the provider descriptor from the registry
+        try:
+            descriptor = tts_registry.get(vp)
+        except KeyError:
             self.logger.warning("HOT-SWAP TTS: unknown provider %s, skipping", voice_provider)
             return
+
+        # Get hot-swap config from the descriptor
+        hot_swap_cfg = descriptor.get_hot_swap_config(voice_model, self.settings or {})
+
+        # Update self.config['tts'] with the hot-swap config
+        self.config['tts']['engine'] = hot_swap_cfg['engine']
+        if 'voice_name' in hot_swap_cfg:
+            self.config['tts']['voice_name'] = hot_swap_cfg['voice_name']
+        if 'voice_id' in hot_swap_cfg:
+            self.config['tts']['voice_id'] = hot_swap_cfg['voice_id']
+        if 'api_key' in hot_swap_cfg:
+            self.config['tts']['api_key'] = hot_swap_cfg['api_key']
+        if 'device' in hot_swap_cfg:
+            self.config['tts']['device'] = hot_swap_cfg['device']
+
+        # Unload Kanade voice cloner if switching away from a custom Kokoro voice
+        if hot_swap_cfg.get('unload_kanade'):
+            try:
+                from distr.core.audio.voice_cloner import unload_model
+                unload_model()
+            except Exception:
+                pass
+
+        # Clear custom voice personality for non-custom voices
+        if vp != 'kokoro' or not (voice_model or '').startswith('custom_'):
+            self._custom_voice_personality = ''
+
+        # --- In-place swap path ---
+        if hot_swap_cfg.get('in_place') and old_service is not None:
+            if vp == 'kokoro':
+                from .services import KokoroTTSService
+                from .constants import KOKORO_VOICE_BY_DISPLAY_NAME
+                resolved = hot_swap_cfg['voice_name']
+                self._load_custom_voice_personality('kokoro', resolved)
+
+                if resolved.startswith('custom_'):
+                    _ref_path, _base_voice = self._resolve_kokoro_custom_voice(resolved)
+                    new_agent_name = service_factory.resolve_voice_to_display_name('kokoro', resolved, self.settings or {})
+                    if isinstance(old_service, KokoroTTSService):
+                        old_service.set_voice(_base_voice)
+                        old_service.set_reference_voice(_ref_path)
+                        self._apply_agent_name(new_agent_name)
+                        self.logger.debug("HOT-SWAP TTS: complete (voice cloning, ref=%s)", _ref_path)
+                        return
+                else:
+                    from .constants import KOKORO_VOICES
+                    new_agent_name = KOKORO_VOICES.get(resolved, DEFAULT_KOKORO_AGENT)
+                    if isinstance(old_service, KokoroTTSService):
+                        old_service.set_voice(resolved)
+                        old_service.set_reference_voice(None)
+                        self._apply_agent_name(new_agent_name)
+                        self.logger.debug("HOT-SWAP TTS: complete (in-place voice=%s)", resolved)
+                        return
+
+            elif vp == 'f5tts':
+                from .services.tts.f5tts import F5TTSTTSService
+                if isinstance(old_service, F5TTSTTSService):
+                    ref_path = hot_swap_cfg.get('reference_audio_path')
+                    ref_text = hot_swap_cfg.get('reference_text')
+                    old_service.set_reference_voice(ref_path or '', ref_text)
+                    self._apply_agent_name(new_agent_name)
+                    self.logger.debug("HOT-SWAP TTS: F5-TTS in-place voice swap complete (voice=%s)", voice_model)
+                    return
+
+            elif vp == 'voxcpm':
+                from .services.tts.voxcpm import VoxCPMTTSService
+                if isinstance(old_service, VoxCPMTTSService):
+                    ref_path = hot_swap_cfg.get('reference_audio_path')
+                    ref_text = hot_swap_cfg.get('reference_text')
+                    old_service.set_reference_voice(ref_path, ref_text)
+                    self._apply_agent_name(new_agent_name)
+                    self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
+                    return
 
         # --- Full service replacement (non-in-place path) ---
         self._apply_agent_name(new_agent_name)

@@ -44,71 +44,80 @@ TTS_OPENAI = "OpenAI (Online)"
 TTS_COQUI = "Coqui TTS (Offline)"
 TTS_SYSTEM = "System Default"
 
-# --- TTS Provider Registry ---
-# Single source of truth for all TTS providers. UI, backend, and service factory
-# all read from this. To add a new provider, add an entry here and create the
-# corresponding service class + /api/voices/<id> endpoint.
-#   id:            internal key (used in settings DB, API, JS)
-#   name:          human-readable label shown in UI dropdown
-#   type:          "offline" or "online"
-#   enabled:       False to hide from UI (e.g. missing Python support)
-#   default_voice: voice id selected by default
-#   settings_key:  DB key that stores the user's chosen voice for this provider
-TTS_PROVIDERS = [
-    {
-        "id": "kokoro",
-        "name": TTS_KOKORO,
-        "type": "offline",
-        "enabled": True,
-        "default_voice": "af_heart",
-        "settings_key": "kokoro_voice",
-        "supports_custom_voices": True,
-        "custom_voice_limit": 0,
-    },
-    {
-        "id": "elevenlabs",
-        "name": TTS_ELEVENLABS,
-        "type": "online",
-        "enabled": True,
-        "default_voice": "default",
-        "settings_key": "elevenlabs_voice",
-        "supports_custom_voices": True,
-        "custom_voice_limit": 5,
-    },
-    {
-        "id": "openai",
-        "name": TTS_OPENAI,
-        "type": "online",
-        "enabled": True,
-        "default_voice": "alloy",
-        "settings_key": "openai_voice",
-        "supports_custom_voices": False,
-    },
-    {
-        "id": "coqui",
-        "name": TTS_COQUI,
-        "type": "offline",
-        "enabled": True,
-        "default_voice": "p225",
-        "settings_key": "coqui_voice",
-        "supports_custom_voices": True,
-        "custom_voice_limit": 0,
-    },
-    {
-        "id": "voxcpm",
-        "name": "VoxCPM (Offline)",
-        "type": "offline",
-        "enabled": False,  # Requires CUDA — MPS crashes, CPU too slow
-        "default_voice": "default",
-        "settings_key": "voxcpm_voice",
-        "supports_custom_voices": True,
-        "custom_voice_limit": 0,
-    },
-]
+# --- TTS Provider Registry (derived from descriptors) ---
+# TTS_PROVIDERS is now built dynamically from the TTSProviderRegistry.
+# To add a new provider, create a descriptor in distr/core/agent/services/tts/
+# and export DESCRIPTOR at module level — it will be auto-discovered.
 
-# Quick lookups derived from the registry
-TTS_PROVIDER_BY_ID = {p["id"]: p for p in TTS_PROVIDERS}
-TTS_ENABLED_IDS = [p["id"] for p in TTS_PROVIDERS if p["enabled"]]
+
+def _build_tts_providers() -> list[dict]:
+    """Build the TTS_PROVIDERS list from the registry for backward compatibility."""
+    from distr.core.agent.services.tts.registry import tts_registry
+    result = []
+    for d in tts_registry.all_providers():
+        entry = {
+            "id": d.id,
+            "name": d.name,
+            "type": d.type,
+            "enabled": d.enabled,
+            "default_voice": d.default_voice,
+            "settings_key": d.settings_key,
+            "supports_custom_voices": d.supports_custom_voices,
+        }
+        if d.custom_voice_limit:
+            entry["custom_voice_limit"] = d.custom_voice_limit
+        result.append(entry)
+    return result
+
+
+# Lazy-initialised module-level list — built on first access via __getattr__
+_TTS_PROVIDERS_CACHE: list[dict] | None = None
+
+
+def _get_tts_providers() -> list[dict]:
+    global _TTS_PROVIDERS_CACHE
+    if _TTS_PROVIDERS_CACHE is None:
+        _TTS_PROVIDERS_CACHE = _build_tts_providers()
+    return _TTS_PROVIDERS_CACHE
+
+
+# Expose TTS_PROVIDERS as a module-level name for backward compatibility.
+# Callers that do `from constants import TTS_PROVIDERS` will get the list.
+TTS_PROVIDERS: list[dict] = []  # placeholder — populated by _init_registry_derived()
+
+
+def _init_registry_derived() -> None:
+    """Populate module-level dicts/lists derived from the registry.
+
+    Called once at the bottom of this module (after all static constants are defined)
+    so that any import of constants.py gets the fully-populated values.
+
+    Uses in-place mutation (.extend / .update / .clear) so that modules which
+    already hold a reference via ``from constants import TTS_PROVIDERS`` see
+    the updated data.
+    """
+    providers = _build_tts_providers()
+
+    TTS_PROVIDERS.clear()
+    TTS_PROVIDERS.extend(providers)
+
+    TTS_PROVIDER_BY_ID.clear()
+    TTS_PROVIDER_BY_ID.update({p["id"]: p for p in TTS_PROVIDERS})
+
+    TTS_ENABLED_IDS.clear()
+    TTS_ENABLED_IDS.extend(p["id"] for p in TTS_PROVIDERS if p["enabled"])
+
+    from distr.core.agent.services.tts.registry import tts_registry
+    SPEED_BOUNDS.clear()
+    SPEED_BOUNDS.update({d.id: d.speed_bounds for d in tts_registry.all_providers()})
+
+    TTS_SAMPLE_RATES.clear()
+    TTS_SAMPLE_RATES.update({d.id: d.sample_rate for d in tts_registry.all_providers()})
+
+
+# Quick lookups derived from the registry (populated by _init_registry_derived)
+TTS_PROVIDER_BY_ID: dict[str, dict] = {}
+TTS_ENABLED_IDS: list[str] = []
 
 DEFAULT_COQUI_VOICE = "p225"
 DEFAULT_COQUI_AGENT = "Sarah"
@@ -188,23 +197,11 @@ SAMPLE_RATE_COQUI = 22050
 # Default to 16kHz — the service's get_sample_rate() returns the actual rate.
 SAMPLE_RATE_VOXCPM = 16000
 
-# Engine -> output sample rate (used by _load_config and transport setup)
-TTS_SAMPLE_RATES = {
-    'kokoro': SAMPLE_RATE_KOKORO,
-    'openai': SAMPLE_RATE_OPENAI_TTS,
-    'elevenlabs': SAMPLE_RATE_ELEVENLABS,
-    'coqui': SAMPLE_RATE_COQUI,
-    'voxcpm': SAMPLE_RATE_VOXCPM,
-}
+# Engine -> output sample rate (derived from registry by _init_registry_derived)
+TTS_SAMPLE_RATES: dict[str, int] = {}
 
-# --- Playback Speed Bounds ---
-SPEED_BOUNDS = {
-    "kokoro": (0.5, 2.0),
-    "elevenlabs": (0.7, 1.2),
-    "openai": (0.25, 4.0),
-    "coqui": (0.5, 2.0),
-    "voxcpm": (0.5, 2.0),
-}
+# --- Playback Speed Bounds (derived from registry by _init_registry_derived) ---
+SPEED_BOUNDS: dict[str, tuple[float, float]] = {}
 
 # --- ElevenLabs Default Voice Settings ---
 ELEVENLABS_DEFAULTS = {
@@ -258,19 +255,31 @@ def normalize_voice_provider(raw: str) -> str:
     """Normalize voice provider strings to canonical lowercase id.
 
     Handles display names like 'Kokoro (Offline)', DB values like 'kokoro',
-    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, qwen3, coqui, f5tts, voxcpm.
+    and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, coqui, f5tts, voxcpm.
+
+    Delegates to each registered descriptor's ``normalize_provider_name()`` method.
+    Falls back to the raw value (lowered/stripped) or 'kokoro' for empty input.
     """
-    v = (raw or '').strip().lower()
-    if 'kokoro' in v:
+    from distr.core.agent.services.tts.registry import tts_registry
+
+    v = (raw or '').strip()
+    if not v:
         return 'kokoro'
-    if 'elevenlabs' in v:
-        return 'elevenlabs'
-    if 'openai' in v:
-        return 'openai'
-    if 'coqui' in v:
-        return 'coqui'
-    if 'f5tts' in v or 'f5-tts' in v or 'f5 tts' in v:
-        return 'f5tts'
-    if 'voxcpm' in v or 'vox cpm' in v:
-        return 'voxcpm'
-    return v or 'kokoro'
+
+    for descriptor in tts_registry.all_providers():
+        result = descriptor.normalize_provider_name(v)
+        if result is not None:
+            return result
+
+    # No descriptor matched — return the raw value lowered
+    return v.lower() or 'kokoro'
+
+
+# --- Initialise registry-derived module-level constants ---
+# This must be called after all static constants are defined above.
+try:
+    _init_registry_derived()
+except Exception:
+    # If registry auto-discovery fails (e.g. during early import or testing),
+    # the module-level dicts remain empty and will be populated on first use.
+    pass

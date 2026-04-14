@@ -6,56 +6,31 @@ logic in one place.
 """
 
 import logging
-import os
 
-from .constants import (
-    DEFAULT_MODELS, API_KEY_NAMES,
-    KOKORO_MODEL_FILE, KOKORO_VOICES_FILE,
-    SPEED_BOUNDS, ELEVENLABS_DEFAULTS,
-    DEFAULT_OPENAI_VOICE,
-    DEFAULT_COQUI_VOICE, DEFAULT_COQUI_AGENT,
-    KOKORO_VOICES, KOKORO_VOICE_BY_DISPLAY_NAME,
-    DEFAULT_KOKORO_AGENT, DEFAULT_KOKORO_VOICE,
-    DEFAULT_OPENAI_AGENT, DEFAULT_ELEVENLABS_AGENT,
-    TTS_COQUI,
-)
+from .constants import DEFAULT_MODELS, API_KEY_NAMES
 
 logger = logging.getLogger(__name__)
 
-# Service class imports (lazy, same pattern as session.py)
-from .services import (
-    WhisperSTTService, OllamaLLMService, KokoroTTSService, ElevenLabsTTSService,
-)
+# LLM service class imports
+from .services import WhisperSTTService, OllamaLLMService
 try:
     from .services import (
-        OpenAITTSService, OpenAILLMService, OpenRouterLLMService,
+        OpenAILLMService, OpenRouterLLMService,
         AnthropicLLMService, GroqLLMService, KiloCodeLLMService,
         GeminiLLMService,
     )
 except ImportError:
-    OpenAITTSService = None
     OpenAILLMService = None
     OpenRouterLLMService = None
     AnthropicLLMService = None
     GroqLLMService = None
     KiloCodeLLMService = None
     GeminiLLMService = None
-try:
-    from .services import CoquiTTSService
-except ImportError:
-    CoquiTTSService = None
-
-try:
-    from .services import F5TTSTTSService
-except ImportError:
-    F5TTSTTSService = None
-
-try:
-    from .services import VoxCPMTTSService
-except ImportError:
-    VoxCPMTTSService = None
 
 from .libs import ElevenLabs
+
+# TTS provider registry — replaces per-provider if/elif chains
+from distr.core.agent.services.tts.registry import tts_registry
 
 # Maps engine name -> (ServiceClass, required_import_label)
 _LLM_ENGINE_MAP = {
@@ -129,155 +104,25 @@ def create_llm_service(llm_config, *, role, agent_name, event_queue, is_listenin
 def create_tts_service(tts_config, *, settings, stt_service, is_hands_free, models_dir):
     """Create a TTS service from a config dict.
 
+    Dispatches to the appropriate provider descriptor via the TTS registry.
     Returns the newly created service instance.
     """
     engine = tts_config['engine']
 
-    if engine == 'kokoro':
-        kokoro_model = os.path.join(models_dir, KOKORO_MODEL_FILE)
-        kokoro_voices = os.path.join(models_dir, KOKORO_VOICES_FILE)
-        if not os.path.exists(kokoro_model):
-            raise FileNotFoundError(f"Kokoro model not found at {kokoro_model}")
-        lo, hi = SPEED_BOUNDS['kokoro']
-        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-
-        # Resolve custom voice reference clip for Kanade voice cloning
-        _ref_path = None
-        _voice_name = tts_config['voice_name']
-        if _voice_name and _voice_name.startswith('custom_'):
-            try:
-                from distr.core.db import get_session as _gs, CustomVoice as _CV
-                _db_id = int(_voice_name.split('_', 1)[1])
-                _sess = _gs()
-                try:
-                    _cv = _sess.query(_CV).filter(
-                        _CV.id == _db_id, _CV.provider == 'kokoro', _CV.status == 'ready'
-                    ).first()
-                    if _cv and _cv.audio_dir:
-                        for _fn in os.listdir(_cv.audio_dir):
-                            if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
-                                _ref_path = os.path.join(_cv.audio_dir, _fn)
-                                break
-                finally:
-                    _sess.close()
-            except Exception:
-                pass
-            _voice_name = 'af_heart'  # good base voice for cloning
-
-        service = KokoroTTSService(
-            model_path=kokoro_model,
-            voices_path=kokoro_voices,
-            voice_name=_voice_name,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-            reference_voice_path=_ref_path,
-        )
-    elif engine == 'elevenlabs':
-        api_key = tts_config.get('api_key', '')
-        voice_id_or_name = tts_config.get('voice_id', '')
-        if not api_key:
-            raise ValueError("ElevenLabs API key is required")
-        if not voice_id_or_name:
-            raise ValueError("ElevenLabs voice ID is required")
-        voice_id, voice_name = resolve_elevenlabs_voice(api_key, voice_id_or_name)
-        playback_speed = settings.get('playback_speed', 1.0)
-        service = ElevenLabsTTSService(
-            api_key=api_key,
-            voice_id=voice_id,
-            voice_name=voice_name,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-            stability=float(settings.get('elevenlabs_stability', ELEVENLABS_DEFAULTS['stability'])),
-            similarity_boost=float(settings.get('elevenlabs_similarity_boost', ELEVENLABS_DEFAULTS['similarity_boost'])),
-            style=float(settings.get('elevenlabs_style', ELEVENLABS_DEFAULTS['style'])),
-            use_speaker_boost=bool(settings.get('elevenlabs_use_speaker_boost', ELEVENLABS_DEFAULTS['use_speaker_boost'])),
-            on_quota_exceeded=settings.get('_on_quota_exceeded'),
-        )
-        # Stash resolved voice name on the service so caller can read it
-        service._resolved_voice_name = voice_name
-    elif engine == 'openai':
-        api_key = tts_config.get('api_key', '')
-        voice_id = tts_config.get('voice_id', DEFAULT_OPENAI_VOICE)
-        if not api_key:
-            raise ValueError("OpenAI API key is required for TTS")
-        if not OpenAITTSService:
-            raise ImportError("OpenAITTSService is not available")
-        lo, hi = SPEED_BOUNDS['openai']
-        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-        service = OpenAITTSService(
-            api_key=api_key,
-            voice_id=voice_id,
-            voice_name=voice_id,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-        )
-    elif engine == 'coqui':
-        if not CoquiTTSService:
-            raise ImportError("CoquiTTSService is not available. Install with: pip install TTS")
-        voice_id = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
-        voice_name = tts_config.get('voice_name') or voice_id
-        device = tts_config.get('device') or settings.get('coqui_device') or None
-        lo, hi = SPEED_BOUNDS['coqui']
-        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-        service = CoquiTTSService(
-            voice_id=voice_id,
-            voice_name=voice_name,
-            device=device,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-        )
-    elif engine == 'voxcpm':
-        if not VoxCPMTTSService:
-            raise ImportError("VoxCPMTTSService is not available. Install with: pip install voxcpm")
-        voice_name = tts_config.get('voice_name', 'default')
-        lo, hi = SPEED_BOUNDS['voxcpm']
-        playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-
-        # Resolve reference audio for voice cloning
-        ref_audio = None
-        ref_text = None
-        if voice_name and voice_name.startswith('custom_'):
-            try:
-                from distr.core.db import get_session as _gs, CustomVoice as _CV
-                _db_id = int(voice_name.split('_', 1)[1])
-                _sess = _gs()
-                try:
-                    _cv = _sess.query(_CV).filter(
-                        _CV.id == _db_id, _CV.provider == 'voxcpm', _CV.status == 'ready'
-                    ).first()
-                    if _cv and _cv.audio_dir:
-                        for _fn in os.listdir(_cv.audio_dir):
-                            if _fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                                ref_audio = os.path.join(_cv.audio_dir, _fn)
-                                break
-                        ref_text = getattr(_cv, 'system_prompt', None) or None
-                finally:
-                    _sess.close()
-            except Exception:
-                pass
-
-        service = VoxCPMTTSService(
-            voice_name=voice_name,
-            reference_audio_path=ref_audio,
-            reference_text=ref_text,
-            stt_service=stt_service,
-            playback_speed=playback_speed,
-            event_queue=settings.get('_event_queue'),
-            speech_volume=100,
-        )
-    else:
+    try:
+        descriptor = tts_registry.get(engine)
+    except KeyError:
         raise ValueError(f"Unsupported TTS engine: {engine}")
 
-    service.set_hands_free(is_hands_free)
-    return service
+    # Each descriptor's create_service() returns a fully initialised service
+    # (including set_hands_free).
+    return descriptor.create_service(
+        tts_config,
+        settings=settings,
+        stt_service=stt_service,
+        is_hands_free=is_hands_free,
+        models_dir=models_dir,
+    )
 
 
 def resolve_elevenlabs_voice(api_key, voice_id_or_name):
@@ -329,217 +174,52 @@ def resolve_elevenlabs_voice(api_key, voice_id_or_name):
 
 
 def resolve_voice_to_display_name(voice_provider: str, voice_model: str, settings: dict) -> str:
-    """Resolve voice ID to human-readable display name for Kokoro, OpenAI, ElevenLabs.
+    """Resolve voice ID to human-readable display name for any TTS provider.
 
-    ElevenLabs stores voice IDs (e.g. EOWOXNvpbg3D1ZJDPJCF); we resolve via API to name.
+    Dispatches to the appropriate provider descriptor via the TTS registry.
     Returns the display name for UI and agent identity.
     """
     from .constants import normalize_voice_provider as _nvp
     vp = _nvp(voice_provider)
     vm = (voice_model or '').strip()
-    if not vm:
-        if 'kokoro' in vp:
-            v = (settings or {}).get('kokoro_voice', DEFAULT_KOKORO_VOICE)
-            if v and v.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session, CustomVoice
-                    db_id = int(v.split('_', 1)[1])
-                    session = get_session()
-                    try:
-                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                        if cv:
-                            return cv.name
-                    finally:
-                        session.close()
-                except Exception:
-                    pass
-                return DEFAULT_KOKORO_AGENT
-            return KOKORO_VOICES.get(v, v) if v else DEFAULT_KOKORO_AGENT
-        if 'openai' in vp:
-            v = (settings or {}).get('openai_voice', DEFAULT_OPENAI_VOICE)
-            return (v or DEFAULT_OPENAI_AGENT).capitalize()
-        if 'elevenlabs' in vp:
-            return (settings or {}).get('elevenlabs_voice', '') or DEFAULT_ELEVENLABS_AGENT
-        if 'coqui' in vp:
-            v = (settings or {}).get('coqui_voice', DEFAULT_COQUI_VOICE)
-            if v and v.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session, CustomVoice
-                    db_id = int(v.split('_', 1)[1])
-                    session = get_session()
-                    try:
-                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                        if cv:
-                            return cv.name
-                    finally:
-                        session.close()
-                except Exception:
-                    pass
-                return DEFAULT_COQUI_AGENT
-            try:
-                from distr.core.agent.constants import COQUI_VOICES
-                return COQUI_VOICES.get(v, v)
-            except Exception:
-                return v or DEFAULT_COQUI_AGENT
-        if 'f5tts' in vp:
-            v = (settings or {}).get('f5tts_voice', 'default')
-            if v and v.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session, CustomVoice
-                    db_id = int(v.split('_', 1)[1])
-                    session = get_session()
-                    try:
-                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                        if cv:
-                            return cv.name
-                    finally:
-                        session.close()
-                except Exception:
-                    pass
-            return v.capitalize() if v and v != 'default' else "F5-TTS"
-        if 'voxcpm' in vp:
-            v = (settings or {}).get('voxcpm_voice', 'default')
-            if v and v.startswith('custom_'):
-                try:
-                    from distr.core.db import get_session, CustomVoice
-                    db_id = int(v.split('_', 1)[1])
-                    session = get_session()
-                    try:
-                        cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                        if cv:
-                            return cv.name
-                    finally:
-                        session.close()
-                except Exception:
-                    pass
-            return v.capitalize() if v and v != 'default' else "VoxCPM"
-        return DEFAULT_KOKORO_AGENT
-    if 'kokoro' in vp:
-        if vm.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(vm.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return DEFAULT_KOKORO_AGENT
-        if vm in KOKORO_VOICE_BY_DISPLAY_NAME:
-            vm = KOKORO_VOICE_BY_DISPLAY_NAME[vm]
-        return KOKORO_VOICES.get(vm, vm)
-    if 'openai' in vp:
-        return vm.capitalize()
-    if 'coqui' in vp:
-        if vm.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(vm.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return DEFAULT_COQUI_AGENT
+
+    try:
+        descriptor = tts_registry.get(vp)
+        return descriptor.resolve_display_name(vm, settings)
+    except KeyError:
+        # Unknown provider — fall back to Kokoro default
         try:
-            from distr.core.agent.constants import COQUI_VOICES
-            return COQUI_VOICES.get(vm, vm)
-        except Exception:
-            return vm or DEFAULT_COQUI_AGENT
-    if 'f5tts' in vp:
-        if vm.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(vm.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-        return vm.capitalize() if vm and vm != 'default' else "F5-TTS"
-    if 'voxcpm' in vp:
-        if vm.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(vm.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-        return vm.capitalize() if vm and vm != 'default' else "VoxCPM"
-    if 'elevenlabs' in vp:
-        # Check custom voices DB first (fast, no API call)
-        try:
-            from distr.core.db import get_session
-            from sqlalchemy import text as sa_text
-            session = get_session()
-            try:
-                row = session.execute(sa_text(
-                    "SELECT name FROM custom_voices "
-                    "WHERE provider = 'elevenlabs' AND provider_voice_id = :vid AND status = 'ready' LIMIT 1"
-                ), {"vid": vm}).fetchone()
-                if row:
-                    return row[0]
-            finally:
-                session.close()
-        except Exception:
-            pass
-        api_key = ((settings or {}).get('elevenlabs_key') or '').strip()
-        if not api_key:
-            return vm
-        try:
-            _, voice_name = resolve_elevenlabs_voice(api_key, vm)
-            return voice_name
-        except Exception as e:
-            logger.debug("Could not resolve ElevenLabs voice %s: %s", vm[:20], e)
-            return vm
-    return vm
+            kokoro = tts_registry.get('kokoro')
+            return kokoro.resolve_display_name('', settings)
+        except KeyError:
+            return vm or "Heart"
 
 
 def resolve_agent_name_from_tts_config(tts_config: dict, settings: dict) -> str:
     """Derive agent display name from a TTS config dict.
 
-    Single entry point that replaces the duplicated per-engine if/elif blocks
-    in __init__, _create_services, and _determine_agent_name.
+    Uses the TTS registry to determine the correct voice model key for each
+    provider, then delegates to resolve_voice_to_display_name().
     """
     engine = (tts_config.get('engine') or '').strip().lower()
-    if engine == 'kokoro':
-        vm = tts_config.get('voice_name', DEFAULT_KOKORO_VOICE)
-        return resolve_voice_to_display_name('kokoro', vm, settings)
+
+    try:
+        descriptor = tts_registry.get(engine)
+    except KeyError:
+        # Unknown engine — fall back to kokoro from settings
+        return resolve_voice_to_display_name('kokoro', '', settings)
+
+    # Determine the voice model value from the config.
+    # Providers use either 'voice_name' or 'voice_id' as their primary key.
+    # ElevenLabs also falls back to settings.
     if engine == 'elevenlabs':
         vm = tts_config.get('voice_id', '') or (settings or {}).get('elevenlabs_voice', '')
-        return resolve_voice_to_display_name('elevenlabs', vm, settings)
-    if engine == 'openai':
-        vm = tts_config.get('voice_id', DEFAULT_OPENAI_VOICE)
-        return resolve_voice_to_display_name('openai', vm, settings)
-    if engine == 'coqui':
-        vm = tts_config.get('voice_id', DEFAULT_COQUI_VOICE)
-        return resolve_voice_to_display_name('coqui', vm, settings)
-    if engine == 'f5tts':
-        vm = tts_config.get('voice_name', 'default')
-        return resolve_voice_to_display_name('f5tts', vm, settings)
-    if engine == 'voxcpm':
-        vm = tts_config.get('voice_name', 'default')
-        return resolve_voice_to_display_name('voxcpm', vm, settings)
-    # Unknown engine — fall back to kokoro from settings
-    return resolve_voice_to_display_name('kokoro', '', settings)
+    elif engine in ('kokoro', 'f5tts', 'voxcpm'):
+        vm = tts_config.get('voice_name', descriptor.default_voice)
+    else:
+        vm = tts_config.get('voice_id', descriptor.default_voice)
+
+    return resolve_voice_to_display_name(engine, vm, settings)
 
 
 def update_agent_name_on_llm(llm_service, agent_name, role):

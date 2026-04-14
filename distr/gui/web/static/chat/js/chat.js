@@ -71,6 +71,29 @@ let ttsPlayerObjectURL = null;
 /** Filename for download: tts_<timestamp>.mp3, set when loading blob */
 let ttsPlayerDownloadFilename = 'tts.wav';
 
+// Cached TTS providers from backend (populated on first use)
+let _ttsProviders = null;
+
+async function _ensureTTSProviders() {
+    if (_ttsProviders) return _ttsProviders;
+    try {
+        const resp = await fetch('/api/tts/providers');
+        if (resp.ok) _ttsProviders = await resp.json();
+    } catch (e) {
+        console.error('Failed to load TTS providers:', e);
+    }
+    if (!_ttsProviders) _ttsProviders = [];
+    return _ttsProviders;
+}
+
+function getVoiceSettingsKey(voiceProvider) {
+    if (_ttsProviders) {
+        const provider = _ttsProviders.find(p => p.id === voiceProvider);
+        if (provider && provider.settings_key) return provider.settings_key;
+    }
+    return voiceProvider + '_voice';  // fallback
+}
+
 // Listen for provider changes from the settings page (cross-tab via BroadcastChannel)
 try {
     const _providersBc = new BroadcastChannel('providers-changed');
@@ -91,6 +114,7 @@ async function createDefaultChat() {
     let voiceProvider = 'kokoro';
     let voiceModel = null;
     try {
+        await _ensureTTSProviders();
         const [llmsRes, generalRes] = await Promise.all([
             fetch('/api/llms'),
             fetch('/api/general')
@@ -106,7 +130,7 @@ async function createDefaultChat() {
             const general = await generalRes.json();
             const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
             if (vp) voiceProvider = vp;
-            const key = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
+            const key = getVoiceSettingsKey(voiceProvider);
             const v = (general[key] || '').trim();
             if (v && v !== '—') voiceModel = v;
         }
@@ -143,6 +167,7 @@ async function createDefaultChat() {
 document.addEventListener('DOMContentLoaded', () => {
     setupEventListeners();
     initTTSPlayer();
+    _ensureTTSProviders();
     loadDefaultSettings();
 
     // Llama click → show about window + play splash sound
@@ -941,6 +966,7 @@ async function loadEmptyStateDropdowns() {
     const voiceModelEl = document.getElementById('emptyStateVoiceModel');
     if (!llmProviderEl || !llmModelEl || !voiceProviderEl || !voiceModelEl) return;
     try {
+        await _ensureTTSProviders();
         const [providersRes, modelsRes, generalRes] = await Promise.all([
             fetch('/api/llms/available-providers'),
             fetch(`${API_BASE}/models`),
@@ -967,7 +993,7 @@ async function loadEmptyStateDropdowns() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderEl.value = voiceProvider;
         await loadEmptyStateVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
+        const voiceKey = getVoiceSettingsKey(voiceProvider);
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelEl.options.length) {
             const opt = Array.from(voiceModelEl.options).find(o => o.value === defaultVoice);
@@ -2199,6 +2225,7 @@ async function loadVoiceModels(provider) {
 // Load default settings: LLM = conversational (Settings > LLMs), Voice = general (Settings > General)
 async function loadDefaultSettings() {
     try {
+        await _ensureTTSProviders();
         const [providersRes, modelsRes, generalRes] = await Promise.all([
             fetch('/api/llms/available-providers'),
             fetch(`${API_BASE}/models`),
@@ -2232,7 +2259,7 @@ async function loadDefaultSettings() {
         const voiceProvider = generalData.voice_provider || 'kokoro';
         voiceProviderSelect.value = voiceProvider;
         await loadVoiceModels(voiceProvider);
-        const voiceKey = voiceProvider === 'kokoro' ? 'kokoro_voice' : voiceProvider === 'openai' ? 'openai_voice' : voiceProvider === 'coqui' ? 'coqui_voice' : voiceProvider === 'f5tts' ? 'f5tts_voice' : voiceProvider === 'voxcpm' ? 'voxcpm_voice' : 'elevenlabs_voice';
+        const voiceKey = getVoiceSettingsKey(voiceProvider);
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelSelect.options.length) {
             const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);

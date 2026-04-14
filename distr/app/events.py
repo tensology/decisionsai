@@ -888,6 +888,9 @@ class EventHandlerMixin:
         settings-style string (e.g. 'Kokoro (Offline)') and voice_id is the
         voice/speaker identifier for that provider.
         """
+        from distr.core.agent.constants import normalize_voice_provider
+        from distr.core.agent.services.tts.registry import tts_registry
+
         chat_voice_provider = ""
         chat_voice_model = ""
 
@@ -914,112 +917,48 @@ class EventHandlerMixin:
         tts_provider = chat_voice_provider or settings.get('tts_provider', 'Kokoro (Offline)')
 
         # Resolve voice model: chat → provider-specific global setting
-        vp_lower = tts_provider.lower()
         if chat_voice_model:
             voice_id = chat_voice_model
-        elif "kokoro" in vp_lower:
-            voice_id = settings.get('kokoro_voice', 'af_heart')
-        elif "openai" in vp_lower:
-            voice_id = settings.get('openai_voice', 'alloy')
-        elif "elevenlabs" in vp_lower:
-            voice_id = settings.get('elevenlabs_voice', '')
-        elif "coqui" in vp_lower:
-            voice_id = settings.get('coqui_voice', 'p225')
-        elif "voxcpm" in vp_lower:
-            voice_id = settings.get('voxcpm_voice', 'default')
         else:
-            voice_id = ''
+            provider_id = normalize_voice_provider(tts_provider)
+            try:
+                descriptor = tts_registry.get(provider_id)
+                voice_id = descriptor.get_telegram_voice_id(settings)
+            except KeyError:
+                voice_id = ''
 
         return tts_provider, voice_id
 
     def _telegram_generate_tts(self, text: str):
         """Generate TTS audio file for Telegram voice note."""
         try:
+            from distr.core.agent.constants import normalize_voice_provider
+            from distr.core.agent.services.tts.registry import tts_registry
+
             settings = load_settings_from_db()
             tts_provider, voice_id = self._telegram_resolve_voice_settings(settings)
             temp_dir = Path(tempfile.gettempdir()) / "decisions_ai_telegram"
             temp_dir.mkdir(parents=True, exist_ok=True)
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
 
-            tts_lower = tts_provider.lower()
+            provider_id = normalize_voice_provider(tts_provider)
 
-            if 'kokoro' in tts_lower:
-                from distr.core.audio.tts_handler import _generate_kokoro
-                audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
-                try:
-                    _generate_kokoro(text, voice_id or 'af_heart', 1.0, str(audio_file))
-                    logger.info(f"Generated Kokoro TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
-                    return audio_file
-                except Exception as e:
-                    logger.warning(f"Kokoro TTS failed: {e}")
-
-            elif 'openai' in tts_lower:
-                from openai import OpenAI
-                openai_key = settings.get('openai_key', '')
-                if openai_key:
-                    client = OpenAI(api_key=openai_key)
-                    response = client.audio.speech.create(
-                        model="tts-1",
-                        voice=voice_id or 'alloy',
-                        input=text,
-                    )
-                    audio_file = temp_dir / f"telegram_tts_{timestamp}.mp3"
-                    response.stream_to_file(str(audio_file))
-                    logger.info(f"Generated OpenAI TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
-                    return audio_file
-
-            elif 'elevenlabs' in tts_lower:
-                try:
-                    from elevenlabs import ElevenLabs
-                    key = settings.get('elevenlabs_key', '')
-                    if key and voice_id:
-                        client = ElevenLabs(api_key=key)
-                        audio_stream = client.text_to_speech.convert(
-                            text=text, voice_id=voice_id,
-                            model_id="eleven_multilingual_v2",
-                            output_format="mp3_44100_128",
-                            voice_settings={
-                                "stability": 0.50, "similarity_boost": 0.60,
-                                "style": 0.25, "use_speaker_boost": True, "speed": 0.90,
-                            },
-                        )
-                        audio_bytes = b"".join(audio_stream)
-                        audio_file = temp_dir / f"telegram_tts_{timestamp}.mp3"
-                        with open(audio_file, 'wb') as f:
-                            f.write(audio_bytes)
-                        logger.info(f"Generated ElevenLabs TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
-                        return audio_file
-                except ImportError:
-                    logger.warning("ElevenLabs library not available")
-                except Exception as e:
-                    logger.error(f"Failed to generate ElevenLabs TTS audio: {e}", exc_info=True)
-
-            elif 'coqui' in tts_lower:
-                try:
-                    from distr.core.audio.tts_handler import _generate_coqui
-                    audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
-                    _generate_coqui(text, voice_id or 'p225', 1.0, str(audio_file))
-                    logger.info(f"Generated Coqui TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
-                    return audio_file
-                except ImportError:
-                    logger.warning("Coqui TTS library not available")
-                except Exception as e:
-                    logger.error(f"Failed to generate Coqui TTS audio: {e}", exc_info=True)
-
-            elif 'voxcpm' in tts_lower:
-                try:
-                    from distr.core.audio.tts_handler import _generate_voxcpm
-                    audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
-                    _generate_voxcpm(text, voice_id or 'default', 1.0, str(audio_file))
-                    logger.info(f"Generated VoxCPM TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
-                    return audio_file
-                except ImportError:
-                    logger.warning("VoxCPM library not available")
-                except Exception as e:
-                    logger.error(f"Failed to generate VoxCPM TTS audio: {e}", exc_info=True)
-
-            else:
+            try:
+                descriptor = tts_registry.get(provider_id)
+            except KeyError:
                 logger.warning(f"Unknown TTS provider: {tts_provider}")
+                return None
+
+            audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
+            try:
+                descriptor.generate_audio(text, voice_id or descriptor.default_voice, 1.0, str(audio_file))
+                logger.info(f"Generated {provider_id} TTS audio: {audio_file} ({os.path.getsize(audio_file)} bytes), voice={voice_id}")
+                return audio_file
+            except ImportError:
+                logger.warning(f"{provider_id} TTS library not available")
+            except Exception as e:
+                logger.error(f"Failed to generate {provider_id} TTS audio: {e}", exc_info=True)
+
         except Exception as e:
             logger.error(f"Failed to generate TTS audio: {e}", exc_info=True)
         return None

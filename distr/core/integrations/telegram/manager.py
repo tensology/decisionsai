@@ -208,13 +208,8 @@ class TelegramWebSocketManager(
             if not provider:
                 provider = normalize_voice_provider(settings.get("voice_provider", "kokoro"))
             if not voice_id:
-                voice_keys = {
-                    "kokoro": "kokoro_voice",
-                    "elevenlabs": "elevenlabs_voice",
-                    "openai": "openai_voice",
-                    "coqui": "coqui_voice",
-                    "voxcpm": "voxcpm_voice",
-                }
+                from distr.core.agent.services.tts.registry import tts_registry
+                voice_keys = {d.id: d.settings_key for d in tts_registry.all_providers()}
                 voice_id = settings.get(voice_keys.get(provider, "kokoro_voice"), "")
 
             # Resolve display name

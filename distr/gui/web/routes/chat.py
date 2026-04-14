@@ -24,6 +24,7 @@ from distr.core.llm_factory import normalize_provider as _normalize_provider
 from distr.core.settings import load_settings_from_db
 from distr.core.agent.service_factory import resolve_voice_to_display_name
 from distr.core.agent.constants import normalize_voice_provider
+from distr.core.agent.services.tts.registry import tts_registry
 from distr.gui.web.security import (
     is_allowed_local_origin,
     websocket_has_valid_internal_token,
@@ -361,7 +362,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             model_name = (settings.get("conversational_llm_model") or "").strip() or "—"
             voice_provider_raw = (settings.get("tts_provider") or "Kokoro").strip()
             voice_provider_id = normalize_voice_provider(voice_provider_raw)
-            _display_map = {"kokoro": "Kokoro", "openai": "OpenAI", "elevenlabs": "ElevenLabs", "coqui": "Coqui TTS", "f5tts": "F5-TTS", "voxcpm": "VoxCPM"}
+            _display_map = {d.id: d.name.split(" (")[0] for d in tts_registry.all_providers()}
             voice_provider = _display_map.get(voice_provider_id, voice_provider_id.title())
             voice_model_raw = (
                 settings.get("kokoro_voice")
@@ -464,19 +465,10 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     or "kokoro"
                 )
                 # Use the voice model that matches the voice provider (not a random fallback chain)
-                vp_lower = voice_provider.lower()
-                if "kokoro" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("kokoro_voice") or "")
-                elif "openai" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("openai_voice") or "")
-                elif "elevenlabs" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("elevenlabs_voice") or "")
-                elif "coqui" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("coqui_voice") or "p225")
-                elif "f5tts" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("f5tts_voice") or "default")
-                elif "voxcpm" in vp_lower:
-                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get("voxcpm_voice") or "default")
+                vp_id = normalize_voice_provider(voice_provider)
+                if vp_id in tts_registry:
+                    desc = tts_registry.get(vp_id)
+                    voice_model_raw = (root_chat.voice_model or "").strip() or (settings.get(desc.settings_key) or desc.default_voice)
                 else:
                     voice_model_raw = (root_chat.voice_model or "").strip() or ""
                 # Persist to chat row when we used fallback so this thread has its own LLM/voice stored (normal chat behaviour)
@@ -581,7 +573,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 voice_provider = normalize_voice_provider(voice_provider)
 
             # Validate voice provider
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", ""]
+            valid_voice_providers = [d.id for d in tts_registry.all_providers()] + [""]
             if voice_provider and voice_provider not in valid_voice_providers:
                 raise HTTPException(
                     status_code=400,
@@ -839,7 +831,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     )
 
             # Validate voice provider if provided
-            valid_voice_providers = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "", None]
+            valid_voice_providers = [d.id for d in tts_registry.all_providers()] + ["", None]
             vp_normalized = normalize_voice_provider(voice_provider) if voice_provider else voice_provider
             if (
                 vp_normalized is not None

@@ -1,545 +1,246 @@
 # Voice Provider Integration Guide
 
-This document is the definitive reference for adding, removing, or updating a TTS (Text-to-Speech) voice provider in the DecisionsAI system. It covers every touch point — from the backend registry and service implementation to the web UI, chat pipeline, Telegram voice notes, and voice cloning.
+This document is the definitive reference for adding, removing, or updating a TTS (Text-to-Speech) voice provider in the DecisionsAI system.
 
 ---
 
 ## Architecture Overview
 
-The voice provider system follows a registry-driven pattern. A single source of truth — `TTS_PROVIDERS` in `constants.py` — drives the entire stack. The UI, service factory, TTS handler, Telegram integration, and chat routes all read from this registry or use the canonical provider IDs it defines.
+The voice provider system uses a **descriptor-based architecture** with automatic discovery. Each provider is defined in a single descriptor file that implements the `TTSProviderDescriptor` abstract base class. A central `TTSProviderRegistry` auto-discovers all descriptors at runtime and provides dynamic dispatch to every consumer in the stack — service factory, session management, TTS handler, Telegram integration, chat routes, voice cloning, and the web UI.
 
 **Data flow:**
 
 ```
-TTS_PROVIDERS (constants.py)
+TTSProviderDescriptor (one file per provider)
+    │
+    ▼
+TTSProviderRegistry (auto-discovers descriptors)
     ├── Web UI (general.js fetches /api/tts/providers)
-    ├── Service Factory (service_factory.py creates TTS service instances)
-    ├── TTS Handler (tts_handler.py generates audio for previews & chat)
-    ├── Telegram (events.py + manager.py generate voice notes)
-    ├── Chat Routes (chat.py validates provider on chat creation/update)
-    └── Voice Cloning (voice_cloning.py processes custom voices)
+    ├── Service Factory (service_factory.py → registry.get(engine).create_service())
+    ├── TTS Handler (tts_handler.py → registry.get(prov).generate_audio())
+    ├── Session (session.py → registry.get(engine).create_service() / get_hot_swap_config())
+    ├── Telegram (events.py + manager.py → registry.get(prov).get_telegram_voice_id())
+    ├── Chat Routes (chat.py → registry.provider_ids() for validation)
+    ├── Voice Cloning (voice_cloning.py → registry.get(prov).clone_voice())
+    └── Constants (constants.py → registry-based normalize_voice_provider())
 ```
 
 **Current providers:** Kokoro (offline), ElevenLabs (online), OpenAI (online), Coqui TTS (offline, disabled), F5-TTS (offline, disabled), VoxCPM (offline).
 
 ---
 
-## Touch Point Checklist
+## Adding a New Voice Provider
 
-When adding or removing a provider, you must update ALL of the following. Each section below explains the details.
+Adding a new provider requires **one file**: a descriptor module in `distr/core/agent/services/tts/`. No other files need to be modified — the registry auto-discovers it.
 
-| # | Touch Point | File(s) | Action |
-|---|-------------|---------|--------|
-| 1 | Provider Registry | `distr/core/agent/constants.py` | Add/remove entry in `TTS_PROVIDERS` |
-| 2 | Provider Normalization | `distr/core/agent/constants.py` | Update `normalize_voice_provider()` |
-| 3 | Sample Rates | `distr/core/agent/constants.py` | Add/remove `SAMPLE_RATE_*` and `TTS_SAMPLE_RATES` entry |
-| 4 | Speed Bounds | `distr/core/agent/constants.py` | Add/remove `SPEED_BOUNDS` entry |
-| 5 | Voice List (if static) | `distr/core/agent/constants.py` | Add voice dict (like `KOKORO_VOICES`) |
-| 6 | TTS Service Class | `distr/core/agent/services/tts/<provider>.py` | Create/remove service class extending `TTSService` |
-| 7 | Services `__init__.py` | `distr/core/agent/services/__init__.py` | Import/export the new service class |
-| 8 | TTS Services `__init__.py` | `distr/core/agent/services/tts/__init__.py` | Import/export the new service class |
-| 9 | Service Factory — Import | `distr/core/agent/service_factory.py` | Import the service class |
-| 10 | Service Factory — `create_tts_service()` | `distr/core/agent/service_factory.py` | Add/remove `elif engine == '<id>':` block |
-| 11 | Service Factory — `resolve_voice_to_display_name()` | `distr/core/agent/service_factory.py` | Add/remove provider display name resolution |
-| 12 | Service Factory — `resolve_agent_name_from_tts_config()` | `distr/core/agent/service_factory.py` | Add/remove `if engine == '<id>':` block |
-| 13 | Session — `_VOICE_SETTINGS` | `distr/core/agent/session.py` | Add/remove entry in `_VOICE_SETTINGS` dict |
-| 14 | Session — `_hot_swap_tts_service()` | `distr/core/agent/session.py` | Add/remove hot-swap `elif vp == '<id>':` block |
-| 14b | Session — `_create_services()` | `distr/core/agent/session.py` | Add/remove `elif tts_config['engine'] == '<id>':` block in the TTS creation chain (this is the STARTUP path — separate from service_factory) |
-| 15 | TTS Handler — `_tts_provider_to_internal()` | `distr/core/audio/tts_handler.py` | Add/remove mapping |
-| 16 | TTS Handler — `_normalize_voice_for_provider()` | `distr/core/audio/tts_handler.py` | Add/remove provider voice validation |
-| 17 | TTS Handler — `generate_tts_audio()` | `distr/core/audio/tts_handler.py` | Add/remove voice default resolution + generation call |
-| 18 | TTS Handler — `generate_voice_sample()` | `distr/core/audio/tts_handler.py` | Add/remove provider generation call |
-| 19 | TTS Handler — `_resolve_display_name()` | `distr/core/audio/tts_handler.py` | Add/remove display name resolution |
-| 20 | TTS Handler — `_generate_<provider>()` | `distr/core/audio/tts_handler.py` | Create/remove generation function |
-| 21 | Database — Settings Model | `distr/core/db/__init__.py` | Add/remove `<provider>_voice` column on `Settings` |
-| 22 | Database — Provider-specific columns | `distr/core/db/__init__.py` | Add any provider-specific settings columns |
-| 23 | Pydantic Model — GeneralSettings | `distr/gui/web/routes/settings/_shared.py` | Add/remove `<provider>_voice` field |
-| 24 | API Route — Voice List | `distr/gui/web/routes/settings/voices.py` | Add/remove `/voices/<provider>` endpoint |
-| 25 | API Route — `_get_voices_for_provider()` | `distr/gui/web/routes/settings/voices.py` | Add/remove `elif provider_id == '<id>':` block |
-| 26 | API Route — General Settings GET | `distr/gui/web/routes/settings/general.py` | Add/remove `<provider>_voice` in response dict |
-| 27 | Chat Route — Validation | `distr/gui/web/routes/chat.py` | Add provider ID to `valid_voice_providers` lists |
-| 28 | Telegram — Voice Resolution | `distr/app/events.py` (`_telegram_resolve_voice_settings`) | Add/remove `elif '<provider>' in vp_lower:` |
-| 29 | Telegram — TTS Generation | `distr/app/events.py` (`_telegram_generate_tts`) | Add/remove `elif '<provider>' in tts_lower:` |
-| 30 | Telegram — Manager Agent Name | `distr/core/integrations/telegram/manager.py` | Add provider to `voice_keys` dict |
-| 31 | Telegram — Voice Note Tool | `distr/core/agent/tools/integrations/send_voice_note_to_telegram.py` | Add/remove provider TTS generation |
-| 32 | Voice Cloning (if supported) | `distr/core/audio/voice_cloning.py` | Add/remove `_clone_<provider>()` function |
-| 33 | Custom Voice Route Validation | `distr/gui/web/routes/settings/voices.py` | Add provider to allowed list in `create_custom_voice()` |
-| 34 | Settings Service | `distr/core/services/settings_service.py` | Add provider-specific cache clearing if needed |
-| 35 | API Docs | `distr/gui/web/routes/docs.py` | Update API documentation |
+### Step 1: Create the Descriptor File
+
+Create `distr/core/agent/services/tts/<yourprovider>_descriptor.py`:
+
+```python
+"""
+YourProviderDescriptor — TTSProviderDescriptor for the YourProvider TTS provider.
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any, Optional
+
+from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
+
+logger = logging.getLogger(__name__)
+
+
+class YourProviderDescriptor(TTSProviderDescriptor):
+    """Provider descriptor for YourProvider."""
+
+    # ------------------------------------------------------------------
+    # Static configuration (required properties)
+    # ------------------------------------------------------------------
+
+    @property
+    def id(self) -> str:
+        return "yourprovider"  # Canonical lowercase ID
+
+    @property
+    def name(self) -> str:
+        return "YourProvider (Online)"  # Human-readable display name
+
+    @property
+    def type(self) -> str:
+        return "online"  # "online" or "offline"
+
+    @property
+    def enabled(self) -> bool:
+        return True  # False to hide from UI
+
+    @property
+    def default_voice(self) -> str:
+        return "voice_1"  # Default voice ID
+
+    @property
+    def settings_key(self) -> str:
+        return "yourprovider_voice"  # DB settings key for saved voice
+
+    @property
+    def sample_rate(self) -> int:
+        return 24000  # Output sample rate in Hz
+
+    @property
+    def speed_bounds(self) -> tuple[float, float]:
+        return (0.5, 2.0)  # (min, max) playback speed
+
+    @property
+    def supports_custom_voices(self) -> bool:
+        return False  # True if voice cloning is supported
+
+    @property
+    def custom_voice_limit(self) -> int:
+        return 0  # 0 = unlimited (only relevant if supports_custom_voices)
+
+    # ------------------------------------------------------------------
+    # Required methods
+    # ------------------------------------------------------------------
+
+    def create_service(self, tts_config, *, settings, stt_service, is_hands_free, models_dir):
+        # Create and return a TTS service instance
+        ...
+
+    def generate_audio(self, text, voice, speed, out_file):
+        # Generate TTS audio and write WAV to out_file
+        ...
+
+    def resolve_display_name(self, voice_id, settings, voice_name=None):
+        # Return human-readable name for a voice ID
+        ...
+
+    def normalize_voice(self, raw_voice, settings):
+        # Normalize a raw voice string into a valid voice ID
+        ...
+
+    def get_voices(self):
+        # Return list of available voices: [{"id": ..., "name": ...}, ...]
+        ...
+
+    def get_hot_swap_config(self, voice_model, settings):
+        # Return config dict for live voice switching
+        ...
+
+    def get_voice_settings_entry(self):
+        # Return (engine, settings_key, default_voice, extra_keys_dict)
+        ...
+
+    def get_telegram_voice_id(self, settings):
+        # Resolve voice ID from settings for Telegram voice notes
+        ...
+
+    def normalize_provider_name(self, raw):
+        # Return self.id if raw matches this provider, else None
+        ...
+
+    # ------------------------------------------------------------------
+    # Optional: Voice cloning (only if supports_custom_voices = True)
+    # ------------------------------------------------------------------
+
+    # def clone_voice(self, voice, audio_files, session):
+    #     # Default raises NotImplementedError — override if needed
+    #     ...
+
+
+# IMPORTANT: Export the singleton descriptor instance at module level
+DESCRIPTOR = YourProviderDescriptor()
+```
+
+### Step 2: That's It
+
+The `TTSProviderRegistry` automatically discovers your descriptor on first access. No other files need changes.
 
 ---
 
-## Detailed Instructions Per Touch Point
-
-### 1. Provider Registry (`distr/core/agent/constants.py`)
-
-Add an entry to the `TTS_PROVIDERS` list. This is the single source of truth — the UI reads it via `/api/tts/providers`.
-
-```python
-TTS_PROVIDERS = [
-    # ... existing providers ...
-    {
-        "id": "newprovider",              # Internal key — lowercase, no spaces
-        "name": "NewProvider (Online)",    # Human-readable label for UI dropdown
-        "type": "online",                 # "online" or "offline"
-        "enabled": True,                  # False to hide from UI
-        "default_voice": "voice_1",       # Default voice ID
-        "settings_key": "newprovider_voice",  # DB column name for saved voice
-        "supports_custom_voices": False,  # True if voice cloning is supported
-        "custom_voice_limit": 0,          # 0 = unlimited, >0 = max custom voices
-    },
-]
-```
-
-Also add display name constant:
-```python
-TTS_NEWPROVIDER = "NewProvider (Online)"
-```
-
-### 2. Provider Normalization (`distr/core/agent/constants.py`)
-
-Update `normalize_voice_provider()` to recognize the new provider's various name forms:
-
-```python
-def normalize_voice_provider(raw: str) -> str:
-    v = (raw or '').strip().lower()
-    # ... existing checks ...
-    if 'newprovider' in v:
-        return 'newprovider'
-    return v or 'kokoro'
-```
-
-### 3. Sample Rates (`distr/core/agent/constants.py`)
-
-Add the output sample rate constant and register it:
-
-```python
-SAMPLE_RATE_NEWPROVIDER = 24000  # or whatever the provider outputs
-
-TTS_SAMPLE_RATES = {
-    # ... existing entries ...
-    'newprovider': SAMPLE_RATE_NEWPROVIDER,
-}
-```
-
-### 4. Speed Bounds (`distr/core/agent/constants.py`)
-
-Add playback speed limits:
-
-```python
-SPEED_BOUNDS = {
-    # ... existing entries ...
-    "newprovider": (0.5, 2.0),  # (min, max) — provider-specific limits
-}
-```
-
-### 5. Voice List (`distr/core/agent/constants.py`)
-
-If the provider has a static voice list (like Kokoro), define it:
-
-```python
-NEWPROVIDER_VOICES = {
-    "voice_1": "Alice",
-    "voice_2": "Bob",
-}
-```
-
-For API-driven providers (like ElevenLabs), voices are fetched dynamically — skip this step.
-
-### 6. TTS Service Class (`distr/core/agent/services/tts/<provider>.py`)
-
-Create a new file implementing the Pipecat `TTSService` interface. The service must:
-
-- Extend `TTSService` from `distr.core.agent.libs`
-- Implement `process_frame()` to handle the Pipecat frame pipeline
-- Handle these frame types: `TextFrame`, `LLMFullResponseStartFrame`, `LLMFullResponseEndFrame`, `StartFrame`, `EndFrame`, `CancelFrame`, `InterruptionFrame`, `UserStartedSpeakingFrame`, `UserStoppedSpeakingFrame`
-- Emit `TTSStartedFrame` / `TTSStoppedFrame` and `OutputAudioRawFrame`
-- Implement `set_hands_free()`, `set_ptt_active()`, `set_playback_speed()`, `set_speech_volume()`
-- Buffer text into complete sentences before synthesizing
-- Support the `event_queue` for sending events back to the main process
-- Handle Telegram voice note generation via `_current_telegram_request` flag
-
-Use an existing service (e.g., `openai.py`) as a template. Key constructor parameters:
-
-```python
-class NewProviderTTSService(TTSService):
-    def __init__(
-        self,
-        api_key: str = None,          # If online provider
-        voice_id: str = "voice_1",
-        voice_name: str = None,
-        stt_service=None,
-        playback_speed: float = 1.0,
-        event_queue=None,
-        speech_volume: int = 100,
-        **kwargs,
-    ):
-```
-
-### 7–8. Services Package Imports
-
-**`distr/core/agent/services/__init__.py`** — Add import with try/except:
-
-```python
-try:
-    from .tts.newprovider import NewProviderTTSService
-except ImportError:
-    NewProviderTTSService = None
-
-# In __all__:
-if NewProviderTTSService:
-    __all__.append("NewProviderTTSService")
-```
-
-**`distr/core/agent/services/tts/__init__.py`** — Add import (if you want it re-exported from the tts subpackage).
-
-### 9–12. Service Factory (`distr/core/agent/service_factory.py`)
-
-**Import:**
-```python
-try:
-    from .services import NewProviderTTSService
-except ImportError:
-    NewProviderTTSService = None
-```
-
-**`create_tts_service()`** — Add an `elif engine == 'newprovider':` block:
-
-```python
-elif engine == 'newprovider':
-    if not NewProviderTTSService:
-        raise ImportError("NewProviderTTSService is not available")
-    api_key = tts_config.get('api_key', '')
-    voice_id = tts_config.get('voice_id', 'voice_1')
-    lo, hi = SPEED_BOUNDS['newprovider']
-    playback_speed = max(lo, min(hi, settings.get('playback_speed', 1.0)))
-    service = NewProviderTTSService(
-        api_key=api_key,
-        voice_id=voice_id,
-        voice_name=voice_id,
-        stt_service=stt_service,
-        playback_speed=playback_speed,
-        event_queue=settings.get('_event_queue'),
-        speech_volume=100,
-    )
-```
-
-**`resolve_voice_to_display_name()`** — Add resolution logic:
-
-```python
-if 'newprovider' in vp:
-    return vm.capitalize() if vm else "NewProvider"
-```
-
-**`resolve_agent_name_from_tts_config()`** — Add:
-
-```python
-if engine == 'newprovider':
-    vm = tts_config.get('voice_id', 'voice_1')
-    return resolve_voice_to_display_name('newprovider', vm, settings)
-```
-
-### 13–14. Session (`distr/core/agent/session.py`)
-
-**`_VOICE_SETTINGS` dict** (in `_load_config`):
-
-```python
-_VOICE_SETTINGS = {
-    # ... existing entries ...
-    'newprovider': ('newprovider', 'newprovider_voice', 'voice_1', {'api_key': 'newprovider_key'}),
-}
-```
-
-The tuple format is: `(engine_name, settings_db_key, default_voice, {extra_config_keys})`.
-
-**`_hot_swap_tts_service()`** — Add an `elif vp == 'newprovider':` block for live voice switching:
-
-```python
-elif vp == 'newprovider':
-    self.config['tts']['engine'] = 'newprovider'
-    self.config['tts']['voice_id'] = voice_model or 'voice_1'
-    self.config['tts']['api_key'] = (self.settings.get('newprovider_key') or '').strip()
-```
-
-**`_create_services()`** — Add an `elif tts_config['engine'] == 'newprovider':` block in the TTS creation if/elif chain. This is the STARTUP path used when the agent session first initializes — it's separate from `service_factory.create_tts_service()` and MUST be updated independently:
-
-```python
-elif tts_config['engine'] == 'newprovider':
-    from .services.tts.newprovider import NewProviderTTSService
-    voice_name = tts_config.get('voice_name', 'default')
-    playback_speed = self.settings.get('playback_speed', 1.0)
-    self.tts_service = NewProviderTTSService(
-        voice_name=voice_name,
-        stt_service=self.stt_service,
-        playback_speed=playback_speed,
-        event_queue=self.event_queue,
-        speech_volume=100,
-    )
-    self.tts_service.set_hands_free(self.is_hands_free)
-    if hasattr(self, 'llm_service') and self.llm_service:
-        self.llm_service.set_tts_service(self.tts_service)
-```
-
-**CRITICAL**: This is the most commonly missed touch point. The `_create_services()` method has its own if/elif chain for TTS engines that is completely separate from `service_factory.create_tts_service()`. If you add a provider to the factory but not here, the app will crash on startup with `ValueError: Unsupported TTS engine`.
-
-### 15–20. TTS Handler (`distr/core/audio/tts_handler.py`)
-
-This file handles audio generation for web previews, chat playback, and Telegram.
-
-**`_tts_provider_to_internal()`:**
-```python
-if p in ("newprovider", "newprovider (online)"):
-    return "newprovider"
-```
-
-**`_normalize_voice_for_provider()`:**
-```python
-if prov == "newprovider":
-    # Validate voice ID against known voices or pass through
-    return raw if raw else "voice_1"
-```
-
-**`generate_tts_audio()`** — Add voice default resolution:
-```python
-elif prov == "newprovider":
-    voice = (settings.get("newprovider_voice") or "voice_1").strip()
-```
-
-And add generation call:
-```python
-elif prov == "newprovider":
-    _generate_newprovider(text, voice, speed, out_file)
-```
-
-**`generate_voice_sample()`** — Add:
-```python
-elif provider == 'newprovider':
-    _generate_newprovider(test_text, voice, speed, out_file)
-```
-
-**`_resolve_display_name()`** — Add:
-```python
-if provider == 'newprovider':
-    return voice.capitalize() if voice else "NewProvider"
-```
-
-**Create `_generate_newprovider()`:**
-```python
-def _generate_newprovider(text: str, voice: str, speed: float, out_file: str):
-    """Generate NewProvider voice sample to WAV file."""
-    import numpy as np
-    # ... provider-specific synthesis logic ...
-    # Must write a WAV file to out_file at 48kHz (resample if needed)
-    audio, sample_rate = _resample_audio(audio, src_rate, 48000)
-    sf.write(out_file, audio, sample_rate)
-    logger.info("Wrote NewProvider sample to %s", out_file)
-```
-
-### 21–22. Database (`distr/core/db/__init__.py`)
-
-Add a column to the `Settings` model:
-
-```python
-class Settings(Base):
-    # ... existing columns ...
-    newprovider_voice = Column(String, default='voice_1')
-    # If the provider needs an API key:
-    # newprovider_key is typically stored alongside other keys
-```
-
-If the provider has provider-specific settings (like ElevenLabs' stability/similarity), add those columns too.
-
-**Important:** After adding columns, the app's auto-migration logic will handle schema updates on next startup. If you need a manual migration, use Alembic or the app's built-in migration system.
-
-### 23. Pydantic Model (`distr/gui/web/routes/settings/_shared.py`)
-
-Add the voice field to `GeneralSettings`:
-
-```python
-class GeneralSettings(BaseModel):
-    # ... existing fields ...
-    newprovider_voice: str = "voice_1"
-```
-
-### 24–25. Voice API Routes (`distr/gui/web/routes/settings/voices.py`)
-
-**Add a `/voices/<provider>` endpoint:**
-
-```python
-@router.get("/voices/newprovider")
-async def get_newprovider_voices():
-    """Return NewProvider voice list."""
-    # For static voices:
-    from distr.core.agent.constants import NEWPROVIDER_VOICES
-    return [{"id": vid, "name": name} for vid, name in NEWPROVIDER_VOICES.items()]
-    # For API-driven voices:
-    # Fetch from provider API using saved API key
-```
-
-**Update `_get_voices_for_provider()`:**
-
-```python
-elif provider_id == "newprovider":
-    from distr.core.agent.constants import NEWPROVIDER_VOICES
-    voices = [{"id": vid, "name": name} for vid, name in NEWPROVIDER_VOICES.items()]
-```
-
-If the provider supports custom voices, add the custom voice DB query block (same pattern as kokoro/f5tts).
-
-### 26. General Settings GET (`distr/gui/web/routes/settings/general.py`)
-
-Add the voice setting to the response:
-
-```python
-return JSONResponse({
-    # ... existing fields ...
-    "newprovider_voice": settings.get("newprovider_voice", "voice_1"),
-})
-```
-
-### 27. Chat Route Validation (`distr/gui/web/routes/chat.py`)
-
-Add the provider ID to both `valid_voice_providers` lists (there are two — one in chat creation, one in chat update):
-
-```python
-valid_voice_providers = ["kokoro", "openai", "elevenlabs", "f5tts", "newprovider", ""]
-```
-
-### 28–29. Telegram Voice Notes (`distr/app/events.py`)
-
-**`_telegram_resolve_voice_settings()`** — Add voice resolution:
-
-```python
-elif "newprovider" in vp_lower:
-    voice_id = settings.get('newprovider_voice', 'voice_1')
-```
-
-**`_telegram_generate_tts()`** — Add TTS generation:
-
-```python
-elif 'newprovider' in tts_lower:
-    # Generate audio using the provider's API/library
-    # Write to temp file, return path
-    from distr.core.audio.tts_handler import _generate_newprovider
-    audio_file = temp_dir / f"telegram_tts_{timestamp}.wav"
-    _generate_newprovider(text, voice_id or 'voice_1', 1.0, str(audio_file))
-    return audio_file
-```
-
-### 30. Telegram Manager (`distr/core/integrations/telegram/manager.py`)
-
-Update the `voice_keys` dict in `_get_agent_name()`:
-
-```python
-voice_keys = {
-    "kokoro": "kokoro_voice",
-    "elevenlabs": "elevenlabs_voice",
-    "openai": "openai_voice",
-    "coqui": "coqui_voice",
-    "newprovider": "newprovider_voice",
-}
-```
-
-### 31. Voice Note Tool (`distr/core/agent/tools/integrations/send_voice_note_to_telegram.py`)
-
-Add provider handling in the `_run()` method:
-
-```python
-elif 'newprovider' in tts_lower:
-    # Generate TTS audio for the voice note
-    # Follow the same pattern as kokoro/openai/elevenlabs blocks
-```
-
-### 32. Voice Cloning (`distr/core/audio/voice_cloning.py`)
-
-If the provider supports voice cloning, add a `_clone_newprovider()` function:
-
-```python
-def _clone_newprovider(voice, audio_files, session) -> None:
-    """Clone voice via NewProvider's cloning API/mechanism."""
-    # Process audio files, call provider API, update DB record
-    voice.provider_voice_id = f"custom_{voice.id}"  # or API-returned ID
-    voice.status = "ready"
-    session.commit()
-```
-
-And add the dispatch in `process_custom_voice()`:
-
-```python
-elif voice.provider == "newprovider":
-    _clone_newprovider(voice, audio_files, session)
-```
-
-### 33. Custom Voice Route Validation (`distr/gui/web/routes/settings/voices.py`)
-
-In `create_custom_voice()`, add the provider to the allowed list:
-
-```python
-if provider not in ("elevenlabs", "kokoro", "f5tts", "newprovider"):
-    return JSONResponse({"error": "Provider must be ..."}, status_code=400)
-```
-
-### 34. Settings Service (`distr/core/services/settings_service.py`)
-
-If the provider needs cache clearing on settings change (like ElevenLabs), add it in `save_general_settings()`:
-
-```python
-if data.voice_provider == "newprovider":
-    # Clear any cached audio files for this provider
-    pass
-```
-
-### 35. API Docs (`distr/gui/web/routes/docs.py`)
-
-Add the new voice endpoint to the documentation section.
+## TTSProviderDescriptor Reference
+
+### Required Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `str` | Canonical lowercase provider ID (e.g. `"kokoro"`, `"elevenlabs"`) |
+| `name` | `str` | Human-readable display name (e.g. `"Kokoro (Offline)"`) |
+| `type` | `str` | `"online"` or `"offline"` |
+| `enabled` | `bool` | Whether the provider is visible in the UI |
+| `default_voice` | `str` | Default voice ID for this provider |
+| `settings_key` | `str` | DB settings key for the user's chosen voice (e.g. `"kokoro_voice"`) |
+| `sample_rate` | `int` | Output sample rate in Hz (e.g. `24000`, `44100`) |
+| `speed_bounds` | `tuple[float, float]` | `(min, max)` playback speed bounds |
+| `supports_custom_voices` | `bool` | Whether voice cloning is supported |
+| `custom_voice_limit` | `int` | Max custom voices (`0` = unlimited) |
+
+### Required Methods
+
+| Method | Signature | Replaces |
+|--------|-----------|----------|
+| `create_service` | `(tts_config, *, settings, stt_service, is_hands_free, models_dir) -> Any` | `service_factory.create_tts_service()` and `session._create_services()` if/elif chains |
+| `generate_audio` | `(text, voice, speed, out_file) -> None` | `tts_handler.generate_tts_audio()`, `generate_voice_sample()`, `events._telegram_generate_tts()`, `send_voice_note_to_telegram._run()` |
+| `resolve_display_name` | `(voice_id, settings, voice_name=None) -> str` | `service_factory.resolve_voice_to_display_name()`, `tts_handler._resolve_display_name()` |
+| `normalize_voice` | `(raw_voice, settings) -> str` | `tts_handler._normalize_voice_for_provider()` |
+| `get_voices` | `() -> list[dict]` | `voices._get_voices_for_provider()` |
+| `get_hot_swap_config` | `(voice_model, settings) -> dict` | `session._hot_swap_tts_service()` |
+| `get_voice_settings_entry` | `() -> tuple[str, str, str, dict]` | `session._VOICE_SETTINGS` entries |
+| `get_telegram_voice_id` | `(settings) -> str` | `events._telegram_resolve_voice_settings()` |
+| `normalize_provider_name` | `(raw) -> Optional[str]` | `constants.normalize_voice_provider()` |
+
+### Optional Methods
+
+| Method | Default Behavior | When to Override |
+|--------|-----------------|-----------------|
+| `clone_voice(voice, audio_files, session)` | Raises `NotImplementedError` | When `supports_custom_voices = True` |
 
 ---
 
-## Web UI — No Code Changes Needed
+## Auto-Discovery Mechanism
 
-The web UI is fully dynamic. The JavaScript in `distr/gui/web/static/settings/js/general.js`:
+The `TTSProviderRegistry` (in `distr/core/agent/services/tts/registry.py`) automatically discovers provider descriptors using the following process:
 
-1. Fetches `/api/tts/providers` on page load
-2. Populates the provider dropdown from the response
-3. Populates the voice dropdown from each provider's `voices` array
-4. Shows/hides the "+ Custom" button based on `supports_custom_voices`
-5. Shows/hides ElevenLabs-specific sliders when `elevenlabs` is selected
-6. Saves the selected voice using the provider's `settings_key`
+1. On first access (any call to `get()`, `enabled_providers()`, `all_providers()`, or `provider_ids()`), the registry scans `distr/core/agent/services/tts/` for Python modules.
+2. Modules named `__init__`, `registry`, or `provider_descriptor` are skipped.
+3. Each remaining module is imported and checked for a module-level `DESCRIPTOR` attribute.
+4. If `DESCRIPTOR` is an instance of `TTSProviderDescriptor`, it is registered automatically.
+5. Discovery runs once (lazily) and the results are cached for the lifetime of the process.
 
-**If your new provider needs provider-specific UI controls** (like ElevenLabs' stability/similarity sliders), you will need to:
+**Import the registry singleton:**
 
-1. Add HTML elements in `distr/gui/web/templates/settings/sections/general.html`
-2. Add show/hide logic in `general.js` (toggle visibility based on provider ID)
-3. Add a dedicated API endpoint for live updates (like `/api/voice/elevenlabs-settings`)
-4. Add the settings service function to persist and emit signals
+```python
+from distr.core.agent.services.tts.registry import tts_registry
 
-For providers with no special UI controls, the existing dynamic system handles everything automatically.
+# Lookup by ID
+descriptor = tts_registry.get("kokoro")
 
----
+# All enabled providers
+for d in tts_registry.enabled_providers():
+    print(d.id, d.name)
 
-## Chat UI Voice Selection
-
-The chat UI (`distr/gui/web/static/chat/js/chat.js`) stores `voice_provider` and `voice_model` per chat thread. When creating or updating a chat:
-
-- `voice_provider` is the normalized provider ID (e.g., `"kokoro"`, `"newprovider"`)
-- `voice_model` is the voice ID (e.g., `"af_heart"`, `"voice_1"`)
-
-These are stored on the root `Chat` DB record and inherited by child messages. The chat route validates against `valid_voice_providers` — make sure your provider is in that list (Touch Point #27).
-
-The chat header displays the voice provider and resolved voice name via `updateChatSettingsDisplay()`. The display name comes from `resolve_voice_to_display_name()` in the service factory.
+# All provider IDs (enabled only)
+ids = tts_registry.provider_ids()
+```
 
 ---
 
-## Voice Cloning Feature
+## Removing or Disabling a Provider
+
+**Soft disable (recommended):** Set `enabled` to `False` in your descriptor's property. The provider will be excluded from all consumer code paths automatically — no other files need changes.
+
+**Hard remove:** Delete the descriptor file from `distr/core/agent/services/tts/`. The registry will no longer discover it. No stale if/elif branches to clean up.
+
+---
+
+## Voice Cloning
 
 Voice cloning is opt-in per provider. To enable it:
 
-1. Set `"supports_custom_voices": True` in the `TTS_PROVIDERS` entry
-2. Set `"custom_voice_limit": N` (0 = unlimited, N > 0 = max voices)
-3. Implement `_clone_<provider>()` in `voice_cloning.py`
-4. Add the provider to the allowed list in `create_custom_voice()` route
-5. Handle custom voice resolution in `create_tts_service()` (service factory)
-6. Handle custom voice resolution in `_generate_<provider>()` (TTS handler)
+1. Set `supports_custom_voices = True` and `custom_voice_limit` in your descriptor
+2. Override the `clone_voice(voice, audio_files, session)` method
+
+The system automatically dispatches cloning requests to your descriptor's `clone_voice()` method.
 
 **Cloning patterns by type:**
 
@@ -549,34 +250,33 @@ Voice cloning is opt-in per provider. To enable it:
 | Reference-based | VoxCPM, F5-TTS | Store reference audio locally, pass path at inference time (zero-shot cloning) |
 | Voice conversion | Kokoro/Kanade | Synthesize with base voice, then apply voice conversion using reference audio |
 
-The `CustomVoice` DB model stores:
-- `name` — display name
-- `provider` — provider ID
-- `audio_dir` — path to uploaded audio files
-- `provider_voice_id` — API-returned ID or `custom_<db_id>`
-- `status` — `pending` → `processing` → `ready` / `failed`
-- `system_prompt` — transcription of reference audio (used by F5-TTS as `ref_text`)
-- `personality` — agent personality text appended to LLM system prompt
-- `gender` — `male` / `female` (used by Kokoro to pick base voice)
+---
+
+## Web UI — No Code Changes Needed
+
+The web UI is fully dynamic. The JavaScript in `distr/gui/web/static/settings/js/general.js`:
+
+1. Fetches `/api/tts/providers` on page load (built from the registry)
+2. Populates the provider dropdown from the response
+3. Populates the voice dropdown from each provider's `voices` array
+4. Shows/hides the "+ Custom" button based on `supports_custom_voices`
+5. Saves the selected voice using the provider's `settings_key`
+
+The chat UI (`chat.js`) resolves voice keys from the `/api/tts/providers` response `settings_key` field — no hardcoded ternary chains.
 
 ---
 
-## Removing a Provider
+## Additional Setup (Outside the Descriptor)
 
-To remove a provider:
+While the descriptor handles all dispatch logic automatically, some providers may still need:
 
-1. Set `"enabled": False` in `TTS_PROVIDERS` (soft disable — keeps DB columns, hides from UI)
-2. Or delete the entry entirely and remove all touch points listed above (hard remove)
+- **TTS Service Class**: A Pipecat `TTSService` implementation in `distr/core/agent/services/tts/<provider>.py` (the descriptor's `create_service()` instantiates it)
+- **Database columns**: A `<provider>_voice` column on the `Settings` model if the provider needs persistent voice selection
+- **Pydantic model field**: A corresponding field in `GeneralSettings` for the settings API
+- **Voice API endpoint**: A `/voices/<provider>` route if the provider has a dynamic voice list
+- **Provider-specific UI controls**: Custom HTML/JS if the provider needs settings beyond voice selection (e.g. ElevenLabs stability/similarity sliders)
 
-Soft disable is recommended — it preserves existing user data and avoids migration issues.
-
----
-
-## Environment & Dependencies
-
-- API keys are stored in the Settings DB, not in `.env`
-- Provider-specific Python packages should be imported with `try/except ImportError` guards
-- The `enabled` flag in `TTS_PROVIDERS` should be set to `False` if the required package isn't available for the current Python version (e.g., Coqui doesn't support Python 3.12+)
+These are provider infrastructure concerns, not dispatch logic — they don't involve if/elif chains and don't need to be updated when other providers change.
 
 ---
 

@@ -100,8 +100,8 @@ class CoquiTTSService(TTSService):
             except ImportError:
                 self._device = "cpu"
 
-        use_gpu = self._device != "cpu"
-        logger.info("Coqui TTS: loading model %s on %s", COQUI_MODEL, self._device)
+        use_gpu = self._device == "cuda"
+        logger.info("Coqui TTS: loading model %s on %s (gpu=%s)", COQUI_MODEL, self._device, use_gpu)
         try:
             self._tts = _CoquiTTS(COQUI_MODEL, gpu=use_gpu)
             logger.info("Coqui TTS: model loaded (speaker=%s)", self.voice_id)

@@ -1,107 +1,39 @@
 """TTS Handler for generating voice samples from web settings."""
-import io
 import os
 import re
 import hashlib
 import logging
-import soundfile as sf
 from distr.core.paths import TMP_DIR
 from distr.core.utils import load_settings_from_db
+from distr.core.agent.services.tts.registry import tts_registry
 
 logger = logging.getLogger(__name__)
 
 
 def _tts_provider_to_internal(provider: str) -> str:
-    """Map display or settings provider name to internal name (kokoro, elevenlabs, openai, qwen3)."""
-    p = (provider or "").strip().lower()
-    if p in ("kokoro", "kokoro (offline)"):
-        return "kokoro"
-    if p in ("elevenlabs", "elevenlabs (online)"):
-        return "elevenlabs"
-    if p in ("openai", "openai (online)"):
-        return "openai"
-    if p in ("coqui", "coqui tts (offline)", "coqui tts"):
-        return "coqui"
-    if p in ("f5tts", "f5-tts", "f5-tts (offline)", "f5 tts (offline)", "f5 tts"):
-        return "f5tts"
-    if p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
-        return "voxcpm"
-    return p or "kokoro"
+    """Map display or settings provider name to internal name (kokoro, elevenlabs, openai, etc.).
+
+    Delegates to constants.normalize_voice_provider() which handles all known
+    display-name variants and partial matches.
+    """
+    from distr.core.agent.constants import normalize_voice_provider
+    return normalize_voice_provider(provider)
 
 
 def _normalize_voice_for_provider(provider: str, voice: str, settings: dict) -> str:
-    """Resolve mixed/stale voice labels into valid provider voice IDs."""
+    """Resolve mixed/stale voice labels into valid provider voice IDs.
+
+    Delegates to the provider descriptor's normalize_voice() method via the registry.
+    """
     raw = (voice or "").strip()
     prov = _tts_provider_to_internal(provider)
 
-    if prov == "openai":
-        allowed = {"alloy", "echo", "fable", "onyx", "nova", "shimmer", "ash", "sage", "coral"}
-        v = raw.lower()
-        if v in allowed:
-            return v
-        # Handle labels like "Kiran nova" by matching any token to a valid id.
-        tokens = re.split(r"[^a-zA-Z0-9_]+", v)
-        for token in tokens:
-            if token in allowed:
-                return token
-        configured = (settings.get("openai_voice") or "").strip().lower()
-        if configured in allowed:
-            return configured
-        return "alloy"
-
-    if prov == "kokoro":
-        # Custom cloned voices pass through directly
-        if raw.startswith("custom_"):
-            return raw
-        try:
-            from distr.core.agent.session import KOKORO_VOICES
-            valid_ids = set(KOKORO_VOICES.keys())
-        except Exception:
-            valid_ids = set()
-        if raw in valid_ids:
-            return raw
-        # Try normalization used in UI labels, then fallback.
-        candidate = raw.lower().replace(" ", "_")
-        if candidate in valid_ids:
-            return candidate
-        configured = (settings.get("kokoro_voice") or "").strip()
-        if configured.startswith("custom_"):
-            return configured
-        if configured in valid_ids:
-            return configured
-        return "af_heart"
-
-    # ElevenLabs is resolved again inside _generate_elevenlabs; keep raw here.
-    # F5-TTS: custom voices pass through, default is "default"
-    if prov == "f5tts":
-        if raw.startswith("custom_"):
-            return raw
-        return raw if raw else "default"
-
-    # VoxCPM: custom voices pass through, default is "default"
-    if prov == "voxcpm":
-        if raw.startswith("custom_"):
-            return raw
-        return raw if raw else "default"
-
-    # Coqui: validate speaker ID against known voices, pass through custom_ voices
-    if prov == "coqui":
-        if raw.startswith("custom_"):
-            return raw
-        try:
-            from distr.core.agent.constants import COQUI_VOICES, DEFAULT_COQUI_VOICE
-            if raw in COQUI_VOICES:
-                return raw
-            configured = (settings.get("coqui_voice") or "").strip()
-            if configured.startswith("custom_"):
-                return configured
-            if configured in COQUI_VOICES:
-                return configured
-            return DEFAULT_COQUI_VOICE
-        except Exception:
-            return raw or "p225"
-
-    return raw
+    try:
+        descriptor = tts_registry.get(prov)
+        return descriptor.normalize_voice(raw, settings)
+    except KeyError:
+        # Unknown provider — pass through raw voice unchanged
+        return raw
 
 
 def generate_tts_audio(
@@ -118,19 +50,11 @@ def generate_tts_audio(
     settings = load_settings_from_db()
     prov = _tts_provider_to_internal(provider or settings.get("tts_provider", "Kokoro (Offline)"))
     if voice is None:
-        if prov == "kokoro":
-            voice = (settings.get("kokoro_voice") or "af_heart").strip()
-        elif prov == "elevenlabs":
-            voice = (settings.get("elevenlabs_voice") or "default").strip()
-        elif prov == "openai":
-            voice = (settings.get("openai_voice") or "alloy").strip()
-        elif prov == "coqui":
-            voice = (settings.get("coqui_voice") or "p225").strip()
-        elif prov == "f5tts":
-            voice = (settings.get("f5tts_voice") or "default").strip()
-        elif prov == "voxcpm":
-            voice = (settings.get("voxcpm_voice") or "default").strip()
-        else:
+        # Resolve default voice from settings via registry descriptor
+        try:
+            descriptor = tts_registry.get(prov)
+            voice = (settings.get(descriptor.settings_key) or descriptor.default_voice).strip()
+        except KeyError:
             voice = "af_heart"
     else:
         voice = voice.strip()
@@ -146,19 +70,11 @@ def generate_tts_audio(
         logger.debug("Using cached TTS: %s", out_file)
         return out_file
     logger.info("Generating TTS: provider=%s, voice=%s, speed=%s", prov, voice, speed)
-    if prov == "kokoro":
-        _generate_kokoro(text, voice, speed, out_file)
-    elif prov == "elevenlabs":
-        _generate_elevenlabs(text, voice, speed, out_file)
-    elif prov == "openai":
-        _generate_openai(text, voice, speed, out_file)
-    elif prov == "coqui":
-        _generate_coqui(text, voice, speed, out_file)
-    elif prov == "f5tts":
-        _generate_f5tts(text, voice, speed, out_file)
-    elif prov == "voxcpm":
-        _generate_voxcpm(text, voice, speed, out_file)
-    else:
+    # Use registry-based dispatch, fall back to legacy functions for unknown providers
+    try:
+        descriptor = tts_registry.get(prov)
+        descriptor.generate_audio(text, voice, speed, out_file)
+    except KeyError:
         raise ValueError(f"Unknown TTS provider: {provider or prov}")
     return out_file
 
@@ -212,116 +128,35 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
 
     logger.info("Generating %s voice sample: voice=%s, speed=%s", provider, voice, speed)
 
-    if provider == 'kokoro':
-        _generate_kokoro(test_text, voice, speed, out_file)
-    elif provider == 'elevenlabs':
-        _generate_elevenlabs(test_text, voice, speed, out_file)
-    elif provider == 'openai':
-        _generate_openai(test_text, voice, speed, out_file)
-    elif provider == 'coqui':
-        _generate_coqui(test_text, voice, speed, out_file)
-    elif provider == 'f5tts':
-        _generate_f5tts(test_text, voice, speed, out_file)
-    elif provider == 'voxcpm':
-        _generate_voxcpm(test_text, voice, speed, out_file)
-    else:
-        raise ValueError("Unknown TTS provider: %s", provider)
+    # Use registry-based dispatch, fall back gracefully for unknown providers
+    try:
+        descriptor = tts_registry.get(provider)
+        descriptor.generate_audio(test_text, voice, speed, out_file)
+    except KeyError:
+        raise ValueError(f"Unknown TTS provider: {provider}")
 
     return out_file
 
 
 def _resolve_display_name(provider: str, voice: str, voice_name: str = None) -> str:
-    """Resolve a clean display name for the voice, with server-side fallback."""
+    """Resolve a clean display name for the voice, with server-side fallback.
+
+    Delegates to the provider descriptor's resolve_display_name() method via the registry.
+    """
+    # Universal short-circuit: if a clean display name was already provided, use it directly.
+    # This preserves the original behavior where voice_name without underscores was returned as-is.
     if voice_name and voice_name.strip() and '_' not in voice_name:
         cleaned = voice_name.strip().lstrip('⭐').strip()
         if cleaned:
             return cleaned
 
-    if provider == 'kokoro':
-        if voice and voice.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(voice.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return "Custom Voice"
-        try:
-            from distr.core.agent.session import KOKORO_VOICES
-            name = KOKORO_VOICES.get(voice)
-            if name:
-                return name
-        except ImportError:
-            pass
-        if '_' in voice:
-            return voice.rsplit('_', 1)[-1].capitalize()
-
-    if provider == 'openai':
-        return voice.capitalize() if voice else "Alloy"
-
-    if provider == 'coqui':
-        if voice and voice.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(voice.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return "Custom Voice"
-        try:
-            from distr.core.agent.constants import COQUI_VOICES
-            return COQUI_VOICES.get(voice, voice)
-        except Exception:
-            pass
-        return voice or "Sarah"
-
-    if provider == 'f5tts':
-        if voice and voice.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(voice.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return "Custom Voice"
-        return voice.capitalize() if voice and voice != 'default' else "F5-TTS"
-
-    if provider == 'voxcpm':
-        if voice and voice.startswith('custom_'):
-            try:
-                from distr.core.db import get_session, CustomVoice
-                db_id = int(voice.split('_', 1)[1])
-                session = get_session()
-                try:
-                    cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                    if cv:
-                        return cv.name
-                finally:
-                    session.close()
-            except Exception:
-                pass
-            return "Custom Voice"
-        return voice.capitalize() if voice and voice != 'default' else "VoxCPM"
-
-    return (voice_name or voice or "Assistant").strip()
+    try:
+        descriptor = tts_registry.get(provider)
+        settings = load_settings_from_db()
+        return descriptor.resolve_display_name(voice, settings, voice_name)
+    except KeyError:
+        # Unknown provider — best-effort fallback
+        return (voice_name or voice or "Assistant").strip()
 
 
 def _resample_audio(audio, src_rate: int, target_rate: int):
@@ -352,90 +187,6 @@ def _resample_audio(audio, src_rate: int, target_rate: int):
     return resampled.astype(np.float32), target_rate
 
 
-def _generate_kokoro(text: str, voice: str, speed: float, out_file: str):
-    """Generate Kokoro voice sample to WAV file. Applies Kanade voice conversion for custom voices."""
-    import numpy as np
-    from kokoro_onnx import Kokoro
-
-    # Detect custom voice — resolve reference audio path from DB
-    reference_path = None
-    base_voice = voice
-    if voice.startswith("custom_"):
-        try:
-            from distr.core.db import get_session, CustomVoice
-            db_id = int(voice.split("_", 1)[1])
-            session = get_session()
-            try:
-                cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
-                if cv and cv.audio_dir and os.path.isdir(cv.audio_dir):
-                    # Find the first audio clip in the directory
-                    for fname in os.listdir(cv.audio_dir):
-                        if fname.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
-                            reference_path = os.path.join(cv.audio_dir, fname)
-                            break
-                # Pick base voice matching the reference speaker's gender
-                gender = getattr(cv, 'gender', 'female') if cv else 'female'
-                base_voice = "am_puck" if gender == "male" else "af_heart"
-            finally:
-                session.close()
-        except Exception as e:
-            logger.warning("Failed to resolve custom voice %s: %s", voice, e)
-            base_voice = "af_heart"
-        if not reference_path:
-            raise FileNotFoundError(f"No reference audio found for custom voice {voice}")
-        logger.info("Kokoro custom voice: base=%s, reference=%s", base_voice, os.path.basename(reference_path))
-
-    base_dir = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../'))
-    models_dir = os.path.join(base_dir, "distr", "core", "agent", "models")
-    kokoro_model = os.path.join(models_dir, "kokoro-v1.0.onnx")
-    kokoro_voices = os.path.join(models_dir, "voices-v1.0.bin")
-
-    logger.debug("Kokoro model path: %s (exists=%s)", kokoro_model, os.path.exists(kokoro_model))
-    logger.debug("Kokoro voices path: %s (exists=%s)", kokoro_voices, os.path.exists(kokoro_voices))
-
-    if not os.path.exists(kokoro_model) or not os.path.exists(kokoro_voices):
-        raise FileNotFoundError(f"Kokoro model files not found at {models_dir}")
-
-    kokoro = Kokoro(kokoro_model, kokoro_voices)
-    clamped_speed = max(0.5, min(2.0, speed))
-
-    # Sanitize text — phonemizer/espeak chokes on embedded newlines
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    # Normalize smart quotes for correct pronunciation
-    from distr.core.agent.services.tts.kokoro import _normalize_text_for_tts
-    text = _normalize_text_for_tts(text)
-
-    # Split into sentences — Kokoro handles single sentences much better
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-    if not sentences:
-        sentences = [text]
-
-    chunks = []
-    sample_rate = None
-    for sentence in sentences:
-        audio, sr = kokoro.create(sentence, voice=base_voice, speed=clamped_speed)
-        if audio is not None and len(audio) > 0:
-            chunks.append(audio)
-            sample_rate = sr
-
-    if not chunks:
-        raise ValueError("Kokoro returned no audio")
-
-    audio = np.concatenate(chunks)
-
-    # Apply Kanade voice conversion for custom voices
-    if reference_path:
-        logger.info("Applying Kanade voice conversion (%.1fs of audio)...", len(audio) / sample_rate)
-        from distr.core.audio.voice_cloner import convert_voice, get_output_sample_rate
-        audio = convert_voice(audio, sample_rate, reference_path)
-        sample_rate = get_output_sample_rate()
-
-    audio, sample_rate = _resample_audio(audio, sample_rate, 48000)
-    sf.write(out_file, audio, sample_rate)
-    logger.info(f"Wrote Kokoro sample to {out_file}")
-
-
 def clear_elevenlabs_voice_cache():
     """Delete any cached ElevenLabs voice files (web samples and previews). Call when stability/similarity/style change."""
     if not os.path.isdir(TMP_DIR):
@@ -451,356 +202,3 @@ def clear_elevenlabs_voice_cache():
                 logger.warning("Could not remove %s: %s", path, e)
     if removed:
         logger.info("Cleared %d ElevenLabs voice cache file(s)", removed)
-
-
-def _generate_elevenlabs(text: str, voice: str, speed: float, out_file: str):
-    """Generate ElevenLabs voice sample to WAV file. Never uses cache; uses current DB voice_settings."""
-    from elevenlabs import ElevenLabs
-    import numpy as np
-
-    settings = load_settings_from_db()
-    api_key = settings.get('elevenlabs_key', '')
-    if not api_key:
-        raise ValueError("ElevenLabs API key not configured")
-    stability = float(settings.get("elevenlabs_stability", 0.5))
-    similarity_boost = float(settings.get("elevenlabs_similarity_boost", 0.6))
-    style = float(settings.get("elevenlabs_style", 0.25))
-    use_speaker_boost = bool(settings.get("elevenlabs_use_speaker_boost", True))
-
-    client = ElevenLabs(api_key=api_key)
-    requested_voice = (voice or "").strip()
-    resolved_voice = requested_voice
-
-    # Defensive resolution: some web/chat paths may pass display names or "default"
-    # instead of a valid ElevenLabs voice_id.
-    try:
-        voices = client.voices.get_all().voices or []
-        if voices:
-            by_id = {v.voice_id: v.voice_id for v in voices if getattr(v, "voice_id", None)}
-            by_name = {
-                (v.name or "").strip().lower(): v.voice_id
-                for v in voices
-                if getattr(v, "voice_id", None) and getattr(v, "name", None)
-            }
-            configured_voice = (settings.get("elevenlabs_voice", "") or "").strip()
-            fallback_voice = voices[0].voice_id
-            req_lower = requested_voice.lower()
-            if requested_voice in by_id:
-                resolved_voice = requested_voice
-            elif req_lower and req_lower in by_name:
-                resolved_voice = by_name[req_lower]
-            elif configured_voice in by_id:
-                resolved_voice = configured_voice
-            elif fallback_voice:
-                resolved_voice = fallback_voice
-    except Exception as resolve_err:
-        logger.warning("ElevenLabs voice resolution failed, using raw voice '%s': %s", requested_voice, resolve_err)
-
-    api_speed = max(0.7, min(1.2, float(speed)))
-
-    audio_stream = client.text_to_speech.convert(
-        text=text,
-        voice_id=resolved_voice,
-        model_id="eleven_multilingual_v2",
-        output_format="mp3_44100_128",
-        voice_settings={
-            "stability": stability,
-            "similarity_boost": similarity_boost,
-            "style": style,
-            "use_speaker_boost": use_speaker_boost,
-            "speed": api_speed
-        }
-    )
-    audio_bytes = b"".join(audio_stream)
-
-    try:
-        from pydub import AudioSegment
-        seg = AudioSegment.from_mp3(io.BytesIO(audio_bytes))
-        if seg.channels > 1:
-            seg = seg.set_channels(1)
-        sample_rate = seg.frame_rate
-        samples = seg.get_array_of_samples()
-        audio = np.array(samples, dtype=np.float32) / 32768.0
-    except ImportError:
-        with io.BytesIO(audio_bytes) as f:
-            audio, sample_rate = sf.read(f)
-        if audio.ndim > 1:
-            audio = np.mean(audio, axis=1)
-        if audio.dtype != np.float32:
-            audio = audio.astype(np.float32) / (32768.0 if audio.dtype == np.int16 else 2147483648.0)
-
-    audio, sample_rate = _resample_audio(audio, sample_rate, 48000)
-    sf.write(out_file, audio, sample_rate)
-    logger.info(f"Wrote ElevenLabs sample to {out_file}")
-
-
-def _generate_openai(text: str, voice: str, speed: float, out_file: str):
-    """Generate OpenAI voice sample to WAV file."""
-    from openai import OpenAI
-
-    settings = load_settings_from_db()
-    api_key = settings.get('openai_key', '')
-    if not api_key:
-        raise ValueError("OpenAI API key not configured")
-
-    client = OpenAI(api_key=api_key)
-
-    response = client.audio.speech.create(
-        model="tts-1",
-        voice=voice,
-        input=text,
-        speed=speed
-    )
-    # OpenAI returns MP3 by default; write to temp then convert to WAV
-    import tempfile
-    import numpy as np
-    tmp_mp3 = out_file + ".tmp.mp3"
-    response.stream_to_file(tmp_mp3)
-
-    try:
-        # Read the MP3 and write as WAV at 48kHz
-        audio, sample_rate = sf.read(tmp_mp3, dtype='float32')
-        audio, sample_rate = _resample_audio(audio, sample_rate, 48000)
-        sf.write(out_file, audio, sample_rate)
-    finally:
-        if os.path.exists(tmp_mp3):
-            os.remove(tmp_mp3)
-
-    logger.info("Wrote OpenAI sample to %s", out_file)
-
-
-def _generate_coqui(text: str, voice: str, speed: float, out_file: str):
-    """Generate Coqui TTS voice sample and write WAV file.
-
-    Uses XTTS v2 for custom voices (voice cloning from reference audio).
-    Uses VCTK VITS for built-in speaker IDs (p225, p226, etc.).
-    """
-    import numpy as np
-
-    try:
-        from TTS.api import TTS as CoquiTTS
-    except ImportError:
-        raise ImportError("TTS package is required for Coqui TTS. Install with: pip install TTS")
-
-    # Custom voice — use XTTS v2 with reference audio
-    if voice and voice.startswith("custom_"):
-        ref_path = _resolve_coqui_reference_audio(voice)
-        if ref_path:
-            tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-            wav = tts.tts(text=text, speaker_wav=ref_path, language="en")
-            audio = np.array(wav, dtype=np.float32)
-            if audio.ndim > 1:
-                audio = np.mean(audio, axis=1)
-            sr = tts.synthesizer.output_sample_rate
-            audio, sr = _resample_audio(audio, sr, 48000)
-            sf.write(out_file, audio, sr)
-            logger.info("Wrote Coqui XTTS cloned voice sample to %s", out_file)
-            return
-        else:
-            logger.warning("Coqui clone: no reference audio found for %s, falling back to VCTK", voice)
-            voice = "p225"
-
-    # Built-in VCTK speaker
-    tts = CoquiTTS("tts_models/en/vctk/vits", gpu=False)
-    wav = tts.tts(text=text, speaker=voice)
-    audio = np.array(wav, dtype=np.float32)
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-    sr = tts.synthesizer.output_sample_rate
-    audio, sr = _resample_audio(audio, sr, 48000)
-    sf.write(out_file, audio, sr)
-    logger.info("Wrote Coqui TTS sample to %s", out_file)
-
-
-def _resolve_coqui_reference_audio(voice_id: str):
-    """Find the reference audio file for a Coqui custom voice."""
-    try:
-        from distr.core.db import get_session, CustomVoice
-        db_id = int(voice_id.split("_", 1)[1])
-        with get_session() as session:
-            cv = session.query(CustomVoice).filter(
-                CustomVoice.id == db_id,
-                CustomVoice.provider == "coqui",
-                CustomVoice.status == "ready",
-            ).first()
-            if cv and cv.audio_dir:
-                import os
-                for fn in os.listdir(cv.audio_dir):
-                    if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
-                        return os.path.join(cv.audio_dir, fn)
-    except Exception as e:
-        logger.warning("Could not resolve Coqui reference audio for %s: %s", voice_id, e)
-    return None
-
-
-def _generate_f5tts(text: str, voice: str, speed: float, out_file: str):
-    """Generate F5-TTS voice sample to WAV file. Supports voice cloning via reference audio."""
-    import numpy as np
-
-    # Uninstall torchcodec if it somehow got reinstalled — it's broken on macOS with torch 2.x
-    try:
-        import torchcodec  # noqa: F401
-        logger.warning("F5-TTS: torchcodec is installed but broken on this system — ignoring")
-    except Exception:
-        pass
-
-    try:
-        from f5_tts.api import F5TTS
-    except ImportError:
-        raise ImportError("f5-tts is required. Install with: pip install f5-tts")
-    except OSError as e:
-        if "torchcodec" in str(e) or "libtorchcodec" in str(e):
-            raise RuntimeError(
-                "torchcodec is causing a conflict. Run: pip uninstall torchcodec -y"
-            ) from e
-        raise
-
-    # Resolve reference audio and text
-    ref_audio = None
-    ref_text = None
-
-    if voice and voice.startswith("custom_"):
-        try:
-            from distr.core.db import get_session, CustomVoice
-            db_id = int(voice.split("_", 1)[1])
-            session = get_session()
-            try:
-                cv = session.query(CustomVoice).filter(
-                    CustomVoice.id == db_id, CustomVoice.provider == "f5tts", CustomVoice.status == "ready"
-                ).first()
-                if cv and cv.audio_dir and os.path.isdir(cv.audio_dir):
-                    for fname in os.listdir(cv.audio_dir):
-                        if fname.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                            ref_audio = os.path.join(cv.audio_dir, fname)
-                            break
-                    ref_text = getattr(cv, 'system_prompt', None) or None
-            finally:
-                session.close()
-        except Exception as e:
-            logger.warning("Failed to resolve F5-TTS custom voice %s: %s", voice, e)
-        if not ref_audio:
-            raise FileNotFoundError(f"No reference audio found for custom voice {voice}")
-
-    # Fall back to default reference audio bundled with f5-tts
-    if not ref_audio:
-        try:
-            import f5_tts
-            pkg_dir = os.path.dirname(f5_tts.__file__)
-            candidate = os.path.join(pkg_dir, "infer", "examples", "basic", "basic_ref_en.wav")
-            if os.path.isfile(candidate):
-                ref_audio = candidate
-                ref_text = "Some call me nature, others call me mother nature."
-        except Exception:
-            pass
-
-    if not ref_audio:
-        raise FileNotFoundError(
-            "F5-TTS requires a reference audio file. "
-            "Upload a custom voice or ensure f5-tts is installed with its example files."
-        )
-
-    clamped_speed = max(0.5, min(2.0, speed))
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    model = F5TTS()
-    wav, sr, _ = model.infer(
-        ref_file=ref_audio,
-        ref_text=ref_text or "",
-        gen_text=text,
-        speed=clamped_speed,
-    )
-
-    audio = np.array(wav, dtype=np.float32)
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-
-    audio, sr = _resample_audio(audio, sr, 48000)
-    sf.write(out_file, audio, sr)
-    logger.info("Wrote F5-TTS sample to %s", out_file)
-
-
-def _generate_voxcpm(text: str, voice: str, speed: float, out_file: str):
-    """Generate VoxCPM voice sample to WAV file.
-
-    Uses VoxCPM-0.5B with reduced inference steps for fast previews on CPU.
-    The full VoxCPM2 model is used only by the live pipeline (VoxCPMTTSService).
-    """
-    import numpy as np
-    import platform as _plat
-    if _plat.system() == "Darwin":
-        os.environ.setdefault("VOXCPM_DEVICE", "cpu")
-
-    try:
-        from voxcpm import VoxCPM  # noqa: F811
-    except ImportError:
-        raise ImportError("voxcpm is required. Install with: pip install voxcpm")
-
-    # Resolve reference audio and text for custom voices
-    ref_audio = None
-    ref_text = None
-
-    if voice and voice.startswith("custom_"):
-        try:
-            from distr.core.db import get_session, CustomVoice
-            db_id = int(voice.split("_", 1)[1])
-            session = get_session()
-            try:
-                cv = session.query(CustomVoice).filter(
-                    CustomVoice.id == db_id, CustomVoice.provider == "voxcpm", CustomVoice.status == "ready"
-                ).first()
-                if cv and cv.audio_dir and os.path.isdir(cv.audio_dir):
-                    for fname in os.listdir(cv.audio_dir):
-                        if fname.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac')):
-                            ref_audio = os.path.join(cv.audio_dir, fname)
-                            break
-                    ref_text = getattr(cv, 'system_prompt', None) or None
-            finally:
-                session.close()
-        except Exception as e:
-            logger.warning("Failed to resolve VoxCPM custom voice %s: %s", voice, e)
-        if not ref_audio:
-            raise FileNotFoundError(f"No reference audio found for custom voice {voice}")
-
-    text = re.sub(r'\s+', ' ', text).strip()
-
-    # Use the lighter 0.5B model for previews — cached after first load
-    from distr.core.agent.services.tts.voxcpm import get_or_load_model
-    model = get_or_load_model("openbmb/VoxCPM-0.5B")
-
-    gen_kwargs = {
-        "text": text,
-        "cfg_value": 2.0,
-        "inference_timesteps": 3,
-    }
-
-    if ref_audio and os.path.isfile(ref_audio):
-        # VoxCPM-0.5B only supports prompt_wav_path (continuation cloning),
-        # NOT reference_wav_path (that's VoxCPM2-only)
-        kw_model = gen_kwargs.get("text", "")  # just for the check
-        import torch as _t
-        if _t.cuda.is_available():
-            # VoxCPM2: supports reference_wav_path
-            if ref_text:
-                gen_kwargs["prompt_wav_path"] = ref_audio
-                gen_kwargs["prompt_text"] = ref_text
-                gen_kwargs["reference_wav_path"] = ref_audio
-            else:
-                gen_kwargs["reference_wav_path"] = ref_audio
-        else:
-            # VoxCPM-0.5B: only prompt_wav_path + prompt_text
-            gen_kwargs["prompt_wav_path"] = ref_audio
-            gen_kwargs["prompt_text"] = ref_text or ""
-
-    wav = model.generate(**gen_kwargs)
-
-    if wav is None or len(wav) == 0:
-        raise ValueError("VoxCPM returned no audio")
-
-    audio = np.array(wav, dtype=np.float32)
-    if audio.ndim > 1:
-        audio = np.mean(audio, axis=1)
-
-    sr = model.tts_model.sample_rate if hasattr(model, 'tts_model') else 16000
-    audio, sr = _resample_audio(audio, sr, 48000)
-    sf.write(out_file, audio, sr)
-    logger.info("Wrote VoxCPM sample to %s", out_file)
