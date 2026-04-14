@@ -457,11 +457,21 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         # Initialize Telegram WebSocket manager
         self.telegram_manager = TelegramWebSocketManager()
         
+        # Initialize WhatsApp WebSocket manager
+        try:
+            from distr.core.integrations.whatsapp import WhatsAppWebSocketManager
+            self.whatsapp_manager = WhatsAppWebSocketManager()
+        except Exception as e:
+            logger.warning(f"WhatsApp manager not available: {e}")
+            self.whatsapp_manager = None
+        
         # Connect Telegram connection signal to start WebSocket
         signal_manager.telegram_connected.connect(self._on_telegram_connected)
         
         # Check if Telegram is already connected and connect WebSocket on startup
         QTimer.singleShot(500, self._check_and_connect_telegram_websocket)
+        # Check if WhatsApp is already connected and connect WebSocket on startup
+        QTimer.singleShot(800, self._check_and_connect_whatsapp_websocket)
         
         # Initialize action playback service (independent of UI)
         from distr.core.actions.playback_service import ActionPlaybackService
@@ -1370,6 +1380,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                     self.telegram_manager.disconnect()
                 except Exception as e:
                     logger.debug(f"Error disconnecting Telegram: {e}")
+            # Disconnect WhatsApp WebSocket
+            if hasattr(self, 'whatsapp_manager') and self.whatsapp_manager:
+                try:
+                    self.whatsapp_manager.disconnect()
+                except Exception as e:
+                    logger.debug(f"Error disconnecting WhatsApp: {e}")
             
             # Cleanup multiprocessing managers
             if hasattr(self, 'screen_info_manager'):
@@ -1577,6 +1593,44 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             telegram_user_id=telegram_user_id if telegram_user_id else None
         )
     
+    def _check_and_connect_whatsapp_websocket(self):
+        """Check if WhatsApp is already connected and connect WebSocket on app startup"""
+        if not self.whatsapp_manager:
+            return
+        try:
+            from distr.core.settings import load_settings_from_db
+            import json
+            settings = load_settings_from_db()
+            
+            connected_accounts = []
+            if settings.get('connected_accounts'):
+                try:
+                    accounts_data = settings.get('connected_accounts', '[]')
+                    if isinstance(accounts_data, str):
+                        connected_accounts = json.loads(accounts_data)
+                    else:
+                        connected_accounts = accounts_data
+                    if isinstance(connected_accounts, dict):
+                        connected_accounts = [connected_accounts]
+                    elif not isinstance(connected_accounts, list):
+                        connected_accounts = []
+                except Exception as e:
+                    logger.warning(f"Failed to parse connected_accounts for WhatsApp: {e}")
+                    return
+            
+            whatsapp_account = None
+            for account in connected_accounts:
+                if isinstance(account, dict) and account.get('provider') == 'whatsapp' and account.get('status') == 'connected':
+                    whatsapp_account = account
+                    break
+            
+            if whatsapp_account:
+                logger.info(f"Found existing WhatsApp connection on startup: jid={whatsapp_account.get('jid')}")
+                self.whatsapp_manager.connect()
+            else:
+                logger.info("No existing WhatsApp connection found on startup")
+        except Exception as e:
+            logger.error(f"Error checking WhatsApp connection on startup: {e}", exc_info=True)
 
 
 # ===========================================
