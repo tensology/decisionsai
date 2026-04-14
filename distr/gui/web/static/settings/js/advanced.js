@@ -267,8 +267,8 @@ function updateConnectionStatus() {
         }
         var whatsappBtn = document.getElementById('whatsapp_connect_btn');
         if (whatsappBtn) {
-            whatsappBtn.className = data.whatsapp_connected ? connectedClass : 'px-6 py-2.5 bg-[#25D366] hover:bg-[#1da851] text-white rounded-md text-sm font-medium transition-colors';
-            whatsappBtn.innerHTML = data.whatsapp_connected ? '✓ WhatsApp' : 'WhatsApp';
+            whatsappBtn.className = data.whatsapp_connected ? connectedClass : 'px-6 py-2.5 border border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-md text-sm font-medium transition-colors';
+            whatsappBtn.innerHTML = data.whatsapp_connected ? '\u2713 WhatsApp' : 'WhatsApp';
         }
         if (telegramBtn) {
             telegramBtn.className = data.telegram_connected ? connectedClass : 'px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors';
@@ -697,18 +697,25 @@ function connectWhatsApp() {
         }
 
         if (qr) {
-            // The QR code is a WhatsApp pairing string — generate a scannable image
+            // The server provides a base64 PNG QR image (qr_image)
             var qrContainer = document.getElementById('whatsapp_qr_container');
             qrContainer.innerHTML = '';
-            // Use a simple canvas-based QR renderer or just display the raw string
-            // For now, create a text display and let the user copy it
-            var qrDiv = document.createElement('div');
-            qrDiv.className = 'text-center';
-            // Try using a QR code library if available, otherwise show a simple text box
-            qrDiv.innerHTML = '<p class="text-sm text-[#ececf1] mb-2">Scan this code in WhatsApp:</p>' +
-                '<div class="bg-white p-4 rounded inline-block"><p class="text-xs text-black break-all font-mono" style="max-width:250px;word-break:break-all;">' + escapeHtml(qr) + '</p></div>';
-            qrContainer.appendChild(qrDiv);
-            document.getElementById('whatsapp_status').textContent = 'Scan with WhatsApp: Settings → Linked Devices → Link a Device';
+            if (data.qr_image) {
+                // qr_image is a data URL like "data:image/png;base64,..."
+                var img = document.createElement('img');
+                img.src = data.qr_image;
+                img.alt = 'WhatsApp QR Code';
+                img.className = 'max-w-[256px] max-h-[256px] rounded';
+                qrContainer.appendChild(img);
+            } else {
+                // Fallback: show raw pairing text
+                var textDiv = document.createElement('div');
+                textDiv.className = 'text-center';
+                textDiv.innerHTML = '<p class="text-sm text-[#ececf1] mb-2">Enter this code in WhatsApp:</p>' +
+                    '<div class="bg-white p-3 rounded inline-block"><p class="text-xs text-black break-all font-mono" style="max-width:250px;word-break:break-all;">' + escapeHtml(qr) + '</p></div>';
+                qrContainer.appendChild(textDiv);
+            }
+            document.getElementById('whatsapp_status').textContent = 'Scan with WhatsApp: Settings \u2192 Linked Devices \u2192 Link a Device';
             document.getElementById('whatsapp_status').className = 'text-sm text-green-500 text-center';
         } else if (status === 'qr_ready') {
             document.getElementById('whatsapp_status').textContent = 'Waiting for QR code...';
