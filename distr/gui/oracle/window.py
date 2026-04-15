@@ -667,7 +667,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             logging.error(f"Error saving listening state: {e}")
 
     def enable_hands_free(self):
-        """Enable hands-free mode"""
+        """Enable hands-free mode and start the glow (oracle only — avatar skins have glow: false)."""
         if not self.is_listening:
             logging.warning("Cannot enable hands-free mode when listening is disabled")
             return
@@ -677,6 +677,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.hands_free_action.setText("Hands-Free Mode: ON")
         signal_manager.hands_free_mode_changed.emit(True)
         self.save_hands_free_state()
+        # Fire the hands-free hook — oracle skins will glow, avatar skins won't (glow: false in skin.json)
+        self._event_dispatcher.fire_hook("hands_free_listening")
 
     def disable_hands_free(self):
         """Disable hands-free mode"""
