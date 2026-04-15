@@ -149,18 +149,32 @@ class TerminalSession:
         if self.master_fd is None:
             return None
         result = b""
+        idle_count = 0
         try:
-            while True:
-                r, _, _ = select.select([self.master_fd], [], [], 0.05)
+            while self._running:
+                try:
+                    r, _, _ = select.select([self.master_fd], [], [], 0.1)
+                except (ValueError, OSError):
+                    # master_fd was closed
+                    return result if result else None
                 if not r:
                     if result:
                         return result
+                    idle_count += 1
+                    if idle_count > 50:  # 5 seconds idle with no data — check if alive
+                        if not self.is_alive:
+                            return result if result else None
+                        idle_count = 0
                     continue
-                data = os.read(self.master_fd, 65536)
+                idle_count = 0
+                try:
+                    data = os.read(self.master_fd, 65536)
+                except OSError:
+                    return result if result else None
                 if not data:
                     return result if result else None
                 result += data
-        except OSError:
+        except Exception:
             return result if result else None
 
     async def _broadcast(self, data: bytes):
