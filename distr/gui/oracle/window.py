@@ -890,15 +890,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Disable the glow when STT reports hands-free listening off.
         
         Only revert the hook if hands-free mode was actually disabled.
-        If still in hands-free mode, this is just a speech pause — keep the hook active.
+        If still in hands-free mode, this is just a speech pause — keep the glow active
+        so the user always sees that continuous listening is on.
         """
-        logging.info("[ORACLE] STT requested hands-free glow OFF")
+        logging.info("[ORACLE] STT requested hands-free glow OFF (is_hands_free=%s)", self.is_hands_free)
         if not self.is_hands_free:
             # Hands-free was disabled — fully revert
             self._event_dispatcher.revert_hook("hands_free_listening")
-        else:
-            # Still in hands-free mode — just stop the glow, keep the animation
-            self._glow_engine.stop()
+        # else: still in continuous mode — keep the glow on, just a speech pause
 
 
 
