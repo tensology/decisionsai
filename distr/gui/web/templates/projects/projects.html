@@ -3,7 +3,7 @@
 {% block title %}Projects{% endblock %}
 
 {% block content %}
-<div class="container mx-auto px-6 py-8 max-w-7xl flex gap-6">
+<div class="container mx-auto px-6 py-4 max-w-7xl flex gap-6 h-[calc(100vh-4rem)]">
     <!-- Left panel: search + project list + Add -->
     <div class="w-80 flex-shrink-0 flex flex-col gap-4">
         <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
@@ -140,6 +140,7 @@
                             <span id="terminal-status-text" class="text-xs text-gray-400">Not connected</span>
                         </div>
                         <div class="flex gap-2">
+                            <button type="button" id="terminal-overview" class="text-xs px-3 py-1.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Summarize terminal output via AI and read aloud"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M12 6a7 7 0 010 12M8.464 15.536a5 5 0 010-7.072M12 18a7 7 0 010-12"/></svg>Read Out Overview</button>
                             <button type="button" id="terminal-restart" class="text-xs px-3 py-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal">↻ Restart</button>
                         </div>
                     </div>

@@ -972,3 +972,62 @@ def register_routes(router, templates):
             return JSONResponse({"success": True, "alive": new_session.is_alive})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.post("/projects/{project_id}/terminal/overview")
+    async def terminal_overview(project_id: int):
+        """Get terminal buffer, summarize via LLM, and speak the summary aloud."""
+        from distr.core.terminal import get_session
+        from distr.core.settings import load_settings_from_db
+        from distr.core.llm_factory import create_stream
+        from distr.core.signals import signal_manager
+
+        session = get_session(project_id)
+        if not session:
+            return JSONResponse({"error": "No terminal session for this project"}, status_code=404)
+
+        # Get terminal buffer (last 200 lines)
+        buffer = session.get_buffer(200)
+        if not buffer or not buffer.strip():
+            return JSONResponse({"summary": "The terminal is empty — nothing has been output yet.", "empty": True})
+
+        # Truncate if too long (LLM context window)
+        if len(buffer) > 8000:
+            buffer = buffer[-8000:]
+
+        # Get LLM settings
+        settings = load_settings_from_db()
+        provider = (settings.get("agent_provider") or settings.get("default_provider") or "ollama").strip()
+        model = (settings.get("agent_model_name") or settings.get("default_model_name") or "").strip()
+        if not provider:
+            provider = "ollama"
+        if not model:
+            model = "llama3.2" if provider == "ollama" else "gpt-4o-mini"
+
+        # Call LLM to summarize
+        system_prompt = (
+            "You are a helpful assistant that explains terminal output to a non-technical user. "
+            "Given the terminal output below, provide a brief, plain-English summary of what happened. "
+            "Focus on what commands were run, whether they succeeded or failed, and what the overall state is. "
+            "Keep it under 3 sentences. Be specific about outcomes."
+        )
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Here is the terminal output:\n\n" + buffer},
+        ]
+
+        try:
+            summary_parts = []
+            for token in create_stream(provider, model, messages, settings):
+                summary_parts.append(token)
+            summary = "".join(summary_parts).strip()
+        except Exception as e:
+            logger.error(f"Terminal overview LLM call failed: {e}", exc_info=True)
+            summary = f"Error summarizing terminal output: {str(e)[:200]}"
+
+        # Speak the summary aloud
+        try:
+            signal_manager.speak_text_directly.emit(summary)
+        except Exception as e:
+            logger.warning(f"Failed to speak terminal overview: {e}")
+
+        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(buffer.splitlines())})

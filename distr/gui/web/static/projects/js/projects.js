@@ -810,6 +810,8 @@
         // Terminal tab
         var terminalRestartBtn = document.getElementById("terminal-restart");
         if (terminalRestartBtn) terminalRestartBtn.addEventListener("click", function() { restartTerminal(); });
+        var terminalOverviewBtn = document.getElementById("terminal-overview");
+        if (terminalOverviewBtn) terminalOverviewBtn.addEventListener("click", function() { readOutOverview(); });
     }
 
     // ── Terminal Management ────────────────────────────────────────────
@@ -1028,6 +1030,33 @@
             })
             .catch(function() {
                 showSnackbar("Failed to restart terminal", "error");
+            });
+    }
+
+    function readOutOverview() {
+        if (!currentProjectId) return;
+        var btn = document.getElementById("terminal-overview");
+        var originalText = btn ? btn.innerHTML : "";
+        if (btn) {
+            btn.disabled = true;
+            btn.innerHTML = "\u23F3 Analyzing...";
+        }
+        apiFetch("/api/projects/" + currentProjectId + "/terminal/overview", { method: "POST" })
+            .then(function(data) {
+                if (data.summary) {
+                    showSnackbar(data.summary, data.empty ? "info" : "success");
+                } else if (data.error) {
+                    showSnackbar(data.error, "error");
+                }
+            })
+            .catch(function(e) {
+                showSnackbar("Failed to get terminal overview", "error");
+            })
+            .finally(function() {
+                if (btn) {
+                    btn.disabled = false;
+                    btn.innerHTML = originalText;
+                }
             });
     }
 
