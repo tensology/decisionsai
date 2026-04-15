@@ -812,6 +812,11 @@
         if (terminalRestartBtn) terminalRestartBtn.addEventListener("click", function() { restartTerminal(); });
         var terminalOverviewBtn = document.getElementById("terminal-overview");
         if (terminalOverviewBtn) terminalOverviewBtn.addEventListener("click", function() { readOutOverview(); });
+        var terminalOverviewClose = document.getElementById("terminal-overview-close");
+        if (terminalOverviewClose) terminalOverviewClose.addEventListener("click", function() {
+            var overlay = document.getElementById("terminal-overview-overlay");
+            if (overlay) overlay.classList.add("hidden");
+        });
     }
 
     // ── Terminal Management ────────────────────────────────────────────
@@ -1041,15 +1046,24 @@
             btn.disabled = true;
             btn.innerHTML = "\u23F3 Analyzing...";
         }
+        // Show loading overlay
+        var overlay = document.getElementById("terminal-overview-overlay");
+        var overviewText = document.getElementById("terminal-overview-text");
+        if (overlay) overlay.classList.remove("hidden");
+        if (overviewText) overviewText.textContent = "Analyzing terminal output...";
+
         apiFetch("/api/projects/" + currentProjectId + "/terminal/overview", { method: "POST" })
             .then(function(data) {
                 if (data.summary) {
-                    showSnackbar(data.summary, data.empty ? "info" : "success");
+                    if (overviewText) overviewText.textContent = data.summary;
+                    showSnackbar("Overview ready — speaking aloud", "success");
                 } else if (data.error) {
+                    if (overviewText) overviewText.textContent = "Error: " + data.error;
                     showSnackbar(data.error, "error");
                 }
             })
             .catch(function(e) {
+                if (overviewText) overviewText.textContent = "Failed to get overview.";
                 showSnackbar("Failed to get terminal overview", "error");
             })
             .finally(function() {
