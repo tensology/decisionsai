@@ -250,9 +250,15 @@ class TerminalSession:
                 os.kill(self.pid, signal.SIGTERM)
             except ProcessLookupError:
                 pass
-            # Wait briefly then force kill
+            # Wait briefly for graceful exit
+            await asyncio.sleep(0.5)
             try:
-                os.waitpid(self.pid, os.WNOHANG)
+                os.kill(self.pid, signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            # Reap the zombie
+            try:
+                os.waitpid(self.pid, 0)
             except ChildProcessError:
                 pass
         if self.master_fd is not None:
@@ -269,19 +275,21 @@ class TerminalSession:
 
     @property
     def is_alive(self) -> bool:
+        """Check if the child process is still running.
+        Uses os.kill(pid, 0) to avoid consuming the wait status."""
         if not self.pid:
             return False
         try:
-            pid, status = os.waitpid(self.pid, os.WNOHANG)
-            if pid != 0:
-                # Process has exited
-                self._running = False
-                return False
-            return True  # still running
-        except ChildProcessError:
+            os.kill(self.pid, 0)
+            return True
+        except ProcessLookupError:
             self._running = False
             return False
+        except PermissionError:
+            # Process exists but we can't signal it
+            return True
         except OSError:
+            self._running = False
             return False
 
 
