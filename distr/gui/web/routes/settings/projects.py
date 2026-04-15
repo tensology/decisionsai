@@ -985,14 +985,27 @@ def register_routes(router, templates):
         if not session:
             return JSONResponse({"error": "No terminal session for this project"}, status_code=404)
 
-        # Get terminal buffer (last 200 lines)
-        buffer = session.get_buffer(200)
+        # Get full terminal buffer (up to 500 lines)
+        buffer = session.get_buffer(500)
         if not buffer or not buffer.strip():
             return JSONResponse({"summary": "The terminal is empty — nothing has been output yet.", "empty": True})
 
-        # Truncate if too long (LLM context window)
-        if len(buffer) > 8000:
-            buffer = buffer[-8000:]
+        # Smart trim: keep recent context, but also capture the beginning if possible
+        # Split into head (startup/initial output) and tail (recent activity)
+        lines = buffer.splitlines()
+        total_lines = len(lines)
+        if total_lines > 400:
+            # Keep first 100 lines (pi startup, initial summary) and last 300 lines
+            head = lines[:100]
+            tail = lines[-300:]
+            # Mark the join clearly so the LLM knows content was elided
+            buffer_start = "\n".join(head)
+            buffer_end = "\n".join(tail)
+            buffer = buffer_start + "\n\n... [middle content omitted] ...\n\n" + buffer_end
+
+        # Truncate if still too long for context window
+        if len(buffer) > 15000:
+            buffer = buffer[-15000:]
 
         # Get LLM settings
         settings = load_settings_from_db()
@@ -1005,10 +1018,12 @@ def register_routes(router, templates):
 
         # Call LLM to summarize
         system_prompt = (
-            "You are a helpful assistant that explains terminal output to a non-technical user. "
-            "Given the terminal output below, provide a brief, plain-English summary of what happened. "
-            "Focus on what commands were run, whether they succeeded or failed, and what the overall state is. "
-            "Keep it under 3 sentences. Be specific about outcomes."
+            "You are a helpful assistant that explains terminal output to a user. "
+            "Given the terminal output below, provide a concise, plain-English summary of what happened. "
+            "Cover: what was the initial state (e.g. pi startup summary), what commands were run, "
+            "whether they succeeded or failed, and what the current state is. "
+            "Keep it under 4 sentences. Be specific about outcomes. "
+            "If the output shows a pi check-in or agent summary, include the key findings."
         )
         messages = [
             {"role": "system", "content": system_prompt},
@@ -1030,4 +1045,4 @@ def register_routes(router, templates):
         except Exception as e:
             logger.warning(f"Failed to speak terminal overview: {e}")
 
-        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(buffer.splitlines())})
+        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": total_lines})
