@@ -1014,18 +1014,14 @@
 
     function restartTerminal() {
         if (!currentProjectId) return;
-        // Kill existing terminal
+        // Kill existing terminal and WebSocket
         destroyTerminal();
         // Request server-side restart
         apiFetch("/api/projects/" + currentProjectId + "/terminal/restart", { method: "POST" })
             .then(function(data) {
                 if (data.success) {
-                    // Clear terminal and reconnect
-                    if (_term) {
-                        _term.clear();
-                        _term.write("\x1b[33mRestarting terminal...\x1b[0m\r\n");
-                    }
-                    connectTerminalWs();
+                    // Re-initialize terminal (creates xterm + WebSocket)
+                    initTerminal();
                 } else {
                     showSnackbar(data.error || "Failed to restart terminal", "error");
                 }
