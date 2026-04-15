@@ -1,7 +1,7 @@
 """
 Projects routes — /projects/*, /browse-folder
 """
-from fastapi import HTTPException, File, UploadFile, Form, Request
+from fastapi import HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from typing import Optional
 import json
@@ -832,3 +832,143 @@ def register_routes(router, templates):
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
+
+    # ── Terminal: WebSocket + buffer API ──────────────────────────────
+
+    @router.websocket("/projects/{project_id}/terminal/ws")
+    async def terminal_websocket(websocket: WebSocket, project_id: int):
+        """WebSocket for real-time terminal I/O. Connects to a PTY session running `pi` in the project directory."""
+        import asyncio
+        from distr.core.terminal import get_or_create_session, get_session, kill_session
+        from distr.gui.web.security import websocket_has_valid_internal_token, is_allowed_local_origin
+
+        # Auth check
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        if not websocket_has_valid_internal_token(websocket):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+
+        await websocket.accept()
+
+        # Get project folder
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            with get_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    await websocket.send_json({"type": "error", "message": "Project not found"})
+                    await websocket.close(code=1008, reason="Project not found")
+                    return
+                cwd = project.folder_location or os.path.expanduser("~")
+        except Exception as e:
+            logger.error(f"Terminal: failed to load project: {e}")
+            await websocket.send_json({"type": "error", "message": "Failed to load project"})
+            await websocket.close(code=1011, reason="Internal error")
+            return
+
+        # Ensure the directory exists
+        if not os.path.isdir(cwd):
+            cwd = os.path.expanduser("~")
+
+        try:
+            session = await get_or_create_session(project_id, cwd, command="pi")
+        except Exception as e:
+            logger.error(f"Terminal: failed to create session: {e}")
+            await websocket.send_json({"type": "error", "message": f"Failed to start terminal: {e}"})
+            await websocket.close(code=1011, reason="Terminal error")
+            return
+
+        session.websockets.add(websocket)
+
+        # Send initial connection message
+        await websocket.send_json({"type": "connected", "project_id": project_id})
+
+        # If there's existing buffer content, send it
+        buffer_text = session.get_buffer(200)
+        if buffer_text:
+            await websocket.send_json({"type": "output", "data": buffer_text + "\n"})
+
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    msg = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+
+                msg_type = msg.get("type")
+
+                if msg_type == "input":
+                    # User typed something — send to PTY
+                    session.write(msg.get("data", ""))
+                elif msg_type == "resize":
+                    # Terminal resize
+                    rows = int(msg.get("rows", 24))
+                    cols = int(msg.get("cols", 80))
+                    session.resize(rows, cols)
+                elif msg_type == "restart":
+                    # Kill and restart terminal
+                    await kill_session(project_id)
+                    try:
+                        session = await get_or_create_session(project_id, cwd, command="pi")
+                        session.websockets.add(websocket)
+                        await websocket.send_json({"type": "connected", "project_id": project_id})
+                    except Exception as e:
+                        await websocket.send_json({"type": "error", "message": f"Failed to restart: {e}"})
+                elif msg_type == "ping":
+                    await websocket.send_json({"type": "pong"})
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug(f"Terminal WebSocket error: {e}")
+        finally:
+            session.websockets.discard(websocket)
+            # Don't kill the session when a single WS disconnects — keep it alive
+            # so the terminal persists across page navigations
+
+    @router.get("/projects/{project_id}/terminal/buffer")
+    async def get_terminal_buffer(project_id: int, lines: int = 100):
+        """Get the terminal buffer content for an agent to read."""
+        from distr.core.terminal import get_session
+
+        session = get_session(project_id)
+        if not session:
+            return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
+
+        return JSONResponse({
+            "buffer": session.get_buffer(lines),
+            "alive": session.is_alive,
+            "project_id": project_id,
+        })
+
+    @router.post("/projects/{project_id}/terminal/restart")
+    async def restart_terminal(project_id: int):
+        """Kill and recreate the terminal session for a project."""
+        from distr.core.terminal import kill_session, get_or_create_session
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+
+        try:
+            with db_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    raise HTTPException(status_code=404, detail="Project not found")
+                cwd = project.folder_location or os.path.expanduser("~")
+        except HTTPException:
+            raise
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+
+        if not os.path.isdir(cwd):
+            cwd = os.path.expanduser("~")
+
+        await kill_session(project_id)
+        try:
+            new_session = await get_or_create_session(project_id, cwd, command="pi")
+            return JSONResponse({"success": True, "alive": new_session.is_alive})
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)

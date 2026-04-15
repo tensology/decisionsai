@@ -235,12 +235,10 @@
             loadBoardProvidersAndSelect(ps ? ps.value : "", bid, bname);
             loadKanbanBoardStatus();
         }
-        if (tabName === "cli") {
-            loadCliAudit();
-            loadKiroCliStatus();
-            startCliStream();
+        if (tabName === "terminal") {
+            initTerminal();
         } else {
-            stopCliStream();
+            destroyTerminal();
         }
     }
 
@@ -809,200 +807,252 @@
         var contextCancelBtn = document.getElementById("context-item-cancel");
         if (contextCancelBtn) contextCancelBtn.addEventListener("click", closeContextItemModal);
 
-        // CLI tab
-        var cliSendBtn = document.getElementById("cli-send");
-        if (cliSendBtn) cliSendBtn.addEventListener("click", sendCliInstruction);
-        var cliInput = document.getElementById("cli-instruction");
-        if (cliInput) cliInput.addEventListener("keydown", function(e) {
-            if (e.key === "Enter") sendCliInstruction();
-        });
-        var cliRefreshBtn = document.getElementById("cli-refresh");
-        if (cliRefreshBtn) cliRefreshBtn.addEventListener("click", loadCliAudit);
-        var cliFilterSel = document.getElementById("cli-filter");
-        if (cliFilterSel) cliFilterSel.addEventListener("change", loadCliAudit);
-        var kiroLoginBtn = document.getElementById("kiro-cli-login");
-        if (kiroLoginBtn) kiroLoginBtn.addEventListener("click", kiroCliLogin);
-        var kiroLogoutBtn = document.getElementById("kiro-cli-logout");
-        if (kiroLogoutBtn) kiroLogoutBtn.addEventListener("click", kiroCliLogout);
+        // Terminal tab
+        var terminalRestartBtn = document.getElementById("terminal-restart");
+        if (terminalRestartBtn) terminalRestartBtn.addEventListener("click", function() { restartTerminal(); });
     }
 
-    function sendCliInstruction() {
+    // ── Terminal Management ────────────────────────────────────────────
+
+    var _term = null;        // xterm.js Terminal instance
+    var _termFit = null;    // FitAddon instance
+    var _termWs = null;     // WebSocket connection
+    var _termPollTimer = null;
+
+    function initTerminal() {
         if (!currentProjectId) return;
-        var input = document.getElementById("cli-instruction");
-        var instruction = (input.value || "").trim();
-        if (!instruction) return;
-        input.value = "";
-        var sendBtn = document.getElementById("cli-send");
-        if (sendBtn) sendBtn.disabled = true;
-        apiFetch("/api/projects/" + currentProjectId + "/cli", {
-            method: "POST",
-            headers: {"Content-Type": "application/json"},
-            body: JSON.stringify({instruction: instruction}),
-        }).then(function(data) {
-            if (data.success) {
-                showSnackbar("Task started via " + (data.engine || "kiro-cli"), "success");
-                loadCliAudit();
-                startCliStream();
-            } else {
-                showSnackbar(data.error || "Failed", "error");
+        if (_term) {
+            // Already initialized, reconnect if needed
+            if (!_termWs || _termWs.readyState !== WebSocket.OPEN) {
+                connectTerminalWs();
             }
-        }).catch(function() {
-            showSnackbar("Failed to send task", "error");
-        }).finally(function() {
-            if (sendBtn) sendBtn.disabled = false;
+            return;
+        }
+
+        var container = document.getElementById("terminal-container");
+        if (!container) return;
+
+        // Create xterm.js terminal
+        _term = new Terminal({
+            theme: {
+                background: '#0d1117',
+                foreground: '#c9d1d9',
+                cursor: '#58a6ff',
+                cursorAccent: '#0d1117',
+                selectionBackground: '#264f78',
+                black: '#484f58',
+                red: '#ff7b72',
+                green: '#3fb950',
+                yellow: '#d29922',
+                blue: '#58a6ff',
+                magenta: '#bc8cff',
+                cyan: '#39c5cf',
+                white: '#b1bac4',
+                brightBlack: '#6e7681',
+                brightRed: '#ffa657',
+                brightGreen: '#56d364',
+                brightYellow: '#e3b341',
+                brightBlue: '#79c0ff',
+                brightMagenta: '#d2a8ff',
+                brightCyan: '#56d4dd',
+                brightWhite: '#f0f6fc'
+            },
+            fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
+            fontSize: 13,
+            lineHeight: 1.2,
+            cursorBlink: true,
+            cursorStyle: 'block',
+            scrollback: 5000,
+            allowProposedApi: true
         });
-    }
 
-    var _cliEventSource = null;
+        // Fit addon
+        _termFit = new FitAddon.FitAddon();
+        _term.loadAddon(_termFit);
 
-    function startCliStream() {
-        stopCliStream();
-        if (!currentProjectId) return;
+        // Web links addon
         try {
-            _cliEventSource = new EventSource("/api/projects/" + currentProjectId + "/cli/stream");
-            _cliEventSource.onmessage = function(e) {
-                try {
-                    var data = JSON.parse(e.data);
-                    if (data.refresh) loadCliAudit();
-                } catch (err) {}
-            };
-            _cliEventSource.onerror = function() {
-                stopCliStream();
-                setTimeout(function() {
-                    if (document.getElementById("tab-cli") && !document.getElementById("tab-cli").classList.contains("hidden")) {
-                        startCliStream();
-                    }
-                }, 5000);
-            };
+            var webLinksAddon = new WebLinksAddon.WebLinksAddon();
+            _term.loadAddon(webLinksAddon);
         } catch (e) {}
+
+        // Open terminal in container
+        _term.open(container);
+
+        // Fit to container
+        try { _termFit.fit(); } catch (e) {}
+
+        // Handle window resize
+        var resizeObserver = new ResizeObserver(function() {
+            if (_term && _termFit) {
+                try { _termFit.fit(); } catch (e) {}
+                sendTerminalResize();
+            }
+        });
+        resizeObserver.observe(container);
+        _term._resizeObserver = resizeObserver;
+
+        // Handle user input
+        _term.onData(function(data) {
+            if (_termWs && _termWs.readyState === WebSocket.OPEN) {
+                _termWs.send(JSON.stringify({type: "input", data: data}));
+            }
+        });
+
+        // Connect WebSocket
+        connectTerminalWs();
     }
 
-    function stopCliStream() {
-        if (_cliEventSource) {
-            try { _cliEventSource.close(); } catch (e) {}
-            _cliEventSource = null;
+    function connectTerminalWs() {
+        if (!currentProjectId) return;
+
+        // Close existing
+        if (_termWs) {
+            try { _termWs.close(); } catch (e) {}
+            _termWs = null;
+        }
+
+        var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
+        var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        var wsUrl = wsProtocol + "//" + window.location.host + "/api/projects/" + currentProjectId + "/terminal/ws";
+        if (token) {
+            wsUrl += "?internal_token=" + encodeURIComponent(token);
+        }
+
+        updateTerminalStatus("connecting");
+
+        _termWs = new WebSocket(wsUrl);
+
+        _termWs.onopen = function() {
+            updateTerminalStatus("connected");
+            // Send initial terminal size
+            if (_term) {
+                sendTerminalResize();
+            }
+        };
+
+        _termWs.onmessage = function(event) {
+            try {
+                var msg = JSON.parse(event.data);
+                if (msg.type === "output" && _term) {
+                    _term.write(msg.data);
+                } else if (msg.type === "connected") {
+                    updateTerminalStatus("connected");
+                } else if (msg.type === "exit") {
+                    updateTerminalStatus("disconnected");
+                } else if (msg.type === "error") {
+                    showSnackbar(msg.message || "Terminal error", "error");
+                    updateTerminalStatus("error");
+                } else if (msg.type === "pong") {
+                    // keepalive
+                }
+            } catch (e) {}
+        };
+
+        _termWs.onclose = function() {
+            updateTerminalStatus("disconnected");
+            // Auto-reconnect after delay if the terminal tab is visible
+            setTimeout(function() {
+                var tabEl = document.getElementById("tab-terminal");
+                if (tabEl && !tabEl.classList.contains("hidden") && currentProjectId) {
+                    connectTerminalWs();
+                }
+            }, 3000);
+        };
+
+        _termWs.onerror = function() {
+            updateTerminalStatus("error");
+        };
+
+        // Keepalive ping
+        if (_termPollTimer) clearInterval(_termPollTimer);
+        _termPollTimer = setInterval(function() {
+            if (_termWs && _termWs.readyState === WebSocket.OPEN) {
+                _termWs.send(JSON.stringify({type: "ping"}));
+            }
+        }, 30000);
+    }
+
+    function sendTerminalResize() {
+        if (_term && _termWs && _termWs.readyState === WebSocket.OPEN) {
+            _termWs.send(JSON.stringify({
+                type: "resize",
+                rows: _term.rows,
+                cols: _term.cols
+            }));
         }
     }
 
-    function loadCliAudit() {
-        if (!currentProjectId) return;
-        var list = document.getElementById("cli-audit-list");
-        if (!list) return;
-        var filter = (document.getElementById("cli-filter") || {}).value || "all";
-        apiFetch("/api/projects/" + currentProjectId + "/cli/audit")
-            .then(function(data) {
-                var sessions = data.sessions || [];
-                if (filter !== "all") {
-                    sessions = sessions.filter(function(s) { return s.status === filter; });
-                }
-                if (!sessions.length) {
-                    list.innerHTML = "<p class=\"text-gray-500 text-xs italic\">No sessions" + (filter !== "all" ? " matching filter" : "") + ".</p>";
-                    return;
-                }
-                list.innerHTML = sessions.map(function(s, idx) {
-                    var statusIcon = s.status === "completed" ? "✓" : s.status === "failed" ? "✗" : s.status === "in_progress" ? "⟳" : "○";
-                    var statusColor = s.status === "completed" ? "text-green-400" : s.status === "failed" ? "text-red-400" : s.status === "in_progress" ? "text-yellow-400" : "text-gray-400";
-                    var stepsHtml = (s.steps || []).map(function(st) {
-                        var stIcon = st.status === "completed" ? "✓" : st.status === "failed" ? "✗" : st.status === "running" ? "⟳" : "·";
-                        var stColor = st.status === "completed" ? "text-green-400" : st.status === "failed" ? "text-red-400" : st.status === "running" ? "text-yellow-400" : "text-gray-500";
-                        return "<div class=\"ml-4 py-1 pl-3 border-l border-white/10 flex items-start gap-2\">" +
-                            "<span class=\"" + stColor + " text-xs flex-shrink-0 mt-0.5\">" + stIcon + "</span>" +
-                            "<div class=\"min-w-0\">" +
-                            "<span class=\"text-xs text-gray-300\">" + escapeAttr(st.title) + "</span>" +
-                            (st.tool ? " <span class=\"text-xs text-gray-600\">via " + escapeAttr(st.tool) + "</span>" : "") +
-                            (st.result ? "<div class=\"text-xs text-gray-500 mt-0.5 break-words\">" + escapeAttr(st.result.substring(0, 200)) + (st.result.length > 200 ? "…" : "") + "</div>" : "") +
-                            "</div></div>";
-                    }).join("");
-                    var timeStr = s.created ? new Date(s.created).toLocaleString() : "";
-                    return "<details class=\"border border-white/10 rounded bg-white/5\"" + (idx === 0 ? " open" : "") + ">" +
-                        "<summary class=\"px-3 py-2 cursor-pointer hover:bg-white/5 flex items-center gap-2\">" +
-                        "<span class=\"" + statusColor + " text-sm flex-shrink-0\">" + statusIcon + "</span>" +
-                        "<span class=\"text-xs text-gray-300 flex-1 truncate\">" + escapeAttr(s.instruction) + "</span>" +
-                        "<span class=\"text-xs text-gray-600 flex-shrink-0\">" + escapeAttr(timeStr) + "</span>" +
-                        "</summary>" +
-                        "<div class=\"px-3 pb-2\">" + (stepsHtml || "<p class=\"text-xs text-gray-500 ml-4\">No steps</p>") + "</div>" +
-                        "</details>";
-                }).join("");
-            })
-            .catch(function() {
-                list.innerHTML = "<p class=\"text-red-400 text-xs\">Failed to load sessions.</p>";
-            });
-    }
-
-    function loadKiroCliStatus() {
-        var dot = document.getElementById("kiro-cli-dot");
-        var label = document.getElementById("kiro-cli-label");
-        var loginBtn = document.getElementById("kiro-cli-login");
-        var logoutBtn = document.getElementById("kiro-cli-logout");
-        var inputSection = document.getElementById("kiro-cli-input-section");
-        apiFetch("/api/kiro-cli/status")
-            .then(function(data) {
-                if (!data.installed) {
-                    dot.className = "w-2 h-2 rounded-full bg-red-500";
-                    label.textContent = "Kiro CLI not installed";
-                    label.className = "text-xs text-red-400";
-                    loginBtn.classList.add("hidden");
-                    logoutBtn.classList.add("hidden");
-                    if (inputSection) inputSection.classList.add("hidden");
-                } else if (!data.authenticated) {
-                    dot.className = "w-2 h-2 rounded-full bg-yellow-500";
-                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — not logged in";
-                    label.className = "text-xs text-yellow-400";
-                    loginBtn.classList.remove("hidden");
-                    logoutBtn.classList.add("hidden");
-                    if (inputSection) inputSection.classList.add("hidden");
-                } else {
-                    dot.className = "w-2 h-2 rounded-full bg-green-500";
-                    label.textContent = "Kiro CLI v" + (data.version || "?") + " — " + (data.email || "authenticated");
-                    label.className = "text-xs text-green-400";
-                    loginBtn.classList.add("hidden");
-                    logoutBtn.classList.remove("hidden");
-                    if (inputSection) inputSection.classList.remove("hidden");
-                }
-            })
-            .catch(function() {
+    function updateTerminalStatus(status) {
+        var dot = document.getElementById("terminal-status");
+        var text = document.getElementById("terminal-status-text");
+        if (!dot || !text) return;
+        switch (status) {
+            case "connected":
+                dot.className = "w-2 h-2 rounded-full bg-green-500";
+                text.textContent = "Connected";
+                text.className = "text-xs text-green-400";
+                break;
+            case "connecting":
+                dot.className = "w-2 h-2 rounded-full bg-yellow-500";
+                text.textContent = "Connecting...";
+                text.className = "text-xs text-yellow-400";
+                break;
+            case "error":
+                dot.className = "w-2 h-2 rounded-full bg-red-500";
+                text.textContent = "Error";
+                text.className = "text-xs text-red-400";
+                break;
+            case "disconnected":
+            default:
                 dot.className = "w-2 h-2 rounded-full bg-gray-500";
-                label.textContent = "Could not check Kiro CLI status";
-                label.className = "text-xs text-gray-500";
+                text.textContent = "Disconnected";
+                text.className = "text-xs text-gray-400";
+                break;
+        }
+    }
+
+    function restartTerminal() {
+        if (!currentProjectId) return;
+        // Kill existing terminal
+        destroyTerminal();
+        // Request server-side restart
+        apiFetch("/api/projects/" + currentProjectId + "/terminal/restart", { method: "POST" })
+            .then(function(data) {
+                if (data.success) {
+                    // Clear terminal and reconnect
+                    if (_term) {
+                        _term.clear();
+                        _term.write("\x1b[33mRestarting terminal...\x1b[0m\r\n");
+                    }
+                    connectTerminalWs();
+                } else {
+                    showSnackbar(data.error || "Failed to restart terminal", "error");
+                }
+            })
+            .catch(function() {
+                showSnackbar("Failed to restart terminal", "error");
             });
     }
 
-    function kiroCliLogin() {
-        apiFetch("/api/kiro-cli/login", { method: "POST" })
-            .then(function(data) {
-                if (data.success) {
-                    showSnackbar("Login started — check your browser", "success");
-                    // Poll for auth status
-                    var polls = 0;
-                    var pollTimer = setInterval(function() {
-                        polls++;
-                        if (polls > 30) { clearInterval(pollTimer); return; }
-                        apiFetch("/api/kiro-cli/status").then(function(s) {
-                            if (s.authenticated) {
-                                clearInterval(pollTimer);
-                                loadKiroCliStatus();
-                                showSnackbar("Kiro CLI authenticated", "success");
-                            }
-                        }).catch(function() {});
-                    }, 3000);
-                } else {
-                    showSnackbar(data.error || "Login failed", "error");
-                }
-            })
-            .catch(function() { showSnackbar("Login failed", "error"); });
-    }
-
-    function kiroCliLogout() {
-        apiFetch("/api/kiro-cli/logout", { method: "POST" })
-            .then(function(data) {
-                if (data.success) {
-                    showSnackbar("Logged out", "success");
-                    loadKiroCliStatus();
-                } else {
-                    showSnackbar(data.error || "Logout failed", "error");
-                }
-            })
-            .catch(function() { showSnackbar("Logout failed", "error"); });
+    function destroyTerminal() {
+        if (_termPollTimer) {
+            clearInterval(_termPollTimer);
+            _termPollTimer = null;
+        }
+        if (_termWs) {
+            try { _termWs.close(); } catch (e) {}
+            _termWs = null;
+        }
+        if (_term) {
+            if (_term._resizeObserver) {
+                _term._resizeObserver.disconnect();
+            }
+            _term.dispose();
+            _term = null;
+        }
+        _termFit = null;
+        updateTerminalStatus("disconnected");
     }
 
     if (document.readyState === "loading") {
