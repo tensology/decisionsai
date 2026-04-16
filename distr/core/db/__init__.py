@@ -70,20 +70,20 @@ class Settings(Base):
     tts_provider = Column(String, default='Kokoro (Offline)')
     tts_voice = Column(String, default='')
     agent_provider = Column(String, default='Ollama')
-    agent_model = Column(String, default='qwen3:8b')
+    agent_model = Column(String, default='minimax-m2.5:cloud')
     code_provider = Column(String, default='Ollama')
-    code_model = Column(String, default='qwen2.5-coder:7b')
+    code_model = Column(String, default='glm-5.1:cloud')
     input_speech = Column(String, default='Vosk')
     transcription_model = Column(String, default='Whisper.cpp (Local & Offline)')
     
     # Multiple LLM Settings (Conversational, Coding, Vision, Image)
     # llm_provider/model: Standardized names used by ChatManager for hot-reload
     llm_provider = Column(String, default='Ollama')
-    llm_model = Column(String, default='qwen3:8b')
+    llm_model = Column(String, default='minimax-m2.5:cloud')
     conversational_llm_provider = Column(String, default='Ollama')
-    conversational_llm_model = Column(String, default='qwen3:8b')
+    conversational_llm_model = Column(String, default='minimax-m2.5:cloud')
     coding_llm_provider = Column(String, default='Ollama')
-    coding_llm_model = Column(String, default='qwen2.5-coder:7b')
+    coding_llm_model = Column(String, default='glm-5.1:cloud')
     step_runner_llm_provider = Column(String, default='')
     step_runner_llm_model = Column(String, default='')
     vision_llm_provider = Column(String, default='Ollama')
@@ -707,19 +707,19 @@ def init_db():
                 voice_provider='kokoro',
                 kokoro_voice='af_heart',
                 agent_provider='Ollama',
-                agent_model=_rec.get('conversational', 'qwen3:0.6b'),
+                agent_model=_rec.get('conversational', 'minimax-m2.5:cloud'),
                 llm_provider='Ollama',
-                llm_model=_rec.get('conversational', 'qwen3:0.6b'),
+                llm_model=_rec.get('conversational', 'minimax-m2.5:cloud'),
                 conversational_llm_provider='Ollama',
-                conversational_llm_model=_rec.get('conversational', 'qwen3:0.6b'),
+                conversational_llm_model=_rec.get('conversational', 'minimax-m2.5:cloud'),
                 coding_llm_provider='Ollama',
-                coding_llm_model=_rec.get('coding', 'qwen2.5-coder:0.5b'),
+                coding_llm_model=_rec.get('coding', 'glm-5.1:cloud'),
                 vision_llm_provider='Ollama',
                 vision_llm_model=_rec.get('vision', 'qwen3-vl:2b'),
                 image_llm_provider='Ollama',
                 image_llm_model='x/flux2-klein:latest',
                 code_provider='Ollama',
-                code_model=_rec.get('coding', 'qwen2.5-coder:0.5b'),
+                code_model=_rec.get('coding', 'glm-5.1:cloud'),
                 input_speech='Vosk',
                 transcription_model='Whisper.cpp (Local & Offline)',
                 indexed_folders='[]',

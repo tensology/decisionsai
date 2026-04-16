@@ -1260,6 +1260,31 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"AutoWorkflow code/validation/wait migration: {e}")
 
+    # Migrate Ollama default models to cloud versions (no local RAM needed)
+    try:
+        with Session() as session:
+            settings = session.query(Settings).first()
+            if settings:
+                changed = False
+                # Conversational: old local models -> minimax-m2.5:cloud
+                old_conv = ('qwen3:8b', 'qwen3:4b', 'qwen3:1.7b', 'qwen3:0.6b', 'gemma4:e2b')
+                if settings.conversational_llm_model in old_conv or settings.llm_model in old_conv or settings.agent_model in old_conv:
+                    settings.conversational_llm_model = 'minimax-m2.5:cloud'
+                    settings.llm_model = 'minimax-m2.5:cloud'
+                    settings.agent_model = 'minimax-m2.5:cloud'
+                    changed = True
+                # Coding: old local models -> glm-5.1:cloud
+                old_code_prefixes = ('qwen2.5-coder:', 'codegemma')
+                if any(settings.coding_llm_model.startswith(p) for p in old_code_prefixes) or any(settings.code_model.startswith(p) for p in old_code_prefixes):
+                    settings.coding_llm_model = 'glm-5.1:cloud'
+                    settings.code_model = 'glm-5.1:cloud'
+                    changed = True
+                if changed:
+                    session.commit()
+                    logger.info("Migrated default models to cloud versions (minimax-m2.5:cloud for chat, glm-5.1:cloud for coding)")
+    except Exception as e:
+        logger.debug(f"Cloud model migration: {e}")
+
     # Seed empty workflows with default steps
     try:
         from distr.core.db.seed_workflows import seed_workflows

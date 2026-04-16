@@ -197,6 +197,181 @@ def setup_kanade_models():
     print("")
 
 
+def _model_display_name(model_id: str) -> str:
+    """Convert a model ID like 'minimax-m2.5:cloud' to a display name like 'MiniMax M2.5'."""
+    name = model_id.split(":")[0] if ":" in model_id else model_id
+    display_names = {
+        "minimax-m2.5": "MiniMax M2.5",
+        "glm-5.1": "GLM 5.1",
+        "qwen3.5": "Qwen 3.5 397B",
+        "qwen3-coder-next": "Qwen3 Coder Next",
+        "qwen3-vl": "Qwen3 VL",
+        "qwen3": "Qwen3",
+        "qwen2.5-coder": "Qwen2.5 Coder",
+        "x/flux2-klein": "Flux2 Klein",
+    }
+    return display_names.get(name, name.replace("-", " ").title())
+
+
+def setup_pi_cli(ram_gb=None, rec=None):
+    """Configure pi CLI's models.json with Ollama cloud models.
+
+    Creates ~/.pi/agent/models.json so that pi CLI (the coding agent)
+    can use the same Ollama cloud models that DecisionsAI uses.
+    This is idempotent — it merges with any existing config.
+    """
+    import json
+
+    pi_dir = os.path.expanduser("~/.pi/agent")
+    models_path = os.path.join(pi_dir, "models.json")
+
+    # Determine which models to configure
+    if rec is None:
+        try:
+            from distr.core.system_resources import recommend_ollama_defaults
+            rec = recommend_ollama_defaults(ram_gb)
+        except Exception:
+            rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:2b"}
+
+    conv_model = rec["conversational"]
+    code_model = rec["coding"]
+
+    print("")
+    print("=" * 60)
+    print("pi CLI Setup (Coding Agent)")
+    print("=" * 60)
+
+    # Build the config
+    pi_config = {
+        "providers": {
+            "ollama": {
+                "baseUrl": "http://127.0.0.1:11434/v1",
+                "apiKey": "ollama",
+                "api": "openai-completions",
+                "compat": {
+                    "supportsDeveloperRole": False,
+                    "supportsReasoningEffort": True,
+                    "reasoningEffortMap": {
+                        "off": "none",
+                        "minimal": "none",
+                        "low": "none",
+                        "medium": "none",
+                        "high": "none",
+                        "xhigh": "none"
+                    }
+                },
+                "models": [
+                    {"id": conv_model, "name": _model_display_name(conv_model)},
+                    {"id": code_model, "name": _model_display_name(code_model)},
+                    {"id": "qwen3-coder-next:cloud", "name": "Qwen3 Coder Next"},
+                    {"id": "qwen3.5:397b-cloud", "name": "Qwen 3.5 397B"},
+                    {"id": "minimax-m2.5:cloud", "name": "MiniMax M2.5"},
+                    {"id": "glm-5.1:cloud", "name": "GLM 5.1"},
+                ]
+            }
+        }
+    }
+
+    # --- Step 1: Install pi CLI if not present ---
+    pi_installed = False
+    try:
+        result = subprocess.run(["pi", "--version"], capture_output=True, text=True, timeout=5)
+        if result.returncode == 0:
+            pi_installed = True
+            print("  ✓ pi CLI is already installed")
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+
+    if not pi_installed:
+        print("  pi CLI is not installed. Attempting automatic install...")
+        npm_available = False
+        try:
+            npm_check = subprocess.run(["npm", "--version"], capture_output=True, text=True, timeout=5)
+            if npm_check.returncode == 0:
+                npm_available = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            pass
+
+        if npm_available:
+            try:
+                result = subprocess.run(
+                    ["npm", "install", "-g", "@mariozechner/pi-coding-agent"],
+                    capture_output=True, text=True, timeout=120
+                )
+                if result.returncode == 0:
+                    print("  ✓ pi CLI installed successfully!")
+                    pi_installed = True
+                else:
+                    print(f"  ✗ npm install failed: {result.stderr[:200]}")
+                    print("    Install manually: npm install -g @mariozechner/pi-coding-agent")
+            except subprocess.TimeoutExpired:
+                print("  ✗ npm install timed out (120s)")
+                print("    Install manually: npm install -g @mariozechner/pi-coding-agent")
+            except Exception as e:
+                print(f"  ✗ Could not auto-install: {e}")
+                print("    Install manually: npm install -g @mariozechner/pi-coding-agent")
+        else:
+            print("  ⚠ npm not found. Install Node.js first: https://nodejs.org")
+            print("    Then run: npm install -g @mariozechner/pi-coding-agent")
+
+    # --- Step 2: Write/merge models.json ---
+    # This works regardless of whether pi is installed — the config will be ready
+    # when the user first launches pi.
+    existing_config = {}
+    if os.path.exists(models_path):
+        try:
+            with open(models_path, "r") as f:
+                existing_config = json.load(f)
+            print(f"  Found existing pi config at {models_path}")
+        except (json.JSONDecodeError, IOError) as e:
+            print(f"  ⚠ Could not read existing models.json: {e}")
+            existing_config = {}
+
+    if existing_config:
+        # Merge ollama models into existing config (preserves other providers)
+        if "providers" not in existing_config:
+            existing_config["providers"] = {}
+        if "ollama" not in existing_config["providers"]:
+            existing_config["providers"]["ollama"] = pi_config["providers"]["ollama"]
+        else:
+            # Merge models — add any that don't already exist by id
+            existing_ids = {m["id"] for m in existing_config["providers"]["ollama"].get("models", [])}
+            new_models = pi_config["providers"]["ollama"]["models"]
+            for m in new_models:
+                if m["id"] not in existing_ids:
+                    existing_config["providers"]["ollama"].setdefault("models", []).append(m)
+            # Ensure compat settings are present
+            if "compat" not in existing_config["providers"]["ollama"]:
+                existing_config["providers"]["ollama"]["compat"] = pi_config["providers"]["ollama"]["compat"]
+            # Ensure baseUrl and apiKey
+            if "baseUrl" not in existing_config["providers"]["ollama"]:
+                existing_config["providers"]["ollama"]["baseUrl"] = pi_config["providers"]["ollama"]["baseUrl"]
+            if "apiKey" not in existing_config["providers"]["ollama"]:
+                existing_config["providers"]["ollama"]["apiKey"] = pi_config["providers"]["ollama"]["apiKey"]
+            if "api" not in existing_config["providers"]["ollama"]:
+                existing_config["providers"]["ollama"]["api"] = pi_config["providers"]["ollama"]["api"]
+        merged_config = existing_config
+    else:
+        merged_config = pi_config
+
+    # Write the config
+    os.makedirs(pi_dir, exist_ok=True)
+    try:
+        with open(models_path, "w") as f:
+            json.dump(merged_config, f, indent=2)
+            f.write("\n")  # trailing newline
+        model_count = len(merged_config.get("providers", {}).get("ollama", {}).get("models", []))
+        print(f"  ✓ pi CLI config written to {models_path}")
+        print(f"    Conversational: {conv_model}")
+        print(f"    Coding:         {code_model}")
+        print(f"    Total Ollama models: {model_count}")
+    except IOError as e:
+        print(f"  ✗ Could not write {models_path}: {e}")
+        print(f"    Create it manually with the content above.")
+
+    print("")
+
+
 def setup(skip_model_pull=False, install_optional=False):
     """
     Main setup function to download and extract files.
@@ -245,7 +420,7 @@ def setup(skip_model_pull=False, install_optional=False):
     except Exception as _e:
         print(f"Could not detect RAM ({_e}), using defaults for 16 GB")
         ram_gb = 16.0
-        rec = {"conversational": "qwen3:8b", "coding": "qwen2.5-coder:7b", "vision": "qwen3-vl:2b"}
+        rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:2b"}
 
     # Write recommended models to a file so the DB can pick them up on first creation
     try:
@@ -425,6 +600,9 @@ def setup(skip_model_pull=False, install_optional=False):
 
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
     setup_kanade_models()
+
+    # --- pi CLI Setup ---
+    setup_pi_cli(ram_gb, rec)
 
     print("All models have been downloaded and set up successfully.")
 
