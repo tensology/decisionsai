@@ -2,6 +2,22 @@
 
 ---
 
+## [2.7.7] - 2026-04-16
+
+### Cloud Models, pi CLI Setup, No More RAM Pain
+
+Local AI models on a 16GB laptop are a dead end — they fight your browser, your IDE, and everything else for RAM. This update swaps the defaults to Ollama cloud models that run on remote servers, using zero local memory. Setup now also configures the pi coding agent so you're ready to code on day one.
+
+**Cloud Models by Default** — New installs and existing setups now default to `minimax-m2.5:cloud` for conversation and `glm-5.1:cloud` for coding. These go through Ollama but run remotely — no 5GB downloads, no 6GB RAM chunks, no 500 errors when your machine is busy. Vision stays local (`qwen3-vl:2b`, only 1.9GB) because it needs low latency for screenshots.
+
+**pi CLI Setup** — The setup script now installs and configures the pi coding agent automatically. It creates `~/.pi/agent/models.json` with your Ollama cloud models, installs pi via npm if it's not there, and merges with any existing config so nothing gets overwritten. One setup run and both DecisionsAI and pi are ready to go.
+
+**Smart RAM Tiers** — The model tier system now puts cloud models at tier 0 (any RAM). Local models are still available as fallbacks for machines with 10GB+ to spare. Your existing database settings are automatically migrated to cloud models on next launch.
+
+**Database Migration** — If you were running `qwen3:8b`, `gemma4:e2b`, or `qwen2.5-coder:7b` as defaults, they're swapped to cloud equivalents on startup. No data loss, no manual steps.
+
+---
+
 ## [2.7.6] - 2026-04-14
 
 ### Sidecar Tools, Workflow Engine, Small Model Tool Calling, Coqui TTS, Initiative System

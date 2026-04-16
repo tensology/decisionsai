@@ -126,15 +126,25 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **RAM** | 8 GB minimum; 12 GB recommended for qwen3:8b |
 | **Python** | 3.12 |
 | **System deps** | PortAudio, FFmpeg |
-| **Disk** | ~6 GB free for initial model downloads |
+| **Disk** | ~200 MB for cloud models; ~6 GB for full local models |
 
-> DecisionsAI detects your system RAM at first launch and picks an Ollama model that fits automatically.
-
-| RAM | Default model | Approx. VRAM |
-|---|---|---|
-| ≤ 9 GB | `qwen3:1.7b` | ~1.5 GB |
-| 10–11 GB | `qwen3:4b` | ~3.5 GB |
-| 12+ GB | `qwen3:8b` | ~6 GB |
+> DecisionsAI detects your system RAM at first launch and picks models that fit. Cloud models (marked `:cloud`) run on Ollama's servers — zero local RAM needed.
+>
+> **Recommended (cloud — any Mac):**
+>
+> | Role | Model | RAM needed |
+> |---|---|---|
+> | Chat | `minimax-m2.5:cloud` | 0 (cloud) |
+> | Coding | `glm-5.1:cloud` | 0 (cloud) |
+> | Vision | `qwen3-vl:2b` | ~1.9 GB |
+> | Image | `x/flux2-klein:latest` | local only |
+>
+> **Local-only fallbacks (10 GB+ RAM):**
+>
+> | RAM | Chat model | Coding model | Approx. VRAM |
+> |---|---|---|---|
+> | 10–11 GB | `qwen3:4b` | `qwen2.5-coder:3b` | ~3.5 GB |
+> | 12+ GB | `qwen3:8b` | `qwen2.5-coder:7b` | ~6 GB |
 
 ### Online / cloud mode
 
