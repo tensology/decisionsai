@@ -244,9 +244,10 @@ def warm_tool_cache(
             except Exception as e:
                 logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
 
-        # Extended sidecar tools (screen intelligence, python executor, drag, scroll, wait)
+        # Extended sidecar tools (python executor, drag, scroll, wait)
+        # Note: ScreenAnalyzeTool removed — screenshot_analyzer handles all screen vision tasks
+        # and integrates with the mouse/click pipeline for coordinate-based actions.
         _sidecar_extended_tools = [
-            ("ScreenAnalyzeTool",    ("input.sidecar_tools", "ScreenAnalyzeTool"),    {}),
             ("RunPythonTool",        ("input.sidecar_tools", "RunPythonTool"),        {}),
             ("DragToTool",           ("input.sidecar_tools", "DragToTool"),           {}),
             ("ScrollTool",           ("input.sidecar_tools", "ScrollTool"),           {}),
@@ -480,7 +481,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # meta/
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",
     # sidecar (screen intelligence, Python execution, physical interaction)
-    "ScreenAnalyzeTool": "Capture a screenshot and analyze it with AI vision. Three modes: describe (what is on screen), locate (find element coordinates), verify (confirm visual state). Use when the accessibility tree is insufficient or for visual content like images, video editors, and custom UIs.",
+
     "RunPythonTool": "Execute arbitrary Python code on the user's machine for complex tasks without dedicated tools: batch file operations, image processing, data transformation, web scraping, GUI automation. Optional pip install of packages before execution.",
     "DragToTool": "Drag from one position to another using element IDs from get_window_tree or raw screen coordinates. Supports element-to-element, element-to-coordinate, and coordinate-to-coordinate dragging.",
     "ScrollTool": "Scroll at the current mouse position or at specified coordinates. Supports up, down, left, right directions with configurable scroll amount.",
@@ -597,7 +598,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
 
     # Extended sidecar tools (screen intelligence, python executor, drag, scroll, wait)
     sidecar_extended_tools = [
-        ("ScreenAnalyzeTool",    ("input.sidecar_tools", "ScreenAnalyzeTool"),    {}),
+
         ("RunPythonTool",        ("input.sidecar_tools", "RunPythonTool"),        {}),
         ("DragToTool",           ("input.sidecar_tools", "DragToTool"),           {}),
         ("ScrollTool",           ("input.sidecar_tools", "ScrollTool"),           {}),

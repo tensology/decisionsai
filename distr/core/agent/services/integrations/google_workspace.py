@@ -313,9 +313,13 @@ class GoogleWorkspaceConnector:
     
     def get_email(self, message_id: str) -> Optional[Dict[str, Any]]:
         """Get email details by ID"""
+        if not message_id:
+            logger.error("get_email called with empty message_id")
+            return None
         if not self._ensure_valid_token():
             return None
         
+        logger.info(f"get_email called with message_id={message_id!r}")
         url = f"https://gmail.googleapis.com/gmail/v1/users/me/messages/{message_id}"
         result = self._make_request('GET', url, params={'format': 'full'})
         

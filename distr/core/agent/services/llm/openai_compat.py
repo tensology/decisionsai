@@ -706,6 +706,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
         except Exception as e:
             logger.error("%s: Background chain error: %s", self.SERVICE_NAME, e, exc_info=True)
             # Announce error via TTS
+            if getattr(self, '_is_telegram_request', False) or not self._speaker_enabled:
+                return
             try:
                 from distr.core.signals import signal_manager
                 signal_manager.speak_text_directly.emit("Sorry, something went wrong with that task.")
@@ -768,11 +770,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
             threading.current_thread().suppress_tts_for_tool_chain = False
 
     async def _send_done_after_tools(self):
-        """Send 'Done' TTS frame and save to history. Returns True (end_frame sent)."""
+        """Send TTS response after tool execution, using tool results when meaningful. Returns True (end_frame sent)."""
         import json as _json
 
         # Check if the last tool result requested silence (e.g. open_page returns {"silent": True})
         is_silent = False
+        tool_result_text = None
         for msg in reversed(self._messages):
             if msg.get("role") == "tool":
                 content = msg.get("content", "")
@@ -783,29 +786,43 @@ class OpenAICompatibleLLMService(BaseLLMService):
                             is_silent = True
                     except (ValueError, TypeError):
                         pass
+                # Collect the last meaningful tool result for TTS/history
+                if content and len(content) > 5 and "[ACTION REQUIRED" not in content:
+                    tool_result_text = content[:2000]  # Cap at 2000 chars
                 break  # Only check the most recent tool result
 
-        # For Telegram, try to include the last tool result as context instead of just "Done"
-        fallback = "Done"
         if getattr(self, '_is_telegram_request', False):
-            # Find the last tool result that has meaningful content
-            for msg in reversed(self._messages):
-                if msg.get("role") == "tool":
-                    content = msg.get("content", "")
-                    if content and len(content) > 5 and "[ACTION REQUIRED" not in content:
-                        fallback = content[:2000]  # Cap at 2000 chars
-                        break
+            # For Telegram, include the tool result as context
+            fallback = tool_result_text or "Done"
             self._telegram_fallback_text = fallback
-        elif not is_silent:
+        elif is_silent:
+            fallback = "Done"
+        elif tool_result_text:
+            # We have a meaningful tool result — use it as the response instead of "Done"
+            # so the user actually knows what happened.
+            # Truncate long results for TTS, keeping the full text for history.
+            tts_text = tool_result_text
+            if len(tts_text) > 500:
+                # For very long results, speak a brief summary
+                first_line = tts_text.split('\n')[0]
+                if len(first_line) > 200:
+                    tts_text = first_line[:200] + "..."
+                else:
+                    line_count = tts_text.count('\n') + 1
+                    tts_text = f"{first_line} ... and {line_count - 1} more lines."
+            await self.push_frame(TextFrame(text=tts_text))
+            fallback = tool_result_text
+        else:
             await self.push_frame(TextFrame(text="Done"))
+            fallback = "Done"
 
         await self.push_frame(LLMFullResponseEndFrame())
 
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
             if chat:
-                self.chat_manager.add_assistant_message(chat, fallback if fallback != "Done" else "Done")
-        self._messages.append({"role": "assistant", "content": fallback if fallback != "Done" else "Done"})
+                self.chat_manager.add_assistant_message(chat, fallback)
+        self._messages.append({"role": "assistant", "content": fallback})
         return True
 
     async def _handle_empty_response(self):

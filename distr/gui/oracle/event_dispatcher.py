@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from PyQt6.QtCore import QObject, pyqtSignal
+from PyQt6.QtCore import QObject, pyqtSignal, QTimer
 
 from distr.core.skin_config import EventResponse, SkinConfig
 
@@ -30,6 +30,9 @@ class EventHookDispatcher(QObject):
 
     event_hook_fired = pyqtSignal(str, str)  # (new_hook, previous_hook)
 
+    # Maximum time (ms) to stay in 'thinking' before auto-reverting to idle
+    THINKING_TIMEOUT_MS = 120_000  # 2 minutes
+
     def __init__(self, signal_manager: Optional[QObject] = None, parent: Optional[QObject] = None):
         super().__init__(parent)
         self._signal_manager = signal_manager
@@ -37,6 +40,9 @@ class EventHookDispatcher(QObject):
         self._current_hook: str = "idle"
         self._previous_hook: str = "idle"
         self._connected = False
+        self._thinking_timer = QTimer(self)
+        self._thinking_timer.setSingleShot(True)
+        self._thinking_timer.timeout.connect(self._on_thinking_timeout)
 
     # ------------------------------------------------------------------
     # Public API
@@ -98,8 +104,26 @@ class EventHookDispatcher(QObject):
         logger.info("[Dispatcher] fire_hook: %s → %s (prev stored: %s)", old_hook, hook, self._previous_hook)
         self.event_hook_fired.emit(hook, old_hook)
 
+        # Start a safety timeout for 'thinking' to prevent stuck state
+        if hook == "thinking":
+            self._thinking_timer.start(self.THINKING_TIMEOUT_MS)
+        else:
+            self._thinking_timer.stop()
+
+    def _on_thinking_timeout(self):
+        """Safety timeout — revert stuck 'thinking' state back to idle."""
+        if self._current_hook == "thinking":
+            logger.warning("[Dispatcher] Thinking timeout (%dms) — forcing revert to idle", self.THINKING_TIMEOUT_MS)
+            self._current_hook = "idle"
+            self._previous_hook = "idle"
+            self.event_hook_fired.emit("idle", "thinking")
+        self._thinking_timer.stop()
+
     def revert_hook(self, hook: str) -> None:
         """Revert from a hook back to the previous state."""
+        # Always stop the thinking timer on any revert
+        self._thinking_timer.stop()
+
         if self._current_hook != hook:
             logger.info("[Dispatcher] revert_hook('%s') skipped — current is '%s'", hook, self._current_hook)
             return
@@ -137,7 +161,8 @@ class EventHookDispatcher(QObject):
         _safe_connect(sm, "chat_stream_started", lambda _=None: self.fire_hook("thinking"))
         _safe_connect(sm, "step_runner_run_all_requested", lambda *_: self.fire_hook("running_step_runner"))
         _safe_connect(sm, "action_recording_stopped", lambda _=None: self.revert_hook("recording_action"))
-        _safe_connect(sm, "chat_stream_finished", lambda _=None: self.fire_hook("idle"))
+        _safe_connect(sm, "chat_stream_finished", lambda _=None: self.revert_hook("thinking"))
+        _safe_connect(sm, "chat_stream_error", lambda _: self.revert_hook("thinking"))
         _safe_connect(sm, "action_playback_finished", lambda: self.revert_hook("running_step_runner"))
         _safe_connect(sm, "action_playback_stopped", lambda _=None: self.revert_hook("running_step_runner"))
 

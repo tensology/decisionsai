@@ -468,6 +468,10 @@ class OllamaResponseMixin:
             if not self._cancelled:
                 await self.push_frame(TextFrame(text=brief))
             self._save_and_signal(current_chat_id, brief)
+        else:
+            # No brief text — still need to finalize the stream so the UI
+            # doesn't get stuck in the 'thinking' state.
+            self._emit_typing_finished(current_chat_id)
         return full_response, False
 
     # --- sub-helpers for _handle_post_tool_execution ---
@@ -702,14 +706,34 @@ class OllamaResponseMixin:
         return error_msg, True
 
     def _determine_brief_confirmation(self, tool_calls, tool_results):
+        """Determine what brief text to speak/emit after tool execution.
+
+        Returns a string to speak, or None if the LLM will produce its own response.
+        Uses tool results as confirmation text instead of the meaningless "Done".
+        """
         skill_called = any(tc.get('function', {}).get('name') in ('find_skill', 'push_skill') for tc in tool_calls)
         if skill_called:
             valid = [str(r) for r in tool_results if r and not str(r).startswith("Error:")]
-            return " ".join(valid) if valid else "Done"
+            return " ".join(valid) if valid else None
         exec_called = any(tc.get('function', {}).get('name') in ('execute_code', 'file_operations') for tc in tool_calls)
         if exec_called:
             return None  # LLM will respond
-        return "Done"
+
+        # For all other tools: use the tool result as confirmation if it's meaningful.
+        # Fall back to None (no text) only if there's truly nothing to say.
+        for result in tool_results:
+            result_str = str(result) if result else ""
+            if result_str and len(result_str) > 2 and not result_str.startswith("Error"):
+                # Truncate long results for TTS
+                if len(result_str) > 500:
+                    first_line = result_str.split('\n')[0]
+                    if len(first_line) > 200:
+                        return first_line[:200] + "..."
+                    else:
+                        line_count = result_str.count('\n') + 1
+                        return f"{first_line} ... and {line_count - 1} more lines."
+                return result_str
+        return None
 
     def _save_and_signal(self, chat_id, text):
         if self.chat_manager and chat_id:

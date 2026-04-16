@@ -444,9 +444,13 @@ def _cmd_stop_dictation(session, params):
 
 def _cmd_process_text_input(session, params):
     text = params.get('text', '')
-    # Cancel welcome message task
+    # Cancel welcome message task — but wait briefly for TTS to finish
+    # the current sentence so we don't leave the player window open
     if session._welcome_task and not session._welcome_task.done():
-        session.logger.debug("process_text_input: Cancelling welcome message task so user message is processed")
+        session.logger.debug("process_text_input: Gracefully stopping welcome message for user input")
+        # Signal the welcome loop to stop after current sentence
+        if hasattr(session, 'tts_service') and session.tts_service:
+            session.tts_service._cancelled = True
         session._welcome_task.cancel()
 
     is_telegram = _parse_bool(params.get('is_telegram'), default=False) if isinstance(params, dict) else False

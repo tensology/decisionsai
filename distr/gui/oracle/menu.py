@@ -91,6 +91,10 @@ class MenuTrayMixin:
         self.chats_action.triggered.connect(lambda: self._open_web_url("/chat/"))
         self.menu.addAction(self.chats_action)
 
+        self.projects_action = QAction("Projects", self.menu)
+        self.projects_action.triggered.connect(lambda: self._open_web_url("/projects/"))
+        self.menu.addAction(self.projects_action)
+
         self.kanban_action = QAction("Ticket Boards", self.menu)
         self.kanban_action.triggered.connect(lambda: self._open_web_url("/kanban/"))
         self.menu.addAction(self.kanban_action)
@@ -106,10 +110,6 @@ class MenuTrayMixin:
         self.skills_action = QAction("Skills", self.menu)
         self.skills_action.triggered.connect(lambda: self._open_web_url("/skills/"))
         self.menu.addAction(self.skills_action)
-
-        self.projects_action = QAction("Projects", self.menu)
-        self.projects_action.triggered.connect(lambda: self._open_web_url("/projects/"))
-        self.menu.addAction(self.projects_action)
 
         self.menu.addSeparator()
 

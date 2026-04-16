@@ -187,6 +187,10 @@ _CLICK_ELEMENT_PATTERNS = [
     r"\b(go\s+to|navigate\s+to)\s+(the\s+)?(.+?)(?:\s+button|\s+link)?(?:\?|\.|$)",
     r"\b(tap|select|choose|pick)\s+(the\s+)?(.+?)(?:\s+button|\s+link|\s+option)?(?:\?|\.|$)",
     r"\b(hit|activate)\s+(the\s+)?(.+?)(?:\s+button)?(?:\?|\.|$)",
+    # "go into [element]", "open [element on screen]"
+    r"\bgo\s+into\s+(the\s+)?(.+?)(?:\?|\.|$,|$)",
+    r"\bopen\s+(the\s+)?(\w+\s+)?(video|folder|file|link|tab|image|result|item|icon|button|app|window|email|message|chat|post|article|page)(?:\?|\.|$,|$)",
+    r"\bclick\s+(on\s+)?(it|that|that\s+one|there|here|the\s+one)(?:\?|\.|$,|$)",
 ]
 
 _HOVER_ELEMENT_PATTERNS = [

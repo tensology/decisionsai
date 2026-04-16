@@ -932,7 +932,7 @@ start_sidecar
 # Run the application
 echo ""
 echo -e "${GREEN}Starting DecisionsAI...${NC}"
-echo "================================"
+echo -e "${GREEN}YOU CAN NOW CLOSE THIS TERMINAL${NC}"
 # Filter macOS dylib duplicate class warnings from stderr (harmless noise from cv2/av FFmpeg conflict)
 "$VENV_DIR/bin/python" bin/start.py 2> >(grep -v "^objc\[" >&2)
 

@@ -1,9 +1,11 @@
 """
-Sidecar Tools — screen intelligence, Python execution, drag, scroll, wait.
+Sidecar Tools — Python execution, drag, scroll, wait.
 
-Talks to the local sidecar process via HTTP on 127.0.0.1:SIDECAR_PORT.
-These tools extend the accessibility tree tools with vision-based screen
-understanding, arbitrary code execution, and physical interaction primitives.
+Talks to the local sidecar process via HTTP on 127.0.0.1:SIDECAR_PORT
+for accessibility tree operations and physical interaction primitives.
+
+Note: screen_analyze has been removed. Use screenshot_analyzer instead,
+which handles the full screenshot → vision LLM → coordinate pipeline.
 """
 
 import logging
@@ -34,51 +36,6 @@ def _call_sidecar(tool: str, params: dict, timeout: int = 120) -> dict:
         )
     except Exception as e:
         raise RuntimeError(f"Sidecar call failed ({tool}): {e}")
-
-
-# ── screen_analyze ────────────────────────────────────────────────────────────
-
-class ScreenAnalyzeTool(BaseTool):
-    name: str = "screen_analyze"
-    description: str = (
-        "Capture a screenshot and analyze it with AI vision. Three modes:\n"
-        "- describe: 'What is on screen right now?' Returns text description.\n"
-        "- locate: 'Where is the Save button?' Returns pixel coordinates. "
-        "Requires Computer Use model configured in settings.\n"
-        "- verify: 'Did the file save successfully?' Returns pass/fail.\n"
-        "Use this when the accessibility tree doesn't have what you need, "
-        "or when you need to understand visual content (images, video editors, "
-        "custom UIs, web pages).\n"
-        "Example: screen_analyze(question='Where is the export button?', mode='locate')"
-    )
-
-    def _run(self, question: str = "Describe what is on screen", mode: str = "describe", **kwargs) -> str:
-        try:
-            result = _call_sidecar("screen_analyze", {
-                "question": question,
-                "mode": mode,
-            }, timeout=60)
-            if isinstance(result, dict):
-                if "error" in result:
-                    return f"Error: {result['error']}"
-                # Format based on mode
-                if mode == "locate" and "coordinates" in result:
-                    coords = result["coordinates"]
-                    return (
-                        f"Element found at coordinates: x={coords.get('x')}, y={coords.get('y')}\n"
-                        f"Description: {result.get('description', '')}"
-                    )
-                if mode == "verify":
-                    verified = result.get("verified", result.get("passed", None))
-                    explanation = result.get("explanation", result.get("description", ""))
-                    return f"Verification: {'PASSED' if verified else 'FAILED'}\n{explanation}"
-                return result.get("description", result.get("analysis", str(result)))
-            return str(result)
-        except RuntimeError as e:
-            return f"Error: {e}"
-        except Exception as e:
-            logger.error("screen_analyze failed: %s", e, exc_info=True)
-            return f"Error: {e}"
 
 
 # ── run_python ────────────────────────────────────────────────────────────────

@@ -50,8 +50,8 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "AVAILABLE ACTIONS:\n"
         "\n"
         "GMAIL:\n"
-        "- 'check_inbox': Check Gmail inbox - shows all inbox emails by default (params: max_results, query). Default query is 'in:inbox' to show all emails. Use 'is:unread' to show only unread emails.\n"
-        "- 'read_email': Read email by ID (params: message_id)\n"
+                "- 'check_inbox': Check Gmail inbox - shows all inbox emails by default (params: max_results, query). Default query is 'in:inbox' to show all emails. Use 'is:unread' to show only unread emails. Each email includes a Message ID — use this ID with read_email.\n"
+        "- 'read_email': Read email by ID. Use the Message ID from check_inbox output. (params: message_id)\n"
         "- 'send_email': Send email (params: to, subject, body, body_type, cc, bcc)\n"
         "- 'draft_email': Create draft email in Gmail (params: to (required), subject (optional), body (required), body_type (optional, default='plain')). Example: action='draft_email', params={'to': 'bob@bob.com', 'subject': 'Thank you', 'body': 'Thank you for the pineapples.'}\n"
         "- 'list_drafts': List all draft emails (params: max_results, default=10). Returns list of drafts with details including draft_id.\n"
@@ -138,7 +138,25 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         # Ensure params is always a dict before using .get()
         if not isinstance(params, dict):
             params = {}
-        
+
+        # LLMs often flatten nested params — merge any top-level kwargs into params
+        # e.g. LLM passes {action: "read_email", message_id: "abc"} instead of
+        #      {action: "read_email", params: {message_id: "abc"}}
+        KNOWN_PARAM_KEYS = {
+            'message_id', 'to', 'subject', 'body', 'body_type', 'cc', 'bcc',
+            'draft_id', 'email_type', 'max_results', 'query', 'file_path',
+            'folder_id', 'file_id', 'name', 'mime_type', 'summary',
+            'start_time', 'end_time', 'description', 'location', 'time_min',
+            'time_max', 'title', 'markdown_content', 'convert_to_google_doc',
+        }
+        for key in KNOWN_PARAM_KEYS:
+            if key in kwargs and key not in params:
+                params[key] = kwargs[key]
+        # Also merge any unknown kwargs that aren't 'action' or 'params'
+        for key, val in kwargs.items():
+            if key not in ('action', 'params', 'last_user_message') and key not in params:
+                params[key] = val
+
         try:
             # Gmail actions
             if action == 'check_inbox':
@@ -170,13 +188,14 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     result += f"Subject: {msg.get('subject', 'No Subject')}\n"
                     result += f"Snippet: {msg.get('snippet', '')}\n"
                     result += f"Date: {msg.get('date', '')}\n"
-                    result += f"ID: {msg.get('id', '')}\n\n"
+                    result += f"Message ID: {msg.get('id', '')}\n\n"
                 return result
             
             elif action == 'read_email':
-                message_id = params.get('message_id')
+                message_id = params.get('message_id') or params.get('id') or params.get('email_id')
                 if not message_id:
-                    return "Error: message_id is required"
+                    logger.warning(f"read_email called without message_id. action={action}, params={params}, kwargs_keys={list(kwargs.keys())}")
+                    return "Error: message_id is required. Please provide a message_id from the inbox listing."
                 email = self.connector.get_email(message_id)
                 if not email:
                     return "Error: Could not retrieve email"
@@ -270,24 +289,24 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                     result += f"Subject: {msg.get('subject', 'No Subject')}\n"
                     result += f"Snippet: {msg.get('snippet', '')}\n"
                     result += f"Date: {msg.get('date', '')}\n"
-                    result += f"ID: {msg.get('id', '')}\n\n"
+                    result += f"Message ID: {msg.get('id', '')}\n\n"
                 return result
             
             elif action == 'reply_email':
-                message_id = params.get('message_id')
+                message_id = params.get('message_id') or params.get('id')
                 body = params.get('body', '')
                 body_type = params.get('body_type', 'plain')
                 
                 if not message_id:
-                    return "Error: message_id is required"
+                    return "Error: message_id is required. Please provide a message_id from the inbox listing."
                 
                 success = self.connector.reply_to_email(message_id, body, body_type)
                 return "Reply sent successfully" if success else "Error: Failed to send reply"
             
             elif action == 'delete_email':
-                message_id = params.get('message_id')
+                message_id = params.get('message_id') or params.get('id')
                 if not message_id:
-                    return "Error: message_id is required"
+                    return "Error: message_id is required. Please provide a message_id from the inbox listing."
                 
                 success = self.connector.delete_email(message_id)
                 return "Email deleted successfully" if success else "Error: Failed to delete email"

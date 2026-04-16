@@ -41,7 +41,7 @@ func buildHandlers() map[string]ToolHandler {
 	// API relay — forward HTTP calls to the desktop app's local server
 	m["api_relay"] = handleAPIRelay
 
-	// Screen intelligence — screenshot + vision/computer-use analysis via desktop app
+	// Screen intelligence — screenshot capture (vision LLM dispatch in Python)
 	m["screen_analyze"] = handleScreenAnalyze
 
 	// Python executor — run arbitrary Python scripts
@@ -349,46 +349,15 @@ func handleMoveMouse(params map[string]any) (any, error) {
 }
 
 // ── screen_analyze ────────────────────────────────────────────────────────────
-// Captures a screenshot and sends it to the desktop app's vision or computer-use
-// endpoint for AI-powered analysis. Three modes:
-//   describe — "what's on screen?" (uses vision LLM)
-//   locate   — "where is the Save button?" (uses computer use LLM, returns coords)
-//   verify   — "did the file save?" (uses vision LLM, returns pass/fail)
+// Captures a screenshot and returns the base64 data. The vision/computer-use
+// LLM dispatch happens in the Python ScreenAnalyzeTool directly.
 
 func handleScreenAnalyze(params map[string]any) (any, error) {
-	question, _ := params["question"].(string)
-	mode, _ := params["mode"].(string)
-	if mode == "" {
-		mode = "describe"
-	}
-	if question == "" {
-		question = "Describe what is currently visible on screen"
-	}
-
-	// 1. Capture screenshot
 	screenshotResult, err := handleCaptureScreen(nil)
 	if err != nil {
 		return nil, fmt.Errorf("screen_analyze: screenshot failed: %w", err)
 	}
-	screenshotMap, ok := screenshotResult.(map[string]any)
-	if !ok {
-		return nil, fmt.Errorf("screen_analyze: unexpected screenshot result type")
-	}
-	screenshotB64, _ := screenshotMap["data"].(string)
-	if screenshotB64 == "" {
-		return nil, fmt.Errorf("screen_analyze: empty screenshot data")
-	}
-
-	// 2. Send to desktop app's /api/screen/analyze endpoint
-	result, err := callDesktopAPI("/api/screen/analyze", map[string]any{
-		"screenshot": screenshotB64,
-		"question":   question,
-		"mode":       mode,
-	})
-	if err != nil {
-		return nil, fmt.Errorf("screen_analyze: %w", err)
-	}
-	return result, nil
+	return screenshotResult, nil
 }
 
 // ── run_python ────────────────────────────────────────────────────────────────
@@ -465,14 +434,3 @@ func handleRunPython(params map[string]any) (any, error) {
 	}, nil
 }
 
-// ── callDesktopAPI ────────────────────────────────────────────────────────────
-// Helper to call the desktop app's local HTTP API. Reuses the api_relay handler
-// with POST method.
-
-func callDesktopAPI(path string, body map[string]any) (any, error) {
-	return handleAPIRelay(map[string]any{
-		"method": "POST",
-		"path":   path,
-		"body":   body,
-	})
-}

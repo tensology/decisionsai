@@ -1415,8 +1415,25 @@ class AgentSession:
                     self.logger.info("Welcome message sent via direct TTS routing")
                     
                 except asyncio.CancelledError:
-                    # Task was cancelled (e.g., by interrupt_tts) - this is expected
-                    self.logger.debug("Welcome message task cancelled during send")
+                    # Task was cancelled (e.g., by process_text_input) — clean up TTS state
+                    self.logger.info("Welcome message cancelled — sending LLMFullResponseEndFrame and tts_stopped")
+                    try:
+                        await tts.process_frame(LLMFullResponseEndFrame(), direction)
+                    except Exception:
+                        pass
+                    # Ensure tts_stopped fires so the player window closes
+                    if hasattr(self, 'event_queue') and self.event_queue:
+                        try:
+                            self.event_queue.put(('tts_stopped', {'duration': 0.0}), block=False)
+                        except Exception:
+                            pass
+                    # Reset TTS cancelled flag so the next generation works
+                    if hasattr(tts, '_cancelled'):
+                        tts._cancelled = False
+                    if hasattr(tts, '_tts_session_active'):
+                        tts._tts_session_active = False
+                    if hasattr(tts, '_current_telegram_request'):
+                        tts._current_telegram_request = False
                     raise  # Re-raise to properly handle cancellation
                 except Exception as e:
                     self.logger.error(f"Error sending welcome message: {e}", exc_info=True)

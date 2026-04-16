@@ -99,12 +99,32 @@ class BaseLLMService(LLMSharedMixin, LLMService):
 
         Uses the module-level tool cache when available (populated by
         ``warm_tool_cache`` at startup) to avoid re-instantiating all tools.
+        Applies model-tier filtering so micro/small models don't receive the
+        full 80+ tool surface (they'd hallucinate).
         Falls back to full instantiation if the cache is empty.
         """
         try:
             from distr.core.agent.tools.loader import _tool_cache
             if _tool_cache:
-                self._tools = list(_tool_cache.values())
+                # Apply model-tier filtering from ToolRetriever
+                from distr.core.agent.tool_retriever import get_tool_retriever
+                tier = get_tool_retriever().classify_model_tier(model_name or "")
+                if tier == "micro":
+                    # Micro models: only always-on core + request_tool
+                    from distr.core.agent.tool_retriever import ALWAYS_ON_NAMES
+                    micro_names = ALWAYS_ON_NAMES | {"request_tool"}
+                    self._tools = [
+                        t for t in _tool_cache.values()
+                        if t.name in micro_names
+                    ]
+                    logger.info(
+                        "%s: Micro-tier model %r - %d tools (always-on + request_tool)",
+                        self.SERVICE_NAME, model_name, len(self._tools),
+                    )
+                else:
+                    # Standard / small: full set - per-request _get_filtered_tools()
+                    # trims further based on user_message semantics.
+                    self._tools = list(_tool_cache.values())
             else:
                 self._tools = load_tools(
                     chat_manager=chat_manager,

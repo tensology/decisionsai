@@ -89,13 +89,29 @@ class CreateCursorTicketTool(BaseTool):
     llm_model: str = Field(default="qwen3:8b", exclude=True)
     chat_manager: Optional[Any] = Field(default=None, exclude=True)
     
+    # Default local model for fast ticket generation
+    LOCAL_TICKET_MODEL: str = "qwen3:8b"
+    
     def __init__(self, llm_service=None, llm_model: str = "qwen3:8b", chat_manager=None, **kwargs):
         super().__init__(**kwargs)
         self.llm_service = llm_service
-        self.llm_model = llm_model or "qwen3:8b"
+        # Use a local model for ticket generation regardless of the main conversation model.
+        # Cloud models are too slow for a synchronous tool operation.
+        is_local = self._is_local_model(llm_model)
+        self.llm_model = llm_model if is_local else self.LOCAL_TICKET_MODEL
         self.chat_manager = chat_manager
         self._last_ticket_path = None
         self._last_tickets_folder = None
+
+    @staticmethod
+    def _is_local_model(model_name: str) -> bool:
+        """Check if a model is a local Ollama model (not cloud/routed)."""
+        if not model_name:
+            return False
+        m = model_name.lower()
+        cloud_indicators = [':cloud', ':pro', '/huggingface', '/openrouter', 'gpt-', 'o1', 'o3', 'o4',
+                           'claude-', 'gemini-', 'chatgpt-']
+        return not any(ind in m for ind in cloud_indicators)
     
     def _get_recent_conversation_summary(self, max_messages: int = 10) -> Optional[str]:
         """Get a summary of recent conversation messages."""

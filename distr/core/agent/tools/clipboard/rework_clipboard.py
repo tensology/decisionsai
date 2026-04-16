@@ -149,9 +149,25 @@ class ReworkClipboardTool(BaseTool):
     
     llm_model: Optional[str] = Field(default="qwen3:8b", description="LLM model to use for reworking")
     
+    # Default local model for fast reworking — always prefer local for speed
+    LOCAL_REWORK_MODEL: str = "qwen3:8b"
+    
     def __init__(self, llm_model="qwen3:8b", **kwargs):
         super().__init__(**kwargs)
-        self.llm_model = llm_model or "qwen3:8b"
+        # Use a local model for reworking regardless of the main conversation model.
+        # Cloud models are too slow for a synchronous clipboard operation.
+        is_local = self._is_local_model(llm_model)
+        self.llm_model = llm_model if is_local else self.LOCAL_REWORK_MODEL
+
+    @staticmethod
+    def _is_local_model(model_name: str) -> bool:
+        """Check if a model is a local Ollama model (not cloud/routed)."""
+        if not model_name:
+            return False
+        m = model_name.lower()
+        cloud_indicators = [':cloud', ':pro', '/huggingface', '/openrouter', 'gpt-', 'o1', 'o3', 'o4',
+                           'claude-', 'gemini-', 'chatgpt-']
+        return not any(ind in m for ind in cloud_indicators)
     
     def _run(self, text: str = "", **kwargs) -> str:
         """Execute rework clipboard action."""

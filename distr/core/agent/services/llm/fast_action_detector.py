@@ -420,6 +420,17 @@ class FastActionDetector:
             (re.compile(r'\bright[- ]?click\s+(on\s+)?(the\s+)?(.+?)(?:\?|\.|$)', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             
+            # === VISION: INTERACT WITH NAMED/ORDINAL SCREEN ELEMENTS ===
+            # "go into the third video", "go into that folder"
+            (re.compile(r'\bgo\s+into\s+(the\s+)?(.+?)(?:\s+and\s+(?:open|click|select))?\s*(?:\.|$)', re.IGNORECASE),
+             ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
+            # "open the third video", "open that folder on the screen" (NOT "open Chrome" which is smart_open)
+            (re.compile(r'\bopen\s+(the\s+)?(\w+\s+)?(video|folder|file|link|tab|image|result|item|icon|button|app|window|email|message|chat|post)\b', re.IGNORECASE),
+             ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
+            # "click it", "click that", "click on that one", "click the one I said"
+            (re.compile(r'\bclick\s+(on\s+)?(it|that|that\s+one|there|here|the\s+one)\b', re.IGNORECASE),
+             ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
+
             # === VISION: FIND/LOCATE ELEMENTS ===
             # "where is the Submit button", "find the search box", "locate the settings icon"
             (re.compile(r'\b(where\s+is|find|locate)\s+(the\s+)?(.+?)\s+(button|link|icon|tab|menu|field|box|input|element)\b', re.IGNORECASE), 
@@ -998,26 +1009,22 @@ class FastActionDetector:
                     import re as _re
                     is_mouse_target = any(_re.search(p, text, _re.IGNORECASE) for p in _mouse_target_patterns)
                     if is_mouse_target:
-                        try:
-                            import requests as _req
-                            _sidecar_port = __import__('os').environ.get('DECISIONSAI_SIDECAR_HTTP_PORT', '11435')
-                            _req.get(f"http://127.0.0.1:{_sidecar_port}/health", timeout=0.3)
-                            # Sidecar is up — let LLM use find_element/move_to_element
-                            logger.info(
-                                "FastActionDetector: sidecar available, deferring '%s' to LLM for accessibility-tree routing",
-                                text[:80],
-                            )
-                            return DetectedAction(
-                                action_type=ActionType.UNKNOWN,
-                                tool_name="",
-                                tool_args={},
-                                needs_copy_first=False,
-                                response_type="llm_response",
-                                confidence=0.0,
-                                original_text=text,
-                            )
-                        except Exception:
-                            pass  # Sidecar not running — fall through to screenshot_analyzer
+                        # Always route screen interactions to screenshot_analyzer —
+                        # it needs to SEE the screen to find the element.
+                        # Don't defer to LLM (it will pick execute_code with blind coords).
+                        logger.info(
+                            "FastActionDetector: mouse target detected — routing to screenshot_analyzer: '%s'",
+                            text[:80],
+                        )
+                        return DetectedAction(
+                            action_type=ActionType.SCREENSHOT_ANALYZE,
+                            tool_name="screenshot_analyzer",
+                            tool_args={"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"},
+                            needs_copy_first=False,
+                            response_type="llm_response",
+                            confidence=0.85,
+                            original_text=text,
+                        )
 
                 return DetectedAction(
                     action_type=action_type,

@@ -8,6 +8,11 @@
     var modalTicketId = null;
     var copyTicketData = null;     // { title, description } for copy modal
     var ctxMenuBoardId = null;     // board id for context menu
+    var waChats = [];
+    var waSelectedJid = null;
+    var waCtxMenuData = null;      // { jid, phone, name }
+    var waMsgCtxData = null;       // { message_id (db id) }
+    var waConnected = false;
 
     // ── Helpers ──
 
@@ -1329,12 +1334,6 @@
     // ═══════════════════════════════════════════════════════════════════
     // WhatsApp Chat/Messages Integration
     // ═══════════════════════════════════════════════════════════════════
-
-    var waChats = [];
-    var waSelectedJid = null;
-    var waCtxMenuData = null;  // { jid, phone, name }
-    var waMsgCtxData = null;   // { message_id (db id) }
-    var waConnected = false;
 
     // ── Sidebar tab switching ──
 

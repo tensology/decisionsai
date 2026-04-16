@@ -81,8 +81,8 @@ SEND_PATTERNS = [
 # we should return the file path for the LLM to route wherever it wants.
 CAPTURE_ONLY_PATTERNS = [
     'and save', 'and put', 'and add', 'and attach', 'and send',
-    'and copy', 'and move', 'and push', 'and upload',
-    'and open', 'and paste', 'and insert', 'and include',
+    'and copy', 'and move', 'and upload',
+    'and paste', 'and insert', 'and include',
     'screenshot and', 'capture and', 'picture and',
     'save it to', 'save the screenshot', 'save that to',
     'put it in', 'put that in', 'put the screenshot in',
@@ -258,17 +258,21 @@ class ScreenshotAnalyzerTool(BaseTool):
 
     name: str = "screenshot_analyzer"
     description: str = (
-        "🎯 USE THIS TOOL to capture screenshots. "
-        "This is the PRIMARY tool for ANY screenshot-related request. "
+        "🎯 PRIMARY TOOL for ALL screen interaction — both seeing AND clicking. "
+        "Always use this tool when the user wants to click, open, or interact with ANY element on screen. "
+        "This tool captures a screenshot, uses vision AI to find the target, and AUTOMATICALLY moves the mouse and clicks it. "
         ""
-        "CRITICAL: ALWAYS use screenshot_analyzer when user says: "
-        "- 'take a screenshot', 'take a picture', 'capture screen', 'screenshot screen X', 'take a picture of screen X' "
-        "- 'give me a screenshot', 'give me screenshot', 'give me screen X', 'give me a picture' "
-        "- 'take a screenshot and send it to me', 'take a picture and send that to me', 'capture and send' "
-        "- 'look at my screen', 'see my screen', 'analyze this window', 'what's on my screen' "
-        "- 'what do you see', 'describe what's on screen', 'read this screen' "
-        "- 'move mouse to [element]', 'click [button]', 'go to [element]' - uses vision to find element "
-        "- 'take a screenshot and save it to downloads', 'capture and add to ticket', 'screenshot and send to pi' "
+        "CRITICAL: NEVER use execute_code with pyautogui to blindly click coordinates — you CANNOT see the screen! "
+        "ALWAYS use screenshot_analyzer first so the vision model can find the exact pixel position, then the tool clicks for you. "
+        ""
+        "USE THIS TOOL when user says: "
+        "- 'click [element]', 'open [element]', 'go into [element]', 'press [button]' → tool finds and CLICKS it "
+        "- 'move mouse to [element]', 'go to [element]' → tool finds and MOVES there "
+        "- 'double-click [element]', 'right-click [element]' → tool finds and performs the action "
+        "- 'take a screenshot', 'capture screen', 'screenshot screen X' "
+        "- 'look at my screen', 'what's on screen', 'read this screen' "
+        "- 'what do you see', 'analyze this window', 'describe what's on screen' "
+        "- 'take a screenshot and save/send/attach it' "
         "- ANY request where a screenshot is the FIRST step in a multi-tool chain "
         ""
         "IMPORTANT BEHAVIOR — THREE MODES: "
@@ -290,11 +294,11 @@ class ScreenshotAnalyzerTool(BaseTool):
         "   - 'take a screenshot and send it to telegram' "
         "   Tool captures screenshot, returns 'Done', screenshot auto-sent to Telegram. "
         ""
-        "3. ANALYSIS (capture + vision LLM): "
-        "   Triggered when user wants to understand what's on screen: "
+        "3. ANALYSIS + ACTION (capture + vision + execute action): "
+        "   Triggered when user wants to interact with something on screen: "
+        "   - 'click the third video', 'open that folder', 'press the submit button' "
         "   - 'what do you see', 'describe the screen', 'read this screen' "
-        "   - 'what's on my screen', 'analyze this window' "
-        "   Tool captures screenshot AND analyzes it with vision LLM. "
+        "   Tool captures screenshot AND analyzes it with vision LLM AND executes the action (click, move, etc.). "
         ""
         "SCREENSHOT CHAINING — When the tool returns a file path with [ACTION REQUIRED]: "
         "- The screenshot is captured and saved to a persistent path on disk "
@@ -1474,12 +1478,28 @@ class ScreenshotAnalyzerTool(BaseTool):
         # we capture and return the file path with [ACTION REQUIRED] — skip vision LLM.
         capture_only = kwargs.get('capture_only', False)
         if not capture_only:
-            combined_text = (f"{original_text or ''} {prompt or ''}").lower()
+            # Resolve original_text early so we can check capture-only patterns
+            _early_text = (
+                kwargs.get('last_user_message', '') or
+                kwargs.get('text', '') or
+                kwargs.get('transcription', '') or
+                kwargs.get('original_text', '') or
+                ''
+            )
+            combined_text = (f"{_early_text} {prompt or ''}").lower()
             if any(p in combined_text for p in CAPTURE_ONLY_PATTERNS):
                 capture_only = True
 
         # ── Capture-only mode: capture + return file path artifact ──
         if capture_only:
+            # Resolve original_text for capture-only handler
+            original_text = (
+                kwargs.get('last_user_message', '') or
+                kwargs.get('text', '') or
+                kwargs.get('transcription', '') or
+                kwargs.get('original_text', '') or
+                ''
+            )
             return self._handle_capture_only(prompt, original_text, **kwargs)
 
         # ── Resolve original text ──
@@ -1523,8 +1543,23 @@ class ScreenshotAnalyzerTool(BaseTool):
 
         # ── Vision model check ──
         from distr.core.settings import load_settings_from_db
+        from distr.core.llm_factory import resolve_computer_use_config
         settings = load_settings_from_db()
         vision_provider, vision_model = resolve_vision_llm_config(settings)
+
+        # For action/locate intents, prefer computer_use model if configured
+        # (better at coordinate-finding), then fall back to vision LLM.
+        from distr.core.agent.services.vision.intent_classifier import LOCATE_INTENTS
+        if is_action_request or vision_intent in LOCATE_INTENTS:
+            cu_provider, cu_model = resolve_computer_use_config(settings)
+            if cu_provider and cu_model:
+                logger.info(
+                    "ScreenshotAnalyzer: Action/locate intent — using computer_use "
+                    "model %s/%s instead of vision %s/%s",
+                    cu_provider, cu_model, vision_provider, vision_model,
+                )
+                vision_provider, vision_model = cu_provider, cu_model
+
         err = self._check_vision_support(vision_provider, vision_model, **kwargs)
         if err:
             return err

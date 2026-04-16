@@ -151,13 +151,30 @@ class SummarizeClipboardTool(BaseTool):
         "Do NOT ask the user to provide text - the tool will automatically copy the selected text or use the spoken message and process it."
     )
     
+    # Default local model for fast summarization — always prefer local for speed
+    LOCAL_SUMMARIZE_MODEL: str = "qwen3:8b"
     llm_model: str = Field(default="qwen3:8b", exclude=True)
     llm_service: Optional[Any] = Field(default=None, exclude=True)
     
     def __init__(self, llm_model: str = "qwen3:8b", llm_service=None, **kwargs):
         super().__init__(**kwargs)
-        self.llm_model = llm_model or "qwen3:8b"
+        # Use a local model for summarization regardless of the main conversation model.
+        # Cloud models are too slow for a synchronous clipboard operation that the user
+        # expects to be instant, and they may not be available via Ollama.
+        is_local = self._is_local_model(llm_model)
+        self.llm_model = llm_model if is_local else self.LOCAL_SUMMARIZE_MODEL
         self.llm_service = llm_service
+
+    @staticmethod
+    def _is_local_model(model_name: str) -> bool:
+        """Check if a model is a local Ollama model (not cloud/routed)."""
+        if not model_name:
+            return False
+        m = model_name.lower()
+        # Cloud/OpenRouter indicators
+        cloud_indicators = [':cloud', ':pro', '/huggingface', '/openrouter', 'gpt-', 'o1', 'o3', 'o4',
+                           'claude-', 'gemini-', 'chatgpt-']
+        return not any(ind in m for ind in cloud_indicators)
     
     def _run(self, text: str = "", **kwargs) -> str:
         """

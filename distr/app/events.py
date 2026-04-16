@@ -711,9 +711,24 @@ class EventHandlerMixin:
             self._telegram_draw_cursor_if_needed(screenshot_file)
         elif not screenshot_file and screenshot_path_from_event and os.path.exists(screenshot_path_from_event):
             screenshot_file = Path(screenshot_path_from_event)
-        else:
-            if not screenshot_file:
-                logger.warning(f"[Telegram] ⚠️ No analyzed image path provided or file doesn't exist: {analyzed_image_path}")
+        elif not screenshot_file:
+            # Fallback: capture a screenshot only when the agent performed a visual action
+            # but no screenshot was stored (e.g. mouse_movement + smart_open without screenshot_analyzer)
+            _ACTION_INDICATORS = (
+                'moved', 'clicked', 'opened', 'double-clicked', 'right-clicked',
+                'scrolled', 'dragged', 'typed', 'navigated', 'switched',
+                'launched', 'closed', 'minimized', 'maximized',
+            )
+            text_lower = (text or '').lower()
+            if any(w in text_lower for w in _ACTION_INDICATORS):
+                fallback = self._telegram_capture_screenshot()
+                if fallback and fallback.exists():
+                    screenshot_file = fallback
+                    logger.info(f"[Telegram] 📸 Attached action-result screenshot: {screenshot_file}")
+                else:
+                    logger.debug(f"[Telegram] No screenshot for action response (fallback capture failed)")
+            else:
+                logger.debug(f"[Telegram] 📝 Text-only response (no visual action detected)")
 
         # Check if file already sent — skip TTS generation
         file_already_sent = self._telegram_check_file_already_sent_full(screenshot_path_from_event)

@@ -61,11 +61,23 @@ ACTION EXECUTION - CRITICAL
 EVERY command from {username} that involves a physical action on the computer MUST call a tool.
 NEVER respond with just "Done" or text without calling the appropriate tool first.
 Even if a similar action was done before in the conversation, ALWAYS execute it again.
-- "Move the mouse to bottom right" → CALL mouse_movement tool with action=move_bottom_right. Do NOT just say "Done".
-- "Move the mouse to center" → CALL mouse_movement tool with action=move_center. Do NOT just say "Done".
-- "Click here" → CALL mouse_actions tool. Do NOT just say "Done".
-- "Open Chrome" → CALL smart_open tool. Do NOT just say "Done".
-- "Tell my desktop X" → CALL speak_on_desktop tool. Do NOT just say "Done".
+
+SCREEN INTERACTIONS — ALWAYS use screenshot_analyzer:
+- "Click the third video", "Open that folder", "Go into that app" → CALL screenshot_analyzer. It sees the screen, finds the element, and clicks it.
+- "Click the Submit button", "Press OK" → CALL screenshot_analyzer. It will find and click it.
+- "Double-click the file" , "Right-click the icon" → CALL screenshot_analyzer. It will perform the action.
+- "What's on my screen?" → CALL screenshot_analyzer. It will analyze and describe.
+NEVER use execute_code with pyautogui to click on screen elements — you cannot see the screen! screenshot_analyzer can.
+
+PRESET MOUSE POSITIONS — use mouse_movement or mouse_actions:
+- "Move the mouse to bottom right" → CALL mouse_movement tool with action=move_bottom_right.
+- "Move the mouse to center" → CALL mouse_movement tool with action=move_center.
+- "Click here" (at current mouse position) → CALL mouse_actions tool.
+
+LAUNCHING APPS — use smart_open:
+- "Open Chrome", "Open YouTube" → CALL smart_open tool.
+- "Tell my desktop X" → CALL speak_on_desktop tool.
+
 If {username} repeats a command, execute it again. Commands are NOT idempotent — the user wants the action performed NOW.
 
 ═══════════════════════════════════════════════════════════════

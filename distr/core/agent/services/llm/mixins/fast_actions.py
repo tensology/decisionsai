@@ -108,7 +108,11 @@ class FastActionMixin:
     # --- fast-action sub-handlers (private) ---
 
     async def _fa_push_tts(self, text: str):
-        """Helper: push text through TTS pipeline frames."""
+        """Helper: push text through TTS pipeline frames.
+        Skips TTS for Telegram requests — responses go via _emit_telegram_response instead."""
+        if getattr(self, '_is_telegram_request', False):
+            logger.debug("Skipping TTS for fast action: Telegram request")
+            return
         from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
         await self.push_frame(LLMFullResponseStartFrame())
         cleaned = clean_text_for_tts(text)
@@ -334,7 +338,11 @@ class FastActionMixin:
 
             logger.debug("Read this: Got clipboard content (%d chars)", len(clipboard_text))
 
-            # --- stream to TTS ---
+            # --- stream to TTS (skip for Telegram requests) ---
+            if getattr(self, '_is_telegram_request', False):
+                logger.debug("Skipping TTS for read-this: Telegram request")
+                return
+
             self._cancelled = False
             await self.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
             await asyncio.sleep(0.05)
@@ -390,6 +398,19 @@ class FastActionMixin:
 
             summary_text = await self._generate_conversation_summary(conversation_messages)
 
+            if getattr(self, '_is_telegram_request', False):
+                logger.debug("Skipping TTS for conversation summary: Telegram request")
+                self._messages.append({"role": "assistant", "content": summary_text})
+                self._fa_save_to_history(current_chat_id, summary_text)
+                if current_chat_id:
+                    try:
+                        signal_manager.chat_message_added.emit(current_chat_id, "assistant", summary_text)
+                        signal_manager.chat_stream_finished.emit(current_chat_id)
+                        signal_manager.chat_updated.emit(current_chat_id)
+                    except RuntimeError:
+                        pass
+                return
+
             self._cancelled = False
             await self.push_frame(LLMFullResponseStartFrame(), direction)
             await asyncio.sleep(0.05)
@@ -410,13 +431,14 @@ class FastActionMixin:
 
         except Exception as e:
             logger.error("Error handling conversation summary: %s", e, exc_info=True)
-            try:
-                from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
-                await self.push_frame(LLMFullResponseStartFrame(), direction)
-                await self.push_frame(TextFrame(text="I'm sorry, I couldn't generate a summary right now."), direction)
-                await self.push_frame(LLMFullResponseEndFrame(), direction)
-            except Exception:
-                pass
+            if not getattr(self, '_is_telegram_request', False):
+                try:
+                    from distr.core.agent.libs import LLMFullResponseStartFrame, LLMFullResponseEndFrame, TextFrame
+                    await self.push_frame(LLMFullResponseStartFrame(), direction)
+                    await self.push_frame(TextFrame(text="I'm sorry, I couldn't generate a summary right now."), direction)
+                    await self.push_frame(LLMFullResponseEndFrame(), direction)
+                except Exception:
+                    pass
 
     # --- helpers ---
 
