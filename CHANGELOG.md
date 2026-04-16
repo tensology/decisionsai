@@ -4,7 +4,7 @@
 
 ## [2.7.7] - 2026-04-16
 
-### Cloud Models, pi Agent, Terminal Overview, No More RAM Pain
+### Cloud Models, pi Agent, Terminal Overview
 
 **Cloud Models by Default** — New installs now use `minimax-m2.5:cloud` for chat and `glm-5.1:cloud` for coding. Zero local RAM needed. Your old local model settings get swapped automatically on next launch.
 
@@ -12,17 +12,11 @@
 
 **Terminal Overview** — The assistant can now glance at your terminal tab and react to what it sees. Build errors, test failures, whatever's on screen.
 
-**Workflow Upgrades** — Workflow steps now actually run tools instead of just talking about them. Hung steps time out instead of running forever. Async steps finish properly.
-
-**Kanban Refactor** — Cleaner kanban agent, better ticket handling, updated routes and UI.
-
 **Step Runner Presets** — Six ready-made presets for common tasks: file ops, HTTP health checks, opening apps, Python data pipelines, and web login/scraping with Playwright.
-
-**Projects & Workflows UI** — Projects settings page got a full overhaul. New layout, rewritten JS, updated workflow templates and LLM config pages.
 
 **pi CLI Setup** — Setup now installs and configures the pi coding agent automatically. One run and both DecisionsAI and pi are ready to go.
 
-**Housekeeping** — Ditched kiro_cli and old xterm vendor files. Better Ollama response handling. Updated launcher script.
+**Housekeeping** — Ditched kiro_cli and old xterm vendor files. Updated launcher script.
 
 ---
 
