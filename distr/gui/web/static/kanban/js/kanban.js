@@ -344,7 +344,7 @@
                 }
                 return;
             }
-            apiFetch("/api/workflows?type=kiro_cli&limit=1&search=Ticket%20%23" + ticketId)
+            apiFetch("/api/workflows?type=pi_agent&limit=1&search=Ticket%20%23" + ticketId)
                 .then(function(sessions) {
                     if (sessions && sessions.length > 0) {
                         var s = sessions[0];

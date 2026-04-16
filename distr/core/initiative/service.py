@@ -316,8 +316,12 @@ class InitiativeService:
             # Call LLM
             try:
                 raw = self._call_llm(bundle, settings, level)
-            except Exception:
-                logger.error("InitiativeService: LLM call failed", exc_info=True)
+            except RuntimeError as e:
+                logger.error("InitiativeService: %s", e)
+                self._reset_idle_timer()
+                return
+            except Exception as e:
+                logger.error("InitiativeService: LLM call failed — %s: %s", type(e).__name__, e)
                 self._reset_idle_timer()
                 return
 
@@ -391,7 +395,7 @@ class InitiativeService:
             {"role": "user", "content": user_prompt},
         ]
 
-        last_error = None
+        failure_reasons: list[tuple[str, str, str]] = []  # (provider, model, short_reason)
         for provider, model in candidates:
             litellm_model = _litellm_model(provider, model, settings)
             try:
@@ -403,22 +407,29 @@ class InitiativeService:
                 )
                 return response.choices[0].message.content
             except litellm.AuthenticationError as e:
+                short = str(e).split("\n")[0][:120]
+                failure_reasons.append((provider, model, f"AUTH: {short}"))
                 logger.warning(
-                    "InitiativeService: auth error for %s/%s, trying next provider: %s",
-                    provider, model, e,
+                    "InitiativeService: auth error for %s/%s, trying next provider",
+                    provider, model,
                 )
-                last_error = e
                 continue
             except Exception as e:
+                short = f"{type(e).__name__}: {str(e).split(chr(10))[0][:120]}"
+                failure_reasons.append((provider, model, short))
                 logger.warning(
-                    "InitiativeService: LLM call failed for %s/%s, trying next provider: %s",
-                    provider, model, e,
+                    "InitiativeService: LLM call failed for %s/%s, trying next provider",
+                    provider, model,
                 )
-                last_error = e
                 continue
 
-        # All providers exhausted
-        raise last_error or RuntimeError("InitiativeService: no LLM providers available")
+        # All providers exhausted — raise a clean, informative error
+        summary_lines = ", ".join(
+            f"{p}/{m}: {r}" for p, m, r in failure_reasons
+        )
+        raise RuntimeError(
+            f"InitiativeService: all LLM providers failed. Tried: [{summary_lines}]"
+        )
 
     @staticmethod
     def _build_system_prompt(settings: dict, bundle, level: str) -> str:
@@ -618,8 +629,8 @@ class InitiativeService:
             return
 
         try:
-            from distr.core.workflow.service import run_workflow
-            run_workflow(int(workflow_id))
+            from distr.core.workflow.dispatcher import start_workflow_run
+            start_workflow_run(int(workflow_id))
             logger.info("InitiativeService: triggered workflow %s: %s",
                         workflow_id, action.description)
             self._log_to_chat(f"Started workflow #{workflow_id}: {action.description}", settings)

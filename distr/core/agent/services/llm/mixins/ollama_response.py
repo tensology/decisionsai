@@ -262,7 +262,13 @@ class OllamaResponseMixin:
                 return _block_if_processing(final_message.get('tool_calls', []))
             if 'function_call' in final_message:
                 fc = final_message['function_call']
-                return _block_if_processing([{'function': {'name': fc.get('name', ''), 'arguments': fc.get('arguments', '{}')}}])
+                fc_args = fc.get('arguments', {})
+                if isinstance(fc_args, str):
+                    try:
+                        fc_args = json.loads(fc_args) if fc_args else {}
+                    except (json.JSONDecodeError, ValueError):
+                        fc_args = {}
+                return _block_if_processing([{'function': {'name': fc.get('name', ''), 'arguments': fc_args}}])
             return []
 
         # Try model_dump / dict()
@@ -297,7 +303,7 @@ class OllamaResponseMixin:
 
             # 1. create snippet redirect
             if ('create' in user_lower or 'make' in user_lower) and name == 'clipboard_action' and is_snippet:
-                tool_calls[i] = {'function': {'name': 'create_snippet', 'arguments': json.dumps({'text': last_user_message})}}
+                tool_calls[i] = {'function': {'name': 'create_snippet', 'arguments': {'text': last_user_message}}}
                 continue
 
             # 2. paste snippet redirect
@@ -306,11 +312,11 @@ class OllamaResponseMixin:
                     try:
                         args = json.loads(tc.get('function', {}).get('arguments', '{}'))
                         if args.get('operation') == 'paste':
-                            tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': json.dumps({'text': last_user_message})}}
+                            tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
                     except (json.JSONDecodeError, ValueError):
                         pass
                 elif name == 'clipboard_action' and is_snippet:
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': json.dumps({'text': last_user_message})}}
+                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
 
             # 3. hallucinated "usesnippet"
             if name == 'usesnippet':
@@ -322,14 +328,14 @@ class OllamaResponseMixin:
                         text_arg = str(text_arg)
                 except (json.JSONDecodeError, ValueError):
                     pass
-                tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': json.dumps({'text': text_arg})}}
+                tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': text_arg}}}
 
             # 4. hallucinated "paste"
             if name == 'paste':
                 if is_snippet:
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': json.dumps({'text': last_user_message})}}
+                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
                 else:
-                    tool_calls[i] = {'function': {'name': 'text_editing', 'arguments': json.dumps({'operation': 'paste'})}}
+                    tool_calls[i] = {'function': {'name': 'text_editing', 'arguments': {'operation': 'paste'}}}
 
             # 5. hallucinated "clipboardaction"
             if name == 'clipboardaction':
@@ -340,9 +346,9 @@ class OllamaResponseMixin:
                 except (json.JSONDecodeError, ValueError):
                     pass
                 if is_snippet and ('paste' in user_lower or 'copy' in user_lower):
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': json.dumps({'text': last_user_message})}}
+                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
                 else:
-                    tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': json.dumps({'action': action})}}
+                    tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': {'action': action}}}
 
     # ------------------------------------------------------------------
     # 6. Post-tool-execution handling
@@ -792,6 +798,8 @@ class OllamaResponseMixin:
             self._messages.append(last_user_msg)
 
         try:
+            # Normalize tool_calls arguments (Ollama v0.6.1+ Pydantic v2 requires dicts)
+            self._normalize_messages_arguments_inplace()
             stream = await self._ollama_client.chat(
                 model=self._model_name,
                 messages=self._messages,

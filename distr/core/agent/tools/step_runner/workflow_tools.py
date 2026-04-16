@@ -171,7 +171,7 @@ class GetProjectStatusTool(BaseTool):
     name: str = "get_project_status"
     description: str = (
         "Get a comprehensive status update on a project by pulling together: "
-        "actively running tasks, latest workflow run results, recent Kiro CLI output, "
+        "actively running tasks, latest workflow run results, recent pi agent output, "
         "and kanban ticket status. Shows what is IN PROGRESS right now first. "
         "Use when user asks 'what's the status on X', 'update me on the project', "
         "'what's happening with Tensology', 'how's the project going', "
@@ -210,7 +210,7 @@ class GetProjectStatusTool(BaseTool):
                 active_cli = (
                     db.query(AutoWorkflow)
                     .filter(
-                        AutoWorkflow.workflow_type == "kiro_cli",
+                        AutoWorkflow.workflow_type == "pi_agent",
                         AutoWorkflow.status == "in_progress",
                         AutoWorkflow.name.ilike(f"%{project.name}%"),
                     )
@@ -277,7 +277,7 @@ class GetProjectStatusTool(BaseTool):
                 cli_sessions = (
                     db.query(AutoWorkflow)
                     .filter(
-                        AutoWorkflow.workflow_type == "kiro_cli",
+                        AutoWorkflow.workflow_type == "pi_agent",
                         AutoWorkflow.name.ilike(f"%{project.name}%"),
                         AutoWorkflow.status != "in_progress",
                     )
@@ -662,7 +662,7 @@ class ContinueWorkflowTool(BaseTool):
 
     def _run(self, run_id: int, user_input: str = "", **kwargs) -> str:
         try:
-            from distr.core.workflow.service import continue_waiting_step
+            from distr.core.workflow.dispatcher import continue_waiting_step
             result = continue_waiting_step(run_id, user_input)
             if "error" in result:
                 return f"Failed: {result['error']}"

@@ -805,64 +805,93 @@ if [ "$DECISIONS_EXISTS" = false ] && ([ -z "$SYMLINK_DIR" ] || [ "$SYMLINK_DIR"
     [ "$DECISIONS_EXISTS" = false ] && echo ""
 fi
 
-# Check and install Kiro CLI (AI coding agent for project tasks)
-check_kiro_cli() {
-    if command -v kiro-cli &> /dev/null; then
-        KIRO_CLI_VERSION=$(kiro-cli --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "${GREEN}✓${NC} Kiro CLI found (version: $KIRO_CLI_VERSION)"
-    else
-        echo -e "${YELLOW}Kiro CLI not found. Installing...${NC}"
-        if [[ "$OSTYPE" == "darwin"* ]]; then
-            # macOS install
-            if curl -fsSL https://cli.kiro.dev/install | bash 2>/dev/null; then
-                # Refresh PATH
-                export PATH="$PATH:$HOME/.local/bin"
-                hash -r 2>/dev/null
-                if command -v kiro-cli &> /dev/null; then
-                    echo -e "${GREEN}✓${NC} Kiro CLI installed successfully"
-                    echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
-                else
-                    echo -e "${YELLOW}⚠${NC}  Kiro CLI installed but not found in PATH. You may need to restart your terminal."
-                fi
+# Check and install Node.js (required for Pi coding agent)
+check_node() {
+    if command -v node &> /dev/null; then
+        NODE_VERSION=$(node -v 2>/dev/null)
+        NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
+        if [ "$NODE_MAJOR" -ge 20 ] 2>/dev/null; then
+            echo -e "${GREEN}✓${NC} Node.js found ($NODE_VERSION)"
+        else
+            echo -e "${YELLOW}⚠${NC}  Node.js $NODE_VERSION found, but Pi requires v20.6+"
+            echo -e "${YELLOW}   Upgrading Node.js...${NC}"
+            if command -v nvm &> /dev/null; then
+                nvm install 20
+                nvm use 20
+            elif command -v brew &> /dev/null; then
+                brew install node@20
+                brew link node@20 2>/dev/null
+            elif command -v fnm &> /dev/null; then
+                fnm install 20
+                fnm use 20
             else
-                echo -e "${YELLOW}⚠${NC}  Could not install Kiro CLI automatically."
-                echo -e "${YELLOW}   Install manually: curl -fsSL https://cli.kiro.dev/install | bash${NC}"
+                echo -e "${YELLOW}   Install Node.js 20+ manually: https://nodejs.org${NC}"
+                return 1
             fi
-        elif [[ -f /etc/debian_version ]]; then
-            # Ubuntu/Debian
-            echo -e "${YELLOW}Downloading Kiro CLI .deb package...${NC}"
-            if wget -q https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.deb -O /tmp/kiro-cli.deb 2>/dev/null; then
-                if sudo dpkg -i /tmp/kiro-cli.deb 2>/dev/null && sudo apt-get install -f -y 2>/dev/null; then
-                    echo -e "${GREEN}✓${NC} Kiro CLI installed successfully"
-                    echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
-                else
-                    echo -e "${YELLOW}⚠${NC}  Could not install Kiro CLI .deb package."
-                fi
-                rm -f /tmp/kiro-cli.deb
+        fi
+    else
+        echo -e "${YELLOW}Node.js not found. Installing...${NC}"
+        if command -v brew &> /dev/null; then
+            brew install node
+            if [ $? -eq 0 ]; then
+                echo -e "${GREEN}✓${NC} Node.js installed: $(node -v)"
             else
-                echo -e "${YELLOW}⚠${NC}  Could not download Kiro CLI. Install manually:"
-                echo -e "${YELLOW}   wget https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.deb${NC}"
-                echo -e "${YELLOW}   sudo dpkg -i kiro-cli.deb && sudo apt-get install -f${NC}"
+                echo -e "${RED}Error: Could not install Node.js via Homebrew.${NC}"
+                echo -e "${YELLOW}   Install manually: https://nodejs.org${NC}"
+                return 1
+            fi
+        elif command -v apt-get &> /dev/null; then
+            # Ubuntu/Debian — install Node.js 20 via NodeSource
+            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null
+            sudo apt-get install -y nodejs 2>/dev/null
+            if command -v node &> /dev/null; then
+                echo -e "${GREEN}✓${NC} Node.js installed: $(node -v)"
+            else
+                echo -e "${RED}Error: Could not install Node.js.${NC}"
+                echo -e "${YELLOW}   Install manually: https://nodejs.org${NC}"
+                return 1
             fi
         else
-            # Other Linux — use AppImage
-            echo -e "${YELLOW}Downloading Kiro CLI AppImage...${NC}"
-            KIRO_CLI_DIR="$HOME/.local/bin"
-            mkdir -p "$KIRO_CLI_DIR"
-            if curl -fsSL https://desktop-release.q.us-east-1.amazonaws.com/latest/kiro-cli.appimage -o "$KIRO_CLI_DIR/kiro-cli" 2>/dev/null; then
-                chmod +x "$KIRO_CLI_DIR/kiro-cli"
-                export PATH="$PATH:$KIRO_CLI_DIR"
-                echo -e "${GREEN}✓${NC} Kiro CLI installed to $KIRO_CLI_DIR/kiro-cli"
-                echo -e "${YELLOW}Note: Run 'kiro-cli login' to authenticate with your Kiro account${NC}"
+            echo -e "${YELLOW}   No package manager found. Install Node.js 20+ manually: https://nodejs.org${NC}"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# Check and install Pi coding agent (AI coding agent for project tasks)
+check_pi_agent() {
+    if command -v pi &> /dev/null; then
+        PI_VERSION=$(pi --version 2>/dev/null | head -1 || echo "unknown")
+        echo -e "${GREEN}✓${NC} Pi coding agent found (version: $PI_VERSION)"
+    else
+        echo -e "${YELLOW}Pi coding agent not found. Installing...${NC}"
+        # Ensure Node.js is available (Pi requires Node 20.6+)
+        if ! command -v node &> /dev/null || [ "$(echo $(node -v | sed 's/v\([0-9]*\).*/\1/'))" -lt 20 ] 2>/dev/null; then
+            check_node
+        fi
+        if command -v npm &> /dev/null; then
+            if npm install -g @mariozechner/pi-coding-agent; then
+                hash -r 2>/dev/null
+                if command -v pi &> /dev/null; then
+                    echo -e "${GREEN}✓${NC} Pi coding agent installed successfully ($(pi --version 2>/dev/null | head -1))"
+                else
+                    echo -e "${YELLOW}⚠${NC}  Pi coding agent installed but not found in PATH."
+                    echo -e "${YELLOW}   You may need to restart your terminal or add $(npm prefix -g)/bin to your PATH.${NC}"
+                fi
             else
-                echo -e "${YELLOW}⚠${NC}  Could not download Kiro CLI AppImage."
-                echo -e "${YELLOW}   Download manually from: https://kiro.dev/docs/cli/installation/${NC}"
+                echo -e "${YELLOW}⚠${NC}  Could not install Pi coding agent automatically."
+                echo -e "${YELLOW}   Install manually: npm install -g @mariozechner/pi-coding-agent${NC}"
             fi
+        else
+            echo -e "${RED}Error: npm not found even after Node.js check.${NC}"
+            echo -e "${YELLOW}   Install Node.js 20+ from https://nodejs.org, then run:${NC}"
+            echo -e "${YELLOW}   npm install -g @mariozechner/pi-coding-agent${NC}"
         fi
     fi
 }
 
-check_kiro_cli
+check_pi_agent
 
 # ── Start sidecar (machine control agent) ────────────────────────────────────
 SIDECAR_BIN="$SCRIPT_DIR/sidecar/dist/decisionsai-sidecar"

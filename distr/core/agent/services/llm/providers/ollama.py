@@ -158,6 +158,57 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         """Validate and fix message format for Ollama API."""
         return self._validate_messages_for_ollama(messages)
 
+    @staticmethod
+    def _normalize_tool_call_arguments(tool_calls: list) -> list:
+        """Convert string `arguments` to dicts for Ollama Pydantic v2 validation.
+
+        The ollama Python client v0.6.1+ uses Pydantic v2 ``Message.model_validate()``
+        which requires ``tool_calls[].function.arguments`` to be a dict
+        (``Mapping[str, Any]``), NOT a JSON string.  Internal code and older
+        conversation history often stored arguments as strings like
+        ``'{"confirm": true}'``.  Passing a string where a dict is expected
+        triggers::
+
+            ValidationError: Input should be a valid dictionary
+                [type=dict_type, input_value='{}', input_type=str]
+
+        This helper normalises every tool-call's ``arguments`` to a dict
+        before messages are handed to ``ollama.AsyncClient.chat()``.
+        """
+        normalized = []
+        for tc in tool_calls:
+            if not isinstance(tc, dict):
+                normalized.append(tc)
+                continue
+            func = tc.get('function')
+            if not isinstance(func, dict):
+                normalized.append(tc)
+                continue
+            args = func.get('arguments')
+            if isinstance(args, str):
+                try:
+                    func = {**func, 'arguments': json.loads(args) if args else {}}
+                except (json.JSONDecodeError, ValueError):
+                    func = {**func, 'arguments': {}}
+            elif args is None:
+                func = {**func, 'arguments': {}}
+            normalized.append({**tc, 'function': func})
+        return normalized
+
+    def _normalize_messages_arguments_inplace(self):
+        """Ensure all assistant messages with tool_calls have dict arguments.
+
+        Safety net — normalises ``self._messages`` in-place right before they
+        are sent to ``ollama.AsyncClient.chat()``.  Catches any tool_calls
+        that were appended to ``self._messages`` after the last
+        ``_validate_messages_for_ollama()`` pass (e.g. from
+        ``_execute_tool_calls`` → ``_handle_post_tool_execution`` →
+        ``_trigger_llm_followup`` cycles).
+        """
+        for msg in self._messages:
+            if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                msg['tool_calls'] = self._normalize_tool_call_arguments(msg['tool_calls'])
+
     def _validate_messages_for_ollama(self, messages: list) -> list:
         if not messages:
             return messages
@@ -168,12 +219,15 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             msg = messages[i]
 
             if msg.get('role') == 'assistant' and msg.get('tool_calls'):
+                # Normalize tool_call arguments from strings to dicts (Ollama v0.6.1+)
+                normalized_tc = OllamaLLMService._normalize_tool_call_arguments(msg['tool_calls'])
                 tool_names = set()
-                for tc in msg.get('tool_calls', []):
+                for tc in normalized_tc:
                     if isinstance(tc, dict):
                         func = tc.get('function', {})
                         if isinstance(func, dict) and func.get('name'):
                             tool_names.add(func['name'])
+                msg = {**msg, 'tool_calls': normalized_tc}
                 i += 1
 
                 found_names = set()
@@ -200,7 +254,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     tool_name = msg.get('name', 'tool')
                     validated.append({
                         "role": "assistant", "content": "",
-                        "tool_calls": [{"function": {"name": tool_name, "arguments": "{}"}}],
+                        "tool_calls": [{"function": {"name": tool_name, "arguments": {}}}],
                     })
                     validated.append(msg)
                 else:
@@ -358,6 +412,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     current_model, len(self._messages), sys_len,
                 )
                 num_ctx = 8192
+                # Normalize tool_calls arguments (Ollama v0.6.1+ Pydantic v2 requires dicts)
+                self._normalize_messages_arguments_inplace()
                 small_chat_kwargs = {
                     "model": current_model,
                     "messages": self._messages,
@@ -382,6 +438,15 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     logger.error("LLM: [small-path] API error: %s", _small_err, exc_info=True)
                     await self.push_frame(ErrorFrame(error=str(_small_err)))
                     return
+
+                # Safety net: if small-path also returns empty, emit fallback
+                if not full_response and not _tc:
+                    logger.error("LLM: [small-path] returned empty response. Emitting fallback message.")
+                    full_response = "I'm having trouble connecting right now. Please try again in a moment."
+                    try:
+                        signal_manager.typing_indicator_changed.emit(True)
+                    except RuntimeError:
+                        pass
 
                 # Prompt injection check on last user message (Req 9.1, 9.2, 9.3)
                 _skip_parse = False
@@ -464,7 +529,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                                 _tool_name, full_response[:80],
                             )
                             _coerced = self._coerce_args_to_schema_types(_tool_name, _args)
-                            _tool_calls = [{"function": {"name": _tool_name, "arguments": json.dumps(_coerced)}}]
+                            _tool_calls = [{"function": {"name": _tool_name, "arguments": _coerced}}]
                             _tool_results = await self._execute_tool_calls(_tool_calls, last_user_message=last_user_message)
                             self._messages.append({"role": "assistant", "content": "", "tool_calls": _tool_calls})
 
@@ -522,6 +587,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # prompt eval is proportional to num_ctx.  When tools are passed
             # via the API the model needs room for tool schemas (~2k tokens).
             num_ctx = 8192
+            # Normalize self._messages before sending: ensure all tool_calls[].function.arguments
+            # are dicts (not strings).  Ollama v0.6.1+ Pydantic v2 validation rejects strings.
+            self._normalize_messages_arguments_inplace()
             chat_kwargs = {
                 "model": current_model,
                 "messages": self._messages,
@@ -570,10 +638,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if not tool_calls and last_user_message and 'clear' in last_user_message.lower() and 'chat' in last_user_message.lower():
                 parsed = parse_tool_calls_from_content(full_response)
                 if parsed:
-                    tool_calls = [{'function': {'name': p.get('name', 'clear_chat'), 'arguments': p.get('arguments', '{"confirm": true}')}} for p in parsed]
+                    tool_calls = [{'function': {'name': p.get('name', 'clear_chat'), 'arguments': {'confirm': True} if isinstance(p.get('arguments'), str) else (p.get('arguments') or {'confirm': True})}} for p in parsed]
                     full_response = ""
                 elif 'clear' in full_response.lower():
-                    tool_calls = [{'function': {'name': 'clear_chat', 'arguments': '{"confirm": true}'}}]
+                    tool_calls = [{'function': {'name': 'clear_chat', 'arguments': {'confirm': True}}}]
                     full_response = ""
 
             # 8. (Removed) — conversational filtering is handled by the semantic
@@ -613,9 +681,24 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 if should_return:
                     return
 
-            # 12. Re-query without tools if no response
+            # 12. Re-query without tools if no response (retry up to 2 times for empty responses)
             if not full_response and not tool_calls and not is_processing_tool_result:
-                full_response = await self._requery_without_tools(full_response)
+                for _retry in range(2):
+                    logger.warning("LLM: Empty response (0 chars, 0 tool_calls). Re-querying without tools (attempt %d)...", _retry + 1)
+                    await asyncio.sleep(0.5 * _retry)  # Brief delay between retries
+                    full_response = await self._requery_without_tools(full_response)
+                    if full_response:
+                        break
+                    logger.warning("LLM: Re-query also returned empty response (attempt %d)", _retry + 1)
+
+            # 12b. Final safety net — if still empty, emit a fallback message
+            if not full_response and not tool_calls:
+                logger.error("LLM: All attempts returned empty. Emitting fallback message.")
+                full_response = "I'm having trouble connecting right now. Please try again in a moment."
+                try:
+                    signal_manager.typing_indicator_changed.emit(True)
+                except RuntimeError:
+                    pass
 
             # 13. Save response (clean markdown for display)
             if full_response:
@@ -759,7 +842,14 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 parsed = parse_tool_calls_from_content(raw_accumulator)
                 if parsed:
                     for ptc in parsed:
-                        tool_calls.append({'function': {'name': ptc.get('name', ''), 'arguments': ptc.get('arguments', '{}')}})
+                        # Ensure arguments is a dict (Ollama Pydantic v2 requires dict, not string)
+                        raw_args = ptc.get('arguments', '{}')
+                        if isinstance(raw_args, str):
+                            try:
+                                raw_args = json.loads(raw_args) if raw_args else {}
+                            except (json.JSONDecodeError, ValueError):
+                                raw_args = {}
+                        tool_calls.append({'function': {'name': ptc.get('name', ''), 'arguments': raw_args}})
                     content = re.sub(r'\{[^{}]*"name"[^{}]*\}', '', content, flags=re.DOTALL).strip()
                     if not content:
                         message['content'] = ''
@@ -799,6 +889,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
                         await self.push_frame(TextFrame(text=cleaned))
 
+        if not first_token and not tool_calls:
+            logger.warning("LLM: _process_stream received no content and no tool_calls from model (empty stream)")
+
         return full_response, tool_calls, final_message
 
     async def _execute_tool_calls(self, tool_calls, last_user_message=None):
@@ -807,10 +900,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         for tool_call in tool_calls:
             function = tool_call.get('function', {})
             tool_name = function.get('name', '')
-            arguments = function.get('arguments', '{}')
+            arguments = function.get('arguments', {})
 
             try:
-                args_dict = json.loads(arguments) if isinstance(arguments, str) else arguments
+                args_dict = arguments if isinstance(arguments, dict) else json.loads(arguments) if isinstance(arguments, str) else {}
                 if isinstance(args_dict, str):
                     args_dict = {'text': args_dict}
             except (json.JSONDecodeError, ValueError, TypeError):

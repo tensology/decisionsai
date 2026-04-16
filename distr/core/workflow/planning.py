@@ -18,31 +18,40 @@ logger = logging.getLogger(__name__)
 
 # ── LLM Planning ──
 
-PLAN_PROMPT = """Break down this instruction into ordered, executable sub-steps for an automation agent.
+PLAN_PROMPT = """Break down this instruction into ordered, executable steps for an automation workflow.
 
-You can use capabilities like opening apps/websites, clicking UI elements, typing, taking screenshots, and checking visible state.
-For browser/web tasks, the agent has a playwright_browser tool that runs headless Chrome, automatically captures screenshots + browser console logs (errors, warnings, failed network requests), and sends them to a vision LLM for analysis. Use this for navigating websites, filling forms, testing web pages, and validating visual state.
+You can choose from these step types (action_type):
+- "agent_instruction" — general-purpose: the workflow agent will execute the instruction using any available tools (open apps, click, type, screenshot, browse web). Use this as the default for most desktop and general UI automation.
+- "run_command" — execute a shell/command-line command directly.
+- "http_request" — make an HTTP request (GET, POST, PUT, DELETE, etc.).
+- "execute_code" — run a Python script (code is auto-generated from your instruction). Use for data processing, file I/O, or computation tasks.
+- "playwright" — browser automation with Playwright (code is auto-generated from your instruction). Use for web tasks like navigating sites, filling forms, clicking buttons, scraping data, taking screenshots.
+- "play_recording" — replay a previously recorded macro/action.
 
-For UI tasks, follow these rules:
-- Keep each step atomic (one action per step).
-- Separate app launch from navigation from interaction.
-- Use precise UI descriptions (button text, location, panel).
-- Include verification checks after important transitions when helpful.
-- For web/browser verification steps, the playwright_browser tool will provide both a screenshot analysis AND console log data — write verification criteria that reference both visual state and console output when relevant (e.g. "Page shows dashboard AND no console errors").
+Rules:
+- Keep each step atomic (one clear action per step).
+- Use "playwright" for all web browser tasks (navigate, login, fill forms, scrape, screenshot).
+- Use "agent_instruction" for desktop app interaction and general-purpose tasks.
+- Use "execute_code" for data processing, file I/O, or computation.
+- Use "run_command" only for simple shell commands (mkdir, cp, ls, app launch).
+- For login flows, use "playwright" and include the URL.
+- Separate navigation from interaction when possible.
+- Add verification steps after important transitions.
 
 Instruction:
 {instruction}
 
 Respond with a JSON array of steps. Each step must have:
-- "title": short label (e.g., "Open browser")
-- "instruction": what to do (e.g., "Open Chrome and navigate to example.com")
-- Optional "verification": what to verify after the step (e.g., "Page shows login form AND no console errors or failed requests")
-- Optional "type": one of "ui", "data", or "verification"
+- "title": short label (e.g., "Open website")
+- "instruction": detailed description of what to do
+- "action_type": one of the valid types listed above
+- Optional "verification": what to check after the step
 
-Example format:
+Example:
 [
-  {{"title": "Open browser", "instruction": "Open Google Chrome", "type": "ui"}},
-  {{"title": "Go to site", "instruction": "Navigate to https://example.com", "verification": "Example homepage is visible AND no console errors", "type": "ui"}}
+  {{"title": "Open website", "instruction": "Navigate to https://example.com and verify the page loads", "action_type": "playwright", "verification": "Page title contains 'Example'"}},
+  {{"title": "Login", "instruction": "Fill in the username and password fields, then click the login button", "action_type": "playwright"}},
+  {{"title": "Verify dashboard", "instruction": "Take a screenshot and confirm the dashboard is visible", "action_type": "playwright", "verification": "Dashboard heading is visible"}}
 ]
 
 Return ONLY the JSON array, no markdown or explanation."""
@@ -90,20 +99,33 @@ def _litellm_model(provider: str, model: str, settings: dict) -> str:
 
 
 def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
-    """Call LLM to break down instruction into steps. Returns list of {title, instruction} dicts."""
+    """Call LLM to break down instruction into steps. Returns list of {title, instruction, action_type} dicts."""
     from distr.core.settings import load_settings_from_db
+    from distr.core.llm_override import get_llm_override
 
     settings = load_settings_from_db()
-    provider = (
-        (settings.get("conversational_llm_provider") or "").strip()
-        or (settings.get("agent_provider") or "").strip()
-        or "Ollama"
-    ).strip().lower()
-    model = (
-        (settings.get("conversational_llm_model") or "").strip()
-        or (settings.get("agent_model") or "").strip()
-        or ""
-    )
+
+    # Check for board-level LLM override (orchestrator role)
+    override = get_llm_override()
+    if override and override.orchestrator_provider:
+        provider = override.orchestrator_provider.strip().lower()
+        model = (override.orchestrator_model or "").strip()
+        if not model and provider == "ollama":
+            model = "llama3.2"
+    else:
+        # Check dedicated workflow LLM, then fall back to conversational
+        provider = (
+            (settings.get("step_runner_llm_provider") or "").strip()
+            or (settings.get("conversational_llm_provider") or "").strip()
+            or (settings.get("agent_provider") or "").strip()
+            or "Ollama"
+        ).strip().lower()
+        model = (
+            (settings.get("step_runner_llm_model") or "").strip()
+            or (settings.get("conversational_llm_model") or "").strip()
+            or (settings.get("agent_model") or "").strip()
+            or ""
+        )
     if not model and provider == "ollama":
         model = "llama3.2"  # fallback
 
@@ -127,23 +149,23 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
             logger.warning("LLM returned non-array: %s", type(parsed))
             return None
         steps = []
+        valid_action_types = {"agent_instruction", "run_command", "http_request", "execute_code", "playwright", "play_recording"}
         for i, item in enumerate(parsed):
             if isinstance(item, dict):
                 title = str(item.get("title") or item.get("label") or f"Step {i + 1}")
                 inst = str(item.get("instruction") or item.get("text") or "")
                 verification = str(item.get("verification") or "").strip() or None
-                step_type = str(item.get("type") or "").strip().lower() or None
-                if step_type not in {"ui", "data", "verification"}:
-                    step_type = None
+                # Map action_type from LLM response — validate and default to agent_instruction
+                action_type = str(item.get("action_type") or "").strip().lower()
+                if action_type not in valid_action_types:
+                    action_type = "agent_instruction"
                 if inst:
-                    step = {"title": title, "instruction": inst}
+                    step = {"title": title, "instruction": inst, "action_type": action_type}
                     if verification:
                         step["verification"] = verification
-                    if step_type:
-                        step["type"] = step_type
                     steps.append(step)
             elif isinstance(item, str):
-                steps.append({"title": f"Step {i + 1}", "instruction": item})
+                steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
         return steps if steps else None
     except Exception as e:
         logger.error("Workflow plan LLM call failed: %s", e, exc_info=True)
@@ -165,14 +187,17 @@ def plan_workflow(
     column.
     """
     steps_data = None
+    planning_mode = "simple_instruction"
     if _is_simple_instruction(instruction):
-        steps_data = [{"title": "Step 1", "instruction": instruction.strip()}]
+        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]
     if not steps_data:
         steps_data = _call_llm_for_plan(instruction)
+        planning_mode = "llm_planned"
         if not steps_data:
             steps_data = _call_llm_for_plan(instruction)  # Retry once
     if not steps_data:
-        steps_data = [{"title": "Step 1", "instruction": instruction.strip()}]  # Fallback single-step
+        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]  # Fallback single-step
+        planning_mode = "fallback_single_step"
 
     # Serialize workflow_input to JSON if provided
     workflow_input_json = None
@@ -181,6 +206,9 @@ def plan_workflow(
             workflow_input_json = json.dumps(workflow_input)
         except (TypeError, ValueError) as exc:
             logger.warning("Failed to serialize workflow_input: %s", exc)
+
+    logger.info("plan_workflow: planning_mode=%s, steps=%d for instruction: %.80s",
+                planning_mode, len(steps_data), instruction)
 
     with get_session() as db:
         wf = AutoWorkflow(
@@ -199,12 +227,17 @@ def plan_workflow(
                 position=i,
                 name=s.get("title", f"Step {i + 1}"),
                 instruction=s.get("instruction", ""),
-                verification=s.get("verification"),
+                action_type=s.get("action_type", "agent_instruction"),
                 status="pending",
-                step_type=s.get("step_type", "run_command"),
+                step_type=s.get("action_type", "agent_instruction"),
                 config=s.get("config"),
                 code=s.get("code"),
             )
+            # Map LLM verification output to proper validation fields
+            verification = s.get("verification")
+            if verification and verification.strip():
+                step.validation_prompt = verification.strip()
+                step.validation_type = "llm_judgment"
             db.add(step)
         db.commit()
         db.refresh(wf)
@@ -311,13 +344,13 @@ def generate_steps(workflow_id: int, instruction: str) -> List[Dict[str, Any]]:
     """
     steps_data = None
     if _is_simple_instruction(instruction):
-        steps_data = [{"title": "Step 1", "instruction": instruction.strip()}]
+        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]
     if not steps_data:
         steps_data = _call_llm_for_plan(instruction)
         if not steps_data:
             steps_data = _call_llm_for_plan(instruction)  # Retry once
     if not steps_data:
-        steps_data = [{"title": "Step 1", "instruction": instruction.strip()}]  # Fallback
+        steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]  # Fallback
 
     created: List[Dict[str, Any]] = []
     with get_session() as db:
@@ -334,12 +367,17 @@ def generate_steps(workflow_id: int, instruction: str) -> List[Dict[str, Any]]:
                 position=i,
                 name=s.get("title", f"Step {i + 1}"),
                 instruction=s.get("instruction", ""),
-                verification=s.get("verification"),
+                action_type=s.get("action_type", "agent_instruction"),
                 status="pending",
-                step_type=s.get("step_type", "run_command"),
+                step_type=s.get("action_type", "agent_instruction"),
                 config=s.get("config"),
                 code=s.get("code"),
             )
+            # Map LLM verification output to proper validation fields
+            verification = s.get("verification")
+            if verification and verification.strip():
+                step.validation_prompt = verification.strip()
+                step.validation_type = "llm_judgment"
             db.add(step)
             db.flush()
             created.append({
@@ -347,6 +385,7 @@ def generate_steps(workflow_id: int, instruction: str) -> List[Dict[str, Any]]:
                 "position": step.position,
                 "name": step.name,
                 "instruction": step.instruction,
+                "action_type": step.action_type,
                 "verification": step.verification,
                 "status": step.status,
                 "step_type": step.step_type,

@@ -851,13 +851,8 @@ source: kanban_ticket_{t.id}
 
     @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
     async def send_ticket_to_cli(ticket_id: int):
-        """Send a ticket's instruction to Kiro CLI for the linked project."""
-        import shutil
-        import subprocess as sp
-
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            raise HTTPException(400, "Kiro CLI is not installed")
+        """Send a ticket's instruction to pi (coding agent) for the linked project."""
+        from distr.core.pi_rpc import get_or_create_rpc_session, PiRpcSession
 
         with get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
@@ -889,6 +884,11 @@ source: kanban_ticket_{t.id}
 
         instruction = f"{title}\n\n{description}".strip() if description else title
 
+        # Check that pi is available
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            raise HTTPException(400, "Pi coding agent is not installed. Run: npm install -g @mariozechner/pi-coding-agent")
+
         # Create audit trail using AutoWorkflow models
         from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
         audit_id = step_id = None
@@ -896,14 +896,14 @@ source: kanban_ticket_{t.id}
             with get_session() as s:
                 audit = AutoWorkflow(
                     name=f"[Project: {project_name}] Ticket #{tid}: {title}",
-                    status="in_progress", workflow_type="kiro_cli",
+                    status="in_progress", workflow_type="pi_cli",
                 )
                 s.add(audit)
                 s.flush()
                 step = AutoWorkflowStep(
                     workflow_id=audit.id, position=0,
                     name=f"Ticket #{tid}", instruction=instruction[:500],
-                    status="running", tool_used="kiro-cli",
+                    status="running", tool_used="pi",
                 )
                 s.add(step)
                 s.commit()
@@ -911,28 +911,21 @@ source: kanban_ticket_{t.id}
         except Exception:
             pass
 
-        # Run CLI in background thread so the API returns immediately
-        def _run_cli():
-            try:
-                result = sp.run(
-                    [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
-                    capture_output=True, text=True, timeout=600, cwd=folder,
-                )
-                output = (result.stdout + result.stderr).strip()[:3000]
-                status = "completed" if result.returncode == 0 else "failed"
-            except sp.TimeoutExpired:
-                output, status = "Kiro CLI timed out after 10 minutes", "failed"
-            except Exception as e:
-                output, status = f"Kiro CLI error: {e}", "failed"
-
-            if audit_id and step_id:
-                pass  # Legacy StepRunner audit trail removed (task 6.3)
-
-        threading.Thread(target=_run_cli, daemon=True).start()
+        # Send the instruction to pi via RPC (async, non-blocking)
+        try:
+            rpc = await get_or_create_rpc_session(project_id, folder)
+            # Use --append-system-prompt to provide ticket context
+            success = rpc.send_prompt(instruction)
+            if not success:
+                raise Exception("Failed to send prompt to pi")
+        except Exception as e:
+            logger.error(f"Failed to send ticket to pi: {e}")
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
         return JSONResponse({
             "success": True,
-            "message": f"Ticket #{tid} sent to CLI for project '{project_name}'. Check the audit log for progress.",
+            "message": f"Ticket #{tid} sent to pi for project '{project_name}'. Check the terminal tab for progress.",
+            "audit_id": audit_id,
         })
 
     # ── Agent run / cancel / restart ──

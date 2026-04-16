@@ -649,7 +649,10 @@ def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
     from .libs import StartFrame, TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
     text = params.get('text', '')
-    if text and hasattr(session, 'llm_service') and session.llm_service:
+    has_llm = hasattr(session, 'llm_service') and session.llm_service is not None
+    has_loop = hasattr(session, 'runner') and session.runner is not None and hasattr(session.runner, '_loop') and session.runner._loop is not None
+    session.logger.info(f"_cmd_speak_text_directly called: text_len={len(text)}, has_llm_service={has_llm}, has_event_loop={has_loop}")
+    if text and has_llm:
         session.logger.debug(f"Speaking text directly via TTS: '{text[:50]}...'")
         if session.runner and session.runner._loop:
             async def speak_directly():

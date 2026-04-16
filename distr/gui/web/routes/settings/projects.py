@@ -569,18 +569,18 @@ def register_routes(router, templates):
 
     @router.post("/projects/{project_id}/cli")
     async def send_cli_instruction(project_id: int, request: Request):
-        """Send an instruction to Kiro CLI in the context of a project."""
+        """Send an instruction to pi coding agent in the context of a project."""
         try:
             body = await request.json()
             instruction = (body.get("instruction") or "").strip()
             if not instruction:
                 return JSONResponse({"success": False, "error": "instruction required"}, status_code=400)
 
-            # Check Kiro CLI is available
-            import shutil
-            kiro_path = shutil.which("kiro-cli")
-            if not kiro_path:
-                return JSONResponse({"success": False, "error": "Kiro CLI not installed. Run: curl -fsSL https://cli.kiro.dev/install | bash"}, status_code=400)
+            # Check pi coding agent is available
+            from distr.core.pi_rpc import PiRpcSession, get_or_create_rpc_session
+            pi_path = PiRpcSession.find_pi()
+            if not pi_path:
+                return JSONResponse({"success": False, "error": "Pi coding agent not installed. Run: npm install -g @mariozechner/pi-coding-agent"}, status_code=400)
 
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -602,7 +602,7 @@ def register_routes(router, templates):
                 chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
                 if chat_id:
                     from distr.core.chat import ChatService
-                    ChatService.add_message(int(chat_id), "user", f"[Kiro CLI: {project_name}] {instruction}")
+                    ChatService.add_message(int(chat_id), "user", f"[Pi: {project_name}] {instruction}")
             except Exception as e:
                 logger.debug(f"Could not log CLI instruction to chat: {e}")
 
@@ -613,30 +613,45 @@ def register_routes(router, templates):
                     name=f"[Project: {project_name}] {instruction}",
                     status="in_progress",
                     chat_id=int(chat_id) if chat_id else None,
-                    workflow_type="kiro_cli",
+                    workflow_type="pi_agent",
                 )
                 session.add(audit)
                 session.flush()
                 step = AutoWorkflowStep(
                     workflow_id=audit.id,
                     position=0,
-                    name="Kiro CLI",
+                    name="Pi Agent",
                     instruction=instruction,
                     status="running",
-                    tool_used="kiro-cli",
+                    tool_used="pi",
                 )
                 session.add(step)
                 session.commit()
                 audit_id = audit.id
                 step_id = step.id
 
-            # Run Kiro CLI in background thread
+            # Try RPC session first, fall back to pi -p (print mode)
+            try:
+                rpc = await get_or_create_rpc_session(project_id, folder)
+                success = rpc.send_prompt(instruction)
+                if success:
+                    if chat_id:
+                        try:
+                            from distr.core.chat import ChatService
+                            ChatService.add_message(int(chat_id), "assistant", f"[Pi: {project_name}] Instruction sent. Check the terminal tab for progress.")
+                        except Exception:
+                            pass
+                    return JSONResponse({"success": True, "session_id": audit_id, "engine": "pi_rpc"})
+            except Exception as e:
+                logger.warning(f"RPC session failed, falling back to pi -p: {e}")
+
+            # Fallback: run pi in print mode (one-shot)
+            import subprocess
             import threading
-            def _run_kiro():
-                import subprocess as _sp
+            def _run_pi():
                 try:
-                    result = _sp.run(
-                        [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
+                    result = subprocess.run(
+                        [pi_path, "-p", "--append-system-prompt", f"You are working on project: {project_name}", instruction],
                         capture_output=True, text=True, timeout=300,
                         cwd=folder,
                     )
@@ -647,16 +662,16 @@ def register_routes(router, templates):
                     if chat_id:
                         try:
                             from distr.core.chat import ChatService
-                            ChatService.add_message(int(chat_id), "assistant", f"[Kiro CLI: {project_name}] {output[:1500]}")
+                            ChatService.add_message(int(chat_id), "assistant", f"[Pi: {project_name}] {output[:1500]}")
                         except Exception:
                             pass
-                except _sp.TimeoutExpired:
+                except subprocess.TimeoutExpired:
                     pass
                 except Exception as e:
-                    logger.error(f"Kiro CLI execution failed: {e}", exc_info=True)
+                    logger.error(f"Pi execution failed: {e}", exc_info=True)
 
-            threading.Thread(target=_run_kiro, daemon=True).start()
-            return JSONResponse({"success": True, "session_id": audit_id, "engine": "kiro-cli"})
+            threading.Thread(target=_run_pi, daemon=True).start()
+            return JSONResponse({"success": True, "session_id": audit_id, "engine": "pi_cli"})
         except HTTPException:
             raise
         except Exception as e:
@@ -665,7 +680,7 @@ def register_routes(router, templates):
 
     @router.get("/projects/{project_id}/cli/audit")
     async def get_cli_audit(project_id: int):
-        """Get audit trail of Kiro CLI actions for a project."""
+        """Get audit trail of pi agent actions for a project."""
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -677,13 +692,13 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 project_name = project.name or ""
 
-                # Find kiro_cli workflows for this project
+                # Find pi_agent workflows for this project
                 prefix = f"[Project: {project_name}]"
                 workflows = (
                     session.query(AutoWorkflow)
                     .filter(
                         AutoWorkflow.name.like(f"{prefix}%"),
-                        AutoWorkflow.workflow_type == "kiro_cli",
+                        AutoWorkflow.workflow_type == "pi_agent",
                     )
                     .order_by(AutoWorkflow.created_date.desc())
                     .limit(50)
@@ -722,67 +737,55 @@ def register_routes(router, templates):
             return JSONResponse({"sessions": []})
 
 
-    # ── Kiro CLI management ──
+    # ── Pi coding agent management ──
 
-    @router.get("/kiro-cli/status")
-    async def get_kiro_cli_status():
-        """Check if Kiro CLI is installed and authenticated."""
-        import shutil
-        import subprocess
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            return JSONResponse({"installed": False, "authenticated": False, "version": None, "path": None, "email": None})
+    @router.get("/pi/status")
+    async def get_pi_status():
+        """Check if pi coding agent is installed and get version."""
+        from distr.core.pi_rpc import PiRpcSession
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            return JSONResponse({"installed": False, "version": None, "path": None, "running": False})
         try:
-            version = subprocess.run([kiro_path, "--version"], capture_output=True, text=True, timeout=5)
+            import subprocess
+            version = subprocess.run([pi_path, "--version"], capture_output=True, text=True, timeout=5)
             ver_str = version.stdout.strip().split("\n")[0] if version.returncode == 0 else None
         except Exception:
             ver_str = None
-        # Check auth via kiro-cli whoami
-        authenticated = False
-        email = None
-        try:
-            whoami = subprocess.run([kiro_path, "whoami"], capture_output=True, text=True, timeout=10)
-            if whoami.returncode == 0 and "Logged in" in whoami.stdout:
-                authenticated = True
-                import re
-                email_match = re.search(r'Email:\s*(\S+)', whoami.stdout)
-                if email_match:
-                    email = email_match.group(1)
-        except Exception:
-            pass
+        # Check if any RPC sessions are alive
+        from distr.core.pi_rpc import _rpc_sessions
+        running = any(s.is_alive for s in _rpc_sessions.values())
         return JSONResponse({
             "installed": True,
-            "authenticated": authenticated,
             "version": ver_str,
-            "path": kiro_path,
-            "email": email,
+            "path": pi_path,
+            "running": running,
         })
 
-    @router.post("/kiro-cli/login")
-    async def kiro_cli_login():
-        """Trigger Kiro CLI login (opens browser for auth)."""
-        import shutil
-        import subprocess
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            return JSONResponse({"success": False, "error": "Kiro CLI not installed"}, status_code=400)
+    @router.post("/pi/login")
+    async def pi_login():
+        """Trigger pi login (opens browser for auth)."""
+        from distr.core.pi_rpc import PiRpcSession
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            return JSONResponse({"success": False, "error": "Pi is not installed. Run: npm install -g @mariozechner/pi-coding-agent"}, status_code=400)
         try:
-            # kiro-cli login opens a browser — run it detached
-            subprocess.Popen([kiro_path, "login"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            import subprocess
+            subprocess.Popen([pi_path, "/login"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             return JSONResponse({"success": True, "message": "Login started — check your browser"})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
-    @router.post("/kiro-cli/logout")
-    async def kiro_cli_logout():
-        """Logout from Kiro CLI."""
-        import shutil
-        import subprocess
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            return JSONResponse({"success": False, "error": "Kiro CLI not installed"}, status_code=400)
+    @router.post("/pi/logout")
+    async def pi_logout():
+        """Logout from pi."""
+        from distr.core.pi_rpc import PiRpcSession
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            return JSONResponse({"success": False, "error": "Pi is not installed"}, status_code=400)
         try:
-            result = subprocess.run([kiro_path, "logout"], capture_output=True, text=True, timeout=10)
+            import subprocess
+            result = subprocess.run([pi_path, "/logout"], capture_output=True, text=True, timeout=10)
             return JSONResponse({"success": result.returncode == 0, "output": result.stdout.strip()})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
@@ -792,7 +795,7 @@ def register_routes(router, templates):
 
     @router.get("/projects/{project_id}/cli/stream")
     async def stream_cli_audit(project_id: int):
-        """SSE endpoint — pushes an event whenever the project's Kiro CLI audit changes."""
+        """SSE endpoint — pushes an event whenever the project's pi agent audit changes."""
         import asyncio
         from fastapi.responses import StreamingResponse
 
@@ -814,7 +817,7 @@ def register_routes(router, templates):
                             session.query(AutoWorkflow)
                             .filter(
                                 AutoWorkflow.name.like(f"{prefix}%"),
-                                AutoWorkflow.workflow_type == "kiro_cli",
+                                AutoWorkflow.workflow_type == "pi_agent",
                             )
                             .order_by(AutoWorkflow.modified_date.desc())
                             .first()
@@ -833,13 +836,13 @@ def register_routes(router, templates):
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
 
-    # ── Terminal: WebSocket + buffer API ──────────────────────────────
+    # ── Terminal: WebSocket (pi RPC mode) + buffer + overview ───────
 
     @router.websocket("/projects/{project_id}/terminal/ws")
     async def terminal_websocket(websocket: WebSocket, project_id: int):
-        """WebSocket for real-time terminal I/O. Connects to a PTY session running `pi` in the project directory."""
+        """WebSocket for real-time pi RPC transcript. Connects to a pi --mode rpc session."""
         import asyncio
-        from distr.core.terminal import get_or_create_session, get_session, kill_session
+        from distr.core.pi_rpc import get_or_create_rpc_session, get_rpc_session, kill_rpc_session, PiRpcSession
         from distr.gui.web.security import websocket_has_valid_internal_token, is_allowed_local_origin
 
         # Auth check
@@ -874,23 +877,47 @@ def register_routes(router, templates):
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
 
+        # Create or get the pi RPC session
         try:
-            session = await get_or_create_session(project_id, cwd, command="pi")
+            rpc = await get_or_create_rpc_session(project_id, cwd)
         except Exception as e:
-            logger.error(f"Terminal: failed to create session: {e}")
-            await websocket.send_json({"type": "error", "message": f"Failed to start terminal: {e}"})
+            logger.error(f"Terminal: failed to create pi RPC session: {e}")
+            await websocket.send_json({"type": "error", "message": f"Failed to start pi: {e}"})
             await websocket.close(code=1011, reason="Terminal error")
             return
 
-        session.websockets.add(websocket)
+        # Queue for RPC events to be sent to this WebSocket
+        event_queue = asyncio.Queue()
 
-        # Send initial connection message
-        await websocket.send_json({"type": "connected", "project_id": project_id})
+        def _on_event(event_dict):
+            try:
+                event_queue.put_nowait(event_dict)
+            except Exception:
+                pass
 
-        # If there's existing buffer content, send it
-        buffer_text = session.get_buffer(200)
-        if buffer_text:
-            await websocket.send_json({"type": "output", "data": buffer_text + "\n"})
+        rpc.add_event_callback(_on_event)
+
+        # Send initial connection message + existing transcript
+        buffer_messages = rpc.get_messages()
+        await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": buffer_messages})
+
+        async def _forward_events():
+            """Forward RPC events to WebSocket client."""
+            while True:
+                try:
+                    event = await asyncio.wait_for(event_queue.get(), timeout=30)
+                    await websocket.send_json(event)
+                except asyncio.TimeoutError:
+                    # Send keepalive
+                    try:
+                        await websocket.send_json({"type": "ping"})
+                    except Exception:
+                        break
+                except Exception:
+                    break
+
+        # Start event forwarding task
+        forward_task = asyncio.create_task(_forward_events())
 
         try:
             while True:
@@ -902,21 +929,26 @@ def register_routes(router, templates):
 
                 msg_type = msg.get("type")
 
-                if msg_type == "input":
-                    # User typed something — send to PTY
-                    session.write(msg.get("data", ""))
-                elif msg_type == "resize":
-                    # Terminal resize
-                    rows = int(msg.get("rows", 24))
-                    cols = int(msg.get("cols", 80))
-                    session.resize(rows, cols)
+                if msg_type == "prompt":
+                    # User sent a prompt to pi via the terminal input
+                    instruction = msg.get("message", "")
+                    if instruction:
+                        rpc.send_prompt(instruction)
+                elif msg_type == "steer":
+                    # User is steering/redirecting pi
+                    instruction = msg.get("message", "")
+                    if instruction:
+                        rpc.steer(instruction)
+                elif msg_type == "abort":
+                    # User wants to abort current operation
+                    rpc.abort()
                 elif msg_type == "restart":
-                    # Kill and restart terminal
-                    await kill_session(project_id)
+                    # Kill and restart pi RPC session
+                    await kill_rpc_session(project_id)
                     try:
-                        session = await get_or_create_session(project_id, cwd, command="pi")
-                        session.websockets.add(websocket)
-                        await websocket.send_json({"type": "connected", "project_id": project_id})
+                        rpc = await get_or_create_rpc_session(project_id, cwd)
+                        rpc.add_event_callback(_on_event)
+                        await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": rpc.get_messages()})
                     except Exception as e:
                         await websocket.send_json({"type": "error", "message": f"Failed to restart: {e}"})
                 elif msg_type == "ping":
@@ -926,29 +958,29 @@ def register_routes(router, templates):
         except Exception as e:
             logger.debug(f"Terminal WebSocket error: {e}")
         finally:
-            session.websockets.discard(websocket)
-            # Don't kill the session when a single WS disconnects — keep it alive
-            # so the terminal persists across page navigations
+            forward_task.cancel()
+            rpc.remove_event_callback(_on_event)
 
     @router.get("/projects/{project_id}/terminal/buffer")
     async def get_terminal_buffer(project_id: int, lines: int = 100):
-        """Get the terminal buffer content for an agent to read."""
-        from distr.core.terminal import get_session
+        """Get the terminal buffer content from the pi RPC session."""
+        from distr.core.pi_rpc import get_rpc_session
 
-        session = get_session(project_id)
-        if not session:
+        rpc = get_rpc_session(project_id)
+        if not rpc:
             return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
 
+        buffer_text = rpc.get_buffer(lines)
         return JSONResponse({
-            "buffer": session.get_buffer(lines),
-            "alive": session.is_alive,
+            "buffer": buffer_text,
+            "alive": rpc.is_alive,
             "project_id": project_id,
         })
 
     @router.post("/projects/{project_id}/terminal/restart")
     async def restart_terminal(project_id: int):
-        """Kill and recreate the terminal session for a project."""
-        from distr.core.terminal import kill_session, get_or_create_session
+        """Kill and recreate the pi RPC session for a project."""
+        from distr.core.pi_rpc import kill_rpc_session, get_or_create_rpc_session
         from distr.core.db import get_session as db_session
         from distr.core.db.projects import Project
 
@@ -966,46 +998,61 @@ def register_routes(router, templates):
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
 
-        await kill_session(project_id)
+        await kill_rpc_session(project_id)
         try:
-            new_session = await get_or_create_session(project_id, cwd, command="pi")
-            return JSONResponse({"success": True, "alive": new_session.is_alive})
+            rpc = await get_or_create_rpc_session(project_id, cwd)
+            return JSONResponse({"success": True, "alive": rpc.is_alive})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
     @router.post("/projects/{project_id}/terminal/overview")
     async def terminal_overview(project_id: int):
-        """Get terminal buffer, summarize via LLM, and speak the summary aloud."""
-        from distr.core.terminal import get_session
+        """Get pi RPC session transcript, produce a natural spoken summary, and speak it aloud."""
+        import asyncio
+        from distr.core.pi_rpc import get_rpc_session
         from distr.core.settings import load_settings_from_db
         from distr.core.llm_factory import create_stream
         from distr.core.signals import signal_manager
 
-        session = get_session(project_id)
-        if not session:
-            return JSONResponse({"error": "No terminal session for this project"}, status_code=404)
+        rpc = get_rpc_session(project_id)
+        if not rpc:
+            return JSONResponse({"error": "No pi session for this project"}, status_code=404)
 
-        # Get full terminal buffer (up to 500 lines)
-        buffer = session.get_buffer(500)
-        if not buffer or not buffer.strip():
+        # Get structured transcript
+        messages = rpc.get_messages()
+        if not messages:
             return JSONResponse({"summary": "The terminal is empty — nothing has been output yet.", "empty": True})
 
-        # Smart trim: keep recent context, but also capture the beginning if possible
-        # Split into head (startup/initial output) and tail (recent activity)
-        lines = buffer.splitlines()
-        total_lines = len(lines)
-        if total_lines > 400:
-            # Keep first 100 lines (pi startup, initial summary) and last 300 lines
-            head = lines[:100]
-            tail = lines[-300:]
-            # Mark the join clearly so the LLM knows content was elided
-            buffer_start = "\n".join(head)
-            buffer_end = "\n".join(tail)
-            buffer = buffer_start + "\n\n... [middle content omitted] ...\n\n" + buffer_end
+        # Extract only user commands and assistant responses (skip thinking, tool calls, tool results)
+        user_msgs = []
+        assistant_msgs = []
+        for msg in messages:
+            role = msg.get("role", "")
+            if role == "user":
+                content = (msg.get("content", "") or "").strip()
+                if content:
+                    user_msgs.append(content)
+            elif role == "assistant":
+                content = (msg.get("content", "") or "").strip()
+                if content:
+                    assistant_msgs.append(content)
 
-        # Truncate if still too long for context window
-        if len(buffer) > 15000:
-            buffer = buffer[-15000:]
+        if not user_msgs and not assistant_msgs:
+            return JSONResponse({"summary": "The terminal has no commands yet.", "empty": True})
+
+        # Build a focused transcript for LLM summarization
+        # Last 5 commands and responses, truncated for the LLM
+        transcript_parts = []
+        for cmd in user_msgs[-5:]:
+            truncated = cmd[:200] + "..." if len(cmd) > 200 else cmd
+            transcript_parts.append(f"[cmd] {truncated}")
+        for resp in assistant_msgs[-5:]:
+            truncated = resp[:400] + "..." if len(resp) > 400 else resp
+            transcript_parts.append(f"[resp] {truncated}")
+
+        buffer = "\n".join(transcript_parts)
+        if len(buffer) > 4000:
+            buffer = buffer[-4000:]
 
         # Get LLM settings
         settings = load_settings_from_db()
@@ -1016,33 +1063,112 @@ def register_routes(router, templates):
         if not model:
             model = "llama3.2" if provider == "ollama" else "gpt-4o-mini"
 
-        # Call LLM to summarize
+        # LLM prompt: produce natural spoken language for TTS
         system_prompt = (
-            "You are a helpful assistant that explains terminal output to a user. "
-            "Given the terminal output below, provide a concise, plain-English summary of what happened. "
-            "Cover: what was the initial state (e.g. pi startup summary), what commands were run, "
-            "whether they succeeded or failed, and what the current state is. "
-            "Keep it under 4 sentences. Be specific about outcomes. "
-            "If the output shows a pi check-in or agent summary, include the key findings."
+            "You produce short TTS-friendly summaries of terminal activity. "
+            "Rules:\n"
+            "1. Speak naturally, as if talking to a colleague.\n"
+            "2. Never say file paths, directory trees, or raw command output.\n"
+            "3. Describe what happened in plain English — e.g. 'listed the project files', 'checked the config', 'read the main source file'.\n"
+            "4. Quantify when useful — 'about 30 files', 'a few hundred lines'.\n"
+            "5. 1-2 sentences max.\n"
+            "6. If there were errors, mention the outcome not the error details.\n"
+            "Examples:\n"
+            "- 'Listed the project directory — about 30 files including the main source and config.'\n"
+            "- 'Read the config file — it has database and API settings.'\n"
+            "- 'Found an error so listed the directory instead — about 15 files.'\n"
         )
-        messages = [
+        llm_messages = [
             {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Here is the terminal output:\n\n" + buffer},
+            {"role": "user", "content": "Terminal transcript:\n" + buffer},
         ]
 
+        # Run LLM in thread pool so it doesn't block uvicorn
+        def _summarize():
+            try:
+                summary_parts = []
+                for token in create_stream(provider, model, llm_messages, settings):
+                    summary_parts.append(token)
+                return "".join(summary_parts).strip()
+            except Exception as e:
+                logger.error(f"Terminal overview LLM call failed: {e}", exc_info=True)
+                return f"Error: {str(e)[:200]}"
+
         try:
-            summary_parts = []
-            for token in create_stream(provider, model, messages, settings):
-                summary_parts.append(token)
-            summary = "".join(summary_parts).strip()
+            loop = asyncio.get_running_loop()
+            summary = await loop.run_in_executor(None, _summarize)
         except Exception as e:
-            logger.error(f"Terminal overview LLM call failed: {e}", exc_info=True)
-            summary = f"Error summarizing terminal output: {str(e)[:200]}"
+            logger.error(f"Terminal overview executor failed: {e}", exc_info=True)
+            summary = f"Error: {str(e)[:200]}"
 
         # Speak the summary aloud
         try:
+            logger.info(f"Terminal overview: speaking {len(summary)} chars")
             signal_manager.speak_text_directly.emit(summary)
         except Exception as e:
-            logger.warning(f"Failed to speak terminal overview: {e}")
+            logger.warning(f"Failed to speak terminal overview: {e}", exc_info=True)
 
-        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": total_lines})
+        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(messages)})
+
+        # For longer sessions, build a focused transcript for LLM summarization
+        # Only include user commands and final assistant responses
+        transcript_parts = []
+        for i, cmd in enumerate(user_msgs):
+            transcript_parts.append(f"[cmd {i+1}] {cmd}")
+        for i, resp in enumerate(assistant_msgs):
+            # Truncate each response to keep the LLM input manageable
+            truncated = resp[:600] + "..." if len(resp) > 600 else resp
+            transcript_parts.append(f"[resp {i+1}] {truncated}")
+
+        buffer = "\n".join(transcript_parts)
+        if len(buffer) > 8000:
+            buffer = buffer[-8000:]
+
+        # Get LLM settings
+        settings = load_settings_from_db()
+        provider = (settings.get("agent_provider") or settings.get("default_provider") or "ollama").strip()
+        model = (settings.get("agent_model_name") or settings.get("default_model_name") or "").strip()
+        if not provider:
+            provider = "ollama"
+        if not model:
+            model = "llama3.2" if provider == "ollama" else "gpt-4o-mini"
+
+        # Call LLM to summarize — focus on commands and results only
+        system_prompt = (
+            "You summarize terminal sessions. You receive a transcript containing user commands [cmd N] "
+            "and agent responses [resp N]. Give a 1-2 sentence spoken summary of what commands ran "
+            "and what the key results were. Speak naturally. Examples:\n"
+            "- 'ls showed 12 files in the project directory including package.json and src.'\n"
+            "- 'read failed on that path because it's a directory, so ls was used instead to list the contents.'\n"
+        )
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": "Terminal transcript:\n\n" + buffer},
+        ]
+
+        # Run the LLM call in a thread pool so it doesn't block the uvicorn event loop
+        def _summarize():
+            try:
+                summary_parts = []
+                for token in create_stream(provider, model, llm_messages, settings):
+                    summary_parts.append(token)
+                return "".join(summary_parts).strip()
+            except Exception as e:
+                logger.error(f"Terminal overview LLM call failed: {e}", exc_info=True)
+                return f"Error summarizing: {str(e)[:200]}"
+
+        try:
+            loop = asyncio.get_running_loop()
+            summary = await loop.run_in_executor(None, _summarize)
+        except Exception as e:
+            logger.error(f"Terminal overview executor failed: {e}", exc_info=True)
+            summary = f"Error: {str(e)[:200]}"
+
+        # Speak the summary aloud
+        try:
+            logger.info(f"Terminal overview (LLM): speaking {len(summary)} chars")
+            signal_manager.speak_text_directly.emit(summary)
+        except Exception as e:
+            logger.warning(f"Failed to speak terminal overview: {e}", exc_info=True)
+
+        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(messages)})

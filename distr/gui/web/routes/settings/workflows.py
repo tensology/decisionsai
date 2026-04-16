@@ -285,10 +285,19 @@ def register_routes(router, templates):
                 "  ],\n"
                 '  "variables": []\n'
                 "}\n\n"
-                "Valid action_type values: agent_instruction, run_command, http_request, "
-                "execute_code, playwright, play_recording, set_variable.\n\n"
-                "The last step's on_pass_goto_position should be null (end workflow).\n"
-                "Return ONLY valid JSON, no markdown fences or explanations.\n\n"
+                "Valid action_type values and when to use them:\n"
+                '- "agent_instruction" — general-purpose desktop/UI automation (default for most tasks)\n'
+                '- "playwright" — browser automation: navigate, login, fill forms, click, scrape, screenshot\n'
+                '- "execute_code" — run a Python script (data processing, file I/O, computation)\n'
+                '- "run_command" — execute a shell command (mkdir, cp, ls, app launch)\n'
+                '- "http_request" — make an HTTP request (GET, POST, PUT, DELETE)\n'
+                '- "play_recording" — replay a previously recorded macro\n\n'
+                "Rules:\n"
+                "- Use \"playwright\" for all web browser tasks.\n"
+                "- Use \"agent_instruction\" for desktop app tasks and general automation.\n"
+                "- Use \"execute_code\" for data/file processing.\n"
+                "- The last step's on_pass_goto_position should be null (end workflow).\n"
+                "- Return ONLY valid JSON, no markdown fences or explanations.\n\n"
                 f"User description:\n{data.description}"
             )
 
@@ -526,15 +535,66 @@ def register_routes(router, templates):
     # Step execution (path-param route)
     @router.post("/workflows/{workflow_id}/steps/{step_id}/execute")
     async def workflow_execute_step(workflow_id: int, step_id: int):
+        """Execute a single step in isolation.
+
+        Runs the step in a background thread so the LLM call doesn't block
+        the uvicorn event loop (which would hang the entire server). Returns
+        immediately; the UI polls / soft-refreshes to see the result.
+        """
+        import asyncio
+
+        def _run():
+            try:
+                from distr.core.workflow.dispatcher import StepDispatcher
+                dispatcher = StepDispatcher()
+                dispatcher.run_isolated(step_id)
+            except Exception as exc:
+                logger.error("Background step execution failed for step %s: %s", step_id, exc, exc_info=True)
+
+        loop = asyncio.get_running_loop()
+        loop.run_in_executor(None, _run)
+        return JSONResponse({"success": True, "message": "Step execution started."})
+
+    @router.post("/workflows/{workflow_id}/steps/{step_id}/stop")
+    async def workflow_stop_step(workflow_id: int, step_id: int):
+        """Stop a running/waiting step: cancel playback, stop TTS/player, cancel the active run, reset the step."""
         try:
-            from distr.core.workflow.dispatcher import StepDispatcher
-            dispatcher = StepDispatcher()
-            result = dispatcher.run_isolated(step_id)
-            if "error" in result:
-                return JSONResponse({"detail": result["error"]}, status_code=400)
-            return JSONResponse(result)
+            from distr.core.workflow.dispatcher import cancel_step, cancel_run
+            from distr.core.db import get_session as _get_session
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep as _Step
+
+            # Stop any recording playback via the action playback service
+            try:
+                from distr.core.signals import signal_manager
+                svc = getattr(signal_manager, 'action_playback_service', None)
+                if svc is not None:
+                    svc.stop_action()
+            except Exception:
+                pass
+
+            # Stop TTS and player if a step is being stopped
+            try:
+                from distr.core.signals import signal_manager
+                signal_manager.interrupt_tts.emit()
+                signal_manager.player_stop.emit()
+            except Exception:
+                pass
+
+            # Cancel the step itself
+            cancel_step(step_id)
+
+            # Also cancel the active run for this workflow
+            with _get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.workflow_id == workflow_id,
+                    AutoWorkflowRun.status.in_(["running", "waiting"])
+                ).first()
+                if run:
+                    cancel_run(run.id)
+
+            return JSONResponse({"success": True})
         except Exception as e:
-            logger.error("Workflow execute step failed: %s", e, exc_info=True)
+            logger.error("Workflow stop step failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/{workflow_id}/steps/{step_id}/cancel")

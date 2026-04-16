@@ -42,6 +42,8 @@ class StepRouter:
         result: str,
         passed: bool,
         run_id: int,
+        *,
+        skip_wait: bool = False,
     ) -> Dict[str, Any]:
         """After a step completes: verify → store result → determine next step.
 
@@ -49,6 +51,9 @@ class StepRouter:
             {"action": "next_step", "step_id": <id>}
             {"action": "end_run", "status": "completed"}
             {"action": "waiting", "notify_main_agent": True}
+
+        Set ``skip_wait=True`` when resuming from feedback to avoid re-entering
+        the wait state for a ``wait_for_continue`` step that has already waited.
         """
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(
@@ -58,7 +63,8 @@ class StepRouter:
                 return {"action": "end_run", "status": "failed", "error": "Step not found"}
 
             # ── wait_for_continue gate ──
-            if step.wait_for_continue:
+            # Skip when resuming from feedback (the step has already waited)
+            if step.wait_for_continue and not skip_wait:
                 return self._enter_wait_state(db, step, run_id, result, passed)
 
             # ── verify ──
@@ -133,8 +139,9 @@ class StepRouter:
 
         increment_workflow_updated()
 
-        # Re-route with the enriched result
-        return self.route(step_id, stored_result, stored_passed, run_id)
+        # Re-route with the enriched result, skipping the wait gate
+        # since the step has already waited for and received feedback.
+        return self.route(step_id, stored_result, stored_passed, run_id, skip_wait=True)
 
     # ── Internal: determine next step ───────────────────────────────
 
@@ -373,8 +380,7 @@ class StepRouter:
             if len(result.strip()) > 400:
                 speak_text += "..."
             signal_manager.speak_text_directly.emit(
-                f"Step '{step_name}' is done and waiting for your input. "
-                f"Here's what happened: {speak_text}",
+                f"{speak_text}. Step '{step_name}' is now waiting for your input.",
             )
         except Exception as e:
             logger.debug("Could not speak wait notification: %s", e)

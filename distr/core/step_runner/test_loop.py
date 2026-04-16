@@ -143,14 +143,14 @@ class TestLoopService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _execute_python(self, code: str, timeout: int = 60) -> ExecutionResult:
+    def _execute_python(self, code: str, timeout: int = 60, cwd: str | None = None) -> ExecutionResult:
         """Run *code* as a Python script in an isolated subprocess.
 
         The code is written to a temporary file and executed with the
         current Python interpreter (``sys.executable``).  stdout and stderr
         are captured.  A *timeout* (seconds) is enforced.
         """
-        return self._run_in_subprocess(code, timeout=timeout, env_extra=None)
+        return self._run_in_subprocess(code, timeout=timeout, env_extra=None, cwd=cwd)
 
     def _execute_playwright(
         self,
@@ -186,6 +186,7 @@ class TestLoopService:
         code: str,
         timeout: int,
         env_extra: dict | None = None,
+        cwd: str | None = None,
     ) -> ExecutionResult:
         """Write *code* to a temp file and run it with ``sys.executable``."""
         fd, tmp_path = tempfile.mkstemp(suffix=".py", prefix="step_runner_")
@@ -204,6 +205,7 @@ class TestLoopService:
                     text=True,
                     timeout=timeout,
                     env=env,
+                    cwd=cwd,
                 )
                 return ExecutionResult(
                     exit_code=proc.returncode,

@@ -18,7 +18,8 @@
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
     var SVG_FORWARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></svg>';
-    var SVG_CANCEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>';
+    var SVG_CANCEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
+       var SVG_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
     var SVG_PLAY_REC = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
 
     function esc(s) {
@@ -119,12 +120,35 @@
                     badge.textContent = s.status;
                     badge.className = "step-status-badge text-xs px-1.5 py-0.5 rounded " + statusBadgeClass(s.status);
                 }
-                // Update result display if expanded
-                var resultEl = card.querySelector(".sf-result-content");
+                // Update result indicator if expanded
+                var resultEl = card.querySelector(".sf-goto-history");
                 if (resultEl && s.result) {
-                    resultEl.textContent = s.result;
+                    var preview = s.result.length > 80 ? s.result.substring(0, 80) + '…' : s.result;
+                    resultEl.textContent = 'ℹ️ ' + preview;
                     var wrap = card.querySelector(".sf-result-wrap");
                     if (wrap) wrap.classList.remove("hidden");
+                } else if (!s.result || !s.result.trim()) {
+                    var w = card.querySelector(".sf-result-wrap");
+                    if (w) w.classList.add("hidden");
+                }
+                // Refresh history tab if it's currently visible
+                if (expandedStepId === s.id && activeStepTab[s.id] === "history") {
+                    var histContainer = card.querySelector(".sf-history-tab-list");
+                    if (histContainer) loadStepHistory(s.id, histContainer);
+                }
+                // When a running/waiting step transitions to a terminal state,
+                // auto-load or refresh history if the step is expanded
+                if (expandedStepId === s.id && (s.status === "passed" || s.status === "failed" || s.status === "cancelled")) {
+                    var wasRunning = card.querySelector(".sh-stop") || card.querySelector(".sh-continue-waiting");
+                    if (wasRunning) {
+                        // Step just finished — auto-switch to History tab
+                        activeStepTab[s.id] = "history";
+                        buildStepForm(s, steps);
+                    } else if (activeStepTab[s.id] !== "history") {
+                        // Step was already terminal but expanded — refresh history anyway
+                        var histContainer2 = card.querySelector(".sf-history-tab-list");
+                        if (histContainer2) loadStepHistory(s.id, histContainer2);
+                    }
                 }
             });
             checkActiveRun();
@@ -266,9 +290,11 @@
             var statusCls = statusBadgeClass(s.status);
             var headerBtns = '';
             if (s.status === "waiting") {
-                headerBtns = '<button type="button" class="sh-continue-waiting px-2 py-0.5 rounded border border-amber-500/50 text-amber-400 text-xs hover:bg-amber-500/20" data-step-id="' + s.id + '">Continue</button>';
+                headerBtns = '<button type="button" class="sh-continue-waiting inline-flex items-center justify-center w-6 h-6 rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/20" data-step-id="' + s.id + '" title="Continue">' + SVG_FORWARD + '</button>' +
+                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel">' + SVG_CANCEL + '</button>';
             } else if (s.status === "running") {
-                headerBtns = '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel">' + SVG_CANCEL + '</button>';
+                headerBtns = '<button type="button" class="sh-stop inline-flex items-center justify-center w-6 h-6 rounded border border-orange-500/50 text-orange-400 hover:bg-orange-500/20" data-step-id="' + s.id + '" title="Stop">' + SVG_STOP + '</button>' +
+                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel run">' + SVG_CANCEL + '</button>';
             } else {
                 headerBtns = '<button type="button" class="sh-run-isolated inline-flex items-center justify-center w-6 h-6 rounded border border-blue-500/50 text-blue-400 hover:bg-blue-500/20" data-step-id="' + s.id + '" title="Run Isolated">' + SVG_PLAY + '</button>' +
                     '<button type="button" class="sh-run-continue inline-flex items-center justify-center w-6 h-6 rounded border border-green-500/50 text-green-400 hover:bg-green-500/20" data-step-id="' + s.id + '" title="Continue From Here">' + SVG_FORWARD + '</button>';
@@ -301,6 +327,9 @@
         });
         el.querySelectorAll(".sh-cancel").forEach(function (btn) {
             btn.addEventListener("click", function (e) { e.stopPropagation(); cancelStep(parseInt(btn.dataset.stepId, 10)); });
+        });
+        el.querySelectorAll(".sh-stop").forEach(function (btn) {
+            btn.addEventListener("click", function (e) { e.stopPropagation(); stopStep(parseInt(btn.dataset.stepId, 10)); });
         });
         el.querySelectorAll(".sh-continue-waiting").forEach(function (btn) {
             btn.addEventListener("click", function (e) {
@@ -523,12 +552,14 @@
         html += '</div>';
         html += '</div>';
 
-        // ── Result display ──
+        // ── Compact result indicator (click to jump to History tab)
         var hasResult = step.result && step.result.trim();
-        html += '<div class="sf-result-wrap border-t border-white/10 pt-3 mt-1' + (hasResult ? "" : " hidden") + '">';
-        html += '<label class="block text-xs text-gray-500 mb-1">Last Result</label>';
-        html += '<pre class="sf-result-content w-full px-3 py-2 bg-[#0d1333] border border-white/10 rounded text-xs text-gray-300 font-mono max-h-40 overflow-auto whitespace-pre-wrap">' + esc(step.result || "") + '</pre>';
-        html += '</div>';
+        if (hasResult) {
+            var resultPreview = step.result.length > 80 ? step.result.substring(0, 80) + '…' : step.result;
+            html += '<div class="sf-result-wrap border-t border-white/10 pt-2 mt-1">';
+            html += '<p class="text-xs text-gray-400 cursor-pointer hover:text-white sf-goto-history">ℹ️ ' + esc(resultPreview) + '</p>';
+            html += '</div>';
+        }
 
         // ── Bottom bar: Save + Delete ──
         html += '<div class="flex items-center gap-2 pt-3 border-t border-white/10">';
@@ -791,6 +822,14 @@
         container.querySelector(".sf-delete").addEventListener("click", function () {
             if (confirm("Delete this step?")) deleteStep(step.id);
         });
+        // Result indicator click -> jump to History tab
+        var gotoHist = container.querySelector(".sf-goto-history");
+        if (gotoHist) {
+            gotoHist.addEventListener("click", function () {
+                activeStepTab[step.id] = "history";
+                buildStepForm(step, allSteps);
+            });
+        }
 
         // Recording
         var recordBtn = container.querySelector(".sf-record");
@@ -890,15 +929,21 @@
 
     function executeStep(stepId) {
         api("POST", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/execute")
-            .then(function () { snack("Step sent to agent"); startPolling(); loadDetail(currentWorkflowId); })
+            .then(function () { snack("Step execution started"); startPolling(); loadDetail(currentWorkflowId); })
             .catch(function (e) { snack(e.message || "Execute failed", "error"); });
     }
 
     function runFromStep(stepId) {
-        // Start a full workflow run (the run engine handles routing from step to step)
-        api("POST", "/workflows/" + currentWorkflowId + "/run")
-            .then(function () { snack("Workflow started"); startPolling(); loadDetail(currentWorkflowId); })
+        // Start a full workflow run starting from the given step
+        api("POST", "/workflows/" + currentWorkflowId + "/run", { start_step_id: stepId })
+            .then(function () { snack("Workflow started from this step"); startPolling(); loadDetail(currentWorkflowId); })
             .catch(function (e) { snack(e.message || "Run failed", "error"); });
+    }
+
+    function stopStep(stepId) {
+        api("POST", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/stop")
+            .then(function () { snack("Step stopped"); loadDetail(currentWorkflowId); })
+            .catch(function () { snack("Failed to stop", "error"); });
     }
 
     function cancelStep(stepId) {
@@ -921,25 +966,65 @@
     }
 
     function loadStepHistory(stepId, container) {
-        api("GET", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/results?limit=10")
+        api("GET", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/results?limit=20")
             .then(function (data) {
                 if (!data.length) {
                     container.innerHTML = '<p class="text-xs text-gray-600">No results yet.</p>';
                     return;
                 }
-                container.innerHTML = data.map(function (r) {
-                    var statusColor = r.status === "passed" ? "text-green-400" : r.status === "failed" ? "text-red-400" : "text-gray-400";
+                container.innerHTML = data.map(function (r, idx) {
+                    var statusColor = r.status === "passed" ? "bg-green-600/40 text-green-300" : r.status === "failed" ? "bg-red-600/40 text-red-300" : r.status === "cancelled" ? "bg-gray-600/40 text-gray-300" : "bg-blue-600/40 text-blue-300";
                     var ts = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
-                    var response = (r.agent_response || "").substring(0, 200);
-                    return '<div class="bg-[#0d1333] border border-white/10 rounded px-3 py-2">' +
-                        '<div class="flex items-center gap-2 mb-1">' +
-                        '<span class="text-xs ' + statusColor + ' font-medium">' + esc(r.status) + '</span>' +
-                        '<span class="text-xs text-gray-600 ml-auto">' + ts + '</span>' +
-                        (r.run_id ? '<span class="text-xs text-gray-600">Run #' + r.run_id + '</span>' : '') +
-                        '</div>' +
-                        '<pre class="text-xs text-gray-400 font-mono whitespace-pre-wrap max-h-20 overflow-auto">' + esc(response) + '</pre>' +
-                    '</div>';
+                    var response = (r.agent_response || "").trim();
+                    var isLatest = idx === 0;
+                    var isCollapsed = !isLatest;
+                    var maxPreviewLen = 150;
+                    var preview = response.length > maxPreviewLen ? response.substring(0, maxPreviewLen) + "…" : response;
+                    if (!response) { preview = "(no output)"; }
+
+                    var html = '<div class="sf-hist-item border border-white/10 rounded mb-2' + (isLatest ? " border-green-500/20" : "") + '">';
+                    // Header row: status badge on right, timestamp
+                    html += '<div class="flex items-center justify-between px-3 py-1.5 cursor-pointer sf-hist-header' + (isCollapsed ? " bg-[#0d1333]" : "") + '" data-idx="' + idx + '">';
+                    html += '<span class="text-xs text-gray-500">' + esc(ts) + '</span>';
+                    html += '<span class="text-xs px-1.5 py-0.5 rounded ml-auto ' + statusColor + '">' + esc(r.status) + '</span>';
+                    if (r.run_id) html += '<span class="text-xs text-gray-600 ml-1">Run #' + r.run_id + '</span>';
+                    if (isCollapsed) html += '<span class="sf-hist-toggle text-gray-500 text-xs ml-1">&#9654;</span>';
+                    if (!isCollapsed) html += '<span class="sf-hist-toggle text-gray-500 text-xs ml-1">&#9660;</span>';
+                    html += '</div>';
+
+                    // Content: latest expanded, others collapsed
+                    html += '<div class="sf-hist-content px-3 pb-2' + (isCollapsed ? " hidden" : "") + '">';
+                    if (isCollapsed) {
+                        html += '<p class="text-xs text-gray-500">' + esc(preview) + '</p>';
+                    } else {
+                        html += '<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-64 overflow-auto">' + esc(response || "(no output)") + '</pre>';
+                    }
+                    html += '</div>';
+                    html += '</div>';
+                    return html;
                 }).join('');
+
+                // Toggle expand/collapse on header click
+                container.querySelectorAll('.sf-hist-header').forEach(function (hdr) {
+                    hdr.addEventListener('click', function () {
+                        var item = hdr.closest('.sf-hist-item');
+                        var content = item.querySelector('.sf-hist-content');
+                        var toggle = hdr.querySelector('.sf-hist-toggle');
+                        var isHidden = content.classList.contains('hidden');
+                        content.classList.toggle('hidden');
+                        if (toggle) toggle.innerHTML = isHidden ? '&#9660;' : '&#9654;';
+                        // If expanding, show full content instead of preview
+                        if (isHidden) {
+                            var pre = content.querySelector('pre');
+                            if (!pre) {
+                                var idx = parseInt(hdr.dataset.idx, 10);
+                                var r = data[idx];
+                                var resp = (r && (r.agent_response || '').trim()) || '(no output)';
+                                content.innerHTML = '<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-64 overflow-auto">' + esc(resp) + '</pre>';
+                            }
+                        }
+                    });
+                });
             })
             .catch(function () { container.innerHTML = '<p class="text-xs text-red-400">Failed to load history.</p>'; });
     }
@@ -1318,46 +1403,18 @@
             });
         }
 
-        // Workflow Builder: generate workflow from description
-        var builderBtn = document.getElementById("wf-builder-btn");
-        if (builderBtn) {
-            builderBtn.addEventListener("click", function () {
-                var desc = (document.getElementById("wf-builder-desc").value || "").trim();
-                if (!desc) { snack("Please describe your workflow", "error"); return; }
-                builderBtn.disabled = true;
-                document.getElementById("wf-builder-spinner").classList.remove("hidden");
-                document.getElementById("wf-builder-error").classList.add("hidden");
-                api("POST", "/workflows/generate", { description: desc })
-                    .then(function (data) {
-                        snack("Workflow generated");
-                        document.getElementById("wf-builder-desc").value = "";
-                        selectWorkflow(data.id);
-                        loadList();
-                    })
-                    .catch(function (e) {
-                        var errEl = document.getElementById("wf-builder-error");
-                        errEl.textContent = e.message || "Generation failed";
-                        errEl.classList.remove("hidden");
-                    })
-                    .finally(function () {
-                        builderBtn.disabled = false;
-                        document.getElementById("wf-builder-spinner").classList.add("hidden");
-                    });
-            });
-        }
-
-        // Plan Steps: LLM step generation from instruction
+        // Plan: LLM generates a multi-step workflow from a description
         var planBtn = document.getElementById("wf-plan-btn");
         if (planBtn) {
             planBtn.addEventListener("click", function () {
                 var desc = (document.getElementById("wf-builder-desc").value || "").trim();
-                if (!desc) { snack("Enter an instruction first", "error"); return; }
+                if (!desc) { snack("Describe what to automate first", "error"); return; }
                 planBtn.disabled = true;
                 planBtn.textContent = "Planning...";
                 document.getElementById("wf-builder-error").classList.add("hidden");
                 api("POST", "/workflows/plan", { instruction: desc })
                     .then(function (data) {
-                        snack("Steps planned");
+                        snack("Workflow planned — " + (data.steps ? data.steps.length : 0) + " steps");
                         document.getElementById("wf-builder-desc").value = "";
                         selectWorkflow(data.id);
                         loadList();
@@ -1369,7 +1426,7 @@
                     })
                     .finally(function () {
                         planBtn.disabled = false;
-                        planBtn.textContent = "Plan Steps";
+                        planBtn.textContent = "⚡ Plan";
                     });
             });
         }

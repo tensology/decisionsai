@@ -608,6 +608,54 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     "voice_model": chat.voice_model,
                 }
 
+            # ── Persist chat selections to global settings so the next "new chat" ──
+            # defaults to these choices. Only update keys that the user explicitly
+            # set (i.e. were provided in the request).
+            try:
+                from distr.core.settings import save_settings_to_db as _save_settings
+                _settings = load_settings_from_db()
+                _changed = False
+
+                # LLM provider & model
+                if request_data.provider and request_data.provider.strip():
+                    _settings["conversational_llm_provider"] = provider  # normalised
+                    _settings["llm_provider"] = provider
+                    _settings["agent_provider"] = provider
+                    _changed = True
+                if request_data.model_name and request_data.model_name.strip():
+                    _settings["conversational_llm_model"] = model_name
+                    _settings["llm_model"] = model_name
+                    _settings["agent_model"] = model_name
+                    _changed = True
+
+                # TTS provider
+                if request_data.voice_provider and request_data.voice_provider.strip():
+                    _settings["tts_provider"] = voice_provider  # already normalised
+                    _settings["voice_provider"] = voice_provider
+                    _changed = True
+
+                # TTS voice — persist to provider-specific key
+                if request_data.voice_model and request_data.voice_model.strip():
+                    vp_id = normalize_voice_provider(voice_provider)
+                    voice_key = {
+                        "kokoro": "kokoro_voice",
+                        "openai": "openai_voice",
+                        "elevenlabs": "elevenlabs_voice",
+                        "coqui": "coqui_voice",
+                    }.get(vp_id)
+                    if voice_key:
+                        _settings[voice_key] = voice_model
+                        _changed = True
+
+                if _changed:
+                    _save_settings(_settings)
+                    logger.info(
+                        "Create chat: persisted selections to global settings (provider=%s, model=%s, voice_provider=%s, voice_model=%s)",
+                        provider, model_name, voice_provider, voice_model,
+                    )
+            except Exception as e:
+                logger.warning("Create chat: could not persist selections to settings: %s", e)
+
             try:
                 from distr.core.signals import signal_manager
 
@@ -656,7 +704,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
 
     @router.patch("/chats/{chat_id}")
     async def update_chat(chat_id: int, request_data: UpdateChatRequest):
-        """Update a chat. Persist title and thread settings (provider, model_name, voice) so the chat row is the source of truth."""
+        """Update a chat. Persist title and thread settings (provider, model_name, voice)
+        so the chat row is the source of truth. Also update global settings defaults so the
+        next new chat pre-selects these choices."""
         try:
             with get_session() as session:
                 chat = session.query(Chat).filter(Chat.id == chat_id).first()
@@ -683,17 +733,57 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 if updated:
                     chat.modified_date = datetime.utcnow()
                     session.commit()
-                return JSONResponse(
-                    {
-                        "id": chat.id,
-                        "title": chat.title or "New Chat",
-                        "provider": chat.provider,
-                        "model_name": chat.model_name,
-                        "voice_provider": chat.voice_provider,
-                        "voice_model": chat.voice_model,
-                        "message": "Chat updated",
-                    }
-                )
+
+            # ── Persist to global settings so next new chat defaults to these choices ──
+            try:
+                _sett = load_settings_from_db()
+                _changed = False
+                if request_data.provider and request_data.provider.strip():
+                    from distr.core.chat import _normalize_provider
+                    _sett["conversational_llm_provider"] = _normalize_provider(request_data.provider)
+                    _sett["llm_provider"] = _normalize_provider(request_data.provider)
+                    _sett["agent_provider"] = _normalize_provider(request_data.provider)
+                    _changed = True
+                if request_data.model_name and request_data.model_name.strip():
+                    _sett["conversational_llm_model"] = request_data.model_name.strip()
+                    _sett["llm_model"] = request_data.model_name.strip()
+                    _sett["agent_model"] = request_data.model_name.strip()
+                    _changed = True
+                if request_data.voice_provider and request_data.voice_provider.strip():
+                    vp_id = normalize_voice_provider(request_data.voice_provider.strip())
+                    _sett["tts_provider"] = vp_id
+                    _sett["voice_provider"] = vp_id
+                    _changed = True
+                if request_data.voice_model and request_data.voice_model.strip():
+                    _vp = normalize_voice_provider(
+                        (request_data.voice_provider or "").strip()
+                        or _sett.get("tts_provider", "kokoro")
+                    )
+                    _vkey = {"kokoro": "kokoro_voice", "openai": "openai_voice",
+                             "elevenlabs": "elevenlabs_voice", "coqui": "coqui_voice"}.get(_vp)
+                    if _vkey:
+                        _sett[_vkey] = request_data.voice_model.strip()
+                        _changed = True
+                if _changed:
+                    from distr.core.settings import save_settings_to_db as _save_settings
+                    _save_settings(_sett)
+                    logger.info(
+                        "Update chat %s: persisted selections to global settings", chat_id
+                    )
+            except Exception as e:
+                logger.warning("Update chat: could not persist selections to settings: %s", e)
+
+            return JSONResponse(
+                {
+                    "id": chat.id,
+                    "title": chat.title or "New Chat",
+                    "provider": chat.provider,
+                    "model_name": chat.model_name,
+                    "voice_provider": chat.voice_provider,
+                    "voice_model": chat.voice_model,
+                    "message": "Chat updated",
+                }
+            )
         except HTTPException:
             raise
         except Exception as e:

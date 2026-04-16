@@ -34,20 +34,32 @@
     <div class="flex gap-6 h-[calc(100vh-140px)]">
         <!-- Left panel -->
         <div class="w-80 flex-shrink-0 flex flex-col gap-4">
-            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
+            <!-- Create + Plan -->
+            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4 space-y-3">
                 <div class="flex gap-2">
                     <input type="text" id="wf-new-name" placeholder="New workflow name..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
                     <button type="button" id="wf-create-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Create</button>
                 </div>
+                <div class="flex gap-2">
+                    <input type="text" id="wf-builder-desc" placeholder="Describe what to automate..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
+                    <button type="button" id="wf-plan-btn" class="px-3 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20 whitespace-nowrap">⚡ Plan</button>
+                </div>
+                <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Planning...</span>
+                <p id="wf-builder-error" class="hidden text-xs text-red-400"></p>
             </div>
+            <!-- Workflow list -->
             <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
                 <div class="flex gap-2 mb-3 relative">
                     <input type="text" id="wf-search" placeholder="Search..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500">
+                    <!-- Cog: presets dropdown + workflow LLM settings -->
                     <button type="button" id="wf-presets-btn" class="hidden px-2 py-1.5 rounded border border-white/20 text-gray-400 text-sm hover:bg-white/10 hover:text-white" title="Presets">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     </button>
+                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="px-2 py-1.5 rounded border border-white/20 text-gray-400 text-sm hover:bg-white/10 hover:text-white">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
+                    </button>
                     <div id="wf-presets-dropdown" class="hidden absolute right-0 top-full mt-1 z-50 w-72 bg-[#1a1f3a] border border-white/20 rounded-lg p-3 max-h-64 overflow-y-auto shadow-xl">
-                        <p class="text-xs text-gray-500 mb-2">Presets</p>
+                        <p class="text-xs text-gray-500 mb-2">Presets & Import</p>
                         <div id="wf-presets-list" class="space-y-1">
                             <p class="text-xs text-gray-600">Loading...</p>
                         </div>
@@ -55,24 +67,11 @@
                 </div>
                 <div id="wf-list" class="flex-1 overflow-y-auto space-y-1"></div>
             </div>
-            <!-- Workflow Builder -->
-            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
-                <textarea id="wf-builder-desc" rows="2" placeholder="Describe your workflow..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-none"></textarea>
-                <div class="flex items-center gap-2 mt-2">
-                    <button type="button" id="wf-builder-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Generate Workflow</button>
-                    <button type="button" id="wf-plan-btn" class="px-4 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20">Plan Steps</button>
-                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="p-2 rounded border border-white/20 text-gray-400 hover:text-white hover:border-[#f97316] transition-colors">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
-                    </button>
-                    <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Generating...</span>
-                </div>
-                <p id="wf-builder-error" class="hidden text-xs text-red-400 mt-2"></p>
-            </div>
         </div>
         <!-- Right panel -->
         <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
             <div id="wf-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <p class="text-gray-400 text-sm max-w-md mb-4">Create a workflow to get started. Each workflow contains steps with actions, conditions, validation, and routing.</p>
+                <p class="text-gray-400 text-sm max-w-md mb-4">Create a workflow or describe what to automate. Each workflow contains steps with actions, conditions, validation, and routing.</p>
             </div>
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
                 <!-- Header -->
@@ -112,7 +111,7 @@
                         <div class="flex justify-between items-center mb-4">
                             <p class="text-xs text-gray-500">Click a step to expand and edit it.</p>
                             <div class="flex gap-2">
-                                <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Generate Steps</button>
+                                <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Add Steps from AI</button>
                                 <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Step</button>
                             </div>
                         </div>

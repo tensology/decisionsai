@@ -191,7 +191,7 @@ class KanbanAgentCheckIn:
         return result
 
     def _process_ticket(self, board, ticket: dict) -> str:
-        """Process a ticket — via Kiro CLI if board.send_to_cli, otherwise via workflow.
+        """Process a ticket — via pi coding agent if board.send_to_cli, otherwise via workflow.
 
         On completion, moves the ticket to the NEXT lane (e.g. Current → QA/Assess).
         Returns the terminal status ('completed', 'failed', 'cancelled').
@@ -200,11 +200,11 @@ class KanbanAgentCheckIn:
         self._status.current_ticket_title = ticket.get("title", "")
 
         if board.send_to_cli:
-            result = self._try_kiro_cli(ticket, board)
+            result = self._try_pi_agent(ticket, board)
             if result == "completed":
                 self._move_ticket_to_next_lane(board, ticket)
             else:
-                logger.info("Agent check-in: Kiro CLI ended with '%s' for ticket %s", result, ticket["id"])
+                logger.info("Agent check-in: pi agent ended with '%s' for ticket %s", result, ticket["id"])
             return result
 
         # Workflow path
@@ -242,17 +242,14 @@ class KanbanAgentCheckIn:
         self._status.current_run_id = None
         return terminal_status
 
-    def _try_kiro_cli(self, ticket: dict, board) -> str:
-        """Process a ticket via Kiro CLI. Returns status string."""
-        import shutil
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            logger.error("Agent check-in: send_to_cli is on but kiro-cli not found")
-            return "failed"
+    def _try_pi_agent(self, ticket: dict, board) -> str:
+        """Process a ticket via pi coding agent (RPC mode). Returns status string."""
+        from distr.core.pi_rpc import get_rpc_session, get_or_create_rpc_session, PiRpcSession
 
         # Resolve project folder
         folder = None
         project_name = None
+        project_id = None
         try:
             from distr.core.db.projects import Project
             project_id = board.default_project_id
@@ -275,6 +272,12 @@ class KanbanAgentCheckIn:
             logger.error("Agent check-in: send_to_cli but no project folder for ticket %s", ticket["id"])
             return "failed"
 
+        # Check pi is available
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            logger.error("Agent check-in: pi coding agent not found")
+            return "failed"
+
         # Build instruction from ticket
         title = ticket.get("title", "")
         description = ""
@@ -288,47 +291,77 @@ class KanbanAgentCheckIn:
 
         instruction = f"{title}\n\n{description}".strip() if description else title
 
-        logger.info("Agent check-in: sending ticket #%s to Kiro CLI in %s", ticket["id"], folder)
+        logger.info("Agent check-in: sending ticket #%s to pi in %s", ticket["id"], folder)
 
         try:
-            import subprocess
-            result = subprocess.run(
-                [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
-                capture_output=True, text=True, timeout=600,
-                cwd=folder,
-            )
-            output = (result.stdout + result.stderr).strip()[:3000]
-            status = "completed" if result.returncode == 0 else "failed"
-            logger.info("Agent check-in: Kiro CLI %s for ticket #%s (%d chars output)", status, ticket["id"], len(output))
-
-            # Log to audit trail
-            try:
-                from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
-                with get_session() as db:
-                    audit = AutoWorkflow(
-                        name=f"[Project: {project_name}] Ticket #{ticket['id']}: {title}",
-                        status=status,
-                        workflow_type="kiro_cli",
+            # Try RPC session first (async, persistent)
+            if project_id:
+                rpc = get_rpc_session(project_id)
+                if rpc and rpc.is_alive:
+                    success = rpc.send_prompt(instruction)
+                    if success:
+                        status = "running"
+                        logger.info("Agent check-in: sent ticket #%s to pi via RPC", ticket["id"])
+                    else:
+                        status = "failed"
+                        logger.warning("Agent check-in: failed to send ticket #%s via RPC", ticket["id"])
+                else:
+                    # No active session — use pi -p (print mode, one-shot)
+                    import subprocess
+                    result = subprocess.run(
+                        ["pi", "-p", "--append-system-prompt",
+                         f"You are working on project: {project_name}. This is ticket #{ticket['id']}.",
+                         instruction],
+                        capture_output=True, text=True, timeout=600,
+                        cwd=folder,
                     )
-                    db.add(audit)
-                    db.flush()
-                    step = AutoWorkflowStep(
-                        workflow_id=audit.id, position=0,
-                        name=f"Ticket #{ticket['id']}", instruction=instruction[:500],
-                        status=status, result=output[:2000], tool_used="kiro-cli",
-                    )
-                    db.add(step)
-                    db.commit()
-            except Exception as e:
-                logger.debug("Could not create audit for kiro-cli ticket: %s", e)
+                    output = (result.stdout + result.stderr).strip()[:3000]
+                    status = "completed" if result.returncode == 0 else "failed"
+                    logger.info("Agent check-in: pi %s for ticket #%s (%d chars output)", status, ticket["id"], len(output))
+            else:
+                # Fallback to pi -p
+                import subprocess
+                result = subprocess.run(
+                    ["pi", "-p", instruction],
+                    capture_output=True, text=True, timeout=600,
+                    cwd=folder,
+                )
+                output = (result.stdout + result.stderr).strip()[:3000]
+                status = "completed" if result.returncode == 0 else "failed"
 
-            return status
         except subprocess.TimeoutExpired:
-            logger.warning("Agent check-in: Kiro CLI timed out for ticket #%s", ticket["id"])
-            return "failed"
+            logger.warning("Agent check-in: pi timed out for ticket #%s", ticket["id"])
+            status = "failed"
+            output = "Pi timed out after 10 minutes"
         except Exception as e:
-            logger.error("Agent check-in: Kiro CLI error for ticket #%s: %s", ticket["id"], e)
-            return "failed"
+            logger.error("Agent check-in: pi error for ticket #%s: %s", ticket["id"], e)
+            status = "failed"
+            output = f"Pi error: {e}"
+            if 'output' not in dir():
+                output = output
+
+        # Log to audit trail
+        try:
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+            with get_session() as db:
+                audit = AutoWorkflow(
+                    name=f"[Project: {project_name}] Ticket #{ticket['id']}: {title}",
+                    status=status,
+                    workflow_type="pi_agent",
+                )
+                db.add(audit)
+                db.flush()
+                step = AutoWorkflowStep(
+                    workflow_id=audit.id, position=0,
+                    name=f"Ticket #{ticket['id']}", instruction=instruction[:500],
+                    status=status, result=output[:2000] if 'output' in dir() else None, tool_used="pi",
+                )
+                db.add(step)
+                db.commit()
+        except Exception as e:
+            logger.debug("Could not create audit for pi agent ticket: %s", e)
+
+        return status
 
     def _move_ticket_to_next_lane(self, board, ticket: dict):
         """Move a ticket to the next lane in sequence (e.g. Current → QA/Assess).

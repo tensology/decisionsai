@@ -99,7 +99,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
-        "Use action='send_to_cli' with ticket_id to send ticket to Kiro CLI for execution. "
+        "Use action='send_to_cli' with ticket_id to send ticket to pi coding agent for execution. "
         "The tool automatically gathers conversation context and attaches any "
         "images/documents from the chat thread to the ticket. "
         "IMPORTANT: When user says 'create a ticket', call this tool with "
@@ -1209,7 +1209,7 @@ class KanbanTicketTool(BaseTool):
     # ── Send ticket to CLI ────────────────────────────────────────────────
 
     def _action_send_to_cli(self, ticket_id) -> str:
-        """Send a ticket's instruction to Kiro CLI for the linked project. Creates an audit trail."""
+        """Send a ticket's instruction to pi coding agent for the linked project. Creates an audit trail."""
         if not ticket_id:
             # Try to find the most recent ticket from the in_use board
             try:
@@ -1227,15 +1227,15 @@ class KanbanTicketTool(BaseTool):
             if not ticket_id:
                 return "No ticket ID provided and no tickets found on the active board."
 
-        import shutil
         import subprocess
 
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         from distr.core.db.projects import Project
+        from distr.core.pi_rpc import PiRpcSession, get_rpc_session
 
-        kiro_path = shutil.which("kiro-cli")
-        if not kiro_path:
-            return "Kiro CLI is not installed. Install it with: curl -fsSL https://cli.kiro.dev/install | bash"
+        pi_path = PiRpcSession.find_pi()
+        if not pi_path:
+            return "Pi coding agent is not installed. Install it with: npm install -g @mariozechner/pi-coding-agent"
 
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
@@ -1276,14 +1276,14 @@ class KanbanTicketTool(BaseTool):
                 audit = AutoWorkflow(
                     name=f"[Project: {project_name}] Ticket #{ticket_id_val}: {title}",
                     status="in_progress",
-                    workflow_type="kiro_cli",
+                    workflow_type="pi_agent",
                 )
                 s.add(audit)
                 s.flush()
                 step = AutoWorkflowStep(
                     workflow_id=audit.id, position=0,
                     name=f"Ticket #{ticket_id_val}", instruction=instruction[:500],
-                    status="running", tool_used="kiro-cli",
+                    status="running", tool_used="pi",
                 )
                 s.add(step)
                 s.commit()
@@ -1298,20 +1298,30 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 pass
 
-        # Execute Kiro CLI
+        # Try RPC session first if one exists for this project
+        rpc = get_rpc_session(project_id) if project_id else None
+        if rpc and rpc.is_alive:
+            success = rpc.send_prompt(instruction)
+            if success:
+                return f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to pi. Check the terminal tab for progress."
+            # Fall through to one-shot if RPC failed
+
+        # Execute pi in print mode (one-shot)
         try:
             result = subprocess.run(
-                [kiro_path, "chat", "--no-interactive", "--trust-all-tools", instruction],
+                [pi_path, "-p", "--append-system-prompt",
+                 f"You are working on project: {project_name}. This is ticket #{ticket_id_val}.",
+                 instruction],
                 capture_output=True, text=True, timeout=600,
                 cwd=folder,
             )
             output = (result.stdout + result.stderr).strip()[:3000]
             status = "completed" if result.returncode == 0 else "failed"
         except subprocess.TimeoutExpired:
-            output = "Kiro CLI timed out after 10 minutes"
+            output = "Pi timed out after 10 minutes"
             status = "failed"
         except Exception as e:
-            output = f"Kiro CLI error: {e}"
+            output = f"Pi error: {e}"
             status = "failed"
 
         # Update audit trail (legacy StepRunner — removed in task 6.3)
@@ -1325,7 +1335,7 @@ class KanbanTicketTool(BaseTool):
                 pass
 
         if not output:
-            return f"Kiro CLI completed for ticket #{ticket_id_val} (exit code: {result.returncode})"
+            return f"Pi completed for ticket #{ticket_id_val} (exit code: {result.returncode})"
 
         preview = output[:500] + "..." if len(output) > 500 else output
-        return f"[Kiro CLI — {project_name}] Ticket #{ticket_id_val}:\n{preview}"
+        return f"[Pi — {project_name}] Ticket #{ticket_id_val}:\n{preview}"

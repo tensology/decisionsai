@@ -216,7 +216,7 @@ function openOllamaModelBrowser(type) {
     // Update modal title based on type
     const titleEl = document.getElementById('ollama_browser_modal_title');
     if (titleEl) {
-        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image' };
+        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image', step_runner: 'Workflow', computer_use: 'Computer Use', kanban: 'Kanban Agent' };
         titleEl.textContent = 'Download Ollama models — ' + (typeLabels[type] || type);
     }
     modal.classList.remove('hidden');

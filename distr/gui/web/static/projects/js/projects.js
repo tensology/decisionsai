@@ -16,7 +16,7 @@
     }
 
     var apiFetch = window.DecisionsAPI.fetch;
-    function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "projects-snackbar" }); }
+    function showSnackbar(msg, type, opts) { window.DecisionsAPI.snackbar(msg, type, Object.assign({ id: "projects-snackbar" }, opts || {})); }
 
     function setEmpty(el) {
         el.innerHTML = "<p class=\"text-sm text-gray-400\">No projects yet. Create one with Add Project.</p>";
@@ -201,6 +201,7 @@
     }
 
     function selectProject(id) {
+        var prevProjectId = currentProjectId;
         currentProjectId = id;
         return fetch("/api/projects/" + id)
             .then(function(r) {
@@ -209,6 +210,13 @@
             })
             .then(function(project) {
                 showDetail(project);
+                // If the terminal tab is active and project changed, reconnect
+                if (prevProjectId !== id) {
+                    var tabEl = document.getElementById("tab-terminal");
+                    if (tabEl && !tabEl.classList.contains("hidden")) {
+                        initTerminal();
+                    }
+                }
             })
             .catch(function() {
                 alert("Could not load project.");
@@ -227,6 +235,14 @@
         });
         var pane = document.getElementById("tab-" + tabName);
         if (pane) pane.classList.remove("hidden");
+        // Terminal tab lives outside projects-tab-content and needs
+        // the full flex space; hide the content div when terminal is active
+        var tabContent = document.getElementById("projects-tab-content");
+        if (tabName === "terminal") {
+            tabContent.classList.add("hidden");
+        } else {
+            tabContent.classList.remove("hidden");
+        }
         if (tabName === "board") {
             var ps = document.getElementById("detail-provider");
             var bs = document.getElementById("detail-board");
@@ -817,107 +833,75 @@
             var overlay = document.getElementById("terminal-overview-overlay");
             if (overlay) overlay.classList.add("hidden");
         });
+        // Terminal input
+        var terminalInput = document.getElementById("terminal-input");
+        if (terminalInput) terminalInput.addEventListener("keydown", function(e) {
+            if (e.key === "Enter") {
+                e.preventDefault();
+                var val = terminalInput.value.trim();
+                if (val) {
+                    sendTerminalPrompt(val);
+                    terminalInput.value = "";
+                }
+            } else if (e.key === "Escape") {
+                e.preventDefault();
+                abortTerminal();
+            }
+        });
+        var terminalSendBtn = document.getElementById("terminal-input-send");
+        if (terminalSendBtn) terminalSendBtn.addEventListener("click", function() {
+            var inp = document.getElementById("terminal-input");
+            if (inp && inp.value.trim()) {
+                sendTerminalPrompt(inp.value.trim());
+                inp.value = "";
+            }
+        });
     }
 
-    // ── Terminal Management ────────────────────────────────────────────
+    // ── Terminal Management (pi RPC mode) ───────────────────────────────
 
-    var _term = null;        // xterm.js Terminal instance
-    var _termFit = null;    // FitAddon instance
-    var _termWs = null;     // WebSocket connection
+    var _termWs = null;     // WebSocket connection to pi RPC
+    var _termWsProjectId = null;  // Which project the WS is connected to
     var _termPollTimer = null;
+    var _termTranscript = [];  // Array of {type, text, tool?, ts}
+    var _currentAssistantEl = null;  // Current streaming assistant message element
+    var _currentAssistantText = "";  // Current streaming text buffer
+    var _termAgentRunning = false;   // Is pi currently processing?
 
     function initTerminal() {
         if (!currentProjectId) return;
-        if (_term) {
-            // Already initialized, reconnect if needed
-            if (!_termWs || _termWs.readyState !== WebSocket.OPEN) {
+        // If already connected to the SAME project, just ensure the WS is open
+        if (_termWs && _termWsProjectId === currentProjectId) {
+            if (_termWs.readyState !== WebSocket.OPEN && _termWs.readyState !== WebSocket.CONNECTING) {
                 connectTerminalWs();
             }
             return;
         }
-
-        var container = document.getElementById("terminal-container");
-        if (!container) return;
-
-        // Create xterm.js terminal
-        _term = new Terminal({
-            theme: {
-                background: '#0d1117',
-                foreground: '#c9d1d9',
-                cursor: '#58a6ff',
-                cursorAccent: '#0d1117',
-                selectionBackground: '#264f78',
-                black: '#484f58',
-                red: '#ff7b72',
-                green: '#3fb950',
-                yellow: '#d29922',
-                blue: '#58a6ff',
-                magenta: '#bc8cff',
-                cyan: '#39c5cf',
-                white: '#b1bac4',
-                brightBlack: '#6e7681',
-                brightRed: '#ffa657',
-                brightGreen: '#56d364',
-                brightYellow: '#e3b341',
-                brightBlue: '#79c0ff',
-                brightMagenta: '#d2a8ff',
-                brightCyan: '#56d4dd',
-                brightWhite: '#f0f6fc'
-            },
-            fontFamily: '"SF Mono", "Fira Code", "Cascadia Code", Menlo, Monaco, "Courier New", monospace',
-            fontSize: 13,
-            lineHeight: 1.2,
-            cursorBlink: true,
-            cursorStyle: 'block',
-            scrollback: 5000,
-            allowProposedApi: true
-        });
-
-        // Fit addon
-        _termFit = new FitAddon.FitAddon();
-        _term.loadAddon(_termFit);
-
-        // Web links addon
-        try {
-            var webLinksAddon = new WebLinksAddon.WebLinksAddon();
-            _term.loadAddon(webLinksAddon);
-        } catch (e) {}
-
-        // Open terminal in container
-        _term.open(container);
-
-        // Fit to container
-        try { _termFit.fit(); } catch (e) {}
-
-        // Handle window resize
-        var resizeObserver = new ResizeObserver(function() {
-            if (_term && _termFit) {
-                try { _termFit.fit(); } catch (e) {}
-                sendTerminalResize();
-            }
-        });
-        resizeObserver.observe(container);
-        _term._resizeObserver = resizeObserver;
-
-        // Handle user input
-        _term.onData(function(data) {
-            if (_termWs && _termWs.readyState === WebSocket.OPEN) {
-                _termWs.send(JSON.stringify({type: "input", data: data}));
-            }
-        });
-
-        // Connect WebSocket
+        // Different project (or first connection) — destroy old and reconnect
+        destroyTerminal();
+        var transcript = document.getElementById("terminal-transcript");
+        if (transcript) transcript.innerHTML = '';
+        _clearTerminalState();
+        _termTranscript = [];
         connectTerminalWs();
+    }
+
+    function _killWs() {
+        // Close the current WS without triggering auto-reconnect.
+        if (_termWs) {
+            _termWs.onclose = null;  // prevent auto-reconnect
+            _termWs.onerror = null;
+            try { _termWs.close(); } catch (e) {}
+            _termWs = null;
+            _termWsProjectId = null;
+        }
     }
 
     function connectTerminalWs() {
         if (!currentProjectId) return;
 
-        // Close existing
-        if (_termWs) {
-            try { _termWs.close(); } catch (e) {}
-            _termWs = null;
-        }
+        // Close existing without triggering its onclose auto-reconnect
+        _killWs();
 
         var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
         var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
@@ -929,37 +913,30 @@
         updateTerminalStatus("connecting");
 
         _termWs = new WebSocket(wsUrl);
+        _termWsProjectId = currentProjectId;
 
         _termWs.onopen = function() {
             updateTerminalStatus("connected");
-            // Send initial terminal size
-            if (_term) {
-                sendTerminalResize();
+            // Clear placeholder / show connection message
+            var transcript = document.getElementById("terminal-transcript");
+            if (transcript && !transcript.querySelector(".transcript-msg")) {
+                transcript.innerHTML = '<div class="transcript-msg system">Connected</div>';
             }
         };
 
         _termWs.onmessage = function(event) {
             try {
                 var msg = JSON.parse(event.data);
-                if (msg.type === "output" && _term) {
-                    _term.write(msg.data);
-                } else if (msg.type === "connected") {
-                    updateTerminalStatus("connected");
-                } else if (msg.type === "exit") {
-                    updateTerminalStatus("disconnected");
-                } else if (msg.type === "error") {
-                    showSnackbar(msg.message || "Terminal error", "error");
-                    updateTerminalStatus("error");
-                } else if (msg.type === "pong") {
-                    // keepalive
-                }
+                handleRpcEvent(msg);
             } catch (e) {}
         };
 
         _termWs.onclose = function() {
+            // Only auto-reconnect if this is still the active WS (not replaced by project switch)
+            var closedWs = this;
             updateTerminalStatus("disconnected");
-            // Auto-reconnect after delay if the terminal tab is visible
             setTimeout(function() {
+                if (closedWs !== _termWs) return;  // replaced by new connection
                 var tabEl = document.getElementById("tab-terminal");
                 if (tabEl && !tabEl.classList.contains("hidden") && currentProjectId) {
                     connectTerminalWs();
@@ -980,14 +957,327 @@
         }, 30000);
     }
 
-    function sendTerminalResize() {
-        if (_term && _termWs && _termWs.readyState === WebSocket.OPEN) {
-            _termWs.send(JSON.stringify({
-                type: "resize",
-                rows: _term.rows,
-                cols: _term.cols
-            }));
+    function handleRpcEvent(msg) {
+        var transcript = document.getElementById("terminal-transcript");
+        if (!transcript) return;
+
+        switch (msg.type) {
+            // ── Connection ──
+            case "connected":
+                updateTerminalStatus("connected");
+                _clearTerminalState();
+                transcript.innerHTML = '';
+                if (msg.buffer && msg.buffer.length) {
+                    msg.buffer.forEach(function(entry) {
+                        _renderBufferMessage(transcript, entry);
+                    });
+                }
+                break;
+
+            // ── Agent lifecycle ──
+            case "agent_start":
+                _termAgentRunning = true;
+                break;
+            case "agent_end":
+                _termAgentRunning = false;
+                _clearTerminalState();
+                var sep = document.createElement("div");
+                sep.className = "transcript-separator";
+                transcript.appendChild(sep);
+                scrollTranscript();
+                break;
+
+            // ── Turn lifecycle — no visual output ──
+            case "turn_start":
+            case "turn_end":
+                break;
+
+            // ── Message streaming (the main event) ──
+            case "message_update": {
+                var evt = msg.assistantMessageEvent;
+                if (!evt) break;
+                switch (evt.type) {
+                    case "start":
+                        // New assistant message beginning
+                        _currentAssistantText = "";
+                        _currentAssistantEl = null;
+                        startAssistantMessage(transcript);
+                        break;
+                    case "text_start":
+                        // Text content block starting
+                        if (!_currentAssistantEl) startAssistantMessage(transcript);
+                        break;
+                    case "text_delta":
+                        _currentAssistantText += (evt.delta || "");
+                        updateAssistantMessage(transcript, _currentAssistantText);
+                        break;
+                    case "text_end":
+                        // Text block complete — already shown
+                        break;
+                    case "thinking_start":
+                    case "thinking_delta":
+                    case "thinking_end":
+                        // Thinking blocks — don't render
+                        break;
+                    case "toolcall_start":
+                        // LLM decided to call a tool — DON'T render here.
+                        // tool_execution_start will fire with the real args and name.
+                        // Just finalize any in-progress assistant text.
+                        if (_currentAssistantEl) finalizeAssistantMessage(transcript);
+                        break;
+                    case "toolcall_delta":
+                        // Argument streaming — skip
+                        break;
+                    case "toolcall_end":
+                        // Tool call object fully resolved — skip, tool_execution_start shows it
+                        break;
+                    case "done":
+                        if (_currentAssistantEl) finalizeAssistantMessage(transcript);
+                        break;
+                    case "error":
+                        appendTranscriptLine(transcript, "error", evt.reason || "Error");
+                        break;
+                }
+                break;
+            }
+
+            // ── Message start/end ──
+            case "message_start": {
+                var m = msg.message || {};
+                if (m.role === "assistant") {
+                    // Start a new assistant block — but message_update "start" may also do this
+                    if (!_currentAssistantEl) {
+                        _currentAssistantText = "";
+                        startAssistantMessage(transcript);
+                    }
+                }
+                // User messages already shown locally — skip entirely
+                break;
+            }
+            case "message_end": {
+                var m = msg.message || {};
+                if (m.role === "assistant" && _currentAssistantEl) {
+                    finalizeAssistantMessage(transcript);
+                }
+                break;
+            }
+
+            // ── Tool execution (the real tool call) ──
+            case "tool_execution_start": {
+                if (_currentAssistantEl) finalizeAssistantMessage(transcript);
+                var tName = msg.toolName || "tool";
+                var tArgs = msg.args || {};
+                var argsStr = "";
+                try { argsStr = JSON.stringify(tArgs); } catch(e) { argsStr = String(tArgs); }
+                appendTranscriptLine(transcript, "tool-call", tName + " " + _truncateArgs(argsStr, 200));
+                break;
+            }
+            case "tool_execution_update": {
+                var partial = msg.partialResult || {};
+                var pText = "";
+                if (partial.content && Array.isArray(partial.content)) {
+                    pText = partial.content.filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join("\n");
+                }
+                if (pText) {
+                    updateOrAppendToolResult(transcript, msg.toolCallId, pText, false);
+                }
+                break;
+            }
+            case "tool_execution_end": {
+                var result = msg.result || {};
+                var rText = "";
+                if (result.content && Array.isArray(result.content)) {
+                    rText = result.content.filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join("\n");
+                }
+                if (rText) {
+                    var isErr = msg.isError === true;
+                    updateOrAppendToolResult(transcript, msg.toolCallId || "_", rText, isErr);
+                }
+                break;
+            }
+
+            // ── Compaction ──
+            case "compaction_start":
+                appendTranscriptLine(transcript, "system", "Compacting context...");
+                break;
+            case "compaction_end":
+                appendTranscriptLine(transcript, "system", "Context compacted");
+                break;
+
+            // ── Auto-retry ──
+            case "auto_retry_start":
+            case "auto_retry_end":
+                break;
+
+            // ── Queue updates ──
+            case "queue_update":
+                break;
+
+            // ── Extension UI ──
+            case "extension_ui_request":
+                // Fire-and-forget notifications like setStatus, notify
+                var method = msg.method || "";
+                if (method === "notify") {
+                    appendTranscriptLine(transcript, "system", msg.message || "");
+                } else if (method === "setStatus") {
+                    // Status bar text — skip
+                }
+                break;
+            case "extension_error":
+                appendTranscriptLine(transcript, "error", msg.error || "Extension error");
+                break;
+
+            // ── RPC responses ──
+            case "response":
+                // Command responses (prompt, steer, abort, etc.) — not rendered
+                break;
+
+            // ── Error from backend ──
+            case "error":
+                appendTranscriptLine(transcript, "error", msg.message || "Unknown error");
+                updateTerminalStatus("error");
+                break;
+
+            // ── Keepalives ──
+            case "pong":
+            case "ping":
+                break;
+
+            // ── Unknown — suppress, don't render JSON ──
+            default:
+                break;
         }
+    }
+
+    var _toolResultEls = {};  // toolCallId -> DOM element for streaming tool output
+
+    function _clearTerminalState() {
+        _currentAssistantEl = null;
+        _currentAssistantText = "";
+        _toolResultEls = {};
+    }
+
+    function startAssistantMessage(transcript) {
+        var el = document.createElement("div");
+        el.className = "transcript-msg assistant streaming";
+        el.innerHTML = "";
+        transcript.appendChild(el);
+        _currentAssistantEl = el;
+        scrollTranscript();
+    }
+
+    function updateAssistantMessage(transcript, text) {
+        if (!_currentAssistantEl) {
+            startAssistantMessage(transcript);
+        }
+        _currentAssistantEl.innerHTML = renderMarkdownLite(text);
+        scrollTranscript();
+    }
+
+    function finalizeAssistantMessage(transcript) {
+        if (_currentAssistantEl) {
+            _currentAssistantEl.classList.remove("streaming");
+            // Remove streaming cursor if present
+            var cursor = _currentAssistantEl.querySelector(".streaming-cursor");
+            if (cursor) cursor.remove();
+        }
+        _currentAssistantText = "";
+        _currentAssistantEl = null;
+    }
+
+    function appendTranscriptLine(transcript, type, text) {
+        var el = document.createElement("div");
+        el.className = "transcript-msg " + escapeAttr(type);
+        // Tool calls and results may contain long text — preserve whitespace
+        if (type === "tool-result" || type === "tool-error" || type === "assistant") {
+            el.innerHTML = renderMarkdownLite(text);
+        } else {
+            el.textContent = text;
+        }
+        transcript.appendChild(el);
+        scrollTranscript();
+        return el;
+    }
+
+    function updateOrAppendToolResult(transcript, toolCallId, text, isError) {
+        var cssClass = isError ? "tool-error" : "tool-result";
+        var existing = _toolResultEls[toolCallId];
+        if (existing) {
+            // Update existing (streaming)
+            existing.innerHTML = renderMarkdownLiteNoCursor(text);
+            scrollTranscript();
+        } else {
+            // New result element
+            var el = appendTranscriptLine(transcript, cssClass, text);
+            _toolResultEls[toolCallId] = el;
+        }
+    }
+
+    function scrollTranscript() {
+        var container = document.getElementById("terminal-container");
+        if (container) {
+            container.scrollTop = container.scrollHeight;
+        }
+    }
+
+    function renderMarkdownLite(text) {
+        if (!text) return "";
+        var s = text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        // Code blocks
+        s = s.replace(/```([\s\S]*?)```/g, "<pre class=\"code-block\">$1</pre>");
+        // Inline code
+        s = s.replace(/`([^`]+)`/g, "<code class=\"inline-code\">$1</code>");
+        // Bold
+        s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        // Line breaks
+        s = s.replace(/\n/g, "<br>");
+        // Streaming cursor
+        s += "<span class=\"streaming-cursor\">▌</span>";
+        return s;
+    }
+
+    function renderMarkdownLiteNoCursor(text) {
+        if (!text) return "";
+        var s = text
+            .replace(/&/g, "&amp;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;");
+        s = s.replace(/```([\s\S]*?)```/g, "<pre class=\"code-block\">$1</pre>");
+        s = s.replace(/`([^`]+)`/g, "<code class=\"inline-code\">$1</code>");
+        s = s.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
+        s = s.replace(/\n/g, "<br>");
+        return s;
+    }
+
+    function _truncateArgs(argsStr, maxLen) {
+        if (!argsStr) return "";
+        if (argsStr.length > maxLen) return argsStr.substring(0, maxLen) + "...";
+        return argsStr;
+    }
+
+    function _renderBufferMessage(transcript, entry) {
+        // Render a message from the RPC buffer (connected message replay)
+        // format: {role: "user"|"assistant", content: "", tool_name: "", tool_result: "", is_error: bool}
+        var role = entry.role || "";
+        if (role === "user" && entry.content) {
+            appendTranscriptLine(transcript, "user", entry.content);
+        } else if (role === "assistant" && entry.content) {
+            appendTranscriptLine(transcript, "assistant", entry.content);
+        } else if (role === "tool_result") {
+            var cls = entry.is_error ? "tool-error" : "tool-result";
+            var label = entry.tool_name ? entry.tool_name + ": " : "";
+            appendTranscriptLine(transcript, cls, label + (entry.tool_result || ""));
+        }
+    }
+
+    function truncateStr(s, maxLen) {
+        if (!s) return "";
+        s = String(s).replace(/\n/g, " ");
+        if (s.length > maxLen) return s.substring(0, maxLen) + "...";
+        return s;
     }
 
     function updateTerminalStatus(status) {
@@ -1021,13 +1311,15 @@
 
     function restartTerminal() {
         if (!currentProjectId) return;
-        // Kill existing terminal and WebSocket
         destroyTerminal();
-        // Request server-side restart
         apiFetch("/api/projects/" + currentProjectId + "/terminal/restart", { method: "POST" })
             .then(function(data) {
                 if (data.success) {
-                    // Re-initialize terminal (creates xterm + WebSocket)
+                    // Clear transcript
+                    var transcript = document.getElementById("terminal-transcript");
+                    if (transcript) transcript.innerHTML = '';
+                    _clearTerminalState();
+                    _termTranscript = [];
                     initTerminal();
                 } else {
                     showSnackbar(data.error || "Failed to restart terminal", "error");
@@ -1036,6 +1328,47 @@
             .catch(function() {
                 showSnackbar("Failed to restart terminal", "error");
             });
+    }
+
+    function abortTerminal() {
+        if (!_termWs || _termWs.readyState !== WebSocket.OPEN) return;
+        if (!_termAgentRunning) return;  // Nothing to abort
+        _termWs.send(JSON.stringify({type: "abort"}));
+        // Show in transcript
+        var transcript = document.getElementById("terminal-transcript");
+        if (transcript) {
+            appendTranscriptLine(transcript, "system", "\u23f9 Aborted");
+        }
+        // Finalize any in-progress assistant message
+        if (_currentAssistantEl) finalizeAssistantMessage(transcript);
+        _termAgentRunning = false;
+        _clearTerminalState();
+    }
+
+    function sendTerminalPrompt(instruction) {
+        if (!instruction || !instruction.trim()) return;
+        if (!_termWs || _termWs.readyState !== WebSocket.OPEN) {
+            showSnackbar("Terminal not connected — try restarting", "error");
+            return;
+        }
+        // Show the user message immediately (pi will also echo it via message_start,
+        // but we mark it so we don't duplicate)
+        var transcript = document.getElementById("terminal-transcript");
+        if (transcript) {
+            var el = appendTranscriptLine(transcript, "user", instruction);
+            el.setAttribute("data-prompt-text", instruction.substring(0, 100));
+        }
+        _termWs.send(JSON.stringify({type: "prompt", message: instruction}));
+    }
+
+    function sendTerminalSteer(instruction) {
+        if (!instruction || !instruction.trim()) return;
+        if (!_termWs || _termWs.readyState !== WebSocket.OPEN) return;
+        var transcript = document.getElementById("terminal-transcript");
+        if (transcript) {
+            appendTranscriptLine(transcript, "user", "[steer] " + instruction);
+        }
+        _termWs.send(JSON.stringify({type: "steer", message: instruction}));
     }
 
     function readOutOverview() {
@@ -1056,7 +1389,7 @@
             .then(function(data) {
                 if (data.summary) {
                     if (overviewText) overviewText.textContent = data.summary;
-                    showSnackbar("Overview ready — speaking aloud", "success");
+                    showSnackbar("Overview ready — speaking aloud", "success", { duration: 15000 });
                 } else if (data.error) {
                     if (overviewText) overviewText.textContent = "Error: " + data.error;
                     showSnackbar(data.error, "error");
@@ -1079,18 +1412,9 @@
             clearInterval(_termPollTimer);
             _termPollTimer = null;
         }
-        if (_termWs) {
-            try { _termWs.close(); } catch (e) {}
-            _termWs = null;
-        }
-        if (_term) {
-            if (_term._resizeObserver) {
-                _term._resizeObserver.disconnect();
-            }
-            _term.dispose();
-            _term = null;
-        }
-        _termFit = null;
+        _killWs();
+        _currentAssistantEl = null;
+        _currentAssistantText = "";
         updateTerminalStatus("disconnected");
     }
 

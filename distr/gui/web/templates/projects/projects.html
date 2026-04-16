@@ -3,6 +3,94 @@
 {% block title %}Projects{% endblock %}
 
 {% block content %}
+<style>
+/* Pi RPC Terminal */
+#terminal-container {
+    background: #0d1117;
+    color: #e6edf3;
+    scrollbar-width: thin;
+    scrollbar-color: #30363d #0d1117;
+}
+.transcript-msg {
+    padding: 4px 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    line-height: 1.6;
+    font-size: 13px;
+}
+/* User messages — orange chevron like pi CLI */
+.transcript-msg.user {
+    color: #f97316;
+    font-weight: 600;
+}
+.transcript-msg.user::before {
+    content: "\25b6 "; /* ▶ */
+    color: #f97316;
+}
+/* Assistant text — clean white */
+.transcript-msg.assistant {
+    color: #e6edf3;
+    padding: 4px 0 8px 0;
+}
+.transcript-msg.assistant.streaming .streaming-cursor {
+    animation: blink 1s step-end infinite;
+    color: #f97316;
+}
+/* Tool call — yellow command */
+.transcript-msg.tool-call {
+    color: #d29922;
+    margin-top: 4px;
+}
+.transcript-msg.tool-call::before {
+    content: "\1f527 "; /* 🔧 */
+}
+/* Tool result — dimmed, indented with left border */
+.transcript-msg.tool-result {
+    color: #8b949e;
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid #21262d;
+    margin: 2px 0 2px 8px;
+}
+/* Tool error — red left border */
+.transcript-msg.tool-error {
+    color: #ff7b72;
+    padding: 2px 0 2px 12px;
+    border-left: 2px solid #da3633;
+    margin: 2px 0 2px 8px;
+}
+/* System messages — subtle teal */
+.transcript-msg.system {
+    color: #39c5cf;
+    font-style: italic;
+}
+/* Error messages — red */
+.transcript-msg.error {
+    color: #ff7b72;
+}
+/* Thin separator between runs */
+.transcript-separator {
+    border-top: 1px solid #21262d;
+    margin: 8px 0;
+}
+/* Code blocks inside messages */
+.transcript-msg .code-block {
+    background: #161b22;
+    border: 1px solid #30363d;
+    border-radius: 6px;
+    padding: 12px 16px;
+    margin: 8px 0;
+    overflow-x: auto;
+    font-size: 12px;
+    line-height: 1.4;
+}
+.transcript-msg .inline-code {
+    background: #161b22;
+    padding: 2px 6px;
+    border-radius: 4px;
+    font-size: 0.9em;
+}
+@keyframes blink { 50% { opacity: 0; } }
+</style>
 <div class="container mx-auto px-6 py-4 max-w-7xl flex gap-6 h-[calc(100vh-4rem)]">
     <!-- Left panel: search + project list + Add -->
     <div class="w-80 flex-shrink-0 flex flex-col gap-4">
@@ -132,20 +220,27 @@
                         </div>
                     </div>
 </div>
-                <!-- Terminal tab - placed outside scrollable area for full-height xterm -->
-                <div id="tab-terminal" class="project-tab-pane hidden flex flex-col gap-2 absolute left-0 right-0 bottom-0 p-2 relative" style="top:2.75rem;">
+                <div id="tab-terminal" class="project-tab-pane hidden flex flex-col gap-2 p-2 flex-1 min-h-0 relative">
                     <div class="flex items-center justify-between px-1">
                         <div class="flex items-center gap-2">
                             <span id="terminal-status" class="w-2 h-2 rounded-full bg-gray-500"></span>
                             <span id="terminal-status-text" class="text-xs text-gray-400">Not connected</span>
                         </div>
                         <div class="flex gap-2">
+                            <button type="button" id="terminal-input-send" class="text-xs px-3 py-1.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Send instruction to pi"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>Send</button>
                             <button type="button" id="terminal-overview" class="text-xs px-3 py-1.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Summarize terminal output via AI and read aloud"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M12 6a7 7 0 010 12M8.464 15.536a5 5 0 010-7.072M12 18a7 7 0 010-12"/></svg>Read Out Overview</button>
                             <button type="button" id="terminal-restart" class="text-xs px-3 py-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal">↻ Restart</button>
                         </div>
                     </div>
-                    <div id="terminal-container" class="flex-1 min-h-0 rounded overflow-hidden border border-white/10 bg-[#0d1117]">
-                        <!-- xterm.js will mount here -->
+                    <!-- Input bar -->
+                    <div class="flex gap-2 px-1">
+                        <input type="text" id="terminal-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm font-mono" placeholder="Type an instruction for pi...">
+                    </div>
+                    <!-- Transcript panel -->
+                    <div id="terminal-container" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10 bg-[#0d1117] p-3 font-mono text-sm leading-relaxed">
+                        <div id="terminal-transcript">
+                        <!-- transcript entries rendered here -->
+                        </div>
                     </div>
                     <!-- Overview overlay -->
                     <div id="terminal-overview-overlay" class="hidden absolute bottom-4 left-4 right-4 bg-[#1a1f3a]/95 border border-[#f97316]/40 rounded-lg p-4 backdrop-blur-sm z-10">
@@ -215,10 +310,6 @@
 {% endblock %}
 
 {% block extra_scripts %}
-<link rel="stylesheet" href="/static/vendor/xterm/xterm.css">
-<script src="/static/vendor/xterm/xterm.min.js"></script>
-<script src="/static/vendor/xterm/addon-fit.min.js"></script>
-<script src="/static/vendor/xterm/addon-web-links.min.js"></script>
 <script src="/static/shared/js/api.js"></script>
 <script src="/projects/static/js/projects.js"></script>
 {% endblock %}

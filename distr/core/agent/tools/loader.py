@@ -127,8 +127,10 @@ def _get_tool_definitions(
         ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
         # Playwright Browser Automation
         ("PlaywrightTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-        # Kiro CLI — AI coding agent for project tasks
-        ("KiroCliTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
+        # Pi Agent — AI coding agent for project tasks
+        ("PiAgentTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
+        # Terminal Overview — query project terminal state
+        ("TerminalOverviewTool", dict(event_queue=event_queue, chat_manager=chat_manager)),
         # Document Extractor
         ("DocumentExtractorTool", {}),
         # System Information
@@ -364,9 +366,10 @@ TOOL_REGISTRY = {
     "CreateCursorTicketTool":  ("integrations.create_cursor_ticket", "CreateCursorTicketTool"),
     "KanbanTicketTool":        ("integrations.kanban_ticket", "KanbanTicketTool"),
     "PlaywrightTool":          ("integrations.playwright_tool", "PlaywrightTool"),
-    "KiroCliTool":             ("integrations.kiro_cli", "KiroCliTool"),
+    "PiAgentTool":             ("integrations.pi_agent", "PiAgentTool"),
     # meta/
     "RequestToolTool":         ("request_tool", "RequestToolTool"),
+    "TerminalOverviewTool":     ("integrations.terminal_overview", "TerminalOverviewTool"),
 }
 
 _BASE_PACKAGE = "distr.core.agent.tools"
@@ -473,7 +476,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
     "KanbanTicketTool": "Create, update, list, move, or manage kanban tickets, tasks, or cards on the project board.",
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
-    "KiroCliTool": "Delegate coding tasks to the Kiro AI coding agent for project-level code generation and editing.",
+    "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task.",
+    "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
     # meta/
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",
     # sidecar (screen intelligence, Python execution, physical interaction)
