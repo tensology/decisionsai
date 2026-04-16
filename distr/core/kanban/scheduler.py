@@ -1,5 +1,5 @@
 """
-Kanban Agent Scheduler — compute next run times for board agent check-ins.
+Ticket Board Agent Scheduler — compute next run times for board agent check-ins.
 
 Supports hourly, daily, weekly, fortnightly, and monthly frequencies.
 """
@@ -248,6 +248,6 @@ def check_kanban_schedules() -> None:
         if next_run_at is None:
             continue
         if next_run_at <= now:
-            logger.info("Kanban scheduler: board %s is due, firing agent check-in", info["id"])
+            logger.info("Ticket Board scheduler: board %s is due, firing agent check-in", info["id"])
             agent = KanbanAgentCheckIn(info["id"])
             threading.Thread(target=agent.run, daemon=True).start()

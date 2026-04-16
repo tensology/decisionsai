@@ -91,7 +91,7 @@ class MenuTrayMixin:
         self.chats_action.triggered.connect(lambda: self._open_web_url("/chat/"))
         self.menu.addAction(self.chats_action)
 
-        self.kanban_action = QAction("Kanban", self.menu)
+        self.kanban_action = QAction("Ticket Boards", self.menu)
         self.kanban_action.triggered.connect(lambda: self._open_web_url("/kanban/"))
         self.menu.addAction(self.kanban_action)
 
@@ -103,9 +103,9 @@ class MenuTrayMixin:
         self.step_runner_action.triggered.connect(lambda: self._open_web_url("/workflows/"))
         self.menu.addAction(self.step_runner_action)
 
-        self.snippets_action = QAction("Snippets", self.menu)
-        self.snippets_action.triggered.connect(lambda: self._open_web_url("/snippets/"))
-        self.menu.addAction(self.snippets_action)
+        self.skills_action = QAction("Skills", self.menu)
+        self.skills_action.triggered.connect(lambda: self._open_web_url("/skills/"))
+        self.menu.addAction(self.skills_action)
 
         self.projects_action = QAction("Projects", self.menu)
         self.projects_action.triggered.connect(lambda: self._open_web_url("/projects/"))
@@ -216,7 +216,7 @@ class MenuTrayMixin:
             self.kanban_action,
             self.actions_action,
             self.step_runner_action,
-            self.snippets_action,
+            self.skills_action,
             self.projects_action,
             self.change_oracle_action,
             self.about_action,

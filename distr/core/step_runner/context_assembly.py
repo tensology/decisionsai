@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class WorkflowInput:
     """The trigger/input that started the workflow."""
 
-    source_type: str  # "instruction", "kanban_ticket", "api", "scheduled"
+    source_type: str  # "instruction", "ticket_board", "api", "scheduled"
     text: str = ""
     title: str = ""
     images: List[str] = field(default_factory=list)

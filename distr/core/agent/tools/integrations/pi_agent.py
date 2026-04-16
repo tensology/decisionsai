@@ -26,20 +26,20 @@ class PiAgentTool(BaseTool):
     """Send coding instructions to pi (coding agent) in a project folder."""
 
     name: str = "pi_agent"
-    description: str = """Send a coding instruction to pi (coding agent) to execute in a project's folder.
-Use this when the user asks you to:
-- Work on code in a project (fix bugs, add features, refactor)
-- Run tests, linting, or builds in a project
-- Query a project for information (file counts, configs, stats)
-- Perform git operations on a project
-- Deploy or manage a project's codebase
-- Any development task that should happen in the project folder
-
-Pi is an AI coding agent that works directly on the codebase with read/write/bash tools.
-You are the orchestrator — Pi is the specialist.
-
-The tool will wait for Pi to complete and return the result directly.
-If no project_name is given, uses the currently active project.""",
+    description: str = (
+        "Send a coding instruction to pi (coding agent) to execute in a project's folder.\n"
+        "Use this when the user asks you to:\n"
+        "- Work on code in a project (fix bugs, add features, refactor)\n"
+        "- Run tests, linting, or builds in a project\n"
+        "- Query a project for information (file counts, configs, stats)\n"
+        "- Perform git operations on a project\n"
+        "- Deploy or manage a project's codebase\n"
+        "- Any development task that should happen in the project folder\n\n"
+        "Pi is an AI coding agent that works directly on the codebase with read/write/bash tools.\n"
+        "You are the orchestrator — Pi is the specialist.\n\n"
+        "The tool will wait for Pi to complete and return the result directly.\n"
+        "If no project_name is given, uses the currently active project."
+    )
     args_schema: type[BaseModel] = PiAgentInput
     event_queue: Any = Field(default=None, exclude=True)
     chat_manager: Any = Field(default=None, exclude=True)

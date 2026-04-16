@@ -31,8 +31,8 @@ class ActionType(Enum):
     CLIPBOARD_REWRITE = "clipboard_rewrite"   # Rewrite clipboard/selection (paste back)
     CLIPBOARD_REWORD = "clipboard_reword"     # Reword clipboard/selection (paste back)
     CLIPBOARD_READ = "clipboard_read"         # Read clipboard aloud (TTS)
-    SNIPPET_CREATE = "snippet_create"         # Create snippet from clipboard
-    SNIPPET_USE = "snippet_use"               # Use/paste a snippet
+    SKILL_FIND = "skill_find"               # Find/search for a skill
+    SKILL_PUSH = "skill_push"               # Push a skill to a project
     ACTION_CREATE = "action_create"           # Create new action
     ACTION_PLAY = "action_play"               # Play/execute an action
     ACTION_START_RECORDING = "action_start_recording"  # Start recording action
@@ -124,13 +124,14 @@ class FastActionDetector:
             (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?transcribe\s+(the\s+)?audio\b', re.IGNORECASE),
              ActionType.AUDIO_TRANSCRIBE, "audio_transcriber", {"audio_file_path": None}, False, "llm_response"),
             
-            # === SNIPPET ACTIONS ===
-            (re.compile(r'\b(create|make|save|new)\b.*\bsnippet\b', re.IGNORECASE), 
-             ActionType.SNIPPET_CREATE, "create_snippet", {}, False, "done"),
-            (re.compile(r'\b(use|paste|insert|get)\b.*\bsnippet\b', re.IGNORECASE), 
-             ActionType.SNIPPET_USE, "use_snippet", {}, False, "done"),
-            (re.compile(r'\bsnippet\b.*\b(create|make|save)\b', re.IGNORECASE), 
-             ActionType.SNIPPET_CREATE, "create_snippet", {}, False, "done"),
+            # === SKILL ACTIONS ===
+            (re.compile(r'\b(find|search|show|list)\b.*\bskill\b', re.IGNORECASE),
+             ActionType.SKILL_FIND, "find_skill", {}, False, "done"),
+            (re.compile(r'\b(push|install|add)\b.*\bskill\b', re.IGNORECASE),
+             ActionType.SKILL_PUSH, "push_skill", {}, False, "done"),
+            # Legacy: "snippet" redirects to skill finding
+            (re.compile(r'\b(create|make|save|new|find|use)\b.*\bsnippet\b', re.IGNORECASE),
+             ActionType.SKILL_FIND, "find_skill", {}, False, "done"),
             
             # === TYPE / DICTATE TEXT ===
             # "type out ...", "type this", "dictate ...", "type from clipboard"
@@ -1122,7 +1123,7 @@ class FastActionDetector:
                     'transcribe', 'record', 'screenshot', 'capture',
                     # Misc tools
                     'snippet', 'telegram', 'generate', 'export', 'import',
-                    'automate', 'step runner', 'project', 'kanban', 'ticket',
+                    'automate', 'step runner', 'project', 'ticket board', 'ticket',
                     # Clipboard — any mention means the user wants clipboard content processed
                     'clipboard', 'clip board',
                 ]

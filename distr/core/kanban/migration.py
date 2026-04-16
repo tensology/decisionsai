@@ -1,5 +1,5 @@
 """
-Kanban settings migration module.
+Ticket Board settings migration module.
 
 Provides a one-time migration that copies agent settings from the first
 agent-enabled KanbanBoard into the global Settings store.  Called during
@@ -41,7 +41,7 @@ def migrate_board_agent_settings_to_global() -> None:
         # If the key was explicitly set before (i.e. migration already ran or
         # user configured global settings), skip.
         if settings.get("_kanban_migration_done", False):
-            logger.debug("Kanban global settings migration already completed, skipping.")
+            logger.debug("Ticket Board global settings migration already completed, skipping.")
             return
 
         # Look for the first board with agent_enabled=True, ordered by ID.
@@ -61,7 +61,7 @@ def migrate_board_agent_settings_to_global() -> None:
                     if value is not None:
                         settings[settings_key] = value
                 logger.info(
-                    "Kanban migration: copied agent settings from board id=%s ('%s') to global settings.",
+                    "Ticket Board migration: copied agent settings from board id=%s ('%s') to global settings.",
                     board.id,
                     board.name,
                 )
@@ -81,11 +81,11 @@ def migrate_board_agent_settings_to_global() -> None:
                 settings["kanban_agent_coder_model"] = ""
                 settings["kanban_agent_sub_provider"] = ""
                 settings["kanban_agent_sub_model"] = ""
-                logger.info("Kanban migration: no agent-enabled boards found, initialized with defaults.")
+                logger.info("Ticket Board migration: no agent-enabled boards found, initialized with defaults.")
 
         # Mark migration as done so it won't run again.
         settings["_kanban_migration_done"] = True
         save_settings_to_db(settings)
 
     except Exception as e:
-        logger.error("Kanban settings migration failed: %s", e)
+        logger.error("Ticket Board settings migration failed: %s", e)

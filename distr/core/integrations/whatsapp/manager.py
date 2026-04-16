@@ -74,6 +74,10 @@ class WhatsAppWebSocketManager(QObject):
             self.socket.disconnected.connect(self._on_disconnected)
             self.socket.textMessageReceived.connect(self._on_message)
             self.socket.error.connect(self._on_error)
+            try:
+                self.socket.sslErrors.connect(self._on_ssl_errors)
+            except AttributeError:
+                pass
         else:
             self.socket = None
             logger.warning("QWebSocket not available — WhatsApp integration disabled")
@@ -164,10 +168,12 @@ class WhatsAppWebSocketManager(QObject):
 
         if not self._active_disconnect:
             logger.warning("WhatsApp: Disconnected unexpectedly, scheduling reconnect")
-            self._reconnect_delay_current_ms = min(
-                self._reconnect_delay_current_ms * 2, self._reconnect_delay_max_ms
-            )
-            self._reconnect_timer.start(self._reconnect_delay_current_ms)
+            # Only schedule if no reconnect already pending (e.g. from _on_error)
+            if not self._reconnect_timer.isActive():
+                self._reconnect_delay_current_ms = min(
+                    self._reconnect_delay_current_ms * 2, self._reconnect_delay_max_ms
+                )
+                self._reconnect_timer.start(self._reconnect_delay_current_ms)
             self.connection_status_changed.emit(False, "Reconnecting...")
         else:
             self.connection_status_changed.emit(False, "Disconnected")
@@ -181,6 +187,15 @@ class WhatsAppWebSocketManager(QObject):
             self._reconnect_delay_current_ms = self._reconnect_delay_ms
             if not self._reconnect_timer.isActive():
                 self._reconnect_timer.start(min(self._reconnect_delay_ms, 1000))
+
+    def _on_ssl_errors(self, errors):
+        """Handle Qt SSL verification errors during WhatsApp WebSocket handshake."""
+        error_descriptions = [err.errorString() for err in errors]
+        logger.warning(
+            "WhatsApp: SSL errors during handshake (%d): %s — ignoring and proceeding",
+            len(errors), "; ".join(error_descriptions),
+        )
+        self.socket.ignoreSslErrors()
 
     def _on_message(self, message: str):
         """Handle incoming WebSocket messages from the relay."""

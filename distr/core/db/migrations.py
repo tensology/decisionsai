@@ -1188,7 +1188,7 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"AutoWorkflow routing_mode migration: {e}")
 
-    # Kanban boards: add agent check-in columns
+    # Ticket boards: add agent check-in columns
     _kanban_agent_columns = [
         ("agent_enabled", "BOOLEAN DEFAULT 0"),
         ("agent_frequency", "VARCHAR DEFAULT 'daily'"),
@@ -1222,7 +1222,7 @@ def run_migrations():
                         if "duplicate column" not in str(e).lower():
                             logger.warning(f"Could not add {col} column to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Kanban agent columns migration: {e}")
+        logger.debug(f"Ticket Board agent columns migration: {e}")
 
     # AutoWorkflow steps: add action_id column (link step to Action entity)
     try:
@@ -1292,7 +1292,7 @@ def run_migrations():
     except Exception as e:
         logger.warning(f"Could not seed workflows: {e}")
 
-    # Kanban agent global settings columns on settings table
+    # Ticket Board agent global settings columns on settings table
     _kanban_settings_columns = [
         ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
         ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
@@ -1323,7 +1323,7 @@ def run_migrations():
                     if "duplicate column" not in str(e).lower():
                         logger.debug(f"Could not add {col} to settings: {e}")
     except Exception as e:
-        logger.debug(f"Kanban settings migration: {e}")
+        logger.debug(f"Ticket Board settings migration: {e}")
 
     # Add color column to kanban_boards table
     try:
@@ -1336,7 +1336,7 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.debug(f"Could not add color to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Kanban board color migration: {e}")
+        logger.debug(f"Ticket Board color migration: {e}")
 
     # Add position column to kanban_boards table
     try:
@@ -1349,7 +1349,7 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.debug(f"Could not add position to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Kanban board position migration: {e}")
+        logger.debug(f"Ticket Board position migration: {e}")
 
     # Initiative settings columns
     initiative_columns = [
@@ -1397,7 +1397,7 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.debug(f"Could not add send_to_cli to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Kanban board send_to_cli migration: {e}")
+        logger.debug(f"Ticket Board send_to_cli migration: {e}")
 
     # Add archived column to kanban_boards
     try:
@@ -1410,9 +1410,9 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.debug(f"Could not add archived to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Kanban board archived migration: {e}")
+        logger.debug(f"Ticket Board archived migration: {e}")
 
-    # ── Kanban ticket send_to_cli ──
+    # ── Ticket send_to_cli ──
     try:
         with engine.connect() as conn:
             try:
@@ -1423,7 +1423,7 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.debug(f"Could not add send_to_cli to kanban_tickets: {e}")
     except Exception as e:
-        logger.debug(f"Kanban ticket send_to_cli migration: {e}")
+        logger.debug(f"Ticket Board send_to_cli migration: {e}")
 
     # ── skin_sizes table ──
     try:

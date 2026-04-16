@@ -16,7 +16,7 @@
     var apiFetch = window.DecisionsAPI.fetch;
     function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "kb-snackbar" }); }
 
-    /** In-app confirm modal (matches Kanban styling). opts: { title, message, confirmLabel, danger, onConfirm } */
+    /** In-app confirm modal (matches Ticket Board styling). opts: { title, message, confirmLabel, danger, onConfirm } */
     var _kbConfirmCallback = null;
     function showKanbanConfirm(opts) {
         opts = opts || {};
@@ -256,6 +256,9 @@
         try { localStorage.setItem("kb_last_selected", JSON.stringify({ source: source, id: id })); } catch (e) {}
         document.getElementById("kb-empty").classList.add("hidden");
         document.getElementById("kb-board-view").classList.remove("hidden");
+        // Close any open WhatsApp thread view
+        document.getElementById("kb-wa-thread-view").classList.add("hidden");
+        waSelectedJid = null;
 
         if (source === "database") {
             apiFetch("/api/kanban/boards/" + id).then(function(data) {
@@ -1331,28 +1334,74 @@
     var waSelectedJid = null;
     var waCtxMenuData = null;  // { jid, phone, name }
     var waMsgCtxData = null;   // { message_id (db id) }
+    var waConnected = false;
+
+    // ── Sidebar tab switching ──
+
+    function switchSidebarTab(tab) {
+        var ticketsPanel = document.getElementById("kb-panel-tickets");
+        var messagesPanel = document.getElementById("kb-panel-messages");
+        var tabTickets = document.getElementById("kb-tab-tickets");
+        var tabMessages = document.getElementById("kb-tab-messages");
+        if (tab === "messages") {
+            ticketsPanel.classList.add("hidden");
+            messagesPanel.classList.remove("hidden");
+            tabTickets.classList.remove("active");
+            tabMessages.classList.add("active");
+        } else {
+            ticketsPanel.classList.remove("hidden");
+            messagesPanel.classList.add("hidden");
+            tabTickets.classList.add("active");
+            tabMessages.classList.remove("active");
+            // Close thread view if open — restore board view
+            closeWhatsAppThread();
+        }
+    }
 
     function loadWhatsAppChats(forceRefresh) {
         var el = document.getElementById("kb-wa-status");
         var chatListEl = document.getElementById("kb-wa-chats");
-        var searchEl = document.getElementById("kb-wa-search");
 
         el.textContent = "Loading...";
-        apiFetch("/api/kanban/whatsapp/chats?limit=100").then(function(data) {
-            waChats = data.chats || [];
-            if (data.error) {
-                el.textContent = data.error;
-                chatListEl.innerHTML = "";
-                searchEl.classList.add("hidden");
+        // Load ALL stored messages from the DB (not raw chats from Baileys)
+        apiFetch("/api/kanban/whatsapp/messages?limit=500").then(function(data) {
+            var messages = data.messages || [];
+            // Group messages by jid_phone (the conversation/chat key)
+            var chatMap = {};
+            messages.forEach(function(msg) {
+                var chatPhone = msg.jid_phone || (msg.jid || "").split("@")[0];
+                var chatName = msg.sender_push_name || msg.sender_phone || chatPhone || "Unknown";
+                if (!chatMap[chatPhone]) {
+                    chatMap[chatPhone] = { sender: chatPhone, name: chatName, messages: [], lastTs: 0, unread: 0 };
+                }
+                chatMap[chatPhone].messages.push(msg);
+                if (msg.whatsapp_timestamp && msg.whatsapp_timestamp > chatMap[chatPhone].lastTs) {
+                    chatMap[chatPhone].lastTs = msg.whatsapp_timestamp;
+                }
+                if (!msg.processed) chatMap[chatPhone].unread++;
+                // Use the latest sender push name as the display name
+                if (msg.sender_push_name) chatMap[chatPhone].name = msg.sender_push_name;
+            });
+            waChats = Object.values(chatMap);
+            // Sort by most recent message first
+            waChats.sort(function(a, b) { return b.lastTs - a.lastTs; });
+            if (messages.length === 0) {
+                el.textContent = "No captured messages yet";
+                chatListEl.innerHTML = "<div class='text-xs text-gray-500 italic py-2'>No captured messages yet</div>";
+                waConnected = false;
+                document.getElementById("kb-tab-messages").classList.add("hidden");
                 return;
             }
-            el.textContent = "";
-            searchEl.classList.remove("hidden");
+            // Show Messages tab only when WhatsApp has captured messages
+            waConnected = true;
+            document.getElementById("kb-tab-messages").classList.remove("hidden");
+            el.textContent = waChats.length + " contacts with messages";
             renderWhatsAppChatList();
         }).catch(function(err) {
             el.textContent = "WhatsApp not connected";
             chatListEl.innerHTML = "";
-            searchEl.classList.add("hidden");
+            waConnected = false;
+            document.getElementById("kb-tab-messages").classList.add("hidden");
         });
     }
 
@@ -1362,67 +1411,82 @@
         var filtered = waChats;
         if (searchVal) {
             filtered = waChats.filter(function(c) {
-                return (c.name || "").toLowerCase().includes(searchVal) || (c.id || "").includes(searchVal);
+                return (c.name || "").toLowerCase().includes(searchVal) || (c.sender || "").includes(searchVal);
             });
         }
         if (!filtered.length) {
-            chatListEl.innerHTML = '<div class="text-xs text-gray-500 italic py-2">No chats found</div>';
+            chatListEl.innerHTML = '<div class="text-xs text-gray-500 italic py-2">No incoming messages</div>';
             return;
         }
         var html = "";
         filtered.forEach(function(chat) {
-            var phone = (chat.id || "").split("@")[0].split(":")[0];
-            var name = esc(chat.name || phone);
-            var isGroup = chat.is_group;
-            var unread = chat.unread_count || 0;
-            var active = waSelectedJid === chat.id ? " bg-[#25D366]/10 border-l-2 border-[#25D366]" : "";
-            var lastTs = chat.last_message_timestamp;
+            var sender = chat.sender || "";
+            var name = esc(chat.name || sender);
+            var unread = chat.unread || 0;
+            var lastMsg = chat.messages.length ? chat.messages[chat.messages.length - 1] : null;
+            var preview = "";
+            if (lastMsg) {
+                preview = lastMsg.text ? lastMsg.text.substring(0, 60) : (lastMsg.media_type ? "📎 " + lastMsg.media_type : "");
+                if (lastMsg.caption && !lastMsg.text) preview = (lastMsg.caption || "").substring(0, 60);
+            }
+            var active = waSelectedJid === chat.sender ? " bg-[#25D366]/10 border-l-2 border-[#25D366]" : "";
+            var lastTs = chat.lastTs;
             var timeStr = "";
             if (lastTs) {
                 var d = new Date(lastTs * 1000);
                 timeStr = d.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"});
             }
-            html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5' + active + '" data-wa-jid="' + esc(chat.id) + '" data-wa-phone="' + esc(phone) + '" data-wa-name="' + esc(name) + '">';
+            html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5' + active + '" data-wa-sender="' + esc(sender) + '" data-wa-name="' + esc(name) + '">';
             html += '<div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-xs font-bold flex-shrink-0">';
             html += esc(name.charAt(0).toUpperCase());
             html += '</div>';
             html += '<div class="flex-1 min-w-0">';
             html += '<div class="flex items-center justify-between">';
-            html += '<span class="text-white truncate">' + (isGroup ? '👥 ' : '') + name + '</span>';
+            html += '<span class="text-white truncate font-medium">' + name + '</span>';
             html += '<span class="text-gray-500 text-[10px] ml-1 flex-shrink-0">' + timeStr + '</span>';
             html += '</div>';
-            html += '<div class="text-gray-500 truncate">' + esc(phone) + (unread ? ' <span class="text-[#25D366] font-bold">(' + unread + ')</span>' : '') + '</div>';
+            html += '<div class="text-gray-500 truncate">' + esc(preview) + (unread ? ' <span class="text-[#25D366] font-bold">(' + unread + ')</span>' : '') + '</div>';
             html += '</div></div>';
         });
         chatListEl.innerHTML = html;
 
         // Click handlers
-        chatListEl.querySelectorAll("[data-wa-jid]").forEach(function(el) {
+        chatListEl.querySelectorAll("[data-wa-sender]").forEach(function(el) {
             el.addEventListener("click", function() {
-                waSelectedJid = el.dataset.waJid;
+                waSelectedJid = el.dataset.waSender;
                 renderWhatsAppChatList();
-                openWhatsAppMessagePanel(el.dataset.waJid, el.dataset.waPhone, el.dataset.waName);
+                showWhatsAppThread(el.dataset.waSender, el.dataset.waName);
             });
             el.addEventListener("contextmenu", function(e) {
                 e.preventDefault();
-                waCtxMenuData = { jid: el.dataset.waJid, phone: el.dataset.waPhone, name: el.dataset.waName };
+                var phone = el.dataset.waSender;
+                waCtxMenuData = { jid: phone + "@s.whatsapp.net", phone: phone, name: el.dataset.waName };
                 showWaChatContextMenu(e.clientX, e.clientY);
             });
         });
     }
 
-    function openWhatsAppMessagePanel(jid, phone, name) {
-        var panel = document.getElementById("kb-wa-msg-panel");
-        var title = document.getElementById("kb-wa-msg-title");
-        var msgList = document.getElementById("kb-wa-msg-list");
-        var countEl = document.getElementById("kb-wa-msg-count");
+    function showWhatsAppThread(sender, name) {
+        // Show the message thread view in the right panel (replacing kanban board)
+        var boardView = document.getElementById("kb-board-view");
+        var emptyView = document.getElementById("kb-empty");
+        var msgView = document.getElementById("kb-wa-thread-view");
 
-        title.textContent = name;
+        boardView.classList.add("hidden");
+        emptyView.classList.add("hidden");
+        msgView.classList.remove("hidden");
+
+        var titleEl = document.getElementById("kb-wa-thread-title");
+        var countEl = document.getElementById("kb-wa-thread-count");
+        var msgList = document.getElementById("kb-wa-thread-messages");
+        var avatarEl = document.getElementById("kb-wa-thread-avatar");
+
+        titleEl.textContent = name;
+        avatarEl.textContent = name.charAt(0).toUpperCase();
         countEl.textContent = "Loading...";
         msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>';
-        panel.classList.remove("hidden");
 
-        apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=200").then(function(data) {
+        apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").then(function(data) {
             var messages = data.messages || [];
             countEl.textContent = messages.length + " messages";
             if (!messages.length) {
@@ -1430,33 +1494,35 @@
                 return;
             }
             var html = "";
+            // Date separator helper
+            var lastDateStr = "";
             messages.forEach(function(msg) {
+                // Date separator
+                var msgDate = msg.whatsapp_timestamp ? new Date(msg.whatsapp_timestamp * 1000) : null;
+                var dateStr = msgDate ? msgDate.toLocaleDateString([], {year: "numeric", month: "short", day: "numeric"}) : "";
+                if (dateStr && dateStr !== lastDateStr) {
+                    html += '<div class="flex items-center justify-center my-3"><span class="text-[10px] text-gray-500 bg-[#152054] px-3 py-1 rounded-full">' + esc(dateStr) + '</span></div>';
+                    lastDateStr = dateStr;
+                }
+
                 var isMine = msg.from_me;
                 var align = isMine ? "justify-end" : "justify-start";
                 var bg = isMine ? "bg-[#005c4b]" : "bg-[#1f2c34]";
-                var timestamp = msg.whatsapp_timestamp ? new Date(msg.whatsapp_timestamp * 1000) : null;
-                var timeStr = timestamp ? timestamp.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
-                var senderName = esc(msg.sender_push_name || msg.sender_phone || "");
+                var timeStr = msgDate ? msgDate.toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"}) : "";
 
                 html += '<div class="flex ' + align + '" data-wa-msg-id="' + msg.id + '">';
-                html += '<div class="max-w-[85%] rounded-lg px-3 py-2 ' + bg + '" style="border-radius: 8px;">';
-
-                // Sender name (for group chats)
-                if (!isMine && msg.chat_type === "group") {
-                    html += '<div class="text-xs text-[#25D366] mb-1">' + senderName + '</div>';
-                }
+                html += '<div class="wa-msg-bubble ' + bg + ' px-3 py-2" style="max-width:75%;border-radius:8px;">';
 
                 // Media preview
                 if (msg.media_type && msg.media_local_path) {
                     var mediaPath = "/api/kanban/whatsapp/media?path=" + encodeURIComponent(msg.media_local_path);
                     if (msg.media_type === "photo" || msg.media_type === "image") {
-                        html += '<div class="mb-1 rounded overflow-hidden"><img src="' + esc(mediaPath) + '" class="max-w-full max-h-[300px] rounded cursor-pointer" loading="lazy" onclick="window.open(\'' + esc(mediaPath) + '\', \'_blank\')"></div>';
+                        html += '<div class="mb-1 rounded overflow-hidden cursor-pointer" onclick="window.open(\'' + esc(mediaPath) + '\', \'_blank\')"><img src="' + esc(mediaPath) + '" class="max-w-full max-h-[350px] rounded" loading="lazy"></div>';
                     } else if (msg.media_type === "voice" || msg.media_type === "audio") {
                         html += '<div class="mb-1"><audio controls class="max-w-full" style="height:36px;"><source src="' + esc(mediaPath) + '" type="' + esc(msg.media_mime_type || "audio/ogg") + '"></audio></div>';
                     } else if (msg.media_type === "video") {
-                        html += '<div class="mb-1 rounded overflow-hidden"><video controls class="max-w-full max-h-[300px]"><source src="' + esc(mediaPath) + '" type="' + esc(msg.media_mime_type || "video/mp4") + '"></video></div>';
+                        html += '<div class="mb-1 rounded overflow-hidden"><video controls class="max-w-full max-h-[350px]"><source src="' + esc(mediaPath) + '" type="' + esc(msg.media_mime_type || "video/mp4") + '"></video></div>';
                     } else {
-                        // Document / sticker / other
                         var icon = msg.media_type === "sticker" ? "🏷️" : "📎";
                         var fname = esc(msg.media_filename || msg.media_local_path.split("/").pop());
                         var sizeStr = msg.media_file_length ? (msg.media_file_length < 1024*1024 ? (msg.media_file_length/1024).toFixed(1) + " KB" : (msg.media_file_length/1024/1024).toFixed(1) + " MB") : "";
@@ -1467,17 +1533,16 @@
                         html += '</div>';
                     }
                 } else if (msg.media_type && !msg.media_local_path) {
-                    // Media not yet downloaded
                     var mediaIcon = { photo: "🖼️", voice: "🎙️", audio: "🎵", video: "🎬", document: "📄", sticker: "🏷️" };
                     html += '<div class="mb-1 px-2 py-1 bg-black/20 rounded text-xs text-gray-400">' + (mediaIcon[msg.media_type] || "📎") + ' ' + esc(msg.media_type) + (msg.media_filename ? ": " + esc(msg.media_filename) : "") + '</div>';
                 }
 
-                // Caption (for media messages)
+                // Caption
                 if (msg.caption) {
                     html += '<div class="text-sm text-white whitespace-pre-wrap">' + esc(msg.caption) + '</div>';
                 }
 
-                // Text message
+                // Text
                 if (msg.text) {
                     html += '<div class="text-sm text-white whitespace-pre-wrap">' + esc(msg.text) + '</div>';
                 }
@@ -1493,6 +1558,9 @@
             });
             msgList.innerHTML = html;
 
+            // Scroll to bottom (newest)
+            msgList.scrollTop = msgList.scrollHeight;
+
             // Right-click on messages
             msgList.querySelectorAll("[data-wa-msg-id]").forEach(function(el) {
                 el.addEventListener("contextmenu", function(e) {
@@ -1505,6 +1573,19 @@
             countEl.textContent = "Error";
             msgList.innerHTML = '<div class="text-sm text-red-400 text-center py-8">Failed to load messages</div>';
         });
+    }
+
+    function closeWhatsAppThread() {
+        var msgView = document.getElementById("kb-wa-thread-view");
+        msgView.classList.add("hidden");
+        // Restore the previous board view or empty state
+        if (currentBoard) {
+            document.getElementById("kb-board-view").classList.remove("hidden");
+        } else {
+            document.getElementById("kb-empty").classList.remove("hidden");
+        }
+        waSelectedJid = null;
+        renderWhatsAppChatList();
     }
 
     function showWaChatContextMenu(x, y) {
@@ -1545,9 +1626,9 @@
     function waCtxViewMessages() {
         hideWaChatContextMenu();
         if (!waCtxMenuData) return;
-        waSelectedJid = waCtxMenuData.jid;
+        waSelectedJid = waCtxMenuData.phone;
         renderWhatsAppChatList();
-        openWhatsAppMessagePanel(waCtxMenuData.jid, waCtxMenuData.phone, waCtxMenuData.name);
+        showWhatsAppThread(waCtxMenuData.phone, waCtxMenuData.name);
     }
 
     function waCtxLinkToBoard() {
@@ -1681,7 +1762,7 @@
                 if (waSelectedJid) {
                     var phone = waSelectedJid.split("@")[0].split(":")[0];
                     var name = waCtxMenuData ? waCtxMenuData.name : phone;
-                    openWhatsAppMessagePanel(waSelectedJid, phone, name);
+                    showWhatsAppThread(waSelectedJid, name);
                 }
             }
         }).catch(function(err) {
@@ -1768,6 +1849,21 @@
 
     // Initialize WhatsApp section
     function initWhatsApp() {
+        // Sidebar tab switching
+        document.getElementById("kb-tab-tickets").addEventListener("click", function() { switchSidebarTab("tickets"); });
+        document.getElementById("kb-tab-messages").addEventListener("click", function() { switchSidebarTab("messages"); });
+
+        // WhatsApp thread back button
+        document.getElementById("kb-wa-thread-back").addEventListener("click", closeWhatsAppThread);
+
+        // WhatsApp thread snapshot button
+        document.getElementById("kb-wa-thread-snapshot").addEventListener("click", function() {
+            if (!waSelectedJid) return;
+            var phone = waSelectedJid;
+            waCtxMenuData = { jid: phone + "@s.whatsapp.net", phone: phone, name: document.getElementById("kb-wa-thread-title").textContent };
+            waCtxSnapshotToBoard();
+        });
+
         document.getElementById("kb-wa-refresh").addEventListener("click", function() { loadWhatsAppChats(true); });
         document.getElementById("kb-wa-search").addEventListener("input", renderWhatsAppChatList);
 
@@ -1782,12 +1878,6 @@
             if (!e.target.closest("#kb-wa-msg-ctx-menu")) hideWaMsgContextMenu();
         });
 
-        // Message panel close
-        document.getElementById("kb-wa-msg-close").addEventListener("click", function() {
-            document.getElementById("kb-wa-msg-panel").classList.add("hidden");
-        });
-
-        // Link modal
         document.getElementById("kb-wa-link-cancel").addEventListener("click", function() {
             document.getElementById("kb-wa-link-modal").classList.add("hidden");
         });

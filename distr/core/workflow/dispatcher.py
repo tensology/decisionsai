@@ -106,7 +106,7 @@ def _clear_workflow_env() -> None:
 
 
 # ── Execution-level functions ───────────────────────────────────────
-# Thin wrappers that callers (routes, scheduler, kanban agent) import.
+# Thin wrappers that callers (routes, scheduler, ticket board agent) import.
 
 
 def start_workflow_run(

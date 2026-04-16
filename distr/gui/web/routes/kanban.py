@@ -1,5 +1,5 @@
 """
-API routes for Kanban board management.
+API routes for Ticket Board management.
 """
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form
 from fastapi.responses import JSONResponse
@@ -107,7 +107,7 @@ class KanbanSettingsUpdate(BaseModel):
 def create_routes():
     router = APIRouter()
 
-    # ── Global Kanban Settings ──
+    # ── Global Ticket Board Settings ──
 
     @router.get("/kanban/settings")
     async def get_kanban_settings():
@@ -590,17 +590,16 @@ def create_routes():
 
     @router.get("/kanban/linkable")
     async def get_linkable_entities():
-        """Return lists of workflows, projects, snippets, actions for linking."""
+        """Return lists of workflows, projects, actions for linking."""
         with get_session() as s:
-            from distr.core.db import Workflow, Action, Snippet
+            from distr.core.db import Workflow, Action
             from distr.core.db.projects import Project
             from distr.core.db.workflow import AutoWorkflow
             workflows = [{"id": w.id, "title": w.title or f"Workflow #{w.id}"} for w in s.query(Workflow).all()]
             step_runner_workflows = [{"id": w.id, "title": w.name or f"Workflow #{w.id}"} for w in s.query(AutoWorkflow).all()]
             projects = [{"id": p.id, "name": p.name} for p in s.query(Project).all()]
-            snippets = [{"id": sn.id, "title": sn.title or f"Snippet #{sn.id}"} for sn in s.query(Snippet).all()]
             actions = [{"id": a.id, "title": a.title or f"Action #{a.id}"} for a in s.query(Action).all()]
-            return JSONResponse({"workflows": workflows + step_runner_workflows, "projects": projects, "snippets": snippets, "actions": actions})
+            return JSONResponse({"workflows": workflows + step_runner_workflows, "projects": projects, "actions": actions})
 
     # ── External boards (Trello / Jira) ──
 
@@ -760,7 +759,7 @@ def create_routes():
 
     @router.post("/kanban/tickets/{ticket_id}/send-to-project")
     async def send_ticket_to_project(ticket_id: int):
-        """Create a .tickets/ticket_*.md file in the linked project's folder from a Kanban ticket."""
+        """Create a .tickets/ticket_*.md file in the linked project's folder from a Ticket Board ticket."""
         with get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
@@ -832,7 +831,7 @@ source: kanban_ticket_{t.id}
 - **Kanban Ticket ID:** {t.id}
 
 ---
-*Sent from Kanban board via DecisionsAI*
+*Sent from Ticket Board via DecisionsAI*
 """
 
             try:
@@ -1115,7 +1114,7 @@ source: kanban_ticket_{t.id}
 
     @router.post("/kanban/tickets/from-whatsapp/{message_id}")
     async def create_ticket_from_whatsapp(message_id: int, payload: dict):
-        """Create a Kanban ticket from a WhatsApp message."""
+        """Create a Ticket Board ticket from a WhatsApp message."""
         from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink
         with get_session() as s:
             msg = s.query(WhatsAppMessage).get(message_id)

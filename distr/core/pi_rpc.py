@@ -10,7 +10,7 @@ giving us:
   - Steering (mid-run course correction)
   - Abort capability
   - Session management
-  - Proper audit trails for the kanban/project integration
+  - Proper audit trails for the ticket board/project integration
 """
 
 import os

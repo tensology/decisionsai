@@ -1,0 +1,210 @@
+<!-- SCOPE: Functional Requirements & Architecture Decisions -->
+<!-- INCLUDES: FRs (what we build), ADRs (why we decided), Success criteria -->
+<!-- EXCLUDES: Non-Functional Requirements (forbidden), Business context → Overview, System structure → Architecture, API contracts → Technical Spec, Implementation steps → Guides -->
+
+<h2>Requirements</h2>
+
+<!-- PLACEHOLDER: {{FUNCTIONAL_REQUIREMENTS}} -->
+<!-- EXAMPLE START: Remove this block after replacing placeholder -->
+<section class="functional-requirements">
+    <h3>Functional Requirements</h3>
+
+    <table>
+        <thead>
+            <tr>
+                <th>ID</th>
+                <th>Priority</th>
+                <th>Requirement</th>
+                <th>Acceptance Criteria</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td>FR-AUTH-001</td>
+                <td><span class="priority-must">MUST</span></td>
+                <td><strong>User Registration and Login</strong><br>
+                    Users must be able to register with email/password and login to access personalized features</td>
+                <td>
+                    <ul>
+                        <li>Email validation (RFC 5322 compliant)</li>
+                        <li>Password strength requirements (min 8 chars, uppercase, lowercase, number)</li>
+                        <li>JWT token-based authentication</li>
+                    </ul>
+                </td>
+            </tr>
+            <tr>
+                <td>FR-CATALOG-001</td>
+                <td><span class="priority-must">MUST</span></td>
+                <td><strong>Product Catalog Display</strong><br>
+                    System must display product catalog with search, filters, and pagination</td>
+                <td>
+                    <ul>
+                        <li>Full-text search across product names and descriptions</li>
+                        <li>Filter by category, price range, availability</li>
+                        <li>Paginate results (20 items per page)</li>
+                    </ul>
+                </td>
+            </tr>
+            <tr>
+                <td>FR-CART-001</td>
+                <td><span class="priority-must">MUST</span></td>
+                <td><strong>Shopping Cart Management</strong><br>
+                    Users must be able to add/remove products to/from cart</td>
+                <td>
+                    <ul>
+                        <li>Add product with quantity selection</li>
+                        <li>Update quantities in cart</li>
+                        <li>Remove items from cart</li>
+                        <li>Cart persists across sessions (logged-in users)</li>
+                    </ul>
+                </td>
+            </tr>
+        </tbody>
+    </table>
+</section>
+<!-- EXAMPLE END -->
+
+<!-- PLACEHOLDER: {{ADR_STRATEGIC}} -->
+<!-- EXAMPLE START: Remove this block after replacing placeholder -->
+<section class="adr-section">
+    <h3>📋 Architecture Decision Records</h3>
+
+    <div class="adr-group">
+        <h4>🎯 Strategic Decisions</h4>
+
+        <details class="adr-item">
+            <summary>ADR-001: Microservices vs Monolith Architecture</summary>
+            <p><strong>Date:</strong> 2025-09-15 | <strong>Status:</strong> Accepted | <strong>Category:</strong> Strategic</p>
+
+            <h4>Context</h4>
+            <p>Need to choose architecture pattern for e-commerce platform considering team size, scaling requirements, and deployment complexity.</p>
+
+            <h4>Decision</h4>
+            <p>Use <strong>modular monolith</strong> architecture with clear domain boundaries.</p>
+
+            <h4>Rationale</h4>
+            <ul>
+                <li>Small team (5 developers) - microservices overhead too high</li>
+                <li>Faster time to market with simplified deployment</li>
+                <li>Clear module boundaries allow future microservices extraction</li>
+            </ul>
+
+            <h4>Alternatives Considered</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Alternative</th>
+                        <th>Pros</th>
+                        <th>Cons</th>
+                        <th>Rejection Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>Microservices</td>
+                        <td>Independent scaling, technology diversity</td>
+                        <td>Operational complexity, team overhead</td>
+                        <td>Team too small, premature optimization</td>
+                    </tr>
+                    <tr>
+                        <td>Traditional monolith</td>
+                        <td>Simplest to build</td>
+                        <td>Difficult to scale, tight coupling</td>
+                        <td>No clear boundaries for future evolution</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>Consequences</h4>
+            <p><strong>Positive:</strong></p>
+            <ul>
+                <li>Faster development and deployment</li>
+                <li>Easier testing and debugging</li>
+                <li>Lower infrastructure costs</li>
+            </ul>
+            <p><strong>Negative:</strong></p>
+            <ul>
+                <li>Cannot scale individual modules independently</li>
+                <li>Requires discipline to maintain module boundaries</li>
+            </ul>
+        </details>
+    </div>
+<!-- EXAMPLE END -->
+
+<!-- PLACEHOLDER: {{ADR_TECHNICAL}} -->
+<!-- EXAMPLE START: Remove this block after replacing placeholder -->
+    <div class="adr-group">
+        <h4>🔧 Technical Decisions</h4>
+
+        <details class="adr-item">
+            <summary>ADR-002: Database Choice - PostgreSQL vs MongoDB</summary>
+            <p><strong>Date:</strong> 2025-09-18 | <strong>Status:</strong> Accepted | <strong>Category:</strong> Technical</p>
+
+            <h4>Context</h4>
+            <p>Need to select database for e-commerce transactional data considering ACID requirements, scalability, and query complexity.</p>
+
+            <h4>Decision</h4>
+            <p>Use <strong>PostgreSQL 15.x</strong> as primary database.</p>
+
+            <h4>Rationale</h4>
+            <ul>
+                <li>Strong ACID guarantees for transactions (orders, payments)</li>
+                <li>JSON support for flexible product attributes</li>
+                <li>Excellent performance for complex queries</li>
+            </ul>
+
+            <h4>Alternatives Considered</h4>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Alternative</th>
+                        <th>Pros</th>
+                        <th>Cons</th>
+                        <th>Rejection Reason</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    <tr>
+                        <td>MongoDB</td>
+                        <td>Schema flexibility, horizontal scaling</td>
+                        <td>Weak transaction support, complex queries difficult</td>
+                        <td>E-commerce requires strong ACID for financial data</td>
+                    </tr>
+                    <tr>
+                        <td>MySQL</td>
+                        <td>Widely adopted, good performance</td>
+                        <td>Limited JSON support, fewer features</td>
+                        <td>PostgreSQL offers better feature set</td>
+                    </tr>
+                </tbody>
+            </table>
+
+            <h4>Consequences</h4>
+            <p><strong>Positive:</strong></p>
+            <ul>
+                <li>Data integrity guaranteed for financial transactions</li>
+                <li>Rich ecosystem and tooling</li>
+            </ul>
+            <p><strong>Negative:</strong></p>
+            <ul>
+                <li>Vertical scaling limitations (mitigated by read replicas)</li>
+                <li>Schema migrations require careful planning</li>
+            </ul>
+        </details>
+    </div>
+</section>
+<!-- EXAMPLE END -->
+
+<!-- PLACEHOLDER: {{SUCCESS_CRITERIA}} -->
+<!-- EXAMPLE START: Remove this block after replacing placeholder -->
+<section class="success-criteria">
+    <h3>Success Criteria</h3>
+    <ul>
+        <li>✅ MVP handles 1,000+ daily active users</li>
+        <li>✅ 99.5% uptime in first 3 months</li>
+        <li>✅ Average checkout time < 3 minutes</li>
+        <li>✅ 85%+ test coverage (E2E + Integration + Unit)</li>
+        <li>✅ Zero critical security vulnerabilities</li>
+    </ul>
+</section>
+<!-- EXAMPLE END -->

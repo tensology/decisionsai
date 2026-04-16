@@ -90,6 +90,7 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._cancelled = False
         self._processed_fast_actions = set()
         self._generation_requested_at = 0.0
+        self._background_chain = None
 
         logger.info("%s initialized with model: %s", self.SERVICE_NAME, self._model_name)
 

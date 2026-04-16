@@ -162,7 +162,7 @@ class CancelWorkflowRunTool(BaseTool):
 
 
 
-# --- Get project status (meshes workflow runs + CLI results + kanban) ---
+# --- Get project status (meshes workflow runs + CLI results + ticket board) ---
 class GetProjectStatusInput(BaseModel):
     project_name: str = Field(description="Project name to get status for")
 
@@ -172,7 +172,7 @@ class GetProjectStatusTool(BaseTool):
     description: str = (
         "Get a comprehensive status update on a project by pulling together: "
         "actively running tasks, latest workflow run results, recent pi agent output, "
-        "and kanban ticket status. Shows what is IN PROGRESS right now first. "
+        "and ticket board status. Shows what is IN PROGRESS right now first. "
         "Use when user asks 'what's the status on X', 'update me on the project', "
         "'what's happening with Tensology', 'how's the project going', "
         "'what's the latest on X', 'is anything running on X'."
@@ -220,7 +220,7 @@ class GetProjectStatusTool(BaseTool):
 
                 # 2b. Workflow runs currently running for workflows linked to this project
                 active_workflow_runs = []
-                # Check kanban boards linked to this project for their default workflow
+                # Check ticket boards linked to this project for their default workflow
                 boards = (
                     db.query(KanbanBoard)
                     .filter(KanbanBoard.default_project_id == project.id)
@@ -338,7 +338,7 @@ class GetProjectStatusTool(BaseTool):
 
                 if boards:
                     for board in boards:
-                        sections.append(f"\n--- Kanban: {board.name} ---")
+                        sections.append(f"\n--- Ticket Board: {board.name} ---")
                         for lane in sorted(board.lanes, key=lambda l: l.position):
                             tickets = sorted(lane.tickets, key=lambda t: t.position)
                             if tickets:
@@ -347,7 +347,7 @@ class GetProjectStatusTool(BaseTool):
                                     sections.append(f"    - {t.title} [{t.priority}]")
 
             if len(sections) <= 2:
-                sections.append("\nNo recent workflow runs, CLI activity, or kanban tickets found for this project.")
+                sections.append("\nNo recent workflow runs, CLI activity, or ticket board entries found for this project.")
 
             return "\n".join(sections)
         except Exception as e:

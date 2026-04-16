@@ -1,1 +1,1 @@
-# Kanban agent package
+# Ticket Board agent package

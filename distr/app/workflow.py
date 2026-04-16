@@ -90,7 +90,7 @@ class WorkflowOrchestrationMixin:
             from distr.core.kanban.scheduler import check_kanban_schedules
             check_kanban_schedules()
         except Exception as e:
-            logger.error("Kanban scheduler error: %s", e, exc_info=True)
+            logger.error("Ticket Board scheduler error: %s", e, exc_info=True)
 
     # ── Signal handlers ─────────────────────────────────────────────
 

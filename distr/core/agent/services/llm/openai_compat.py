@@ -45,7 +45,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
 
     async def _generate_response(self):
-        """Orchestrator: stream → tool calls → follow-up → save."""
+        """Orchestrator: stream → tool calls → feed results back → repeat until done.
+
+        Runs an agentic loop: the LLM can call tools, and the results are fed back
+        for as many rounds as needed (like pi's agent loop). Stops when the LLM
+        responds with text only (no tool calls) or hits MAX_TOOL_ROUNDS.
+        """
         import time as _time
 
         _t0 = _time.time()
@@ -70,9 +75,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     return
 
             await self.push_frame(LLMFullResponseStartFrame())
+            current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if self.event_queue:
                 self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
-                current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 if current_chat_id:
                     self.event_queue.put(('chat_stream_started', {'chat_id': current_chat_id}), block=False)
 
@@ -99,30 +104,91 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.info("%s: [4] consume_stream: %.3fs (%d chars, %d tool_calls)",
                         self.SERVICE_NAME, _time.time() - _t3, len(full_content), len(tool_calls))
 
-            if tool_calls:
+            # ── Agentic tool loop: keep calling LLM while it returns tool_calls ──
+            MAX_TOOL_ROUNDS = 10
+            round_num = 0
+
+            # If the LLM jumped straight to tool calls with no acknowledgment text,
+            # speak a brief acknowledgment so the user isn't left in silence during
+            # what could be a long chain. (If the LLM already wrote text before
+            # the tool calls, that was already streamed in _consume_stream above.)
+            if tool_calls and not full_content.strip():
+                self._speak_acknowledgment()
+
+            while tool_calls and round_num < MAX_TOOL_ROUNDS:
+                round_num += 1
+                logger.info("%s: Tool round %d/%d — executing %d tool call(s)",
+                            self.SERVICE_NAME, round_num, MAX_TOOL_ROUNDS, len(tool_calls))
+
+                # Save the assistant message with tool_calls
                 self._messages.append({
                     "role": "assistant",
                     "content": full_content or None,
                     "tool_calls": tool_calls,
                 })
-                await self._execute_tool_calls_with_chaining(tool_calls)
 
+                # Execute all tool calls from this round
+                if round_num == 1:
+                    await self._execute_tool_calls_with_chaining(tool_calls)
+                else:
+                    await self._execute_chained_tools(tool_calls, full_content)
+
+                # Auto-send file to Telegram if applicable
                 auto_sent = await self._auto_send_file_to_telegram()
-                if not auto_sent:
-                    follow_up_content, follow_up_tool_calls = await self._process_follow_up()
-                    if not follow_up_tool_calls:
-                        await self._auto_send_file_to_telegram()
-                    if follow_up_tool_calls:
-                        await self._execute_chained_tools(follow_up_tool_calls, follow_up_content)
-                    if follow_up_content:
-                        self._handle_follow_up_content(follow_up_content)
-                    else:
-                        end_frame_sent = await self._send_done_after_tools()
+
+                # After round 1: check if this is a multi-step chain that should
+                # run in the background, freeing the main conversation.
+                if round_num == 1 and self._should_dispatch_to_background(tool_calls):
+                    # Speak a descriptive acknowledgment if the LLM hasn't already
+                    if not full_content.strip():
+                        self._speak_acknowledgment()
+                    dispatched = await self._dispatch_chain_to_background(
+                        full_content, tools_list, current_chat_id
+                    )
+                    if dispatched:
+                        # Main generation is done — background chain takes over
+                        end_frame_sent = True
+                        tool_calls = []  # Clear so final handling knows we're done
+                        break
+
+                # Feed tool results back to the LLM for the next round
+                # Pass tools so the LLM can keep calling tools if needed
+                follow_up_content, follow_up_tool_calls = await self._process_follow_up(tools_list=tools_list)
+                if not follow_up_tool_calls:
+                    await self._auto_send_file_to_telegram()
+
+                # Update for next loop iteration
+                full_content = follow_up_content or ""
+                tool_calls = follow_up_tool_calls or []
+
+                # If the LLM returned text but no more tool calls, we're done
+                if not tool_calls and full_content:
+                    self._handle_follow_up_content(full_content)
+                    break
+
+                # If LLM returned neither text nor tool calls, we're done
+                if not tool_calls and not full_content:
+                    end_frame_sent = await self._send_done_after_tools()
+                    break
+
+            # Log if we hit the limit
+            if round_num >= MAX_TOOL_ROUNDS and tool_calls:
+                logger.warning("%s: Hit MAX_TOOL_ROUNDS (%d) — stopping tool loop with %d pending tool calls",
+                               self.SERVICE_NAME, MAX_TOOL_ROUNDS, len(tool_calls))
+
+            # ── Final handling (no more tool calls) ──
+            if not tool_calls:
+                if full_content and full_content.strip() and round_num == 0:
+                    # Round 0 = LLM returned text only, no tools at all
+                    self._save_assistant_message(full_content)
+                elif not end_frame_sent and round_num > 0:
+                    # Tool loop finished, make sure we send Done
+                    end_frame_sent = await self._send_done_after_tools()
+                elif not end_frame_sent:
+                    end_frame_sent = await self._handle_empty_response()
 
             elif full_content and full_content.strip():
                 self._save_assistant_message(full_content)
-            elif not tool_calls:
-                end_frame_sent = await self._handle_empty_response()
 
         except asyncio.CancelledError:
             logger.warning("%s: _generate_response cancelled (%.3fs)", self.SERVICE_NAME, _time.time() - _t0)
@@ -414,12 +480,15 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             self._messages.append(resp)
 
-    async def _process_follow_up(self):
-        """Make a follow-up API call after tool execution. Returns (content, tool_calls)."""
+    async def _process_follow_up(self, tools_list=None):
+        """Make a follow-up API call after tool execution. Returns (content, tool_calls).
+        
+        If tools_list is provided, the LLM can call more tools in the next round.
+        """
         import threading
 
         messages = self._prepare_api_messages()
-        stream = await self._call_stream(messages, tools_list=None, max_retries=3)
+        stream = await self._call_stream(messages, tools_list=tools_list, max_retries=3)
 
         content = ""
         tool_calls = []
@@ -527,6 +596,125 @@ class OpenAICompatibleLLMService(BaseLLMService):
             else:
                 self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name,
                                        "content": f"Error: Tool '{func_name}' not found"})
+
+    def _speak_acknowledgment(self):
+        """Speak a brief acknowledgment when the LLM jumps straight to tool calls
+        without any preceding text. Prevents the user sitting in silence during
+        a long tool chain.
+
+        The LLM may already have written acknowledgment text before the tool calls
+        (which was streamed in _consume_stream). This method only fires when the
+        LLM went straight to tool calls with no text at all.
+        """
+        import threading
+        if getattr(self, '_is_telegram_request', False) or not self._speaker_enabled:
+            return
+
+        # Don't acknowledge if TTS is already suppressed (e.g. nested chain)
+        if getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False):
+            return
+
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.speak_text_directly.emit("On it.")
+        except Exception:
+            pass
+
+    def _should_dispatch_to_background(self, tool_calls: list) -> bool:
+        """Determine if a tool chain should run in the background.
+
+        Multi-step chains (screenshot → save → attach, etc.) should run in the
+        background so the user can continue the conversation. Single fast tool
+        calls stay inline.
+
+        Triggers:
+        - Any tool returned [ACTION REQUIRED] (explicit chain signal)
+        - Tools known to produce multi-step chains (screenshot_analyzer with
+          capture_only, pi_agent)
+
+        NOT dispatched to background for Telegram requests (response must go
+        back to the Telegram API synchronously).
+        """
+        # Telegram requests need synchronous response — don't dispatch
+        if getattr(self, '_is_telegram_request', False):
+            return False
+        # Check for [ACTION REQUIRED] in tool results — definitive chain signal
+        for msg in self._messages:
+            if msg.get("role") == "tool":
+                content = msg.get("content", "")
+                if "[ACTION REQUIRED" in content:
+                    return True
+
+        # Check tool names for chain-prone tools
+        from distr.core.agent.services.llm.background_chain import BackgroundChainRunner
+        if BackgroundChainRunner.is_multi_tool_chain(tool_calls):
+            return True
+
+        return False
+
+    async def _dispatch_chain_to_background(self, initial_content: str,
+                                             tools_list: list,
+                                             chat_id: int = None) -> bool:
+        """Dispatch the remaining tool chain to a background task.
+
+        Takes a snapshot of current messages so the background chain works
+        in isolation. The main generation returns (user can keep talking).
+        When the background chain completes, it announces the result via TTS.
+
+        Returns True if dispatch succeeded, False if it should stay inline.
+        """
+        from distr.core.agent.services.llm.background_chain import BackgroundChainRunner
+
+        # Cancel any existing background chain
+        if hasattr(self, '_background_chain') and self._background_chain:
+            self._background_chain.cancel()
+
+        # Take a snapshot of messages for the background chain
+        messages_snapshot = list(self._messages)
+
+        runner = BackgroundChainRunner(
+            service=self,
+            messages_snapshot=messages_snapshot,
+            tools_list=tools_list,
+            chat_id=chat_id,
+            event_queue=self.event_queue,
+        )
+        self._background_chain = runner
+
+        logger.info("%s: Dispatching tool chain to background (round 1 done inline)",
+                    self.SERVICE_NAME)
+
+        # Keep typing indicator on so the user knows work is happening
+        if self.event_queue:
+            self.event_queue.put(('typing_indicator_changed', {'show': True}), block=False)
+
+        # Create the background task
+        runner.task = asyncio.create_task(
+            self._run_background_chain(runner, initial_content),
+            name=f"{self.SERVICE_NAME}_background_chain"
+        )
+
+        return True
+
+    async def _run_background_chain(self, runner: 'BackgroundChainRunner',
+                                     initial_content: str):
+        """Wrapper that runs a BackgroundChainRunner and handles completion/cleanup."""
+        try:
+            await runner.run(initial_content=initial_content, initial_tool_results=[])
+        except asyncio.CancelledError:
+            logger.info("%s: Background chain cancelled", self.SERVICE_NAME)
+        except Exception as e:
+            logger.error("%s: Background chain error: %s", self.SERVICE_NAME, e, exc_info=True)
+            # Announce error via TTS
+            try:
+                from distr.core.signals import signal_manager
+                signal_manager.speak_text_directly.emit("Sorry, something went wrong with that task.")
+            except Exception:
+                pass
+        finally:
+            # Clear the reference
+            if hasattr(self, '_background_chain') and self._background_chain is runner:
+                self._background_chain = None
 
     def _handle_follow_up_content(self, content):
         """Save follow-up content to history and speak it via TTS.
@@ -686,8 +874,14 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """Cleanup telegram flags, emit typing finished. Returns True if EndFrame needed."""
         self._cleanup_telegram_flags()
 
+        # Don't turn off typing indicator if a background chain is still running
+        bg_running = hasattr(self, '_background_chain') and self._background_chain and (
+            self._background_chain.task and not self._background_chain.task.done()
+        )
+
         if self.event_queue:
-            self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
+            if not bg_running:
+                self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if chat_id:
                 result_text = follow_up_content or full_content or ""

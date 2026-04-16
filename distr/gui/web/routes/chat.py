@@ -111,7 +111,7 @@ class TTSGenerateRequest(ChatRequestModel):
 def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
     """
     Create and configure API routes for chat web UI.
-    The chat HTML page is served by the unified app from settings templates (same base as actions/snippets/projects).
+    The chat HTML page is served by the unified app from settings templates (same base as actions/skills/projects).
     """
     router = APIRouter()
 

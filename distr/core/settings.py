@@ -58,7 +58,7 @@ DEFAULT_SETTINGS = {
     'locked_input': 'System Default',
     'locked_output': 'System Default',
     # Note: Jira and Trello accounts are now stored in connected_accounts JSON field
-    # Kanban agent global settings
+    # Ticket Board agent global settings
     'kanban_agent_enabled': False,
     'kanban_agent_frequency': 'daily',
     'kanban_agent_time': '09:00',

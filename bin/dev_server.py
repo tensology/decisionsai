@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Development server with hot-reload for the unified GUI (Settings, Chat, Actions, Snippets, Projects, Flow, Board).
+Development server with hot-reload for the unified GUI (Settings, Chat, Actions, Skills, Projects, Flow, Board).
 
 Usage:
     python bin/dev_server.py
@@ -19,7 +19,7 @@ if __name__ == "__main__":
     gui_dir = Path(__file__).resolve().parent.parent / "distr" / "gui"
     reload_dirs = [str(gui_dir / "web")]
     print(f"Unified server: http://{DEFAULT_HOST}:{DEFAULT_PORT}")
-    print("  Settings: /settings   Chat: /chat   Actions: /actions   Snippets: /snippets   Projects: /projects")
+    print("  Settings: /settings   Chat: /chat   Actions: /actions   Skills: /skills/   Projects: /projects")
     uvicorn.run(
         "distr.gui.web.server:create_app",
         host=DEFAULT_HOST,

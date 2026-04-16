@@ -1,5 +1,5 @@
 """
-Kanban board database models.
+Ticket Board database models.
 Supports local (database) boards with full CRUD, plus read-only Trello/Jira board viewing.
 """
 from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean

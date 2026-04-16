@@ -1,5 +1,5 @@
 """
-Kanban Board Ticket Tool — create, list, and manage tickets on Kanban boards.
+Ticket Board Tool — create, list, and manage tickets on Ticket Boards.
 
 Replaces the old CreateCursorTicketTool. Works with the database-backed
 KanbanBoard / KanbanLane / KanbanTicket models and supports attaching files
@@ -41,7 +41,7 @@ class KanbanTicketInput(BaseModel):
 
 
 class KanbanTicketTool(BaseTool):
-    """Create and manage tickets on Kanban boards.
+    """Create and manage tickets on Ticket Boards.
 
     ACTIONS (pass as the 'action' parameter):
       list_boards        — list all boards
@@ -89,7 +89,7 @@ class KanbanTicketTool(BaseTool):
     name: str = "create_ticket"
     args_schema: type[BaseModel] = KanbanTicketInput
     description: str = (
-        "Full CRUD for Kanban boards and tickets. "
+        "Full CRUD for Ticket boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
@@ -133,7 +133,7 @@ class KanbanTicketTool(BaseTool):
         return [
             "create a ticket", "create ticket", "make a ticket",
             "add a ticket", "new ticket", "add ticket",
-            "create a kanban ticket", "kanban ticket",
+            "create a ticket board ticket", "ticket board ticket",
             "add to board", "add to the board",
             "list boards", "show boards", "my boards",
             "list tickets", "show tickets",
@@ -577,7 +577,7 @@ class KanbanTicketTool(BaseTool):
             logger.debug("Could not fetch external boards: %s", e)
 
         if not lines:
-            return "No Kanban boards found. You can create one in the Board UI."
+            return "No Ticket boards found. You can create one in the Board UI."
         return "Available boards:\n" + "\n".join(lines)
 
     def _fetch_external_boards(self) -> Dict:
@@ -1175,7 +1175,7 @@ class KanbanTicketTool(BaseTool):
                 f"source: kanban_ticket_{t.id}\n---\n\n"
                 f"## Description\n{t.description or '(no description)'}\n"
                 f"{todos_md}{links_md}{files_md}\n"
-                f"---\n*Sent from Kanban board via DecisionsAI*\n"
+                f"---\n*Sent from Ticket Board via DecisionsAI*\n"
             )
 
             with open(ticket_path, "w", encoding="utf-8") as f:

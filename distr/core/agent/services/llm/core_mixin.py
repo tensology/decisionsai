@@ -748,6 +748,11 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             self._generation_task.cancel()
             self._emit_interruption_cleanup()
 
+        # Cancel any running background chain
+        if hasattr(self, '_background_chain') and self._background_chain:
+            self._background_chain.cancel()
+            self._background_chain = None
+
         self._cancelled = False
 
         try:
@@ -867,6 +872,11 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
         self._messages.append({"role": "user", "content": user_message_content})
 
+        # Cancel any running background chain before starting new generation
+        if hasattr(self, '_background_chain') and self._background_chain:
+            self._background_chain.cancel()
+            self._background_chain = None
+
         if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
             self._cancelled = True
             self._generation_task.cancel()
@@ -916,6 +926,9 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             self._cancelled = True
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                 self._generation_task.cancel()
+            if hasattr(self, '_background_chain') and self._background_chain:
+                self._background_chain.cancel()
+                self._background_chain = None
             self._emit_interruption_cleanup()
             await self.push_frame(frame, direction)
             return
@@ -925,6 +938,9 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 self._cancelled = True
                 if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                     self._generation_task.cancel()
+                if hasattr(self, '_background_chain') and self._background_chain:
+                    self._background_chain.cancel()
+                    self._background_chain = None
                 self._emit_interruption_cleanup()
                 await self.push_frame(frame, direction)
             return
@@ -933,6 +949,9 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             self._cancelled = True
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                 self._generation_task.cancel()
+            if hasattr(self, '_background_chain') and self._background_chain:
+                self._background_chain.cancel()
+                self._background_chain = None
             self._emit_interruption_cleanup()
             await self.push_frame(frame, direction)
             return

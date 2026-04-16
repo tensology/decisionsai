@@ -211,7 +211,7 @@ def get_tool_parameters(tool_name: str) -> dict:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "REQUIRED: The clipboard action: 'explain this', 'elaborate this', or 'get' (for 'what's in the clipboard'). Extract from user request immediately. NOTE: 'read this' is handled separately. Do NOT use for 'create snippet' requests.",
+                    "description": "REQUIRED: The clipboard action: 'explain this', 'elaborate this', or 'get' (for 'what's in the clipboard'). Extract from user request immediately. NOTE: 'read this' is handled separately.",
                     "enum": ["explain", "elaborate", "get"]
                 },
                 "text": {
@@ -261,12 +261,16 @@ def get_tool_parameters(tool_name: str) -> dict:
             },
             "required": []
         },
-        "create_snippet": {
+        "find_skill": {
             "type": "object",
             "properties": {
-                "text": {
+                "query": {
                     "type": "string",
-                    "description": "The full user request text. Use this tool when the user wants to create a new 'snippet' or 'code snippet' from their clipboard. This tool reads the clipboard AUTOMATICALLY. Do NOT call clipboard_action first."
+                    "description": "What you're looking for: a capability, technology, or task. Leave empty to list all. Examples: 'debugging', 'docker setup', 'security audit'."
+                },
+                "tag": {
+                    "type": "string",
+                    "description": "Optional tag filter: planning, documentation, execution, quality, auditing, bootstrap, performance, creative, dev-tools, superpowers."
                 }
             },
             "required": []
@@ -281,12 +285,20 @@ def get_tool_parameters(tool_name: str) -> dict:
             },
             "required": []
         },
-        "use_snippet": {
+        "push_skill": {
             "type": "object",
             "properties": {
-                "text": {
+                "skill_id": {
                     "type": "string",
-                    "description": "The full user request text (e.g., 'copy snippet <x> to clipboard', 'paste snippet <x>')"
+                    "description": "The skill ID to push. Use the ID from find_skill results."
+                },
+                "project_path": {
+                    "type": "string",
+                    "description": "Path to the project directory."
+                },
+                "target": {
+                    "type": "string",
+                    "description": "CLI target: 'pi' (default), 'claude', 'cursor', 'gemini', 'codex'."
                 }
             },
             "required": []
@@ -420,12 +432,21 @@ def convert_tools_to_openai_format(tools_list):
                     "required": []
                 }
         
+        # Sanitize description — must be a string (not a tuple, list, etc.)
+        description = tool.description
+        if not isinstance(description, str):
+            if isinstance(description, (tuple, list)):
+                description = ' '.join(str(x) for x in description)
+            else:
+                description = str(description)
+            logger.warning(f"Tool '{tool.name}' description was {type(description).__name__}, converted to string")
+
         # Create Ollama function format
         ollama_tool = {
             "type": "function",
             "function": {
                 "name": tool.name,
-                "description": tool.description,
+                "description": description,
                 "parameters": parameters
             }
         }

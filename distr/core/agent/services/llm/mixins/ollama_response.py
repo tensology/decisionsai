@@ -296,46 +296,28 @@ class OllamaResponseMixin:
         if not tool_calls or not last_user_message:
             return
         user_lower = last_user_message.lower()
-        is_snippet = any(s in user_lower for s in ['snippet', 'snip it', 'snipit'])
+        is_skill = any(s in user_lower for s in ['skill', 'snippet', 'snip it', 'snipit'])
 
         for i, tc in enumerate(tool_calls):
             name = tc.get('function', {}).get('name', '')
 
-            # 1. create snippet redirect
-            if ('create' in user_lower or 'make' in user_lower) and name == 'clipboard_action' and is_snippet:
-                tool_calls[i] = {'function': {'name': 'create_snippet', 'arguments': {'text': last_user_message}}}
+            # 1. find_skill redirect
+            if ('find' in user_lower or 'search' in user_lower or 'show' in user_lower) and name == 'clipboard_action' and is_skill:
+                tool_calls[i] = {'function': {'name': 'find_skill', 'arguments': {'query': last_user_message}}}
                 continue
 
-            # 2. paste snippet redirect
-            if 'paste' in user_lower:
-                if name == 'text_editing' and is_snippet:
-                    try:
-                        args = json.loads(tc.get('function', {}).get('arguments', '{}'))
-                        if args.get('operation') == 'paste':
-                            tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
-                    except (json.JSONDecodeError, ValueError):
-                        pass
-                elif name == 'clipboard_action' and is_snippet:
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
+            # 2. push_skill redirect
+            if ('push' in user_lower or 'install' in user_lower or 'add' in user_lower) and is_skill:
+                tool_calls[i] = {'function': {'name': 'push_skill', 'arguments': {'skill_id': last_user_message}}}
+                continue
 
-            # 3. hallucinated "usesnippet"
-            if name == 'usesnippet':
-                text_arg = last_user_message
-                try:
-                    args = json.loads(tc.get('function', {}).get('arguments', '{}'))
-                    text_arg = args.get('text', args.get('index', last_user_message))
-                    if not isinstance(text_arg, str):
-                        text_arg = str(text_arg)
-                except (json.JSONDecodeError, ValueError):
-                    pass
-                tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': text_arg}}}
+            # 3. hallucinated "findskill" / "usesnippet"
+            if name in ('findskill', 'usesnippet', 'useskill'):
+                tool_calls[i] = {'function': {'name': 'find_skill', 'arguments': {'query': last_user_message}}}
 
             # 4. hallucinated "paste"
             if name == 'paste':
-                if is_snippet:
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
-                else:
-                    tool_calls[i] = {'function': {'name': 'text_editing', 'arguments': {'operation': 'paste'}}}
+                tool_calls[i] = {'function': {'name': 'text_editing', 'arguments': {'operation': 'paste'}}}
 
             # 5. hallucinated "clipboardaction"
             if name == 'clipboardaction':
@@ -345,10 +327,7 @@ class OllamaResponseMixin:
                     action = args.get('action', 'get')
                 except (json.JSONDecodeError, ValueError):
                     pass
-                if is_snippet and ('paste' in user_lower or 'copy' in user_lower):
-                    tool_calls[i] = {'function': {'name': 'use_snippet', 'arguments': {'text': last_user_message}}}
-                else:
-                    tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': {'action': action}}}
+                tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': {'action': action}}}
 
     # ------------------------------------------------------------------
     # 6. Post-tool-execution handling
@@ -599,9 +578,16 @@ class OllamaResponseMixin:
                 if msg.get("tool_calls"):
                     tool_calls.extend(msg["tool_calls"])
 
-            # If the LLM wants to chain another tool call, execute it and
-            # do one more follow-up (non-recursive to avoid infinite loops).
-            if tool_calls and not self._cancelled:
+            # ── Agentic tool loop: keep going while the LLM returns tool calls ──
+            MAX_TOOL_ROUNDS = 10
+            round_num = 0
+
+            while tool_calls and round_num < MAX_TOOL_ROUNDS and not self._cancelled:
+                round_num += 1
+                logger.info("Ollama inline followup tool round %d/%d — %d tool call(s)",
+                            round_num, MAX_TOOL_ROUNDS, len(tool_calls))
+
+                # Execute tool calls
                 self._intercept_tool_calls(tool_calls, last_user_msg)
                 tool_results = await self._execute_tool_calls(tool_calls, last_user_message=last_user_msg)
                 self._messages.append({"role": "assistant", "content": full_response or "", "tool_calls": tool_calls})
@@ -609,36 +595,57 @@ class OllamaResponseMixin:
                     name = tc.get("function", {}).get("name", "")
                     self._messages.append({"role": "tool", "content": str(result), "name": name})
 
-                # One more LLM pass to summarise the chained results (no tools
-                # this time to prevent infinite chaining).
-                conv2 = [m for m in self._messages[1:] if m.get("role") != "system"] if system_msg else list(self._messages)
-                conv2 = self._validate_messages_for_ollama(conv2)
-                validated2 = ([system_msg] + conv2) if system_msg else conv2
+                # Feed tool results back — include tools so LLM can keep chaining
+                conv_next = [m for m in self._messages[1:] if m.get("role") != "system"] if system_msg else list(self._messages)
+                conv_next = self._validate_messages_for_ollama(conv_next)
+                validated_next = ([system_msg] + conv_next) if system_msg else conv_next
 
-                chain_response = ""
-                stream2 = await self._ollama_client.chat(
-                    model=current_model,
-                    messages=validated2,
-                    stream=True,
-                    options={"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
-                )
-                async for chunk in stream2:
+                # Re-filter tools for this round
+                last_user_msg_next = ""
+                for msg_r in reversed(self._messages):
+                    if msg_r.get("role") == "user":
+                        last_user_msg_next = msg_r.get("content", "")
+                        break
+                filtered_tools_next = self._get_filtered_tools(last_user_msg_next or last_user_msg)
+                ollama_tools_next = self._convert_tools_to_ollama_format(filtered_tools_next)
+
+                chat_kwargs_next = {
+                    "model": current_model,
+                    "messages": validated_next,
+                    "stream": True,
+                    "options": {"keep_alive": -1, "num_ctx": 8192, "temperature": 0.7},
+                }
+                if ollama_tools_next:
+                    chat_kwargs_next["tools"] = ollama_tools_next
+
+                full_response = ""
+                tool_calls = []
+                stream_next = await self._ollama_client.chat(**chat_kwargs_next)
+                async for chunk_next in stream_next:
                     if self._cancelled:
                         break
-                    content = chunk.get("message", {}).get("content", "")
-                    if content:
-                        cleaned = clean_text_for_tts(content, strip_whitespace=False)
-                        if cleaned:
-                            chain_response += cleaned
+                    content_next = chunk_next.get("message", {}).get("content", "")
+                    if content_next:
+                        cleaned_next = clean_text_for_tts(content_next, strip_whitespace=False)
+                        if cleaned_next:
+                            full_response += cleaned_next
                             if not self._cancelled:
                                 try:
-                                    signal_manager.chat_stream_token.emit(cleaned)
+                                    signal_manager.chat_stream_token.emit(cleaned_next)
                                 except (RuntimeError, Exception):
                                     pass
                                 if self._speaker_enabled and not getattr(self, "_is_telegram_request", False):
-                                    await self.push_frame(TextFrame(text=cleaned))
-                if chain_response:
-                    full_response = chain_response  # final answer replaces intermediate
+                                    await self.push_frame(TextFrame(text=cleaned_next))
+                    if chunk_next.get("message", {}).get("tool_calls"):
+                        tool_calls.extend(chunk_next["message"]["tool_calls"])
+
+                # If no more tool calls, the loop exits - full_response has the final text
+                if not tool_calls:
+                    break
+
+            # Log if we hit the limit
+            if round_num >= MAX_TOOL_ROUNDS and tool_calls:
+                logger.warning("Ollama inline followup hit MAX_TOOL_ROUNDS (%d)", MAX_TOOL_ROUNDS)
 
         except Exception as e:
             logger.error("LLM: inline followup error: %s", e, exc_info=True)
@@ -695,8 +702,8 @@ class OllamaResponseMixin:
         return error_msg, True
 
     def _determine_brief_confirmation(self, tool_calls, tool_results):
-        snippet_called = any(tc.get('function', {}).get('name') in ('create_snippet', 'use_snippet') for tc in tool_calls)
-        if snippet_called:
+        skill_called = any(tc.get('function', {}).get('name') in ('find_skill', 'push_skill') for tc in tool_calls)
+        if skill_called:
             valid = [str(r) for r in tool_results if r and not str(r).startswith("Error:")]
             return " ".join(valid) if valid else "Done"
         exec_called = any(tc.get('function', {}).get('name') in ('execute_code', 'file_operations') for tc in tool_calls)

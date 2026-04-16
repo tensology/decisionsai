@@ -22,8 +22,9 @@ OLLAMA_MODEL_TIERS = [
 
 # Vision model tiers
 OLLAMA_VISION_TIERS = [
-    (0,   "qwen3-vl:2b",  1.5, "vision — light"),
-    (16,  "qwen3-vl:8b",  5.0, "vision — default"),
+    (0,   "qwen3-vl:235b-cloud",  0, "cloud — no local RAM needed"),
+    (12,  "qwen3-vl:2b",          1.5, "local — light"),
+    (16,  "qwen3-vl:8b",          5.0, "local — default"),
 ]
 
 # Coding model tiers
@@ -94,7 +95,7 @@ def recommend_ollama_defaults(ram_gb: float = None) -> dict:
     """Return a dict of recommended Ollama models keyed by role.
 
     >>> recommend_ollama_defaults(8)
-    {'conversational': 'qwen3:4b', 'coding': 'qwen2.5-coder:3b', 'vision': 'qwen3-vl:2b'}
+    {'conversational': 'qwen3:4b', 'coding': 'qwen2.5-coder:3b', 'vision': 'qwen3-vl:235b-cloud'}
     """
     if ram_gb is None:
         ram_gb = get_total_ram_gb()

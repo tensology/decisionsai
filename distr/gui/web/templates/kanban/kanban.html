@@ -1,11 +1,11 @@
 {% extends "base.html" %}
 
-{% block title %}Kanban{% endblock %}
+{% block title %}Ticket Boards{% endblock %}
 
 {% block head_styles %}
 {{ super() }}
 <style>
-/* Kanban lanes */
+/* Ticket Board lanes */
 .kb-lane { min-width: 260px; max-width: 300px; flex: 1 1 260px; }
 .kb-lane-body { min-height: 80px; }
 /* Drag states */
@@ -54,6 +54,10 @@
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
 /* Confirm dialog above ticket / board modals */
 .kb-confirm-overlay { z-index: 120; }
+/* Sidebar tabs */
+.kb-sidebar-tab { cursor: pointer; padding: 6px 16px; border-radius: 6px 6px 0 0; font-size: 0.8rem; font-weight: 600; color: #9ca3af; border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; user-select: none; }
+.kb-sidebar-tab:hover { color: #d1d5db; }
+.kb-sidebar-tab.active { color: #f97316; border-bottom-color: #f97316; }
 /* WhatsApp message bubbles */
 .wa-msg-bubble { max-width: 85%; border-radius: 8px; padding: 8px 12px; }
 .wa-msg-mine { background: #005c4b; }
@@ -66,66 +70,83 @@
     <div class="flex gap-6" style="height: calc(100vh - 130px);">
         <!-- Left panel: board sources -->
         <div class="w-72 flex-shrink-0 flex flex-col gap-4">
-            <!-- Search -->
-            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
-                <div class="flex items-center gap-2">
-                    <input type="text" id="kb-search" placeholder="Search boards..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
-                    <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0" title="KanBan Settings">
-                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                        </svg>
-                    </button>
-                </div>
+            <!-- Tabs -->
+            <div class="flex items-center gap-1 bg-[#1a1f3a] rounded-lg border border-white/20 px-2 pt-2">
+                <button type="button" id="kb-tab-tickets" class="kb-sidebar-tab active" data-tab="tickets">
+                    <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
+                    Tickets
+                </button>
+                <button type="button" id="kb-tab-messages" class="kb-sidebar-tab hidden" data-tab="messages">
+                    <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
+                    Messages
+                </button>
+                <div class="flex-1"></div>
+                <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0 mb-1" title="Ticket Boards Settings">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                </button>
             </div>
-            <!-- Board list -->
-            <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
-                <!-- Database boards -->
-                <div class="mb-3">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Boards</span>
-                        <div class="flex items-center gap-1">
-                            <button type="button" id="kb-checkin-btn" class="text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
-                            <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
+
+            <!-- Tickets panel -->
+            <div id="kb-panel-tickets" class="flex-1 min-h-0 flex flex-col gap-4">
+                <!-- Search -->
+                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
+                    <input type="text" id="kb-search" placeholder="Search boards..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                </div>
+                <!-- Board list -->
+                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
+                    <!-- Database boards -->
+                    <div class="mb-3">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Boards</span>
+                            <div class="flex items-center gap-1">
+                                <button type="button" id="kb-checkin-btn" class="text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                                <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
+                            </div>
+                        </div>
+                        <div id="kb-db-boards" class="space-y-1"></div>
+                    </div>
+                    <!-- Trello boards -->
+                    <div class="mb-3">
+                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
+                        <div id="kb-trello-boards" class="space-y-1 mt-2">
+                            <p class="text-xs text-gray-500 italic">No Trello account connected</p>
                         </div>
                     </div>
-                    <div id="kb-db-boards" class="space-y-1"></div>
-                </div>
-                <!-- WhatsApp Messages section -->
-                <div class="mb-3">
-                    <div class="flex items-center justify-between mb-2">
-                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider flex items-center gap-1.5">
-                            <svg class="w-3.5 h-3.5 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
-                            Messages
-                        </span>
-                        <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Refresh WhatsApp chats">Refresh</button>
+                    <!-- Jira boards -->
+                    <div>
+                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
+                        <div id="kb-jira-boards" class="space-y-1 mt-2">
+                            <p class="text-xs text-gray-500 italic">No Jira account connected</p>
+                        </div>
                     </div>
+                </div>
+            </div>
+
+            <!-- Messages panel -->
+            <div id="kb-panel-messages" class="flex-1 min-h-0 flex flex-col gap-4 hidden">
+                <!-- Search messages -->
+                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="kb-wa-search" placeholder="Search messages..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-sm">
+                        <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Refresh WhatsApp messages">Refresh</button>
+                    </div>
+                </div>
+                <!-- Chat list (incoming messages only) -->
+                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
                     <div id="kb-wa-status" class="text-xs text-gray-500 italic px-1 py-1"></div>
-                    <input type="text" id="kb-wa-search" placeholder="Search chats..." class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-xs mb-2 hidden">
-                    <div id="kb-wa-chats" class="space-y-0.5 max-h-[300px] overflow-y-auto"></div>
-                </div>
-                <!-- Trello boards -->
-                <div class="mb-3">
-                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
-                    <div id="kb-trello-boards" class="space-y-1 mt-2">
-                        <p class="text-xs text-gray-500 italic">No Trello account connected</p>
-                    </div>
-                </div>
-                <!-- Jira boards -->
-                <div>
-                    <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
-                    <div id="kb-jira-boards" class="space-y-1 mt-2">
-                        <p class="text-xs text-gray-500 italic">No Jira account connected</p>
-                    </div>
+                    <div id="kb-wa-chats" class="space-y-0.5 flex-1 overflow-y-auto"></div>
                 </div>
             </div>
         </div>
 
-        <!-- Right panel: kanban display -->
+        <!-- Right panel: ticket board display -->
         <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
             <!-- Empty state -->
             <div id="kb-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <p class="text-gray-400 text-sm max-w-md mb-6">Select a board from the left panel, or create a new database board to get started with your Kanban workflow.</p>
+                <p class="text-gray-400 text-sm max-w-md mb-6">Select a board from the left panel, or create a new database board to get started with your Ticket Boards workflow.</p>
                 <button type="button" id="kb-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Board</button>
             </div>
             <!-- Board view -->
@@ -148,6 +169,29 @@
                     <div id="kb-lanes" class="flex gap-4 h-full"></div>
                 </div>
             </div>
+            <!-- WhatsApp message thread view -->
+            <div id="kb-wa-thread-view" class="hidden flex-1 flex flex-col min-h-0">
+                <!-- Thread header -->
+                <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between">
+                    <div class="flex items-center gap-3">
+                        <button type="button" id="kb-wa-thread-back" class="text-gray-400 hover:text-white mr-1" title="Back to board">
+                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
+                        </button>
+                        <div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-sm font-bold" id="kb-wa-thread-avatar"></div>
+                        <div>
+                            <h2 id="kb-wa-thread-title" class="text-lg font-semibold text-white"></h2>
+                            <span id="kb-wa-thread-count" class="text-xs text-gray-500"></span>
+                        </div>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <button type="button" id="kb-wa-thread-snapshot" class="px-3 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] text-xs hover:bg-[#25D366]/20">Snapshot to Board</button>
+                    </div>
+                </div>
+                <!-- Thread messages -->
+                <div id="kb-wa-thread-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-2">
+                    <div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>
+                </div>
+            </div>
         </div>
     </div>
 </div>
@@ -157,22 +201,6 @@
     <button type="button" class="kb-wa-ctx-view w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">View Messages</button>
     <button type="button" class="kb-wa-ctx-link w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Link to Board</button>
     <button type="button" class="kb-wa-ctx-snapshot w-full text-left px-4 py-2 text-sm text-[#25D366] hover:bg-[#25D366]/20 flex items-center gap-2">Snapshot All to Board</button>
-</div>
-
-<!-- WhatsApp message viewer panel -->
-<div id="kb-wa-msg-panel" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
-    <div class="kb-modal p-0" style="width: 800px; max-height: 85vh;">
-        <div class="flex items-center justify-between px-6 pt-5 pb-0">
-            <h3 id="kb-wa-msg-title" class="text-lg font-semibold text-white">WhatsApp Messages</h3>
-            <div class="flex items-center gap-2">
-                <span id="kb-wa-msg-count" class="text-xs text-gray-500"></span>
-                <button type="button" id="kb-wa-msg-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
-            </div>
-        </div>
-        <div id="kb-wa-msg-list" class="px-6 py-4 space-y-2 overflow-y-auto" style="max-height: 65vh;">
-            <div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>
-        </div>
-    </div>
 </div>
 
 <!-- Link to board dialog -->
@@ -436,7 +464,7 @@
     <div class="kb-modal p-0" style="width: 640px;">
         <!-- Header -->
         <div class="flex items-center justify-between px-6 pt-5 pb-0">
-            <h3 class="text-lg font-semibold text-white">KanBan Settings</h3>
+            <h3 class="text-lg font-semibold text-white">Ticket Boards Settings</h3>
             <button type="button" id="kb-gs-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
         </div>
 

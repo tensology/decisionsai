@@ -1,5 +1,5 @@
 """
-Kanban Agent Check-In Engine.
+Ticket Board Agent Check-In Engine.
 
 Processes tickets from a board's source lane by running the board's default
 workflow against each ticket sequentially, then moving completed tickets to

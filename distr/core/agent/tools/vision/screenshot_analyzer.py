@@ -52,6 +52,7 @@ class ScreenshotAnalyzerInput(BaseModel):
     """Input schema for screenshot_analyzer tool."""
     prompt: str = Field(description="The question or instruction about what to analyze in the screenshot")
     region: Optional[str] = Field(default=None, description="Optional: 'full', 'window', 'selection', or 'all'.")
+    capture_only: Optional[bool] = Field(default=None, description="If True, capture screenshot and return file path only — skip vision LLM analysis. Use when the screenshot file is needed as input to other tools (save to folder, attach to ticket, send to pi, etc.).")
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +73,24 @@ SEND_PATTERNS = [
     'give me screenshot', 'give me picture', 'give me that', 'give me it',
     'give me screen', 'give me the screen', 'give me screen 1', 'give me screen 2',
     'give me', 'get me', 'show me',
+]
+
+# Patterns that indicate the user wants the screenshot FILE as an artifact
+# to route to other tools (NOT just capture-and-analyze or send-to-telegram)
+# Keep this broad — if the screenshot is a STEP IN A CHAIN, not the end goal,
+# we should return the file path for the LLM to route wherever it wants.
+CAPTURE_ONLY_PATTERNS = [
+    'and save', 'and put', 'and add', 'and attach', 'and send',
+    'and copy', 'and move', 'and push', 'and upload',
+    'and open', 'and paste', 'and insert', 'and include',
+    'screenshot and', 'capture and', 'picture and',
+    'save it to', 'save the screenshot', 'save that to',
+    'put it in', 'put that in', 'put the screenshot in',
+    'add it to', 'add the screenshot to',
+    'attach it to', 'attach the screenshot to',
+    'send it to pi', 'push to the cli', 'push it to the cli', 'send to the cli',
+    'send to pi', 'push to pi',
+    'screenshot to', 'screenshot in', 'screenshot for',
 ]
 
 
@@ -249,18 +268,45 @@ class ScreenshotAnalyzerTool(BaseTool):
         "- 'look at my screen', 'see my screen', 'analyze this window', 'what's on my screen' "
         "- 'what do you see', 'describe what's on screen', 'read this screen' "
         "- 'move mouse to [element]', 'click [button]', 'go to [element]' - uses vision to find element "
+        "- 'take a screenshot and save it to downloads', 'capture and add to ticket', 'screenshot and send to pi' "
+        "- ANY request where a screenshot is the FIRST step in a multi-tool chain "
         ""
-        "IMPORTANT BEHAVIOR: "
-        "- For SIMPLE screenshot requests ('take a screenshot', 'give me a screenshot', 'send it to me'): "
-        "  Tool captures screenshot and returns 'Done' - NO analysis, NO vision API calls "
-        "- For ANALYSIS requests ('what do you see', 'describe the screen'): "
-        "  Tool captures screenshot AND analyzes it "
+        "IMPORTANT BEHAVIOR — THREE MODES: "
         ""
-        "When user says 'give me', 'send it to me', or 'send that to me' in Telegram: "
-        "1. Tool captures the screenshot "
-        "2. Tool returns 'Done' immediately (NO analysis) "
-        "3. Screenshot is automatically sent to Telegram "
-        "You do NOT need to ask where to send it - just use the tool and it will handle everything. "
+        "1. CAPTURE-ONLY (returns a routable file path artifact): "
+        "   Triggered when the user wants the screenshot FILE to use in other tools: "
+        "   - 'take a screenshot and save it to [folder]' "
+        "   - 'take a screenshot and add/attach it to [ticket/card]' "
+        "   - 'take a screenshot and send it to pi' / 'push to the CLI' "
+        "   - 'take a screenshot and [any action that needs the file]' "
+        "   - 'screenshot screen 2 and put it in my downloads' "
+        "   In this mode the tool captures the screenshot, persists it, and returns the file path "
+        "   with [ACTION REQUIRED] directives. The LLM MUST then chain to the next tool(s) "
+        "   (file_operations, ticket_board, pi_agent, send_file_to_telegram, execute_code, etc.) "
+        ""
+        "2. DIRECT SEND (capture + send to Telegram, no analysis): "
+        "   Triggered for simple 'give me a screenshot' / 'send it to me' in Telegram: "
+        "   - 'give me a screenshot', 'give me screenshot', 'send it to me' (from Telegram) "
+        "   - 'take a screenshot and send it to telegram' "
+        "   Tool captures screenshot, returns 'Done', screenshot auto-sent to Telegram. "
+        ""
+        "3. ANALYSIS (capture + vision LLM): "
+        "   Triggered when user wants to understand what's on screen: "
+        "   - 'what do you see', 'describe the screen', 'read this screen' "
+        "   - 'what's on my screen', 'analyze this window' "
+        "   Tool captures screenshot AND analyzes it with vision LLM. "
+        ""
+        "SCREENSHOT CHAINING — When the tool returns a file path with [ACTION REQUIRED]: "
+        "- The screenshot is captured and saved to a persistent path on disk "
+        "- You MUST chain to the next tool(s) the user requested "
+        "- Common chains: "
+        "  * screenshot + save to folder → call execute_code to copy/move the file "
+        "  * screenshot + attach to ticket → call ticket_board with the file path "
+        "  * screenshot + send to pi CLI → call pi_agent with the file path referenced "
+        "  * screenshot + send to Telegram → call send_file_to_telegram with file_path "
+        "  * screenshot + multiple actions → chain ALL tools in sequence "
+        "- DO NOT say 'Done' until ALL tools in the chain have completed "
+        "- If a tool result contains [ACTION REQUIRED], silently call the next tool "
         ""
         "The tool can capture: "
         "- Specific screen numbers: 'screen 1', 'screen 2', etc. "
@@ -320,6 +366,88 @@ class ScreenshotAnalyzerTool(BaseTool):
         except Exception as e:
             logger.error(f"Direct screenshot capture failed: {e}")
             return f"Error: {e}"
+
+    # ------------------------------------------------------------------
+    # Capture-only: return file path artifact for tool chaining
+    # ------------------------------------------------------------------
+
+    def _handle_capture_only(self, prompt: str, original_text: str, **kwargs) -> str:
+        """Capture a screenshot and return the file path as a routable artifact.
+
+        Used when the user wants the screenshot FILE to pass to other tools
+        (save to folder, attach to ticket, send to pi, etc.).
+        Returns the file path with [ACTION REQUIRED] so the LLM chains to the next tool.
+        """
+        logger.info("📸 CAPTURE-ONLY mode — returning file path artifact for chaining")
+
+        text_lower = (original_text or prompt or "").lower()
+
+        # Extract screen number
+        screen_number = _extract_screen_number(text_lower)
+
+        # Resolve capture region (respect user's screen/region intent)
+        capture_region = _resolve_capture_region(None, screen_number, text_lower)
+
+        try:
+            is_telegram = _check_telegram_request()
+
+            if is_telegram:
+                # Telegram path — capture, persist, and store for Telegram delivery
+                with tempfile.TemporaryDirectory() as tmp_dir:
+                    screenshot_paths, screenshot_to_screen_map, captured_screen_number = \
+                        self._capture_screenshots(capture_region, tmp_dir)
+                    if not screenshot_paths:
+                        return "Error: Failed to capture screenshot."
+                    pp = _persist_screenshot(screenshot_paths[0], "capture_only")
+                    if not pp:
+                        return "Error: Failed to persist screenshot."
+                    _store_for_telegram(pp, raw=True)
+                    # Also return path for chaining
+                    return (
+                        f"Result: Screenshot captured at {pp}\n"
+                        f"[ACTION REQUIRED: The screenshot file is at \"{pp}\". "
+                        f"Chain to the next tool(s) the user requested.]"
+                    )
+
+            # Desktop path — capture, persist, return file path with chaining directives
+            with tempfile.TemporaryDirectory() as tmp_dir:
+                screenshot_paths, screenshot_to_screen_map, captured_screen_number = \
+                    self._capture_screenshots(capture_region, tmp_dir)
+                if not screenshot_paths:
+                    return "Error: Failed to capture screenshot."
+
+                # Persist ALL screenshots before temp dir is deleted
+                persistent_paths = []
+                for idx, sp in enumerate(screenshot_paths):
+                    pp = _persist_screenshot(sp, f"capture_only_{idx}")
+                    if pp:
+                        persistent_paths.append(pp)
+
+                if not persistent_paths:
+                    return "Error: Failed to persist screenshot."
+
+                primary = persistent_paths[0]
+
+                if len(persistent_paths) == 1:
+                    result = (
+                        f"Result: Screenshot captured at: {primary}\n"
+                        f'[ACTION REQUIRED: The screenshot file is at "{primary}". '
+                        f"Continue with the user's request using this file path.]"
+                    )
+                else:
+                    paths_str = ", ".join(f'"{p}"' for p in persistent_paths)
+                    result = (
+                        f"Result: {len(persistent_paths)} screenshot(s) captured: {paths_str}\n"
+                        f'[ACTION REQUIRED: The primary screenshot is at "{primary}". '
+                        f"Continue with the user's request using this file path.]"
+                    )
+
+                logger.info(f"📸 Capture-only returning artifact: {primary}")
+                return result
+
+        except Exception as e:
+            logger.error(f"Capture-only screenshot failed: {e}", exc_info=True)
+            return f"Error: Failed to capture screenshot: {e}"
 
     # ------------------------------------------------------------------
     # Capture a single screen (used by direct-send and main path)
@@ -1340,6 +1468,19 @@ class ScreenshotAnalyzerTool(BaseTool):
         # ── Fast path: direct send (no analysis) ──
         if kwargs.get('direct_send', False):
             return self._handle_direct_send(prompt, **kwargs)
+
+        # ── Detect capture-only mode ──
+        # When the user wants the screenshot FILE to route to other tools,
+        # we capture and return the file path with [ACTION REQUIRED] — skip vision LLM.
+        capture_only = kwargs.get('capture_only', False)
+        if not capture_only:
+            combined_text = (f"{original_text or ''} {prompt or ''}").lower()
+            if any(p in combined_text for p in CAPTURE_ONLY_PATTERNS):
+                capture_only = True
+
+        # ── Capture-only mode: capture + return file path artifact ──
+        if capture_only:
+            return self._handle_capture_only(prompt, original_text, **kwargs)
 
         # ── Resolve original text ──
         original_text = (

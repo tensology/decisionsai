@@ -72,10 +72,9 @@ def _get_tool_definitions(
         ("ReworkClipboardTool", dict(llm_model=llm_model or "qwen3:8b")),
         # Summarize Clipboard
         ("SummarizeClipboardTool", dict(llm_model=llm_model or "qwen3:8b", llm_service=llm_service)),
-        # Create Snippet
-        ("CreateSnippetTool", dict(event_queue=event_queue)),
-        # Use Snippet
-        ("UseSnippetTool", {}),
+        # Skills tools
+        ("FindSkillTool", {}),
+        ("PushSkillTool", {}),
         # Create Action
         ("CreateActionTool", dict(event_queue=event_queue)),
         # Workflow Builder (AutoWorkflow) tools
@@ -123,7 +122,7 @@ def _get_tool_definitions(
         ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
         # Create Cursor Ticket (legacy — kept for backward compat)
         ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
-        # Kanban Board Ticket (primary ticket tool)
+        # Ticket Board Ticket (primary ticket tool)
         ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
         # Playwright Browser Automation
         ("PlaywrightTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
@@ -331,8 +330,8 @@ TOOL_REGISTRY = {
     "PlayActionTool":          ("actions.play_action", "PlayActionTool"),
     "StopActionTool":          ("actions.stop_action", "StopActionTool"),
     "ListActionsTool":         ("actions.list_actions", "ListActionsTool"),
-    "CreateSnippetTool":       ("actions.create_snippet", "CreateSnippetTool"),
-    "UseSnippetTool":          ("actions.use_snippet", "UseSnippetTool"),
+    "FindSkillTool":          ("skills.find_skill", "FindSkillTool"),
+    "PushSkillTool":          ("skills.push_skill", "PushSkillTool"),
     # chat/
     "NewChatTool":             ("chat.new_chat", "NewChatTool"),
     "ClearChatTool":           ("chat.clear_chat", "ClearChatTool"),
@@ -416,7 +415,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "IndexFolderTool": "Index a dropped folder into the RAG system for semantic search and querying of its contents.",
     "ConvertDocumentTool": "Convert a Markdown file to PDF, DOCX, or Google Doc with proper formatting, tables, and Mermaid diagrams.",
     # vision/
-    "ScreenshotAnalyzerTool": "Capture a screenshot of the desktop or a specific screen and analyze it using a vision LLM.",
+    "ScreenshotAnalyzerTool": "Capture a screenshot of the desktop or a specific screen. THREE MODES: 1) Analysis — capture and analyze with vision LLM. 2) Direct send — capture and send to Telegram. 3) Capture-only — capture and return file path for chaining to other tools (save to folder, attach to ticket, send to pi agent, send to Telegram). Use for: take a screenshot, what do you see, screenshot and save, screenshot and attach to ticket, screenshot and send to pi, push to CLI.",
     "VisionAnalyzerTool": "Analyze a dropped or specified image file using a vision-enabled LLM to describe its contents.",
     "ImageGeneratorTool": "Generate an image from a text description using an image generation LLM and save it to disk.",
     # web/
@@ -441,13 +440,13 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "PlayActionTool": "Play back a previously recorded macro action to repeat a sequence of interactions.",
     "StopActionTool": "Stop a currently playing macro action mid-execution.",
     "ListActionsTool": "List all saved macro actions available for playback.",
-    "CreateSnippetTool": "Create a reusable text snippet that can be quickly inserted later.",
-    "UseSnippetTool": "Insert a previously saved text snippet into the current input field.",
+    "FindSkillTool": "Search and find skills by capability, or list all skills. Use when: find a skill for X, suggest a skill, what skills do we have, is there a skill for Docker/testing/security. No query = list all; with query = relevance-scored search.",
+    "PushSkillTool": "Push a skill to a project's CLI (pi, Claude, Cursor, Gemini, Codex). For pi, copies SKILL.md into .pi/skills/ so it's auto-loaded by the agent. Use when the user asks: push skill, add skill to my project, install skill for pi, make skill available.",
     # chat/
     "NewChatTool": "Start a new conversation, new chat, or fresh chat session.",
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
-    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, kanban, board, settings, preferences, actions, snippets, projects, workflows, step runner, docs, activity log, audio, models, skins, or about. Use for: open kanban, go to settings, show the board, open chat page.",
+    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, step runner, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "ExitAppTool": "Quit and close the DecisionsAI desktop application.",
@@ -462,7 +461,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "DeactivateProjectTool": "Deactivate the currently active project, returning to the default context.",
     "CreateProjectFromFolderTool": "Register a new project from an existing folder on disk.",
     "AddFilesToProjectTool": "Add files or directories to an existing project's tracked file set.",
-    "CreateProjectTicketTool": "Create a new task ticket within the current project's kanban board.",
+    "CreateProjectTicketTool": "Create a new task ticket within the current project's Ticket Board.",
     "OpenProjectTool": "Open a project's folder in the system file manager or IDE.",
     "StartProjectTool": "Start a project by running its configured start command or script.",
     "OpenAndStartProjectTool": "Open a project folder and immediately run its start command in one step.",
@@ -474,9 +473,9 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
     "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
-    "KanbanTicketTool": "Create, update, list, move, or manage kanban tickets, tasks, or cards on the project board.",
+    "KanbanTicketTool": "Create, update, list, move, or manage tickets, tasks, or cards on the project ticket board.",
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
-    "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task.",
+    "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",
     # meta/
     "RequestToolTool": "Request a tool that is not currently available in your active tool set when you need a capability you don't have access to.",

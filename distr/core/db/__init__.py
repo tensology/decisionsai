@@ -87,7 +87,7 @@ class Settings(Base):
     step_runner_llm_provider = Column(String, default='')
     step_runner_llm_model = Column(String, default='')
     vision_llm_provider = Column(String, default='Ollama')
-    vision_llm_model = Column(String, default='qwen3-vl:2b')
+    vision_llm_model = Column(String, default='qwen3-vl:235b-cloud')
     image_llm_provider = Column(String, default='Ollama')
     image_llm_model = Column(String, default='x/flux2-klein:latest')
     computer_use_provider = Column(String, default='')
@@ -158,7 +158,7 @@ class Settings(Base):
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
 
-    # Kanban Agent Settings (global, migrated from per-board)
+    # Ticket Board Agent Settings (global, migrated from per-board)
     kanban_agent_enabled = Column(Boolean, default=False)
 
     # Telegram response format settings
@@ -406,7 +406,7 @@ class TelegramGroupMessage(Base):
 
 
 class WhatsAppPhoneLink(Base):
-    """Link a WhatsApp phone JID to a Kanban board.
+    """Link a WhatsApp phone JID to a Ticket Board.
     When a number is linked, its messages show up in the board's WhatsApp tab,
     and the agent check-in can auto-create tickets from unlinked messages.
     """
@@ -513,7 +513,7 @@ def on_checkin(dbapi_conn, connection_record):
     pool = engine.pool
     logger.debug(f"Database connection checked in. Pool size: {pool.size()}, checked out: {pool.checkedout()}")
 
-# Add missing kanban columns to existing settings table before create_all
+# Add missing ticket board columns to existing settings table before create_all
 try:
     with engine.connect() as _conn:
         _result = _conn.execute(sa_text("SELECT name FROM sqlite_master WHERE type='table' AND name='settings'"))
@@ -675,7 +675,7 @@ def init_db():
                 from distr.core.system_resources import recommend_ollama_defaults, get_total_ram_gb
                 _rec = recommend_ollama_defaults(get_total_ram_gb())
             except Exception:
-                _rec = {"conversational": "qwen3:0.6b", "coding": "qwen2.5-coder:0.5b", "vision": "qwen3-vl:2b"}
+                _rec = {"conversational": "qwen3:0.6b", "coding": "qwen2.5-coder:0.5b", "vision": "qwen3-vl:235b-cloud"}
 
             # Also consume the setup.py JSON if it exists (may have more accurate values)
             _model_defaults_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), 'installer', '.model_defaults.json')
@@ -715,7 +715,7 @@ def init_db():
                 coding_llm_provider='Ollama',
                 coding_llm_model=_rec.get('coding', 'glm-5.1:cloud'),
                 vision_llm_provider='Ollama',
-                vision_llm_model=_rec.get('vision', 'qwen3-vl:2b'),
+                vision_llm_model=_rec.get('vision', 'qwen3-vl:235b-cloud'),
                 image_llm_provider='Ollama',
                 image_llm_model='x/flux2-klein:latest',
                 code_provider='Ollama',

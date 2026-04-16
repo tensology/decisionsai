@@ -101,7 +101,7 @@ def create_app() -> FastAPI:
     _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js")
     _mount_static(app, "/actions/static/js", static_dir / "actions" / "js", "actions_js")
     _mount_static(app, "/workflows/static/js", static_dir / "workflows" / "js", "workflows_js")
-    _mount_static(app, "/snippets/static/js", static_dir / "snippets" / "js", "snippets_js")
+    _mount_static(app, "/skills/static/js", static_dir / "skills" / "js", "skills_js")
     _mount_static(app, "/projects/static/js", static_dir / "projects" / "js", "projects_js")
     _mount_static(app, "/oauth/static/css", static_dir / "oauth" / "css", "oauth_css")
     _mount_static(app, "/oauth/static/js", static_dir / "oauth" / "js", "oauth_js")
@@ -120,7 +120,7 @@ def create_app() -> FastAPI:
             if any(path.startswith(p) for p in [
                 "/board/", "/settings/static/", "/chat/static/", "/docs/static/",
                 "/kanban/static/", "/actions/static/", "/workflows/static/",
-                "/snippets/static/", "/projects/static/", "/oauth/static/",
+                "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/",
             ]):
                 response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
@@ -250,13 +250,144 @@ def create_app() -> FastAPI:
     async def actions_redirect():
         return RedirectResponse(url="/actions/", status_code=302)
 
-    @app.get("/snippets/", response_class=HTMLResponse)
-    async def snippets_page(request: Request):
-        return page_templates.TemplateResponse(request, "snippets/snippets.html", _template_context(request, "/snippets"))
+    @app.get("/skills/", response_class=HTMLResponse)
+    async def skills_page(request: Request):
+        return page_templates.TemplateResponse(request, "skills/skills.html", _template_context(request, "/skills"))
 
-    @app.get("/snippets", response_class=HTMLResponse)
-    async def snippets_redirect():
-        return RedirectResponse(url="/snippets/", status_code=302)
+    @app.get("/skills", response_class=HTMLResponse)
+    async def skills_redirect():
+        return RedirectResponse(url="/skills/", status_code=302)
+
+    # Projects API — list projects for push dropdown
+    @app.get("/api/projects")
+    async def get_projects():
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            session = get_session()
+            projects = session.query(Project).all()
+            return [{"name": p.name, "path": p.folder} for p in projects if p.folder]
+        except Exception:
+            return []
+
+    # Skills API — serve the skills registry
+    @app.get("/api/skills")
+    async def get_skills_registry():
+        import json as _json
+        skills_root = project_root / "skills"
+        registry_file = skills_root / "skills_registry.json"
+        if registry_file.exists():
+            return _json.loads(registry_file.read_text())
+        return []
+
+    @app.get("/api/skills/{skill_id}")
+    async def get_skill_detail(skill_id: str):
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Skill not found")
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            skill_file = skill_dir / "skill.md"
+        if not skill_file.exists():
+            raise HTTPException(status_code=404, detail="Skill SKILL.md not found")
+        content = skill_file.read_text()
+        return {"id": skill_id, "content": content}
+
+    @app.post("/api/skills/{skill_id}/push")
+    async def push_skill_to_project(skill_id: str, request: Request):
+        """Push a skill to a project's CLI command directory."""
+        import json as _json
+        import shutil
+        body = await request.json()
+        project_path = body.get("project_path", ".")
+        target = body.get("target", "pi")
+        instructions = body.get("instructions", "")
+
+        # Supported CLI targets
+        cli_targets = {
+            "pi": ".pi/skills",
+            "claude": ".claude/commands",
+            "cursor": ".cursor/commands",
+            "gemini": ".gemini/commands",
+            "codex": ".codex/commands",
+        }
+        target_dir_name = cli_targets.get(target.lower())
+        if not target_dir_name:
+            raise HTTPException(status_code=400, detail=f"Unsupported target '{target}'. Supported: {', '.join(cli_targets.keys())}")
+
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            skill_file = skill_dir / "skill.md"
+        if not skill_file.exists():
+            raise HTTPException(status_code=404, detail="SKILL.md not found")
+
+        # Read skill name from frontmatter
+        skill_name = skill_id
+        try:
+            fm_content = skill_file.read_text()
+            if fm_content.startswith("---"):
+                end = fm_content.find("---", 3)
+                if end > 0:
+                    for line in fm_content[3:end].split("\n"):
+                        if line.strip().startswith("name:"):
+                            skill_name = line.split(":", 1)[1].strip().strip('"').strip("'")
+                            break
+        except Exception:
+            pass
+
+        # Resolve project path
+        from pathlib import Path as P
+        project = P(project_path).resolve()
+        if not project.exists():
+            project.mkdir(parents=True, exist_ok=True)
+
+        target_dir = project / target_dir_name
+        target_dir.mkdir(parents=True, exist_ok=True)
+
+        # For pi: directory/SKILL.md (Agent Skills spec). For others: flat .md file
+        if target.lower() == "pi":
+            dest_skill_dir = target_dir / skill_id
+            dest_skill_dir.mkdir(parents=True, exist_ok=True)
+            dest_file = dest_skill_dir / "SKILL.md"
+            shutil.copy2(skill_file, dest_file)
+            # Copy supporting files into the skill directory
+            pushed_files = [str(dest_file)]
+            for subdir_name in ["scripts", "references", "reference"]:
+                subdir = skill_dir / subdir_name
+                if subdir.exists() and subdir.is_dir():
+                    dest_subdir = dest_skill_dir / subdir_name
+                    if dest_subdir.exists():
+                        shutil.rmtree(dest_subdir)
+                    shutil.copytree(subdir, dest_subdir)
+                    pushed_files.append(str(dest_subdir))
+        else:
+            dest_file = target_dir / f"{skill_id}.md"
+            shutil.copy2(skill_file, dest_file)
+            pushed_files = [str(dest_file)]
+            for subdir_name in ["scripts", "references", "reference"]:
+                subdir = skill_dir / subdir_name
+                if subdir.exists() and subdir.is_dir():
+                    dest_subdir = target_dir / skill_id / subdir_name
+                    if dest_subdir.exists():
+                        shutil.rmtree(dest_subdir)
+                    shutil.copytree(subdir, dest_subdir)
+                    pushed_files.append(str(dest_subdir))
+
+        return {
+            "success": True,
+            "skill_id": skill_id,
+            "skill_name": skill_name,
+            "target": target,
+            "destination": str(dest_file),
+            "files": pushed_files,
+            "message": f"Pushed '{skill_name}' to {target}! Run: /skill:{skill_id}" + (f" with: {instructions}" if instructions else "")
+        }
 
     @app.get("/projects/", response_class=HTMLResponse)
     async def projects_page(request: Request):
@@ -274,7 +405,7 @@ def create_app() -> FastAPI:
     async def workflows_redirect():
         return RedirectResponse(url="/workflows/", status_code=302)
 
-    # Kanban
+    # Ticket Board
     @app.get("/kanban/", response_class=HTMLResponse)
     async def kanban_page(request: Request):
         return page_templates.TemplateResponse(request, "kanban/kanban.html", _template_context(request, "/kanban"))
@@ -287,9 +418,9 @@ def create_app() -> FastAPI:
         from distr.gui.web.routes.kanban import create_routes as create_kanban_routes
         kanban_router = create_kanban_routes()
         app.include_router(kanban_router, prefix="/api", tags=["kanban"])
-        logger.info("Kanban API routes mounted at /api")
+        logger.info("Ticket Board API routes mounted at /api")
     except Exception as e:
-        logger.error("Failed to load Kanban routes: %s", e, exc_info=True)
+        logger.error("Failed to load Ticket Board routes: %s", e, exc_info=True)
 
     # Legacy: redirect old step-runner URLs to workflows
     @app.get("/step-runner/", response_class=HTMLResponse)
@@ -317,14 +448,14 @@ def create_app() -> FastAPI:
     async def health_check():
         return {"status": "ok", "services": ["flow", "board", "settings", "chat"]}
     
-    # Run one-time kanban settings migration on startup
+    # Run one-time ticket board settings migration on startup
     @app.on_event("startup")
     async def _run_kanban_migration():
         try:
             from distr.core.kanban.migration import migrate_board_agent_settings_to_global
             migrate_board_agent_settings_to_global()
         except Exception as e:
-            logger.warning("Kanban settings migration could not run: %s", e)
+            logger.warning("Ticket Board settings migration could not run: %s", e)
 
     # Check model recommendations staleness on startup
     @app.on_event("startup")

@@ -49,8 +49,9 @@ _PAGE_MAP = {
     "advanced settings": "/settings#advanced",
     # Actions
     "actions":        "/actions/",
-    # Snippets
-    "snippets":       "/snippets/",
+    # Skills
+    "skills":         "/skills/",
+    "snippets":       "/skills/",
     # Projects
     "projects":       "/projects/",
     # Workflows / Step Runner
@@ -59,7 +60,7 @@ _PAGE_MAP = {
     "step runner":    "/workflows/",
     "step-runner":    "/workflows/",
     "steprunner":     "/workflows/",
-    # Kanban / Board
+    # Ticket Board / Board
     "kanban":         "/kanban/",
     "board":          "/kanban/",
     # API Docs
@@ -80,8 +81,8 @@ _PAGE_MAP = {
 _KNOWN_PAGES = ", ".join(sorted({
     "chat", "settings/preferences", "general", "initiative", "audio",
     "third party/providers/api keys", "llms/models", "skins/avatar",
-    "advanced", "actions", "snippets", "projects",
-    "workflows/step runner", "kanban/board", "docs/api docs",
+    "advanced", "actions", "skills", "projects",
+    "workflows/step runner", "ticket board", "docs/api docs",
     "activity log", "about",
 }))
 

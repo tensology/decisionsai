@@ -498,15 +498,15 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                 ],
             },
-            # ── Kanban Boards ──────────────────────────────────────
+            # ── Ticket Boards ──────────────────────────────────────
             {
-                "section": "Kanban Boards",
+                "section": "Ticket Boards",
                 "endpoints": [
                     {
                         "method": "GET",
                         "path": "/api/kanban/boards",
                         "summary": "List all boards",
-                        "description": "Returns all Kanban boards.",
+                        "description": "Returns all Ticket boards.",
                         "curl": f'curl -s {base}/api/kanban/boards',
                         "body": None,
                         "response_example": '[{"id": 1, "name": "My Board", "description": "..."}]',
@@ -515,7 +515,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "method": "POST",
                         "path": "/api/kanban/boards",
                         "summary": "Create a board",
-                        "description": "Creates a new Kanban board with default lanes (To Do, In Progress, Done).",
+                        "description": "Creates a new Ticket board with default lanes (To Do, In Progress, Done).",
                         "curl": f"""curl -s -X POST {base}/api/kanban/boards \\
   -H 'Content-Type: application/json' \\
   -d '{{"name": "Sprint Board", "description": "Current sprint"}}'""",
@@ -776,14 +776,13 @@ def create_routes(base_path: str = "") -> APIRouter:
                     {"method": "POST", "path": "/api/custom-voices/transcribe", "summary": "Transcribe audio", "description": "Upload an audio file and get its transcription. Uses OpenAI Whisper API or local whisper.", "curl": f'curl -s -X POST {base}/api/custom-voices/transcribe -F "audio=@recording.wav"', "body": None, "response_example": '{"transcript": "Hello, this is a sample recording."}'},
                 ],
             },
-            # ── Snippets ───────────────────────────────────────
+            # ── Skills ───────────────────────────────────────
             {
-                "section": "Snippets",
+                "section": "Skills",
                 "endpoints": [
-                    {"method": "GET", "path": "/api/snippets", "summary": "List all snippets", "description": "Returns all text snippets.", "curl": f'curl -s {base}/api/snippets', "body": None, "response_example": '[{"id": 1, "title": "Email Signature", "description": "..."}]'},
-                    {"method": "POST", "path": "/api/snippets", "summary": "Create a snippet", "description": "Creates a new text snippet.", "curl": f"curl -s -X POST {base}/api/snippets -H 'Content-Type: application/json' -d '{{\"title\": \"Meeting Template\", \"description\": \"Notes format\"}}'", "body": {"title": {"type": "string", "required": True, "description": "Snippet title"}, "description": {"type": "string", "required": False, "description": "Content"}}, "response_example": '{"id": 2, "title": "Meeting Template"}'},
-                    {"method": "PUT", "path": "/api/snippets/{snippet_id}", "summary": "Update a snippet", "description": "Update a snippet's title or description.", "curl": f"curl -s -X PUT {base}/api/snippets/1 -H 'Content-Type: application/json' -d '{{\"title\": \"Updated\"}}'", "params": [{"name": "snippet_id", "type": "int", "required": True, "description": "Snippet ID"}], "body": {"title": {"type": "string", "required": False, "description": "New title"}, "description": {"type": "string", "required": False, "description": "New content"}}, "response_example": '{"success": true}'},
-                    {"method": "DELETE", "path": "/api/snippets/{snippet_id}", "summary": "Delete a snippet", "description": "Permanently deletes a snippet.", "curl": f'curl -s -X DELETE {base}/api/snippets/1', "params": [{"name": "snippet_id", "type": "int", "required": True, "description": "Snippet ID"}], "body": None, "response_example": '{"success": true}'},
+                    {"method": "GET", "path": "/api/skills", "summary": "List all skills", "description": "Returns the skills registry.", "curl": f'curl -s {base}/api/skills', "body": None, "response_example": '[{"id": "brainstorming", "name": "brainstorming", "description": "..."}]'},
+                    {"method": "GET", "path": "/api/skills/{{skill_id}}", "summary": "Get skill detail", "description": "Returns the full SKILL.md content for a skill.", "curl": f'curl -s {base}/api/skills/brainstorming', "params": [{"name": "skill_id", "type": "str", "required": True, "description": "Skill ID"}], "body": None, "response_example": '{"id": "brainstorming", "content": "..."}'},
+                    {"method": "POST", "path": "/api/skills/{{skill_id}}/push", "summary": "Push skill to project", "description": "Push a skill to a project CLI directory (.pi/skills/, .claude/commands/, etc).", "curl": f"curl -s -X POST {base}/api/skills/brainstorming/push -H 'Content-Type: application/json' -d '{{\\"target\\": \"pi\", \"project_path\\": \".\"}}'", "body": {"project_path": {"type": "str", "required": False, "description": "Path to project"}, "target": {"type": "str", "required": False, "description": "CLI target: pi, claude, cursor, gemini, codex"}}, "response_example": '{"success": true, "message": "Pushed brainstorming to pi!"}'},
                 ],
             },
             # ── Workflows ──────────────────────────────────────

@@ -1,4 +1,4 @@
-"""Utility helpers for the Kanban module."""
+"""Utility helpers for the Ticket Board module."""
 
 from __future__ import annotations
 

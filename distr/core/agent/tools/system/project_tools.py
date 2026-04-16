@@ -969,7 +969,7 @@ class CreateProjectTicketTool(BaseTool):
         
         Only 'tell cursor' is a strong trigger. Other triggers are for
         code-change instructions when a project is active — but the word
-        'ticket' on its own should route to the kanban tool, not here.
+        'ticket' on its own should route to the ticket board tool, not here.
         """
         return [
             "tell cursor",

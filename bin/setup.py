@@ -206,6 +206,7 @@ def _model_display_name(model_id: str) -> str:
         "qwen3.5": "Qwen 3.5 397B",
         "qwen3-coder-next": "Qwen3 Coder Next",
         "qwen3-vl": "Qwen3 VL",
+        "qwen3-vl:235b-cloud": "Qwen3 VL",
         "qwen3": "Qwen3",
         "qwen2.5-coder": "Qwen2.5 Coder",
         "x/flux2-klein": "Flux2 Klein",
@@ -231,7 +232,7 @@ def setup_pi_cli(ram_gb=None, rec=None):
             from distr.core.system_resources import recommend_ollama_defaults
             rec = recommend_ollama_defaults(ram_gb)
         except Exception:
-            rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:2b"}
+            rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
 
     conv_model = rec["conversational"]
     code_model = rec["coding"]
@@ -267,6 +268,7 @@ def setup_pi_cli(ram_gb=None, rec=None):
                     {"id": "qwen3.5:397b-cloud", "name": "Qwen 3.5 397B"},
                     {"id": "minimax-m2.5:cloud", "name": "MiniMax M2.5"},
                     {"id": "glm-5.1:cloud", "name": "GLM 5.1"},
+                    {"id": "qwen3-vl:235b-cloud", "name": "Qwen3 VL"},
                 ]
             }
         }
@@ -420,7 +422,7 @@ def setup(skip_model_pull=False, install_optional=False):
     except Exception as _e:
         print(f"Could not detect RAM ({_e}), using defaults for 16 GB")
         ram_gb = 16.0
-        rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:2b"}
+        rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
 
     # Write recommended models to a file so the DB can pick them up on first creation
     try:

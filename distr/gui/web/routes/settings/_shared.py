@@ -213,7 +213,7 @@ class ElevenLabsVoiceSettingsUpdate(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Pydantic models — Actions / Snippets / Projects
+# Pydantic models — Actions / Skills / Projects
 # ---------------------------------------------------------------------------
 
 class ActionUpdate(BaseModel):

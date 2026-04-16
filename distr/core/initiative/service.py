@@ -11,7 +11,7 @@ The service runs two timers:
   idle_timer     — fires after 5 min of user inactivity
   schedule_timer — fires every 60 s for periodic checks
 
-On each cycle it assembles context (chat history, kanban, workflows, etc.),
+On each cycle it assembles context (chat history, ticket boards, workflows, etc.),
 asks the LLM to propose ONE action, evaluates it against the policy gate,
 and dispatches accordingly.
 """
@@ -387,7 +387,7 @@ class InitiativeService:
             "stuck_tasks": bundle.stuck_tasks,
             "unfinished_workflows": bundle.unfinished_workflows,
             "available_tools": bundle.available_tools[:15],
-            "snippets": bundle.snippets[:10],
+            "skills": bundle.skills[:10],
             "recent_audit": bundle.recent_audit[:10],
         }, ensure_ascii=False)
         messages = [
@@ -448,7 +448,7 @@ class InitiativeService:
             role_instruction = (
                 "Your role is to follow up on stuck work, run approved routine tasks, "
                 "and keep the user updated. You can propose executing routine tasks "
-                "(kanban ticket creation, workflow runs) and sending suggestions. "
+                "(ticket board creation, workflow runs) and sending suggestions. "
                 "For external communications, file changes, or sensitive actions, "
                 "check the boundary settings — if 'ask' is enabled, use those action types "
                 "so the system can request confirmation."
@@ -465,14 +465,14 @@ class InitiativeService:
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {boundary_info}\n\n"
             f"{role_instruction}\n\n"
-            "Context available: active project, kanban boards and tickets, "
+            "Context available: active project, ticket boards and tickets, "
             "workflows (stuck/unfinished), recent tool audit trail, available tools, "
-            "and saved snippets.\n\n"
+            "and available skills.\n\n"
             "Based on the context, propose ONE action. "
             "Respond with a JSON object (no markdown fences) with fields:\n"
             "  action_type: suggestion | routine_task | external_comms | file_change | sensitive | none\n"
             "  description: what the action does (string)\n"
-            "  payload: optional dict with details (e.g. board_id, lane, title for kanban)\n"
+            "  payload: optional dict with details (e.g. board_id, lane, title for ticket board)\n"
             "  draft: optional text draft for the action\n"
             "  telegram_message: optional notification text\n\n"
             "If nothing useful can be done, return {\"action_type\": \"none\"}."
@@ -521,7 +521,7 @@ class InitiativeService:
             elif runner_type == "workflow":
                 self._dispatch_workflow(action, settings)
             else:
-                # Default: try kanban if board_id present, otherwise log as suggestion
+                # Default: try ticket board if board_id present, otherwise log as suggestion
                 if (action.payload or {}).get("board_id"):
                     self._dispatch_kanban(action, settings)
                 else:
@@ -557,7 +557,7 @@ class InitiativeService:
         )
 
     def _dispatch_kanban(self, action: ProposedAction, settings: dict) -> None:
-        """Create a kanban ticket from the proposed action."""
+        """Create a ticket from the proposed action."""
         payload = action.payload or {}
         board_id = payload.get("board_id")
         lane_name = payload.get("lane", "Backlog")
@@ -577,7 +577,7 @@ class InitiativeService:
                 pass
 
         if not board_id:
-            logger.warning("InitiativeService: no board_id for kanban dispatch, falling back to suggestion")
+            logger.warning("InitiativeService: no board_id for ticket board dispatch, falling back to suggestion")
             self._deliver_suggestion(action, settings)
             return
 
@@ -606,16 +606,16 @@ class InitiativeService:
                     )
                     session.add(ticket)
                     session.commit()
-                    logger.info("InitiativeService: created kanban ticket '%s' in lane '%s' (board %s)",
+                    logger.info("InitiativeService: created ticket '%s' in lane '%s' (board %s)",
                                 title[:50], lane.name, board_id)
-                    self._log_to_chat(f"Created kanban ticket: {title[:100]}", settings)
+                    self._log_to_chat(f"Created ticket: {title[:100]}", settings)
                     self._send_telegram_if_allowed(
                         action.telegram_message or f"Created ticket: {title[:100]}",
                         settings,
                     )
                     return
         except Exception:
-            logger.error("InitiativeService: kanban ticket creation failed", exc_info=True)
+            logger.error("InitiativeService: ticket creation failed", exc_info=True)
 
         self._deliver_suggestion(action, settings)
 

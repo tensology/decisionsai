@@ -676,7 +676,7 @@
                     link.textContent = "Go To Board";
                     actionsEl.appendChild(link);
                 } else {
-                    statusEl.textContent = "No kanban board for this project.";
+                    statusEl.textContent = "No ticket board for this project.";
                     var btn = document.createElement("button");
                     btn.type = "button";
                     btn.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium";

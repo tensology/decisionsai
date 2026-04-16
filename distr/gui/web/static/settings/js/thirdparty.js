@@ -133,7 +133,7 @@ async function saveThirdPartySettings() {
         showNotification('Settings saved successfully', 'success');
         console.log('Settings saved:', result);
 
-        // Notify same-page tabs (LLMs, Kanban) to refresh provider dropdowns
+        // Notify same-page tabs (LLMs, Ticket Board) to refresh provider dropdowns
         window.dispatchEvent(new CustomEvent('thirdparty-providers-changed'));
 
         // Notify other open pages (Chat) via BroadcastChannel

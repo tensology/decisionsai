@@ -116,9 +116,9 @@ ROUTING_CASES = [
     ("which project is active", "query_current_project"),
     ("switch to the other project", "switch_project"),
 
-    # ── Snippets ──
-    ("create a snippet", "create_snippet"),
-    ("use my snippet", "use_snippet"),
+    # ── Skills ──
+    ("find a skill for debugging", "find_skill"),
+    ("push the security skill to my project", "push_skill"),
 
     # ── Execute code ──
     ("run this python script", "execute_code"),

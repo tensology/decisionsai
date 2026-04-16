@@ -15,7 +15,7 @@ class ContextBundle:
     unfinished_workflows: list = field(default_factory=list)
     active_project: dict = field(default_factory=dict)
     available_tools: list = field(default_factory=list)
-    snippets: list = field(default_factory=list)
+    skills: list = field(default_factory=list)
     recent_audit: list = field(default_factory=list)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
@@ -44,7 +44,7 @@ class ContextAssembler:
         try:
             kanban_summary = self._fetch_kanban_summary(now)
         except Exception:
-            logger.warning("ContextAssembler: failed to fetch kanban summary", exc_info=True)
+            logger.warning("ContextAssembler: failed to fetch ticket board summary", exc_info=True)
 
         # --- stuck_tasks ---
         stuck_tasks = []
@@ -74,12 +74,12 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to fetch available tools", exc_info=True)
 
-        # --- snippets ---
-        snippets = []
+        # --- skills ---
+        skills = []
         try:
-            snippets = self._fetch_snippets()
+            skills = self._fetch_skills()
         except Exception:
-            logger.warning("ContextAssembler: failed to fetch snippets", exc_info=True)
+            logger.warning("ContextAssembler: failed to fetch skills", exc_info=True)
 
         # --- recent_audit ---
         recent_audit = []
@@ -96,7 +96,7 @@ class ContextAssembler:
             unfinished_workflows=unfinished_workflows,
             active_project=active_project,
             available_tools=available_tools,
-            snippets=snippets,
+            skills=skills,
             recent_audit=recent_audit,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
@@ -332,21 +332,20 @@ class ContextAssembler:
             logger.debug("_fetch_available_tools failed: %s", e)
             return []
 
-    def _fetch_snippets(self) -> list:
-        """Fetch saved snippets/actions."""
-        from distr.core.db import get_session
+    def _fetch_skills(self) -> list:
+        """Fetch available skills from the skills directory."""
+        import json
+        from pathlib import Path
 
-        result = []
+        project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+        registry_file = project_root / "skills" / "skills_registry.json"
+        if not registry_file.exists():
+            return []
         try:
-            from distr.core.db.kanban import Snippet
-            with get_session() as session:
-                snippets = session.query(Snippet).limit(20).all()
-                for s in snippets:
-                    result.append({
-                        "id": s.id,
-                        "title": s.title or "",
-                        "content": (s.content or "")[:200],
-                    })
+            registry = json.loads(registry_file.read_text(encoding="utf-8"))
+            return [{"id": s.get("id", ""), "name": s.get("name", ""), "description": (s.get("description") or "")[:120]} for s in registry[:20]]
+        except Exception:
+            return []
         except Exception:
             pass
         return result
