@@ -48,6 +48,8 @@
 | 🔀 | **Workflows** | Multi-step workflows with validation, agent routing, recording, presets, and scheduling |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
+| 🔧 | **pi Agent** | Talk to the pi coding agent from chat — send prompts, stream output, get code done without leaving the conversation |
+| 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
 
 ## How It Works

@@ -2,6 +2,28 @@
 
 ---
 
+## [2.7.8] - 2026-04-16
+
+### pi Agent Integration, Terminal Overview, Workflow Upgrades, Kanban Refactor
+
+**pi Agent Tool** — The new `pi_agent` integration lets the assistant talk to the pi coding agent directly from chat. It replaced the old `kiro_cli` tool with a full RPC client (`pi_rpc.py`) that sends prompts, gets responses, and streams output. The assistant can now spin up a coding task, send it to pi, and relay the result back — all without leaving the conversation.
+
+**Terminal Overview** — A new `terminal_overview` tool captures a head-and-tail buffer of whatever's running in the terminal tab. The assistant can glance at your terminal output and react to build errors, test failures, or anything else visible in the window. Faster than reading the whole scrollback, smarter than guessing.
+
+**Workflow Dispatcher Rewrite** — The dispatcher got a major expansion (428 lines of new logic). Steps now resume correctly after async completions, hung steps fail on timeout instead of running forever, and tool calls during workflow runs actually execute instead of just describing what they'd do.
+
+**Kanban Agent & Tickets** — The kanban agent and ticket integration were refactored for cleaner state management and better ticket updates. Route handlers and the frontend JS both got updates.
+
+**Step Runner Presets** — Six ready-made presets for common automation tasks: file operations, HTTP health checks, opening applications, Python data pipelines, and Playwright-based web login and scraping. Pick one and customize, or use them as-is.
+
+**Projects & Workflows UI** — The projects settings page got a major overhaul (new HTML layout, rewritten JS). Workflow templates, settings, and LLM configuration pages were all updated to match the new model slot structure.
+
+**Ollama Provider Improvements** — Better response handling and error recovery in the Ollama provider and response mixins.
+
+**Housekeeping** — Removed old xterm vendor files (addon-fit, addon-web-links, xterm.css/js) and the kiro_cli integration. Updated the launcher script and various step runner test utilities.
+
+---
+
 ## [2.7.7] - 2026-04-16
 
 ### Cloud Models, pi CLI Setup, No More RAM Pain
