@@ -2,43 +2,30 @@
 
 ---
 
-## [2.7.8] - 2026-04-16
-
-### pi Agent Integration, Terminal Overview, Workflow Upgrades, Kanban Refactor
-
-**pi Agent Tool** — The new `pi_agent` integration lets the assistant talk to the pi coding agent directly from chat. It replaced the old `kiro_cli` tool with a full RPC client (`pi_rpc.py`) that sends prompts, gets responses, and streams output. The assistant can now spin up a coding task, send it to pi, and relay the result back — all without leaving the conversation.
-
-**Terminal Overview** — A new `terminal_overview` tool captures a head-and-tail buffer of whatever's running in the terminal tab. The assistant can glance at your terminal output and react to build errors, test failures, or anything else visible in the window. Faster than reading the whole scrollback, smarter than guessing.
-
-**Workflow Dispatcher Rewrite** — The dispatcher got a major expansion (428 lines of new logic). Steps now resume correctly after async completions, hung steps fail on timeout instead of running forever, and tool calls during workflow runs actually execute instead of just describing what they'd do.
-
-**Kanban Agent & Tickets** — The kanban agent and ticket integration were refactored for cleaner state management and better ticket updates. Route handlers and the frontend JS both got updates.
-
-**Step Runner Presets** — Six ready-made presets for common automation tasks: file operations, HTTP health checks, opening applications, Python data pipelines, and Playwright-based web login and scraping. Pick one and customize, or use them as-is.
-
-**Projects & Workflows UI** — The projects settings page got a major overhaul (new HTML layout, rewritten JS). Workflow templates, settings, and LLM configuration pages were all updated to match the new model slot structure.
-
-**Ollama Provider Improvements** — Better response handling and error recovery in the Ollama provider and response mixins.
-
-**Housekeeping** — Removed old xterm vendor files (addon-fit, addon-web-links, xterm.css/js) and the kiro_cli integration. Updated the launcher script and various step runner test utilities.
-
----
-
 ## [2.7.7] - 2026-04-16
 
-### Cloud Models, pi CLI Setup, No More RAM Pain
+### Cloud Models, pi Agent, Terminal Overview, No More RAM Pain
 
-Local AI models on a 16GB laptop are a dead end — they fight your browser, your IDE, and everything else for RAM. This update swaps the defaults to Ollama cloud models that run on remote servers, using zero local memory. Setup now also configures the pi coding agent so you're ready to code on day one.
+**Cloud Models by Default** — New installs now use `minimax-m2.5:cloud` for chat and `glm-5.1:cloud` for coding. Zero local RAM needed. Your old local model settings get swapped automatically on next launch.
 
-**Cloud Models by Default** — New installs and existing setups now default to `minimax-m2.5:cloud` for conversation and `glm-5.1:cloud` for coding. These go through Ollama but run remotely — no 5GB downloads, no 6GB RAM chunks, no 500 errors when your machine is busy. Vision stays local (`qwen3-vl:2b`, only 1.9GB) because it needs low latency for screenshots.
+**pi Agent** — You can now talk to the pi coding agent straight from chat. Ask it to write code, fix bugs, refactor stuff — all without leaving the conversation.
 
-**pi CLI Setup** — The setup script now installs and configures the pi coding agent automatically. It creates `~/.pi/agent/models.json` with your Ollama cloud models, installs pi via npm if it's not there, and merges with any existing config so nothing gets overwritten. One setup run and both DecisionsAI and pi are ready to go.
+**Terminal Overview** — The assistant can now glance at your terminal tab and react to what it sees. Build errors, test failures, whatever's on screen.
 
-**Smart RAM Tiers** — The model tier system now puts cloud models at tier 0 (any RAM). Local models are still available as fallbacks for machines with 10GB+ to spare. Your existing database settings are automatically migrated to cloud models on next launch.
+**Workflow Upgrades** — Workflow steps now actually run tools instead of just talking about them. Hung steps time out instead of running forever. Async steps finish properly.
 
-**Database Migration** — If you were running `qwen3:8b`, `gemma4:e2b`, or `qwen2.5-coder:7b` as defaults, they're swapped to cloud equivalents on startup. No data loss, no manual steps.
+**Kanban Refactor** — Cleaner kanban agent, better ticket handling, updated routes and UI.
+
+**Step Runner Presets** — Six ready-made presets for common tasks: file ops, HTTP health checks, opening apps, Python data pipelines, and web login/scraping with Playwright.
+
+**Projects & Workflows UI** — Projects settings page got a full overhaul. New layout, rewritten JS, updated workflow templates and LLM config pages.
+
+**pi CLI Setup** — Setup now installs and configures the pi coding agent automatically. One run and both DecisionsAI and pi are ready to go.
+
+**Housekeeping** — Ditched kiro_cli and old xterm vendor files. Better Ollama response handling. Updated launcher script.
 
 ---
+
 
 ## [2.7.6] - 2026-04-14
 
