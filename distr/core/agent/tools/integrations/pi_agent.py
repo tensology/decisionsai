@@ -75,6 +75,25 @@ class PiAgentTool(BaseTool):
             return "No active project with a folder set. Please set a project folder first."
 
         resolved_name = project_name or self._get_active_project_name() or "project"
+        project_id = self._get_project_id(project_name)
+
+        # Build rich project context to pass to pi
+        project_context = self._build_project_context(project_id, resolved_name, folder)
+
+        # Enrich the instruction with project context so pi knows what it's working on
+        enriched_instruction = instruction
+        if project_context:
+            enriched_instruction = f"{project_context}\n\n---\n\n{instruction}"
+            logger.info(f"PiAgentTool: enriched instruction with {len(project_context)} chars of project context")
+
+        # Build append_system_prompt with project context (not just name)
+        system_prompt_for_pi = f"You are working on project: {resolved_name}"
+        if folder:
+            system_prompt_for_pi += f"\nProject folder: {folder}"
+        if project_context:
+            # For the system prompt, include a condensed version
+            condensed = self._condense_context_for_system_prompt(project_context)
+            system_prompt_for_pi += f"\n{condensed}"
 
         # Acknowledge immediately so the user isn't left in silence
         from distr.core.signals import signal_manager
@@ -85,7 +104,6 @@ class PiAgentTool(BaseTool):
 
         # Try to use an existing RPC session for the project, or create one
         from distr.core.pi_rpc import get_rpc_session, PiRpcSession as _PiRpcSession
-        project_id = self._get_project_id(project_name)
 
         if project_id:
             rpc = get_rpc_session(project_id)
@@ -93,7 +111,7 @@ class PiAgentTool(BaseTool):
                 # No terminal session yet — create one so the output is visible in the terminal tab
                 if folder and _PiRpcSession.find_pi():
                     try:
-                        rpc = _PiRpcSession(project_id, folder, append_system_prompt=f"You are working on project: {resolved_name}")
+                        rpc = _PiRpcSession(project_id, folder, append_system_prompt=system_prompt_for_pi)
                         rpc.start()
                         from distr.core.pi_rpc import _rpc_sessions
                         _rpc_sessions[project_id] = rpc
@@ -104,7 +122,7 @@ class PiAgentTool(BaseTool):
 
             if rpc and rpc.is_alive:
                 # Send via RPC and wait for Pi to finish — get the result back
-                result = rpc.send_and_wait(instruction, timeout=120)
+                result = rpc.send_and_wait(enriched_instruction, timeout=120)
                 self._create_audit(resolved_name, instruction, status="completed", result=(result or "")[:2000], project_id=project_id)
                 if not result:
                     return f"[Pi — {resolved_name}] Pi completed but produced no output."
@@ -116,8 +134,8 @@ class PiAgentTool(BaseTool):
         import subprocess
         try:
             result = subprocess.run(
-                ["pi", "-p", "--append-system-prompt", f"You are working on project: {resolved_name}",
-                 instruction],
+                ["pi", "-p", "--append-system-prompt", system_prompt_for_pi,
+                 enriched_instruction],
                 capture_output=True, text=True, timeout=600,
                 cwd=folder,
             )
@@ -172,6 +190,93 @@ class PiAgentTool(BaseTool):
                 return project.name if project else None
         except Exception:
             return None
+
+    def _build_project_context(self, project_id: Optional[int], project_name: str, folder: str) -> str:
+        """Build rich project context to pass to pi so it understands what it's working on."""
+        parts = []
+        parts.append(f"PROJECT: {project_name}")
+        parts.append(f"FOLDER: {folder}")
+
+        # Add context items from the database
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project, ProjectContextItem, ProjectFile
+            with get_session() as session:
+                if project_id:
+                    # Context items
+                    context_items = session.query(ProjectContextItem).filter(
+                        ProjectContextItem.project_id == project_id
+                    ).all()
+                    if context_items:
+                        parts.append("\nCONTEXT ITEMS:")
+                        for item in context_items:
+                            content = (item.content or "")[:500]  # Truncate long items
+                            parts.append(f"- {item.title}: {content}")
+
+                    # Files
+                    project_files = session.query(ProjectFile).filter(
+                        ProjectFile.project_id == project_id
+                    ).all()
+                    if project_files:
+                        parts.append("\nPROJECT FILES:")
+                        for pf in project_files:
+                            parts.append(f"- {pf.filename}")
+
+                # Startup instructions
+                project = session.query(Project).filter(Project.id == project_id).first() if project_id else None
+                if project and project.startup_instructions and project.startup_instructions.strip():
+                    parts.append("\nSTARTUP INSTRUCTIONS:")
+                    parts.append(project.startup_instructions.strip()[:500])
+
+                # Trigger words
+                if project and project.additional_trigger_words:
+                    try:
+                        import json
+                        trigger_words = json.loads(project.additional_trigger_words)
+                        if trigger_words:
+                            parts.append(f"\nTRIGGER WORDS: {', '.join(trigger_words)}")
+                    except (json.JSONDecodeError, ValueError):
+                        pass
+
+                # Description
+                if project and project.description:
+                    parts.append(f"\nDESCRIPTION: {project.description}")
+        except Exception as e:
+            logger.debug(f"Could not load project context items: {e}")
+
+        # Add key file listing from folder (top-level + .tickets)
+        try:
+            import os
+            if folder and os.path.isdir(folder):
+                top_files = []
+                for f in sorted(os.listdir(folder)):
+                    fp = os.path.join(folder, f)
+                    if os.path.isfile(fp) and not f.startswith('.'):
+                        top_files.append(f)
+                if top_files:
+                    parts.append(f"\nTOP-LEVEL FILES: {', '.join(top_files[:20])}")
+
+                # .tickets contents
+                tickets_dir = os.path.join(folder, '.tickets')
+                if os.path.isdir(tickets_dir):
+                    ticket_files = [f for f in os.listdir(tickets_dir) if f.endswith('.md')]
+                    if ticket_files:
+                        parts.append(f"\nOPEN TICKETS: {', '.join(sorted(ticket_files)[:10])}")
+        except Exception as e:
+            logger.debug(f"Could not list project folder: {e}")
+
+        return '\n'.join(parts)
+
+    def _condense_context_for_system_prompt(self, full_context: str) -> str:
+        """Create a condensed version of project context for the pi system prompt.
+        Full context goes in the instruction; system prompt gets a shorter version."""
+        lines = full_context.split('\n')
+        condensed = []
+        for line in lines:
+            # Keep PROJECT, FOLDER, DESCRIPTION, TRIGGER WORDS — skip verbose items
+            if any(line.startswith(prefix) for prefix in ['PROJECT:', 'FOLDER:', 'DESCRIPTION:', 'TRIGGER WORDS:', 'CONTEXT ITEMS:', 'STARTUP INSTRUCTIONS:']):
+                condensed.append(line)
+        return '\n'.join(condensed)
 
     def _get_project_id(self, project_name: Optional[str]) -> Optional[int]:
         try:
