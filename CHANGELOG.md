@@ -4,13 +4,29 @@
 
 ## [2.7.8] - 2026-04-17
 
-### CLI Model Switcher, Smarter Project Layout, Auto-Readback
+### WhatsApp Snapshots, Agent Terminals, Real-Time CLI, Icons Everywhere
 
-**Switch models from the CLI** — Pick any model right next to the input bar. Ollama and OpenAI models are grouped by provider. Change it and pi restarts with your selection instantly.
+**WhatsApp → Ticket in one click** — Snapshot an entire WhatsApp thread into a kanban ticket. Messages get batched together in the Backlog lane with a camera badge showing which ones were included. No more copying messages one by one.
 
-**Simpler project view** — Two columns now: Name + Folder on one row, Description + Trigger words on the next. Board config moved into Details so there's one less tab. Details, Startup, CLI — that's it.
+**Agent can start your project** — The agent now has a "start project" tool that launches startup terminals directly from a chat. Say "start DecisionsAI" and pi boots your dev server, runs your migrations — whatever your startup instructions say.
+
+**Real-time CLI feedback** — Every agent tool (push ticket, push skill, send instruction) now routes through a single dispatch so the CLI tab shows what's happening as it happens. No more guessing whether the agent actually did something.
+
+**Switch models from the CLI** — Pick any model right next to the input bar. Ollama and OpenAI models grouped by provider. Change it and pi restarts with your selection instantly.
 
 **Pi reads back its work** — When pi finishes a task, it summarizes what it did and speaks it aloud. Sent from Telegram? The summary goes back to your chat instead.
+
+**Projects ↔ Boards linked both ways** — Set a kanban board on a project and that project auto-links back as the board's default. One setting, bidirectional.
+
+**Ticket copy includes media** — Copying a ticket to clipboard now includes the full media file URLs alongside the text. Paste it anywhere and nothing gets left behind.
+
+**Startup aliases work** — Aliases like `runserver` and `workon` defined in your `.zshrc` now work in startup terminals. No more writing out full commands.
+
+**Terminal overview sees tools** — The overview summary now includes tool activity (which tools ran, which failed) alongside the last command and response.
+
+**Icons on everything** — Project tabs, chat context menus, kanban right-clicks, action menus — all have proper SVG icons now instead of bare text.
+
+**Simpler project view** — Two-column layout, board config living inside Details, three tabs instead of four.
 
 ---
 
