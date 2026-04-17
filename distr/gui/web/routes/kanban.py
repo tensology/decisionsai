@@ -1436,12 +1436,14 @@ source: kanban_ticket_{t.id}
 
     # ── SSE: real-time WhatsApp message updates ──
 
+    import asyncio as _asyncio
     _wa_sse_queues: list = []  # list of asyncio.Queue objects
     _wa_sse_hooked = False
+    _wa_sse_loop = None  # reference to the running asyncio event loop
 
     def _hook_whatsapp_signal():
         """Connect the WhatsApp manager's message_received signal to SSE queues."""
-        nonlocal _wa_sse_hooked
+        nonlocal _wa_sse_hooked, _wa_sse_loop
         if _wa_sse_hooked:
             return
         try:
@@ -1451,17 +1453,15 @@ source: kanban_ticket_{t.id}
             if not whatsapp_manager:
                 return
 
-            import asyncio
-            from PyQt6.QtCore import QMetaObject, Qt
+            # Store the running asyncio loop reference for thread-safe queueing
+            try:
+                _wa_sse_loop = _asyncio.get_running_loop()
+            except RuntimeError:
+                pass
 
             def _on_message_received(data: dict):
                 """Called when a WhatsApp message arrives — push to all SSE clients."""
                 import json as _json
-                try:
-                    loop = asyncio.get_event_loop()
-                except RuntimeError:
-                    loop = None
-
                 event_data = _json.dumps({
                     "type": "whatsapp_message",
                     "jid_phone": data.get("jid_phone", ""),
@@ -1472,12 +1472,13 @@ source: kanban_ticket_{t.id}
                 })
                 for q in list(_wa_sse_queues):
                     try:
-                        if loop and not loop.is_closed():
-                            loop.call_soon_threadsafe(q.put_nowait, event_data)
+                        if _wa_sse_loop and not _wa_sse_loop.is_closed():
+                            _wa_sse_loop.call_soon_threadsafe(q.put_nowait, event_data)
                         else:
                             q.put_nowait(event_data)
                     except Exception:
-                        _wa_sse_queues.remove(q)
+                        if q in _wa_sse_queues:
+                            _wa_sse_queues.remove(q)
 
             whatsapp_manager.message_received.connect(_on_message_received)
             _wa_sse_hooked = True
