@@ -1802,9 +1802,9 @@
         });
 
         function fetchFromRelay() {
-            return fetch(relayUrl, { mode: "cors" }).then(function(resp) {
-                if (!resp.ok) throw new Error("Relay returned " + resp.status);
-                return resp.json();
+            return apiFetch("/api/kanban/whatsapp/relay/messages?limit=500").then(function(data) {
+                if (data.messages && data.messages.length >= 0) return data;
+                throw new Error("Relay returned no data");
             });
         }
     }
@@ -1813,19 +1813,13 @@
         var el = document.getElementById("kb-wa-status");
         var chatListEl = document.getElementById("kb-wa-chats");
         el.textContent = "Syncing from server...";
-        var relayUrl = waRelayBase + "/messages?limit=500&unprocessed_only=true";
-        fetch(relayUrl, { mode: "cors" }).then(function(resp) {
-            if (!resp.ok) throw new Error("Relay returned " + resp.status);
-            return resp.json();
-        }).then(function(data) {
+        apiFetch("/api/kanban/whatsapp/relay/messages?limit=500&unprocessed_only=true").then(function(data) {
             var newCount = (data.messages || []).length;
             if (newCount > 0) {
                 showSnackbar("Synced " + newCount + " new message" + (newCount !== 1 ? "s" : "") + " from server", "success");
-                // Mark them as processed on the relay so they won't appear in future syncs
+                // Mark them as processed via local proxy
                 data.messages.forEach(function(msg) {
-                    fetch(waRelayBase + "/messages/" + msg.id + "/processed", {
-                        method: "POST", mode: "cors"
-                    }).catch(function() {});
+                    apiFetch("/api/kanban/whatsapp/relay/mark-processed/" + msg.id, { method: "POST" }).catch(function() {});
                 });
             } else {
                 showSnackbar("No new messages on server");
@@ -1962,11 +1956,11 @@
 
         apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").then(function(data) {
             if (data.messages && data.messages.length > 0) return data;
-            // Fallback to relay server
-            return fetch(waRelayBase + "/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200", { mode: "cors" }).then(function(r) { return r.json(); });
+            // Fallback to relay server via local proxy
+            return apiFetch("/api/kanban/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200");
         }).catch(function() {
-            // Local endpoint failed — try relay
-            return fetch(waRelayBase + "/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200", { mode: "cors" }).then(function(r) { return r.json(); });
+            // Local endpoint failed — try relay via proxy
+            return apiFetch("/api/kanban/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200");
         }).then(function(data) {
             var messages = data.messages || [];
             countEl.textContent = messages.length + " messages";

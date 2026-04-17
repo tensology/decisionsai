@@ -1261,6 +1261,39 @@ source: kanban_ticket_{t.id}
             logger.error(f"WhatsApp message query error: {e}")
             return JSONResponse({"messages": [], "total": 0, "error": str(e)})
 
+    @router.get("/kanban/whatsapp/relay/messages")
+    async def get_relay_whatsapp_messages(jid_phone: str = "", limit: int = 500, offset: int = 0, unprocessed_only: bool = False):
+        """Proxy: fetch messages from the relay server (avoids CORS in browser)."""
+        try:
+            import httpx
+            base_url = "https://www.decisionsai.net/api/whatsapp"
+            if os.environ.get("DEBUG", "").upper() == "TRUE":
+                base_url = "http://localhost:8090/api/whatsapp"
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.get(f"{base_url}/messages", params={
+                    "jid_phone": jid_phone, "limit": limit, "offset": offset,
+                    "unprocessed_only": str(unprocessed_only).lower(),
+                })
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp relay proxy error: {e}")
+            return JSONResponse({"messages": [], "total": 0, "error": str(e)}, status_code=500)
+
+    @router.post("/kanban/whatsapp/relay/mark-processed/{message_id}")
+    async def mark_relay_message_processed(message_id: int):
+        """Proxy: mark a message processed on the relay server."""
+        try:
+            import httpx
+            base_url = "https://www.decisionsai.net/api/whatsapp"
+            if os.environ.get("DEBUG", "").upper() == "TRUE":
+                base_url = "http://localhost:8090/api/whatsapp"
+            async with httpx.AsyncClient(timeout=5.0) as client:
+                resp = await client.post(f"{base_url}/messages/{message_id}/processed")
+                return JSONResponse(content=resp.json(), status_code=resp.status_code)
+        except Exception as e:
+            logger.error(f"WhatsApp relay mark-processed proxy error: {e}")
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
     @router.post("/kanban/whatsapp/messages/{message_id}/processed")
     async def mark_whatsapp_message_processed(message_id: int):
         """Mark a WhatsApp message as processed."""
