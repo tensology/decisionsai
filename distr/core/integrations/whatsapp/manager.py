@@ -385,6 +385,10 @@ class WhatsAppWebSocketManager(QObject):
 
         logger.info(f"WhatsApp: Message from {sender_phone} ({chat_type}): {display_text[:80]}... (db_id={db_id})")
 
+        # Mark as processed on the relay server so it won't appear in future syncs
+        if message_id:
+            self._mark_relay_processed_by_message_id(message_id)
+
         # Emit to the agent — is_external=True (suppresses TTS like Telegram)
         try:
             from distr.core.signals import signal_manager
@@ -448,6 +452,10 @@ class WhatsAppWebSocketManager(QObject):
 
         # Update the existing message record with local path and file length
         self._update_media_info(message_id, local_path, file_length)
+
+        # Mark as processed on the relay server so it won't appear in future syncs
+        if message_id:
+            self._mark_relay_processed_by_message_id(message_id)
 
         # Build agent message
         sender_phone = sender_jid.split("@")[0].split(":")[0] if sender_jid else "Unknown"
@@ -657,7 +665,7 @@ class WhatsAppWebSocketManager(QObject):
             return {"synced": 0, "total": 0, "error": str(e)}
 
     def _mark_relay_processed(self, relay_id: int):
-        """Mark a message as processed on the relay server."""
+        """Mark a message as processed on the relay server by relay DB ID."""
         try:
             import requests
             requests.post(
@@ -665,7 +673,20 @@ class WhatsAppWebSocketManager(QObject):
                 timeout=5,
             )
         except Exception as e:
-            logger.debug(f"WhatsApp: Failed to mark relay msg {relay_id} as processed: {e}")
+            logger.debug(f"WhatsApp: Failed to mark relay message {relay_id} as processed: {e}")
+
+    def _mark_relay_processed_by_message_id(self, wa_message_id: str):
+        """Mark a message as processed on the relay server by WhatsApp message ID.
+        Called when a message is received via WebSocket in real-time, so the
+        relay knows it doesn't need to keep it for future sync pulls."""
+        try:
+            import requests
+            requests.post(
+                f"{self.api_base}/messages/by-wa-id/{wa_message_id}/processed",
+                timeout=5,
+            )
+        except Exception as e:
+            logger.debug(f"WhatsApp: Could not mark relay message {wa_message_id} as processed: {e}")
 
     # ══════════════════════════════════════════════════════════╒═══════════════\n    # Settings Persistence
     # ═══════════════════════════════════════════╒═════════════════╒═════════════\n
