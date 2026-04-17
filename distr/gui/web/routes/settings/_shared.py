@@ -114,6 +114,8 @@ class ThirdPartySettings(BaseModel):
     kilo_key: str = ""
     gemini_enabled: bool = False
     gemini_key: str = ""
+    masko_enabled: bool = False
+    masko_key: str = ""
 
 
 class ValidateRequest(BaseModel):

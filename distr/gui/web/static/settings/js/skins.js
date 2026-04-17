@@ -23,42 +23,23 @@ function _getOraclePlaybackMode() {
 
 function _applyPingPongToVideo(vid, isPingPong) {
     // Clean up any previous ping-pong state
+    if (vid._ppCleanup) vid._ppCleanup();
     if (vid._ppEndHandler) vid.removeEventListener('ended', vid._ppEndHandler);
     if (vid._ppRafId) cancelAnimationFrame(vid._ppRafId);
     vid._ppEndHandler = null;
     vid._ppRafId = null;
-    vid._ppForward = true;
+    vid._ppDirection = null;
 
-    if (!isPingPong) {
-        vid.loop = true;
-        return;
-    }
-
-    vid.loop = false;
-
-    var endHandler = function() {
-        // Video finished playing forward — now step backward frame by frame
-        vid._ppForward = false;
-        var fps = 24;
-        var stepTime = 1.0 / fps;
-
-        function stepBack() {
-            if (vid._ppForward || vid.paused) return;
-            vid.currentTime = Math.max(0, vid.currentTime - stepTime);
-            if (vid.currentTime <= 0.01) {
-                // Reached the start — play forward again
-                vid._ppForward = true;
-                vid.currentTime = 0;
-                vid.play().catch(function(){});
-                return;
-            }
-            vid._ppRafId = requestAnimationFrame(stepBack);
-        }
-        vid._ppRafId = requestAnimationFrame(stepBack);
-    };
-
-    vid._ppEndHandler = endHandler;
-    vid.addEventListener('ended', endHandler);
+    // For WebM (VP8/VP9) videos, true reverse playback is not possible
+    // because these codecs only decode forward (keyframe compression).
+    // playbackRate=-1 and currentTime stepping both produce visible stutter.
+    // The only smooth option is native forward loop.
+    // We set loop=true for both modes — ping-pong skins will loop
+    // forward seamlessly. The playback mode is stored in skin.json so
+    // the Qt/desktop renderer can do proper ping-pong, but in the web
+    // preview we always use smooth forward looping.
+    vid.loop = true;
+    vid.playbackRate = 1;
 }
 
 async function loadSkinsSettings() {
@@ -106,6 +87,7 @@ function renderSkinsGrid() {
                 previewEl.src = previewUrl;
                 previewEl.autoplay = true; previewEl.muted = true;
                 previewEl.setAttribute('playsinline', '');
+                previewEl.loop = true; // Always loop in grid cards
                 _applyPingPongToVideo(previewEl, skin.idle_playback === 'pingpong');
             } else {
                 previewEl = document.createElement('img');
@@ -152,6 +134,31 @@ function renderSkinsGrid() {
         card.addEventListener('click', function() { selectSkin(skin.folder_name); });
         grid.appendChild(card);
     });
+
+    // Append the Create Skin card as the last grid item
+    var createCard = document.createElement('div');
+    createCard.id = 'create_skin_card';
+    createCard.className = 'flex flex-col items-center justify-center gap-2 p-4 rounded-xl border-2 border-dashed border-[#565869] cursor-pointer transition-all hover:border-[#10a37f] hover:bg-[#10a37f]/5 min-h-0';
+
+    var plusIcon = document.createElement('div');
+    plusIcon.className = 'w-full aspect-square rounded-lg bg-[#0d1117] flex items-center justify-center text-3xl text-[#565869]';
+    plusIcon.textContent = '+';
+    createCard.appendChild(plusIcon);
+
+    var createName = document.createElement('span');
+    createName.className = 'text-sm font-medium text-[#565869] text-center';
+    createName.textContent = 'Create Skin';
+    createCard.appendChild(createName);
+
+    createCard.addEventListener('click', function() {
+        if (_maskoConfigured) {
+            openCreateSkinModal();
+        } else {
+            _navigateToMaskoKey();
+        }
+    });
+
+    grid.appendChild(createCard);
 }
 
 function escapeHtml(s) { var d = document.createElement('div'); d.textContent = s; return d.innerHTML; }
@@ -241,7 +248,7 @@ async function loadOracleEditor(folderName) {
             if (f === cur) o.selected = true;
             sel.appendChild(o);
         });
-        sel.onchange = function() { previewOracleGif(this.value); saveOracleGif(this.value); };
+        sel.onchange = function() { previewOracleGif(this.value); saveOracleGif(this.value).then(function() { renderSkinsGrid(); }); };
 
         // Ping-pong checkbox
         var ppCb = document.getElementById('oracle_pingpong_checkbox');
@@ -288,6 +295,7 @@ function previewOracleGif(filename) {
     var oldVid = container.querySelector('video');
     if (oldImg) oldImg.remove();
     if (oldVid) {
+        if (oldVid._ppCleanup) oldVid._ppCleanup();
         if (oldVid._ppEndHandler) oldVid.removeEventListener('ended', oldVid._ppEndHandler);
         if (oldVid._ppRafId) cancelAnimationFrame(oldVid._ppRafId);
         oldVid.remove();
@@ -303,6 +311,7 @@ function previewOracleGif(filename) {
         vid.src = url;
         vid.autoplay = true; vid.muted = true;
         vid.setAttribute('playsinline', '');
+        vid.loop = true; // Always loop in preview
         vid.style.cssText = 'width:155%; height:155%; object-fit:cover; border-radius:50%;';
         _applyPingPongToVideo(vid, isPingPong);
         container.appendChild(vid);
@@ -318,6 +327,8 @@ function previewOracleGif(filename) {
 async function saveOracleGif(filename) {
     if (!_editingSkinConfig) return;
     for (var h in _editingSkinConfig.events) _editingSkinConfig.events[h].animation = filename;
+    // Update local skins list so grid re-renders with the new animation
+    _skinsList.forEach(function(s) { if (s.folder_name === _editingSkin) s.idle_animation = filename; });
     try {
         await fetch('/api/skins/' + encodeURIComponent(_editingSkin) + '/config', {
             method: 'PUT', headers: {'Content-Type': 'application/json'},
@@ -543,3 +554,435 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else _initSkins();
 
 window.loadSkinsSettings = loadSkinsSettings;
+
+// ===========================================================================
+// Create Skin Modal — Masko AI skin generation
+// ===========================================================================
+
+var _csCurrentStep = 1;
+var _csSelectedStyle = '';
+var _csMode = 'static';
+var _csStyles = [];
+var _csGenerationId = null;
+var _csPollInterval = null;
+var _csCreditsBalance = null;
+
+var CS_STEP_NAMES = ['', 'name', 'description', 'style', 'mode', 'confirm', 'progress'];
+var EVENT_HOOKS_DISPLAY = {
+    idle: 'Idle', hands_free_listening: 'Listening', ptt_active: 'PTT Active',
+    dictation: 'Dictation', recording_action: 'Recording', file_drop_success: 'File Drop',
+    tts_response: 'TTS Response', running_action: 'Running Action', running_step_runner: 'Step Runner',
+    snippet_copied: 'Snippet Copied', thinking: 'Thinking', needs_attention: 'Needs Attention'
+};
+
+var _maskoConfigured = false;
+
+function _checkMaskoConfigured() {
+    return fetch('/api/masko/credits')
+        .then(function(r) { return r.ok; })
+        .catch(function() { return false; });
+}
+
+function _navigateToMaskoKey() {
+    // Switch to the Third Party tab and highlight the masko key field
+    if (typeof switchTab === 'function') {
+        switchTab('thirdparty');
+    } else {
+        var thirdpartyTab = document.querySelector('[data-tab="thirdparty"]');
+        if (thirdpartyTab) thirdpartyTab.click();
+    }
+    // After a short delay for the tab to render, highlight the masko key field
+    setTimeout(function() {
+        var maskoCheckbox = document.getElementById('masko_enabled');
+        var maskoKeyEl = document.getElementById('masko_key');
+        if (maskoCheckbox && !maskoCheckbox.checked) {
+            maskoCheckbox.checked = true;
+            // Trigger the enable toggle
+            if (typeof toggleProviderInput === 'function') toggleProviderInput('masko', true);
+        }
+        if (maskoKeyEl) {
+            maskoKeyEl.scrollIntoView({behavior: 'smooth', block: 'center'});
+            // Add a glow effect
+            maskoKeyEl.classList.add('masko-glow');
+            // Remove glow after a few seconds
+            setTimeout(function() { maskoKeyEl.classList.remove('masko-glow'); }, 4000);
+            maskoKeyEl.focus();
+        }
+    }, 300);
+}
+
+function _initCreateSkinCard() {
+    // The card is now rendered inside renderSkinsGrid as the last grid item
+    // We just need to check masko config for click behavior
+    _checkMaskoConfigured().then(function(ok) {
+        _maskoConfigured = ok;
+    });
+}
+
+function openCreateSkinModal() {
+    _csCurrentStep = 1;
+    _csSelectedStyle = '';
+    _csMode = 'static';
+    _csGenerationId = null;
+    if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+
+    // Clear inputs
+    var nameEl = document.getElementById('cs_skin_name'); if (nameEl) nameEl.value = '';
+    var descEl = document.getElementById('cs_description'); if (descEl) descEl.value = '';
+    _hideCsErrors();
+
+    var modal = document.getElementById('create_skin_modal');
+    if (modal) { modal.style.display = 'flex'; modal.classList.remove('hidden'); }
+    _updateCsStep();
+}
+
+function closeCreateSkinModal() {
+    var modal = document.getElementById('create_skin_modal');
+    if (modal) { modal.style.display = 'none'; modal.classList.add('hidden'); }
+    if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+}
+
+function _hideCsErrors() {
+    ['cs_name_error','cs_desc_error','cs_style_error'].forEach(function(id) {
+        var el = document.getElementById(id); if (el) { el.classList.add('hidden'); el.textContent = ''; }
+    });
+}
+
+function _updateCsStep() {
+    for (var i = 1; i <= 6; i++) {
+        var el = document.getElementById('cs_step_' + i);
+        if (el) el.classList.toggle('hidden', i !== _csCurrentStep);
+    }
+    var backBtn = document.getElementById('cs_back_btn');
+    var nextBtn = document.getElementById('cs_next_btn');
+
+    if (backBtn) backBtn.classList.toggle('hidden', _csCurrentStep <= 1 || _csCurrentStep === 6);
+    if (nextBtn) {
+        if (_csCurrentStep === 5) {
+            nextBtn.textContent = 'Generate';
+            nextBtn.classList.remove('hidden');
+        } else if (_csCurrentStep === 6) {
+            nextBtn.classList.add('hidden');
+        } else {
+            nextBtn.textContent = 'Next';
+            nextBtn.classList.remove('hidden');
+        }
+        // Disable next if insufficient credits on step 4
+        if (_csCurrentStep === 4 && _csCreditsBalance !== null) {
+            var est = _csMode === 'animated' ? 372 : 12;
+            if (_csCreditsBalance < est) {
+                nextBtn.disabled = true;
+                nextBtn.classList.add('opacity-50','cursor-not-allowed');
+            } else {
+                nextBtn.disabled = false;
+                nextBtn.classList.remove('opacity-50','cursor-not-allowed');
+            }
+        } else {
+            nextBtn.disabled = false;
+            nextBtn.classList.remove('opacity-50','cursor-not-allowed');
+        }
+    }
+
+    // Fetch styles when entering step 3
+    if (_csCurrentStep === 3) _fetchStyles();
+    // Fetch credits when entering step 4
+    if (_csCurrentStep === 4) _fetchCredits();
+}
+
+function csStepBack() {
+    if (_csCurrentStep > 1 && _csCurrentStep < 6) {
+        _csCurrentStep--;
+        _updateCsStep();
+    }
+}
+
+function csStepNext() {
+    if (_csCurrentStep === 6) return;
+
+    // Validate current step
+    if (_csCurrentStep === 1) {
+        var name = (document.getElementById('cs_skin_name').value || '').trim();
+        if (!name) {
+            var err = document.getElementById('cs_name_error');
+            err.textContent = 'Please enter a skin name.'; err.classList.remove('hidden');
+            return;
+        }
+    } else if (_csCurrentStep === 2) {
+        var desc = (document.getElementById('cs_description').value || '').trim();
+        if (!desc) {
+            var err = document.getElementById('cs_desc_error');
+            err.textContent = 'Please describe your character.'; err.classList.remove('hidden');
+            return;
+        }
+    } else if (_csCurrentStep === 3) {
+        if (!_csSelectedStyle) {
+            var err = document.getElementById('cs_style_error');
+            err.textContent = 'Please select a style.'; err.classList.remove('hidden');
+            return;
+        }
+    } else if (_csCurrentStep === 5) {
+        _startGeneration();
+        return;
+    }
+
+    _csCurrentStep++;
+    _updateCsStep();
+}
+
+function selectMode(mode) {
+    _csMode = mode;
+    var staticBtn = document.getElementById('cs_mode_static');
+    var animBtn = document.getElementById('cs_mode_animated');
+    if (mode === 'static') {
+        staticBtn.className = 'flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#10a37f] bg-[#10a37f]/10 text-[#10a37f]';
+        animBtn.className = 'flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#565869] bg-[#0d1117] text-gray-400';
+    } else {
+        animBtn.className = 'flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#10a37f] bg-[#10a37f]/10 text-[#10a37f]';
+        staticBtn.className = 'flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#565869] bg-[#0d1117] text-gray-400';
+    }
+    _updateCostDisplay();
+}
+
+function _updateCostDisplay() {
+    var poseCredits = _csMode === 'animated' ? 252 : 12;
+    var transCredits = _csMode === 'animated' ? 120 : 0;
+    var total = poseCredits + transCredits;
+
+    var poseEl = document.getElementById('cs_pose_credits'); if (poseEl) poseEl.textContent = poseCredits + ' credits';
+    var transEl = document.getElementById('cs_transition_credits'); if (transEl) transEl.textContent = '~' + transCredits + ' credits';
+    var totalEl = document.getElementById('cs_total_credits'); if (totalEl) totalEl.textContent = total + ' credits';
+    var transRow = document.getElementById('cs_transition_row'); if (transRow) transRow.classList.toggle('hidden', _csMode !== 'animated');
+    var noteEl = document.getElementById('cs_cost_note'); if (noteEl) noteEl.classList.toggle('hidden', _csMode !== 'animated');
+
+    // Insufficient credits warning
+    var warnEl = document.getElementById('cs_insufficient_warning');
+    if (_csCreditsBalance !== null && warnEl) {
+        warnEl.classList.toggle('hidden', _csCreditsBalance >= total);
+    }
+}
+
+async function _fetchCredits() {
+    var balEl = document.getElementById('cs_credit_balance');
+    if (balEl) balEl.textContent = 'Loading...';
+    try {
+        var resp = await fetch('/api/masko/credits');
+        if (resp.ok) {
+            var data = await resp.json();
+            _csCreditsBalance = data.credits;
+            if (balEl) balEl.textContent = data.credits + ' credits';
+        } else {
+            _csCreditsBalance = null;
+            if (balEl) balEl.textContent = 'Could not fetch balance';
+        }
+    } catch (e) {
+        _csCreditsBalance = null;
+        if (balEl) balEl.textContent = 'Could not fetch balance';
+    }
+    _updateCostDisplay();
+}
+
+async function _fetchStyles() {
+    var grid = document.getElementById('cs_styles_grid'); if (!grid) return;
+    var loading = document.getElementById('cs_style_loading');
+    if (loading) loading.classList.remove('hidden');
+    grid.innerHTML = '<div class="text-xs text-gray-400 col-span-3">Loading styles...</div>';
+    try {
+        var resp = await fetch('/api/masko/styles');
+        if (resp.ok) {
+            var data = await resp.json();
+            _csStyles = data.styles || [];
+            grid.innerHTML = '';
+            _csStyles.forEach(function(s) {
+                var card = document.createElement('div');
+                card.className = 'border-2 rounded-lg p-3 cursor-pointer transition-all text-center hover:border-[#10a37f] ' +
+                    (_csSelectedStyle === s.id ? 'border-[#10a37f] bg-[#10a37f]/10' : 'border-[#565869] bg-[#0d1117]');
+                card.dataset.styleId = s.id;
+                if (s.preview_url) {
+                    card.innerHTML = '<img src="' + escapeHtml(s.preview_url) + '" class="w-full aspect-square object-contain rounded mb-1" alt="' + escapeHtml(s.name) + '" onerror="this.style.display=\'none\'" /><div class="text-xs text-[#ececf1]">' + escapeHtml(s.name) + '</div>';
+                } else {
+                    card.innerHTML = '<div class="text-sm text-[#ececf1] py-4">' + escapeHtml(s.name) + '</div>';
+                }
+                card.addEventListener('click', function() {
+                    _csSelectedStyle = s.id;
+                    grid.querySelectorAll('div[data-style-id]').forEach(function(el) {
+                        el.className = 'border-2 rounded-lg p-3 cursor-pointer transition-all text-center hover:border-[#10a37f] ' +
+                            (el.dataset.styleId === _csSelectedStyle ? 'border-[#10a37f] bg-[#10a37f]/10' : 'border-[#565869] bg-[#0d1117]');
+                    });
+                });
+                grid.appendChild(card);
+            });
+        } else {
+            grid.innerHTML = '<div class="text-xs text-red-400 col-span-3">Failed to load styles. <button onclick="_fetchStyles()" class="text-[#10a37f] underline">Retry</button></div>';
+        }
+    } catch (e) {
+        grid.innerHTML = '<div class="text-xs text-red-400 col-span-3">Network error. <button onclick="_fetchStyles()" class="text-[#10a37f] underline">Retry</button></div>';
+    }
+    if (loading) loading.classList.add('hidden');
+}
+
+async function _startGeneration() {
+    var name = (document.getElementById('cs_skin_name').value || '').trim();
+    var description = (document.getElementById('cs_description').value || '').trim();
+    var style = _csSelectedStyle;
+    var mode = _csMode;
+
+    // Populate confirm step
+    var cn = document.getElementById('cs_confirm_name'); if (cn) cn.textContent = name;
+    var cd = document.getElementById('cs_confirm_desc'); if (cd) cd.textContent = description.substring(0, 50) + (description.length > 50 ? '...' : '');
+    var cs = document.getElementById('cs_confirm_style'); if (cs) cs.textContent = style;
+    var cm = document.getElementById('cs_confirm_mode'); if (cm) cm.textContent = mode === 'animated' ? 'Animated' : 'Static';
+    var cc = document.getElementById('cs_confirm_credits'); if (cc) cc.textContent = (mode === 'animated' ? '~372' : '12') + ' credits';
+
+    _csCurrentStep = 6; // Jump to progress
+    _updateCsStep();
+
+    try {
+        var resp = await fetch('/api/skins/generate', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({skin_name: name, description: description, style: style, mode: mode})
+        });
+        if (!resp.ok) {
+            var err = await resp.json();
+            _showGenerationError(err.detail || 'Generation failed to start');
+            return;
+        }
+        var data = await resp.json();
+        _csGenerationId = data.generation_id;
+        // Start polling
+        _csPollInterval = setInterval(pollGenerationStatus, 2000);
+        pollGenerationStatus();
+    } catch (e) {
+        _showGenerationError('Network error: ' + e.message);
+    }
+}
+
+async function pollGenerationStatus() {
+    if (!_csGenerationId) return;
+    try {
+        var resp = await fetch('/api/skins/generate/status?id=' + encodeURIComponent(_csGenerationId));
+        if (!resp.ok) return;
+        var data = await resp.json();
+
+        // Update progress UI
+        var completed = data.completed_jobs || 0;
+        var total = data.total_jobs || 12;
+        var pct = total > 0 ? Math.round((completed / total) * 100) : 0;
+        var bar = document.getElementById('cs_progress_bar'); if (bar) bar.style.width = pct + '%';
+        var countEl = document.getElementById('cs_progress_count'); if (countEl) countEl.textContent = completed + ' / ' + total;
+        var hookEl = document.getElementById('cs_progress_hook'); if (hookEl) hookEl.textContent = data.current_hook ? (EVENT_HOOKS_DISPLAY[data.current_hook] || data.current_hook) : (completed === total ? 'Finalizing...' : 'Processing...');
+
+        if (data.status === 'complete') {
+            if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+            var hookEl2 = document.getElementById('cs_progress_hook'); if (hookEl2) hookEl2.textContent = 'Complete!';
+            setTimeout(function() {
+                closeCreateSkinModal();
+                loadSkinsSettings(); // Refresh the skin grid
+            }, 1500);
+        } else if (data.status === 'failed') {
+            if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+            _handleFailedGeneration(data);
+        } else if (data.status === 'cancelled') {
+            if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+            closeCreateSkinModal();
+        }
+    } catch (e) {
+        // Continue polling
+    }
+}
+
+function _handleFailedGeneration(data) {
+    var hookStatuses = data.hook_statuses || {};
+    var failedHooks = [];
+    var completedHooks = [];
+    for (var h in hookStatuses) {
+        if (hookStatuses[h] === 'failed') failedHooks.push(h);
+        else if (hookStatuses[h] === 'completed') completedHooks.push(h);
+    }
+
+    var hookEl = document.getElementById('cs_progress_hook'); if (hookEl) hookEl.textContent = 'Generation failed';
+
+    document.getElementById('cs_cancel_btn').classList.add('hidden');
+
+    if (completedHooks.length === 0) {
+        // All hooks failed
+        document.getElementById('cs_all_failed').classList.remove('hidden');
+        document.getElementById('cs_failed_hooks').classList.add('hidden');
+    } else {
+        // Partial failure — show retry UI
+        var list = document.getElementById('cs_failed_list');
+        list.innerHTML = '';
+        failedHooks.forEach(function(h) {
+            var li = document.createElement('li');
+            li.textContent = EVENT_HOOKS_DISPLAY[h] || h;
+            list.appendChild(li);
+        });
+        document.getElementById('cs_failed_hooks').classList.remove('hidden');
+        document.getElementById('cs_all_failed').classList.add('hidden');
+    }
+}
+
+function _showGenerationError(msg) {
+    var hookEl = document.getElementById('cs_progress_hook'); if (hookEl) hookEl.textContent = 'Error: ' + msg;
+    var countEl = document.getElementById('cs_progress_count'); if (countEl) countEl.textContent = '';
+    document.getElementById('cs_cancel_btn').classList.remove('hidden');
+}
+
+async function retryFailedHooks() {
+    if (!_csGenerationId) return;
+    document.getElementById('cs_failed_hooks').classList.add('hidden');
+    document.getElementById('cs_all_failed').classList.add('hidden');
+    document.getElementById('cs_cancel_btn').classList.remove('hidden');
+    var hookEl = document.getElementById('cs_progress_hook'); if (hookEl) hookEl.textContent = 'Retrying...';
+
+    try {
+        await fetch('/api/skins/generate/retry', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({generation_id: _csGenerationId})
+        });
+        _csPollInterval = setInterval(pollGenerationStatus, 2000);
+        pollGenerationStatus();
+    } catch (e) {
+        _showGenerationError('Retry failed: ' + e.message);
+    }
+}
+
+async function retryAllHooks() {
+    // Same as retryFailedHooks — sends empty hooks list to retry all
+    await retryFailedHooks();
+}
+
+async function cancelGeneration() {
+    if (!_csGenerationId) { closeCreateSkinModal(); return; }
+    try {
+        await fetch('/api/skins/generate/cancel', {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({id: _csGenerationId})
+        });
+    } catch (e) {}
+    if (_csPollInterval) { clearInterval(_csPollInterval); _csPollInterval = null; }
+    closeCreateSkinModal();
+}
+
+// Click outside modal to close
+function _setupCreateSkinModalClose() {
+    var modal = document.getElementById('create_skin_modal');
+    if (modal) {
+        modal.addEventListener('click', function(e) {
+            if (e.target === modal) closeCreateSkinModal();
+        });
+    }
+}
+
+// Override _initSkins to include Create Skin card init
+var _origInitSkins = _initSkins;
+function _initSkins() {
+    if (!document.getElementById('skins_grid')) return;
+    loadSkinsSettings(); setupSkinsSliders();
+    var saveBtn = document.getElementById('skin_editor_save');
+    if (saveBtn) saveBtn.addEventListener('click', saveAvatarConfig);
+    _initCreateSkinCard();
+    _setupCreateSkinModalClose();
+}

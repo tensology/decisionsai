@@ -9,7 +9,8 @@ const PROVIDERS = [
     {id: 'openrouter', name: 'OpenRouter', keyField: 'key'},
     {id: 'groq', name: 'Groq', keyField: 'key'},
     {id: 'kilocode', name: 'KiloCode', keyField: 'key', settingsKey: 'kilo'},
-    {id: 'gemini', name: 'Google Gemini', keyField: 'key'}
+    {id: 'gemini', name: 'Google Gemini', keyField: 'key'},
+    {id: 'masko', name: 'Masko AI', keyField: 'key'}
 ];
 
 // Validation states

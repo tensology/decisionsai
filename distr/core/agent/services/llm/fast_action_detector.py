@@ -136,13 +136,35 @@ class FastActionDetector:
             # === TYPE / DICTATE TEXT ===
             # "type out ...", "type this", "dictate ...", "type from clipboard"
             # These bypass the LLM entirely — just type and done, no screenshot verification.
+            #
+            # IMPORTANT: Must NOT match figurative uses like:
+            #   "Type your thoughts" → LLM
+            #   "That's a different type of problem" → LLM
+            #   "Dictate the terms of the agreement" → LLM
+            # Guard: require explicit type/dictate intent — quoted strings, intent keywords,
+            # or short direct phrases. NOT "type of", "type your", "dictate the terms".
             (re.compile(r'\btype\s+(?:out\s+)?from\s+clipboard\b', re.IGNORECASE),
              ActionType.TYPE_TEXT, "type_text", {"source": "clipboard"}, False, "done"),
             (re.compile(r'\bdictate\s+from\s+clipboard\b', re.IGNORECASE),
              ActionType.TYPE_TEXT, "type_text", {"source": "clipboard"}, False, "done"),
+            # Quoted text: type/dictate "hello world" or type/dictate 'hello world'
             (re.compile(r'\b(?:type|dictate)\s+(?:out\s+)?["\u201c](.+?)["\u201d]', re.IGNORECASE),
              ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
-            (re.compile(r'\b(?:type|dictate)\s+(?:out\s+)?(.{3,})', re.IGNORECASE),
+            # Intent keywords: "type text ...", "type message ...", "dictate text ..."
+            (re.compile(r'\btype\s+(?:out\s+)?(?:text|message|words?|letters?)\b', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\bdictate\s+(?:text|message|words?|letters?)\b', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # "type the word X"
+            (re.compile(r'\btype\s+the\s+word\b', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # Short direct phrases: "type hello", "type the password"
+            # NEGATIVE LOOKAHEAD: exclude figurative/descriptive uses
+            #   "type of" ("type of problem"), "type your" ("type your thoughts")
+            #   "dictate the terms", "dictate how", "dictate what"
+            (re.compile(r'\btype\s+(?!of\b|your\b|a\s|an\s|the\s+\w{4,})([\w\s]{1,25})$', re.IGNORECASE),
+             ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
+            (re.compile(r'\bdictate\s+(?!the\s+terms|how\b|what\b|that\b|whether\b)([\w\s]{1,25})$', re.IGNORECASE),
              ActionType.TYPE_TEXT, "type_text", {"text": "__MATCH_GROUP_PRESERVE_CASE__"}, False, "done"),
             
             # === ACTION ACTIONS ===
@@ -198,7 +220,8 @@ class FastActionDetector:
             # NOTE: Simple file operations (copy, move, delete, rename) are NOT fast-detected
             # EXCEPT delete — LLMs frequently misroute "delete <file>" to text_editing
             # "delete the file", "delete it", "can you delete it", "delete that file"
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(delete|remove)\s+(it|that|this|the\s+\w+|that\s+\w+|this\s+\w+)\b.*\b(file|image|photo|picture|document|folder|video)?\b', re.IGNORECASE),
+            # Guard: Must refer to a file/object, not figurative uses like "delete that thought"
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(delete|remove)\s+(it|that\s+(?:file|image|photo|picture|document|folder|video|pdf|screenshot)|this\s+(?:file|image|photo|picture|document|folder|video|pdf|screenshot)|the\s+(?:file|image|photo|picture|document|folder|video|pdf|screenshot))\b', re.IGNORECASE),
              ActionType.FILE_DELETE, "file_operations", {"operation": "delete", "path": "__EXTRACT_PATH__"}, False, "llm_response"),
             # "delete the whatsapp image", "remove the screenshot", "delete that pdf"
             (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(delete|remove)\s+.{0,60}\b(file|image|photo|picture|screenshot|document|pdf|video|folder)\b', re.IGNORECASE),
@@ -259,7 +282,7 @@ class FastActionDetector:
             # === COPY/CUT/PASTE (text editing only) ===
             (re.compile(r'^copy(\s+this)?\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_COPY, "text_editing", {"operation": "copy"}, False, "done"),
-            (re.compile(r'^cut(\s+this)?\.?$', re.IGNORECASE), 
+            (re.compile(r'^cut(\s+(this|that|it))?\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_CUT, "text_editing", {"operation": "cut"}, False, "done"),
             (re.compile(r'^paste\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_PASTE, "text_editing", {"operation": "paste"}, False, "done"),
@@ -291,9 +314,19 @@ class FastActionDetector:
             # "rewrite this", "reword this", "can you reword this" - tool handles copy & paste based on text
             # Note: tool_args will be updated with original text in detect()
             # needs_copy_first=False because the tool handles copying internally
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(rewrite|re-write)\b.*\b(this|that|it)\b', re.IGNORECASE), 
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(rewrite|re-word)\s+(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_REWRITE, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(reword|re-word)\b.*\b(this|that|it)\b', re.IGNORECASE), 
+            (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?(rewrite|re-write)\s+(this|that|it)\.?$', re.IGNORECASE), 
+             ActionType.CLIPBOARD_REWRITE, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # "reword this to be more professional", "can you reword that more formally"
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(rewrite|re-write)\s+(this|that|it)\s+(to\s+be|to\s+make|more|less|with|using|in\s+a|into|for)\b', re.IGNORECASE), 
+             ActionType.CLIPBOARD_REWRITE, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(reword|re-word)\s+(this|that|it)\.?$', re.IGNORECASE), 
+             ActionType.CLIPBOARD_REWORD, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?(reword|re-word)\s+(this|that|it)\.?$', re.IGNORECASE), 
+             ActionType.CLIPBOARD_REWORD, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            # "reword this to be more professional", "can you reword that more formally"
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?(reword|re-word)\s+(this|that|it)\s+(to\s+be|to\s+make|more|less|with|using|in\s+a|into|for)\b', re.IGNORECASE), 
              ActionType.CLIPBOARD_REWORD, "rework_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "rewrite the clipboard", "reword clipboard", "reword from clipboard"
             (re.compile(r'\b(rewrite|re-write)\b.*\bclipboard\b', re.IGNORECASE), 
@@ -304,9 +337,17 @@ class FastActionDetector:
             # === EXPLAIN ===
             # "explain this", "explain that", "can you explain this" - tool handles copy internally
             # needs_copy_first=False because clipboard_action handles copy for "this" context
+            #
+            # IMPORTANT: Must NOT match conversational uses like:
+            #   "Explain this concept" → LLM ("this" modifies a noun, not a clipboard reference)
+            #   "Can you explain what this error means?" → LLM
+            #   "Please explain why this approach doesn't work" → LLM
+            #   "Can you explain how it works?" → LLM ("it" is a pronoun, not clipboard)
+            # Guard: Only match standalone "this/that/it" as direct objects (end of sentence/phrase),
+            # not followed by nouns that make them descriptive.
             (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?explain\s+(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_EXPLAIN, "clipboard_action", {"action": "explain", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?explain\b.*\b(this|that|it)\b', re.IGNORECASE), 
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?explain\s+(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_EXPLAIN, "clipboard_action", {"action": "explain", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
             # "explain the clipboard", "explain what's in the clipboard", "explain what is in the clipboard"
             (re.compile(r'\bexplain\b.*\b(what\'?s?\s+(in|on)|what\s+is\s+in)\s+the\s+clipboard\b', re.IGNORECASE), 
@@ -316,9 +357,11 @@ class FastActionDetector:
             
             # === ELABORATE ===
             # "elaborate on this", "elaborate this", "can you elaborate on this" - tool handles copy internally
+            # Guard: same as explain — only match standalone "this/that/it" objects, not
+            # "elaborate on this theory" or "elaborate on your reasoning"
             (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?elaborate\s+(on\s+)?(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_ELABORATE, "clipboard_action", {"action": "elaborate", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?elaborate\b.*\b(this|that|it)\b', re.IGNORECASE), 
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?elaborate\s+(on\s+)?(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_ELABORATE, "clipboard_action", {"action": "elaborate", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
             # "elaborate on the clipboard", "elaborate clipboard", "elaborate on what's in the clipboard"
             (re.compile(r'\belaborate\b.*\b(what\'?s?\s+(in|on)|what\s+is\s+in)\s+the\s+clipboard\b', re.IGNORECASE), 
@@ -345,7 +388,7 @@ class FastActionDetector:
             # Note: tool_args will be updated with original text in detect()
             (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\b.*\b(this|that|it)\b', re.IGNORECASE), 
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE), 
              ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             # "summarize the clipboard", "summarize from clipboard"
             (re.compile(r'\bsummar(ize|ise)\b.*\b(from\s+)?clipboard\b', re.IGNORECASE), 
@@ -354,6 +397,9 @@ class FastActionDetector:
             # === DIRECT SCREENSHOT CAPTURE (no analysis - just send it) ===
             # "give me a screenshot", "give me a screenshot of screen 1", "send me a screenshot"
             (re.compile(r'\b(give|send|show)\s+(me\s+)?a?\s*screenshot\b', re.IGNORECASE), 
+             ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "all", "direct_send": True}, False, "done"),
+            # "take a screenshot" (standalone - no "send" or "what you see" required)
+            (re.compile(r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?take\s+a\s+(screenshot|picture)\.?$', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "all", "direct_send": True}, False, "done"),
             # "take a screenshot and send it", "take a picture and send it to me"
             (re.compile(r'\btake\s+a\s+(screenshot|picture)\b.*\b(send|give)\b', re.IGNORECASE), 
@@ -422,10 +468,14 @@ class FastActionDetector:
             
             # === VISION: INTERACT WITH NAMED/ORDINAL SCREEN ELEMENTS ===
             # "go into the third video", "go into that folder"
-            (re.compile(r'\bgo\s+into\s+(the\s+)?(.+?)(?:\s+and\s+(?:open|click|select))?\s*(?:\.|$)', re.IGNORECASE),
+            # Guard: Must specify a visual element (folder, video, link, tab, etc.)
+            # NOT "go into more detail" or "go into detail about"
+            (re.compile(r'\bgo\s+into\s+(the\s+)?(\w+\s+)?(video|folder|file|link|tab|image|result|item|icon|button|app|window|email|message|chat|post)\b', re.IGNORECASE),
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "open the third video", "open that folder on the screen" (NOT "open Chrome" which is smart_open)
-            (re.compile(r'\bopen\s+(the\s+)?(\w+\s+)?(video|folder|file|link|tab|image|result|item|icon|button|app|window|email|message|chat|post)\b', re.IGNORECASE),
+            # Guard: Must have "the" or demonstrative article, and a visual element noun
+            # NOT "How would you open a file in Python?" (conversational question)
+            (re.compile(r'^\s*(?:can\s+you\s+|could\s+you\s+|please\s+)?open\s+(the\s+)?(\w+\s+)?(video|folder|file|link|tab|image|result|item|icon|button|app|window|email|message|chat|post)\b', re.IGNORECASE),
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "click it", "click that", "click on that one", "click the one I said"
             (re.compile(r'\bclick\s+(on\s+)?(it|that|that\s+one|there|here|the\s+one)\b', re.IGNORECASE),
@@ -465,14 +515,18 @@ class FastActionDetector:
             (re.compile(r'\b(how\s+many|count\s+the)\s+(tabs?|windows?|icons?|buttons?|items?|elements?|files?|notifications?|messages?|emails?)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "full"}, False, "llm_response"),
             # "what changed", "what's different", "compare the screens"
-            (re.compile(r'\b(what\s+changed|what\'?s?\s+different|compare|did\s+(anything|something)\s+change)\b', re.IGNORECASE), 
+            # Guard: "compare" must be followed by screen/display context, not general comparison
+            (re.compile(r'\b(what\s+changed|what\'?s?\s+different|did\s+(anything|something)\s+change)\b', re.IGNORECASE), 
+             ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "full"}, False, "llm_response"),
+            (re.compile(r'\bcompare\s+(the\s+)?(screens?|displays?|monitors?|windows?|images?|pictures?|photos?|side\s+by\s+side)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "full"}, False, "llm_response"),
             
             # === VISION: SCROLL/DRAG ===
             # "scroll down to the footer", "scroll to Settings"
-            (re.compile(r'\bscroll\s+(down|up)\s+to\s+(the\s+)?(.+?)(?:\?|\.|$)', re.IGNORECASE), 
+            # Guard: Must end at a clear UI target, not "scroll down to see more details" (conversational)
+            (re.compile(r'\bscroll\s+(down|up)\s+to\s+(the\s+)?(footer|bottom|top|menu|section|panel|tab|button|link|header|sidebar|navigation)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
-            (re.compile(r'\bscroll\s+to\s+(the\s+)?(.+?)(?:\?|\.|$)', re.IGNORECASE), 
+            (re.compile(r'\bscroll\s+to\s+(the\s+)?(footer|bottom|top|menu|section|panel|tab|button|link|header|sidebar|navigation|settings?)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "drag the file to the trash", "drag X to Y"
             (re.compile(r'\bdrag\s+(the\s+)?(.+?)\s+(to|into|onto)\s+(the\s+)?(.+?)(?:\?|\.|$)', re.IGNORECASE), 
@@ -482,7 +536,7 @@ class FastActionDetector:
             # "fill in the form", "type hello in the search box"
             (re.compile(r'\b(fill\s+(in\s+)?(the\s+)?form|fill\s+out\s+(the\s+)?form)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
-            (re.compile(r'\b(type|enter)\s+[\'"]?(.+?)[\'"]?\s+(in|into)\s+(the\s+)?(.+?)\s*(field|box|input)?\b', re.IGNORECASE), 
+            (re.compile(r'\b(type|enter)\s+[\'"]?(\w+)[\'"]?\s+(in|into)\s+(the\s+)?(.+?)\s*(field|box|input|search|address|url|text|login|password|email|username|form|bar|area)\b', re.IGNORECASE), 
              ActionType.SCREENSHOT_ANALYZE, "screenshot_analyzer", {"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"}, False, "llm_response"),
             # "open the File menu", "go to Settings > General"
             (re.compile(r'\b(open\s+the)\s+(.+?)\s+(menu|dropdown|submenu)\b', re.IGNORECASE), 
@@ -752,10 +806,13 @@ class FastActionDetector:
         ]
         
         # Context reference patterns (needs chat history)
+        # Guard: Must not catch commands like "next tab", "next track", "next window"
         self.context_reference_patterns = [
             re.compile(r'\b(that|it|this)\b.*\b(list|content|text|result|answer)\b', re.IGNORECASE),
             re.compile(r'\b(what do you think|what about|how about)\b', re.IGNORECASE),
-            re.compile(r'^(and|also|now|then|next)\b', re.IGNORECASE),
+            re.compile(r'^(and|also|now|then)\b', re.IGNORECASE),
+            # "next" only needs context if NOT followed by tab/track/window/screen/monitor
+            re.compile(r'^next\b(?!\s*(tab|track|window|screen|monitor|page|item|song|chapter|step))', re.IGNORECASE),
         ]
     
     def detect(self, text: str, has_recent_clipboard_context: bool = False) -> DetectedAction:
@@ -796,6 +853,10 @@ class FastActionDetector:
         screenshot_analysis_pattern = re.compile(r'\b(can\s+you\s+)?(see|look\s+at|analyze|check|examine)\b.*?(my\s+)?(screen|display|monitor|screens)\b', re.IGNORECASE)
         # Direct send patterns: "give me a screenshot", "send me a screenshot", "screenshot of screen 1"
         screenshot_direct_pattern = re.compile(r'\b(give|send|show)\s+(me\s+)?a?\s*screenshot\b|\bscreenshot\s+(of\s+)?screen\s+\d+\b|\btake\s+a\s+(screenshot|picture)\b', re.IGNORECASE)
+        # "why is this not working" / "what's wrong with this" / "why isn't this loading" — visual debugging
+        screenshot_debug_pattern = re.compile(r'\b(why\s+is\s+(this|that|it)\s+not\s+working|what\'?s?\s+wrong\s+with\s+(this|that|it)|why\s+isn\'?t\s+(this|that|it)\s+loading)\b', re.IGNORECASE)
+        # "what do you see", "what's on the screen", "describe the screen"
+        screenshot_question_pattern = re.compile(r'\b(what\s+do\s+you\s+see|what\'?s?\s+on\s+(the\s+)?screen|describe\s+(the\s+)?screen|what\'?s?\s+on\s+my\s+screen)\b', re.IGNORECASE)
         
         # Mouse-to-element patterns: "move mouse to the end of...", "move cursor to the X button", etc.
         # These need vision (screenshot_analyzer) and must skip conversational/context checks
@@ -810,6 +871,12 @@ class FastActionDetector:
         elif screenshot_analysis_pattern.search(text):
             # This is a screenshot analysis command - skip conversational/context checks and go straight to pattern matching
             logger.debug(f"FastActionDetector: Detected screenshot analysis command, skipping conversational/context checks")
+        elif screenshot_debug_pattern.search(text):
+            # "why is this not working" type visual debugging - skip conversational checks
+            logger.debug(f"FastActionDetector: Detected screenshot debug command, skipping conversational/context checks")
+        elif screenshot_question_pattern.search(text):
+            # "what do you see" type screenshot question - skip conversational checks
+            logger.debug(f"FastActionDetector: Detected screenshot question command, skipping conversational/context checks")
         elif mouse_to_element_pattern.search(text):
             # Mouse movement to a specific element/position - skip conversational/context checks
             logger.debug(f"FastActionDetector: Detected mouse-to-element command, skipping conversational/context checks")
@@ -1097,7 +1164,9 @@ class FastActionDetector:
             r'\b(start|begin|stop|end|finish)\b.*\brecording\b',
             # Screenshot commands
             r'\b(can\s+you\s+)?(see|look\s+at|analyze|check|examine)\b.*?(my\s+)?(screen|display|monitor|screens)\b',
-            r'\b(what\s+do\s+you\s+see|what\'?s?\s+on\s+(the\s+)?screen|describe\s+(the\s+)?screen)\b',
+            r'\b(what\s+do\s+you\s+see|what\'?s?\s+on\s+(the\s+)?screen|describe\s+(the\s+)?screen|what\'?s?\s+on\s+my\s+screen)\b',
+            # Visual debugging - "why is this not working"
+            r'\b(why\s+is\s+(this|that|it)\s+not\s+working|what\'?s?\s+wrong\s+with\s+(this|that|it)|why\s+isn\'?t\s+(this|that|it)\s+loading)\b',
         ]
         for pattern in action_command_patterns:
             if re.compile(pattern, re.IGNORECASE).search(text):

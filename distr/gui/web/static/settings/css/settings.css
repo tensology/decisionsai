@@ -469,3 +469,13 @@ textarea:focus-visible {
     background-color: #565869 !important;
     border-color: #565869 !important;
 }
+
+/* Masko API key glow — used when navigating from Create Skin card */
+.masko-glow {
+    animation: masko-glow-pulse 1s ease-in-out 3;
+    outline: none;
+}
+@keyframes masko-glow-pulse {
+    0%, 100% { box-shadow: 0 0 0 0 rgba(16, 163, 127, 0); border-color: #565869; }
+    50% { box-shadow: 0 0 12px 4px rgba(16, 163, 127, 0.5); border-color: #10a37f; }
+}

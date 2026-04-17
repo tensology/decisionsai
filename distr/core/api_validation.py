@@ -223,6 +223,25 @@ def validate_gemini(api_key: str) -> tuple[bool, str]:
 
 
 
+def validate_masko(api_key: str) -> tuple[bool, str]:
+    """Validate Masko API key by checking credits."""
+    try:
+        req = urllib.request.Request(
+            "https://api.masko.ai/v1/credits",
+            headers={"Authorization": f"Bearer {api_key}"}
+        )
+        with urllib.request.urlopen(req, timeout=10) as response:
+            if response.status == 200:
+                return True, ""
+        return False, "Invalid API key"
+    except urllib.error.HTTPError as e:
+        if e.code == 401:
+            return False, "Invalid API key"
+        return False, f"HTTP Error: {e.code}"
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     """
     Validate API key for any provider.
@@ -243,6 +262,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
         "groq": validate_groq,
         "kilocode": validate_kilocode,
         "gemini": validate_gemini,
+        "masko": validate_masko,
     }
 
     validator = validators.get(provider.lower())

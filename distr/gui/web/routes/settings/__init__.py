@@ -22,6 +22,7 @@ from . import (
     logs,
     workflows,
     skins,
+    masko,
 )
 
 _MODULES = [
@@ -38,6 +39,7 @@ _MODULES = [
     logs,
     workflows,
     skins,
+    masko,
 ]
 
 

@@ -13,9 +13,136 @@
             <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
         </div>
 
-        <!-- Skin Grid — 4 per row, big preview cards -->
+        <!-- Skin Grid — 4 per row, big preview cards. Create Skin card is appended as last item via JS -->
         <div id="skins_grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             <!-- Dynamically populated -->
+        </div>
+
+        <!-- Create Skin Modal -->
+        <div id="create_skin_modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60" style="display:none">
+            <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto mx-4 p-6">
+                <!-- Step indicators -->
+                <div class="flex items-center justify-between mb-6">
+                    <h3 class="text-lg font-semibold text-white">Create New Skin</h3>
+                    <button onclick="closeCreateSkinModal()" class="text-gray-400 hover:text-white text-xl">&times;</button>
+                </div>
+
+                <!-- Step 1: Name -->
+                <div id="cs_step_1" class="cs_step">
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Skin Name</label>
+                    <input type="text" id="cs_skin_name" placeholder="e.g. Pixel Cat, Robot Assistant"
+                           class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f]">
+                    <p id="cs_name_error" class="text-xs text-red-400 mt-1 hidden"></p>
+                </div>
+
+                <!-- Step 2: Description -->
+                <div id="cs_step_2" class="cs_step hidden">
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Character Description</label>
+                    <textarea id="cs_description" rows="4" placeholder="Describe your character — appearance, personality, clothing..."
+                              class="w-full bg-[#0d1117] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] resize-none"></textarea>
+                    <p id="cs_desc_error" class="text-xs text-red-400 mt-1 hidden"></p>
+                </div>
+
+                <!-- Step 3: Style -->
+                <div id="cs_step_3" class="cs_step hidden">
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Visual Style</label>
+                    <div id="cs_styles_grid" class="grid grid-cols-3 gap-2 max-h-60 overflow-y-auto">
+                        <!-- Populated dynamically -->
+                    </div>
+                    <p id="cs_style_error" class="text-xs text-red-400 mt-1 hidden"></p>
+                    <p id="cs_style_loading" class="text-xs text-gray-400 mt-1 hidden">Loading styles...</p>
+                </div>
+
+                <!-- Step 4: Mode & Cost -->
+                <div id="cs_step_4" class="cs_step hidden">
+                    <label class="block text-sm font-medium text-[#ececf1] mb-3">Generation Mode</label>
+                    <div class="flex gap-4 mb-4">
+                        <button id="cs_mode_static" onclick="selectMode('static')"
+                                class="flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#10a37f] bg-[#10a37f]/10 text-[#10a37f]">
+                            <div class="font-semibold">Static</div>
+                            <div class="text-xs mt-1 text-gray-400">12 images • 12 credits</div>
+                        </button>
+                        <button id="cs_mode_animated" onclick="selectMode('animated')"
+                                class="flex-1 px-4 py-3 rounded-lg border-2 text-sm font-medium transition-all border-[#565869] bg-[#0d1117] text-gray-400">
+                            <div class="font-semibold">Animated</div>
+                            <div class="text-xs mt-1 text-gray-400">~372 credits (12 poses + transitions)</div>
+                        </button>
+                    </div>
+                    <div id="cs_cost_breakdown" class="bg-[#0d1117] rounded-lg p-4 text-sm">
+                        <div class="flex justify-between text-[#ececf1] mb-1">
+                            <span>Pose generations (×12)</span>
+                            <span id="cs_pose_credits">12 credits</span>
+                        </div>
+                        <div id="cs_transition_row" class="flex justify-between text-[#ececf1] mb-1 hidden">
+                            <span>Transition animations</span>
+                            <span id="cs_transition_credits">~120 credits</span>
+                        </div>
+                        <div class="border-t border-[#565869] my-2"></div>
+                        <div class="flex justify-between font-semibold text-white">
+                            <span>Estimated Total</span>
+                            <span id="cs_total_credits">12 credits</span>
+                        </div>
+                        <div id="cs_cost_note" class="text-xs text-gray-400 mt-1 hidden">Estimated — actual cost may vary based on transitions generated.</div>
+                    </div>
+                    <div class="mt-3 flex justify-between items-center">
+                        <span class="text-sm text-[#ececf1]">Your balance:</span>
+                        <span id="cs_credit_balance" class="text-sm font-semibold text-[#10a37f]">—</span>
+                    </div>
+                    <div id="cs_insufficient_warning" class="text-xs text-red-400 mt-1 hidden">⚠ Insufficient credits for this generation.</div>
+                </div>
+
+                <!-- Step 5: Confirm -->
+                <div id="cs_step_5" class="cs_step hidden">
+                    <h4 class="text-sm font-medium text-[#ececf1] mb-3">Confirm Generation</h4>
+                    <div class="bg-[#0d1117] rounded-lg p-4 text-sm space-y-2">
+                        <div class="flex justify-between"><span class="text-gray-400">Name:</span><span id="cs_confirm_name" class="text-[#ececf1]"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Description:</span><span id="cs_confirm_desc" class="text-[#ececf1] truncate max-w-[250px]"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Style:</span><span id="cs_confirm_style" class="text-[#ececf1]"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Mode:</span><span id="cs_confirm_mode" class="text-[#ececf1]"></span></div>
+                        <div class="flex justify-between"><span class="text-gray-400">Estimated Credits:</span><span id="cs_confirm_credits" class="text-[#10a37f] font-semibold"></span></div>
+                    </div>
+                </div>
+
+                <!-- Step 6: Progress -->
+                <div id="cs_step_6" class="cs_step hidden">
+                    <h4 class="text-sm font-medium text-[#ececf1] mb-3">Generating Skin...</h4>
+                    <div class="bg-[#0d1117] rounded-lg p-4">
+                        <div class="flex justify-between text-sm text-[#ececf1] mb-2">
+                            <span id="cs_progress_hook">Starting...</span>
+                            <span id="cs_progress_count">0 / 12</span>
+                        </div>
+                        <div class="w-full bg-[#565869] rounded-full h-2">
+                            <div id="cs_progress_bar" class="bg-[#10a37f] h-2 rounded-full transition-all" style="width: 0%"></div>
+                        </div>
+                    </div>
+                    <!-- Failed hooks retry UI -->
+                    <div id="cs_failed_hooks" class="hidden mt-3">
+                        <p class="text-xs text-red-400 mb-2">Some hooks failed:</p>
+                        <ul id="cs_failed_list" class="text-xs text-gray-300 list-disc list-inside mb-2"></ul>
+                        <div class="flex gap-2">
+                            <button onclick="retryFailedHooks()" class="px-3 py-1.5 text-xs bg-[#10a37f] text-white rounded hover:bg-[#0d8c6d]">Retry Failed</button>
+                            <button onclick="cancelGeneration()" class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30">Cancel All</button>
+                        </div>
+                    </div>
+                    <div id="cs_all_failed" class="hidden mt-3">
+                        <p class="text-xs text-red-400 mb-2">All hooks failed.</p>
+                        <div class="flex gap-2">
+                            <button onclick="retryAllHooks()" class="px-3 py-1.5 text-xs bg-[#10a37f] text-white rounded hover:bg-[#0d8c6d]">Retry All</button>
+                            <button onclick="cancelGeneration()" class="px-3 py-1.5 text-xs bg-red-500/20 text-red-400 rounded hover:bg-red-500/30">Cancel</button>
+                        </div>
+                    </div>
+                    <div id="cs_cancel_btn" class="mt-3">
+                        <button onclick="cancelGeneration()" class="px-3 py-1.5 text-xs bg-[#565869] text-gray-300 rounded hover:bg-[#666]">Cancel Generation</button>
+                    </div>
+                </div>
+
+                <!-- Navigation buttons -->
+                <div class="flex justify-between mt-6">
+                    <button id="cs_back_btn" onclick="csStepBack()" class="px-4 py-2 text-sm text-gray-400 hover:text-white transition-colors hidden">Back</button>
+                    <div class="flex-1"></div>
+                    <button id="cs_next_btn" onclick="csStepNext()" class="px-5 py-2 text-sm font-medium bg-[#10a37f] text-white rounded-md hover:bg-[#0d8c6d] transition-colors">Next</button>
+                </div>
+            </div>
         </div>
 
         <!-- Skin Detail Panel (shown when a skin is clicked) -->

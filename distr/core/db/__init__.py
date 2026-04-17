@@ -181,6 +181,10 @@ class Settings(Base):
     kanban_cli_auth = Column(String, default='')
     _kanban_migration_done = Column(Boolean, default=False)
 
+    # Masko (AI skin generation)
+    masko_enabled = Column(Boolean, default=False)
+    masko_key = Column(String, default='')
+
 
 class Chat(Base):
     __tablename__ = 'chats'
@@ -552,6 +556,9 @@ try:
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 1"),
                 # Load on startup
                 ("load_on_startup", "BOOLEAN DEFAULT 1"),
+                # Masko (AI skin generation)
+                ("masko_enabled", "BOOLEAN DEFAULT 0"),
+                ("masko_key", "VARCHAR DEFAULT ''"),
             ]:
                 if _col not in _existing:
                     try:

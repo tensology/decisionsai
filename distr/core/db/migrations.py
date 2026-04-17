@@ -1578,3 +1578,21 @@ def run_migrations():
             except Exception as e:
                 if "duplicate column" not in str(e).lower():
                     logger.warning(f"Could not add {_wcol} to kanban_tickets: {e}")
+
+    # ── Masko (AI skin generation) provider columns ──
+    for _wcol, _wtype, _wdef in [
+        ("masko_enabled", "BOOLEAN", "0"),
+        ("masko_key", "VARCHAR", "''"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_wcol} FROM settings LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_wcol} {_wtype} DEFAULT {_wdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_wcol} column to settings table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_wcol} column to settings: {e}")
