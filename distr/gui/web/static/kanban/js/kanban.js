@@ -2373,16 +2373,16 @@
         document.getElementById("kb-bm-wa-add-btn").addEventListener("click", addWaLinkFromBoardModal);
 
         // Check WhatsApp connection status first — show Messages tab if connected
+        // Then load chats (must wait so waConnected is set before processWhatsAppMessages runs)
         apiFetch("/api/advanced/whatsapp/status").then(function(statusData) {
             if (statusData.status === "connected") {
                 waConnected = true;
                 document.getElementById("kb-tab-messages").classList.remove("hidden");
                 updateTabBarVisibility();
             }
-        }).catch(function() {});
-
-        // Load chats
-        loadWhatsAppChats();
+        }).catch(function() {}).finally(function() {
+            loadWhatsAppChats();
+        });
 
         // ── SSE: real-time WhatsApp message updates ──
         var waSSE = null;
