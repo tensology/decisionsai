@@ -1298,44 +1298,17 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 pass
 
-        # Try RPC session first if one exists for this project
-        rpc = get_rpc_session(project_id) if project_id else None
-        if rpc and rpc.is_alive:
-            success = rpc.send_prompt(instruction)
-            if success:
-                return f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to pi. Check the terminal tab for progress."
-            # Fall through to one-shot if RPC failed
+        # Use unified CLI dispatch — ensures RPC session exists for real-time CLI feed
+        from distr.core.agent.tools.integrations.unified_cli import dispatch_to_cli
 
-        # Execute pi in print mode (one-shot)
-        try:
-            result = subprocess.run(
-                [pi_path, "-p", "--append-system-prompt",
-                 f"You are working on project: {project_name}. This is ticket #{ticket_id_val}.",
-                 instruction],
-                capture_output=True, text=True, timeout=600,
+        if project_id and folder:
+            result = dispatch_to_cli(
+                project_id=project_id,
                 cwd=folder,
+                instruction=f"Ticket #{ticket_id_val}: {instruction}",
+                project_name=project_name,
+                append_system_prompt=f"You are working on project: {project_name}. This is ticket #{ticket_id_val}.",
             )
-            output = (result.stdout + result.stderr).strip()[:3000]
-            status = "completed" if result.returncode == 0 else "failed"
-        except subprocess.TimeoutExpired:
-            output = "Pi timed out after 10 minutes"
-            status = "failed"
-        except Exception as e:
-            output = f"Pi error: {e}"
-            status = "failed"
-
-        # Update audit trail (legacy StepRunner — removed in task 6.3)
-        if audit_id and step_id:
-            pass
-
-        if self.event_queue:
-            try:
-                self.event_queue.put(("step_runner_updated", {}), block=False)
-            except Exception:
-                pass
-
-        if not output:
-            return f"Pi completed for ticket #{ticket_id_val} (exit code: {result.returncode})"
-
-        preview = output[:500] + "..." if len(output) > 500 else output
-        return f"[Pi — {project_name}] Ticket #{ticket_id_val}:\n{preview}"
+            if result["success"]:
+                return f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to CLI. Check the CLI tab for progress."
+            return f"[Pi — {project_name}] Ticket #{ticket_id_val} failed: {result['message']}"

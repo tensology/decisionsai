@@ -461,6 +461,7 @@ class WhatsAppMessage(Base):
     # Processing status
     processed = Column(Boolean, default=False)  # Whether message was processed by agent
     processed_date = Column(DateTime, nullable=True)
+    snapshot_group = Column(String, nullable=True)  # Group ID for snapshot batch tracking
     agent_chat_id = Column(Integer, nullable=True)  # Link to Chat row if message was added to a chat
 
     # Timestamps

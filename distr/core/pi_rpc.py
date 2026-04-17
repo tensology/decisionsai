@@ -60,6 +60,10 @@ class PiRpcSession:
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
 
+        # Origin tracking (for auto-overview on completion)
+        self._origin: str = "cli"  # "cli", "desktop", "telegram"
+        self._telegram_chat_id: Optional[str] = None
+
         # Event callbacks (async or sync)
         self._on_event_callbacks: List[Callable] = []
 
@@ -106,8 +110,26 @@ class PiRpcSession:
             logger.error("PiRpcSession: pi binary not found in PATH")
             return False
 
+        # Read the current model from settings so pi uses the selected model
+        try:
+            from distr.core.db import get_session as db_session
+            from sqlalchemy import text
+            with db_session() as session:
+                row = session.execute(text(
+                    "SELECT coding_llm_provider, coding_llm_model FROM settings LIMIT 1"
+                )).first()
+                self._provider = (row[0] or "ollama") if row else "ollama"
+                self._model = (row[1] or "") if row else ""
+        except Exception:
+            self._provider = "ollama"
+            self._model = ""
+
         try:
             cmd = [self._pi_bin, "--mode", "rpc", "--no-session"]
+            if self._provider:
+                cmd += ["--provider", self._provider]
+            if self._model:
+                cmd += ["--model", self._model]
             if self.append_system_prompt:
                 cmd += ["--append-system-prompt", self.append_system_prompt]
             self._process = subprocess.Popen(
@@ -132,7 +154,7 @@ class PiRpcSession:
         self._reader_thread = threading.Thread(target=self._read_loop, daemon=True)
         self._reader_thread.start()
 
-        logger.info(f"PiRpcSession started: project={self.project_id}, cwd={self.cwd}, pid={self._process.pid}")
+        logger.info(f"PiRpcSession started: project={self.project_id}, cwd={self.cwd}, pid={self._process.pid}, provider={self._provider}, model={self._model}")
         return True
 
     def _read_loop(self):
@@ -262,6 +284,8 @@ class PiRpcSession:
             self.status = "completed"
             all_msgs = event.get("messages", [])
             self._add_output("[Agent finished]")
+            # Auto-read out overview when agent finishes
+            self._auto_overview()
 
         elif event_type == "compaction_start":
             self._add_output("[Compacting context...]")
@@ -281,6 +305,65 @@ class PiRpcSession:
                 if status_text:
                     self._add_output(f"⚙️ {status_text}")
 
+    def _auto_overview(self):
+        """When pi finishes, auto-read out the overview to the originating channel."""
+        try:
+            msgs = self.get_messages()
+            if not msgs:
+                return
+
+            # Build a short summary from last user cmd + last assistant response + last tool
+            user_cmds = [m["content"] for m in msgs if m.get("role") == "user" and m.get("content")]
+            assistant_resps = [m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")]
+            tool_results = [m for m in msgs if m.get("role") == "tool_result" and m.get("tool_result")]
+
+            last_cmd = user_cmds[-1][:100] if user_cmds else ""
+            last_resp = assistant_resps[-1][:300] if assistant_resps else ""
+            last_tool = ""
+            if tool_results:
+                t = tool_results[-1]
+                name = t.get("tool_name", "tool")
+                result = (t.get("tool_result") or "")[:100]
+                is_err = t.get("is_error", False)
+                last_tool = f"{'Error in' if is_err else ''} {name}: {result}"
+
+            parts = []
+            if last_cmd:
+                parts.append(f"Ran: {last_cmd}")
+            if last_resp:
+                parts.append(f"Result: {last_resp}")
+            if last_tool:
+                parts.append(last_tool)
+
+            summary = ". ".join(parts) if parts else "Agent finished."
+
+            # Send to the originating channel
+            if self._origin == "telegram" and self._telegram_chat_id:
+                self._send_telegram_overview(summary)
+            else:
+                # Desktop / CLI — speak via TTS
+                self._speak_overview(summary)
+        except Exception as e:
+            logger.debug(f"Auto-overview failed: {e}")
+
+    def _speak_overview(self, text: str):
+        """Speak the overview via TTS signal."""
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.send("speak_text", text[:500])
+        except Exception:
+            pass
+
+    def _send_telegram_overview(self, text: str):
+        """Send the overview back to the originating Telegram chat."""
+        try:
+            from distr.integrations.telegram.client import get_telegram_client
+            client = get_telegram_client()
+            if client and self._telegram_chat_id:
+                client.send_message(self._telegram_chat_id, text[:1000])
+        except Exception:
+            pass
+
     def _add_output(self, text: str, newline: bool = True):
         """Append text to the output buffer (clean, no ANSI)."""
         if newline:
@@ -295,11 +378,17 @@ class PiRpcSession:
         if len(self._output_lines) > self._max_buffer_lines:
             self._output_lines = self._output_lines[-self._max_buffer_lines:]
 
-    def send_prompt(self, instruction: str) -> bool:
+    def send_prompt(self, instruction: str, origin: str = "cli", telegram_chat_id: Optional[str] = None) -> bool:
         """Send a prompt to pi via RPC. Returns True if sent successfully."""
         if not self._process or not self._running:
             if not self.start():
                 return False
+
+        # Track origin for auto-overview on completion
+        if origin:
+            self._origin = origin
+        if telegram_chat_id:
+            self._telegram_chat_id = telegram_chat_id
 
         cmd = {"type": "prompt", "message": instruction}
 
@@ -490,3 +579,24 @@ async def kill_rpc_session(project_id: int):
     session = _rpc_sessions.pop(project_id, None)
     if session:
         await session.kill()
+
+
+# ── Cleanup on exit ────────────────────────────────────────────────────────
+import atexit
+
+def _kill_all_rpc_on_exit():
+    """atexit handler: kill all pi RPC subprocesses on app exit."""
+    killed = 0
+    for pid_key, rpc in list(_rpc_sessions.items()):
+        try:
+            if rpc._process and rpc._process.poll() is None:
+                rpc._process.kill()
+                rpc._process.wait(timeout=1)
+                killed += 1
+        except Exception:
+            pass
+    _rpc_sessions.clear()
+    if killed:
+        logger.info(f"Cleanup on exit: killed {killed} pi RPC subprocesses")
+
+atexit.register(_kill_all_rpc_on_exit)

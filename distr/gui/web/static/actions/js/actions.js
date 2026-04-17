@@ -155,7 +155,7 @@
     }
 
     function getTriggerWordsArray() {
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return [];
         var seen = {};
         var words = [];
@@ -174,7 +174,7 @@
     }
 
     function renderTriggerBadges(words) {
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return;
         wrap.innerHTML = "";
         (words || []).forEach(function(word) {
@@ -196,7 +196,7 @@
         var raw = (input.value || "").trim();
         if (!raw) return;
         var toAdd = raw.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return;
         var existing = new Set();
         wrap.querySelectorAll(".trigger-badge[data-word]").forEach(function(b) { existing.add((b.getAttribute("data-word") || "").trim()); });

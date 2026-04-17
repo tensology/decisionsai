@@ -74,6 +74,59 @@
     return html;
   }
 
+  // ── Copy skill to clipboard ──────────────────────────────────────
+  function copySkillToClipboard(skillId) {
+    // First check if skill has content cached
+    var skill = allSkills.find(function (s) { return s.id === skillId; });
+    if (skill && skill.content) {
+      copyToClipboard(skill.content);
+      return;
+    }
+
+    // Otherwise fetch the content from API
+    fetch("/api/skills/" + encodeURIComponent(skillId))
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data && data.content) {
+          // Update skill with content for future use
+          if (skill) skill.content = data.content;
+          copyToClipboard(data.content);
+        } else {
+          showSnackbar("Failed to copy skill - no content", "error");
+        }
+      })
+      .catch(function (err) {
+        showSnackbar("Failed to copy skill: " + (err.message || err), "error");
+      });
+  }
+
+  // ── Helper to copy to clipboard and show result ───────────────────
+  function copyToClipboard(text) {
+    navigator.clipboard.writeText(text)
+      .then(function () {
+        showSnackbar("Skill markdown copied!", "success");
+      })
+      .catch(function () {
+        showSnackbar("Copy failed", "error");
+      });
+  }
+
+  // ── Show snackbar notification ────────────────────────────────────
+  function showSnackbar(message, type) {
+    var snackbar = document.getElementById("skills-snackbar");
+    if (!snackbar) {
+      snackbar = document.createElement("div");
+      snackbar.id = "skills-snackbar";
+      snackbar.textContent = message;
+      snackbar.style.cssText = "visibility:hidden; min-width:250px; background-color:#333; color:#fff; text-align:center; border-radius:8px; padding:12px 16px; position:fixed; z-index:1000; bottom:30px; left:50%; transform:translateX(-50%); font-size:14px; box-shadow:0 4px 12px rgba(0,0,0,0.3);";
+      document.body.appendChild(snackbar);
+    }
+    snackbar.textContent = message;
+    snackbar.style.backgroundColor = type === "success" ? "#10b981" : "#ef4444";
+    snackbar.style.visibility = "visible";
+    setTimeout(function () { snackbar.style.visibility = "hidden"; }, 2000);
+  }
+
   // ── Init ─────────────────────────────────────────────────────────
   function init() {
     loadSkills();
@@ -159,7 +212,13 @@
         return '<span class="inline-block px-1.5 py-0.5 text-[10px] font-medium rounded bg-[#f97316]/15 text-[#fb923c]">' + esc(t) + "</span>";
       }).join(" ");
 
-      html += '<div class="skill-card bg-[#152054] rounded-lg border border-white/10 p-4 hover:border-[#f97316]/50 transition-colors cursor-pointer" data-id="' + esc(skill.id) + '">';
+      html += '<div class="skill-card bg-[#152054] rounded-lg border border-white/10 p-4 hover:border-[#f97316]/50 transition-colors cursor-pointer relative" data-id="' + esc(skill.id) + '">';
+      html += '  <button type="button" class="copy-btn absolute top-3 right-3 p-1 text-gray-400 hover:text-[#fb923c] transition-colors" title="Copy skill markdown">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
+              '</button>';
+      html += '  <button type="button" class="push-btn absolute top-3 right-10 p-1 text-gray-400 hover:text-[#fb923c] transition-colors" title="Push skill to project">' +
+              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>' +
+              '</button>';
       html += '  <div class="flex flex-wrap gap-1 mb-2">' + tagBadges + "</div>";
       html += '  <h4 class="text-sm font-semibold text-white mb-1.5 leading-tight">' + esc(skill.name || skill.id) + "</h4>";
       html += '  <p class="text-xs text-gray-400 leading-relaxed">' + esc(shortDesc) + "</p>";
@@ -168,6 +227,22 @@
     grid.innerHTML = html;
 
     grid.querySelectorAll(".skill-card").forEach(function (card) {
+      var copyBtn = card.querySelector(".copy-btn");
+      if (copyBtn) {
+        copyBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var skillId = card.getAttribute("data-id");
+          copySkillToClipboard(skillId);
+        });
+      }
+      var pushBtn = card.querySelector(".push-btn");
+      if (pushBtn) {
+        pushBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var skillId = card.getAttribute("data-id");
+          openSkillPushModal(skillId);
+        });
+      }
       card.addEventListener("click", function () {
         openSkillDetail(card.getAttribute("data-id"));
       });
@@ -186,6 +261,11 @@
 
     document.getElementById("skills-prev").disabled = currentPage === 0;
     document.getElementById("skills-next").disabled = currentPage >= totalPages - 1;
+  }
+
+  // ── Open skill push modal (for push button) ─────────────────────
+  function openSkillPushModal(skillId) {
+    openSkillDetail(skillId);
   }
 
   // ── Skill detail modal ──────────────────────────────────────────

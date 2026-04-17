@@ -127,6 +127,99 @@ def register_routes(router, templates):
             logger.error(f"Failed to get boards: {e}", exc_info=True)
             return JSONResponse({"boards": []})
 
+    @router.get("/projects/cli-models")
+    async def get_cli_models():
+        """Return available models for the CLI dropdown.
+        Reads custom models from ~/.pi/agent/models.json and built-in providers
+        configured in settings."""
+        import json as _json
+        
+        models = []
+        
+        # Load custom models from pi's models.json
+        try:
+            models_path = os.path.expanduser("~/.pi/agent/models.json")
+            if os.path.exists(models_path):
+                with open(models_path) as f:
+                    cfg = _json.load(f)
+                for prov_name, prov in (cfg.get("providers") or {}).items():
+                    for m in (prov.get("models") or []):
+                        mid = m.get("id", "")
+                        mname = m.get("name") or mid
+                        if mid:
+                            models.append({"id": mid, "name": mname, "provider": prov_name})
+        except Exception as e:
+            logger.debug(f"Failed to load models.json: {e}")
+        
+        # Also add well-known OpenAI models (not from models.json)
+        builtin_openai = [
+            "gpt-5.4-pro", "gpt-5.4", "gpt-5.4-mini", "gpt-5.4-nano",
+            "gpt-5.3-codex", "gpt-5.3-codex-spark", "gpt-5.2-codex", "gpt-5.2-pro",
+            "gpt-5.1-codex-max", "gpt-5.1-codex", "gpt-5-pro", "gpt-5",
+            "o3-pro", "o3", "o3-deep-research", "o4-mini", "o4-mini-deep-research",
+            "o1", "o1-pro", "gpt-4.1", "gpt-4.1-mini", "gpt-4.1-nano",
+            "gpt-4o", "gpt-4o-mini",
+        ]
+        for mid in builtin_openai:
+            if not any(m["id"] == mid for m in models):
+                models.append({"id": mid, "name": mid, "provider": "openai"})
+
+        # Deduplicate by model id
+        seen = set()
+        unique_models = []
+        for m in models:
+            if m["id"] not in seen:
+                seen.add(m["id"])
+                unique_models.append(m)
+        models = unique_models
+
+        # Get current model from settings
+        try:
+            from distr.core.db import get_session as db_session
+            with db_session() as session:
+                from sqlalchemy import text
+                row = session.execute(text("SELECT coding_llm_provider, coding_llm_model FROM settings LIMIT 1")).first()
+                current_provider = (row[0] or "ollama") if row else "ollama"
+                current_model = (row[1] or "") if row else ""
+        except Exception:
+            current_provider = "ollama"
+            current_model = ""
+
+        return JSONResponse({
+            "models": models,
+            "current_provider": current_provider,
+            "current_model": current_model,
+        })
+
+    @router.post("/projects/cli-model")
+    async def set_cli_model(request: Request):
+        """Set the CLI model and restart active pi RPC sessions with the new model."""
+        body = await request.json()
+        model = (body.get("model") or "").strip()
+        provider = (body.get("provider") or "").strip()
+        if not model:
+            return JSONResponse({"success": False, "error": "model required"}, status_code=400)
+
+        try:
+            from distr.core.db import get_session as db_session
+            with db_session() as session:
+                from sqlalchemy import text
+                session.execute(text("UPDATE settings SET coding_llm_model = :m, coding_llm_provider = :p"), {"m": model, "p": provider or "ollama"})
+                session.commit()
+            logger.info(f"CLI model set to: {provider}/{model}")
+            
+            # Restart any active RPC sessions so they pick up the new model
+            try:
+                from distr.core.pi_rpc import get_or_create_rpc_session, kill_rpc_session, _rpc_sessions
+                project_ids = list(_rpc_sessions.keys())
+                for pid in project_ids:
+                    await kill_rpc_session(pid)
+            except Exception as e:
+                logger.debug(f"Could not restart RPC sessions after model change: {e}")
+            
+            return JSONResponse({"success": True, "model": model, "provider": provider})
+        except Exception as e:
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
     @router.get("/projects/{project_id}")
     async def get_project_detail(project_id: int):
         """Get full project details including context items and files (matches desktop Projects UI)."""
@@ -509,7 +602,12 @@ def register_routes(router, templates):
                 project = session.query(Project).filter(Project.id == project_id).first()
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
-                # Check for a board with default_project_id pointing to this project
+                # First check the explicit kanban_board_id link (new method)
+                if project.kanban_board_id:
+                    board = session.query(KanbanBoard).filter(KanbanBoard.id == project.kanban_board_id).first()
+                    if board:
+                        return JSONResponse({"board": {"id": board.id, "name": board.name}})
+                # Fallback: check for a board with default_project_id pointing to this project
                 board = session.query(KanbanBoard).filter(
                     KanbanBoard.default_project_id == project_id
                 ).first()
@@ -551,10 +649,17 @@ def register_routes(router, templates):
                     # Link it if not already linked
                     if not existing.default_project_id:
                         existing.default_project_id = project_id
+                    # Set the explicit kanban_board_id link
+                    project.kanban_board_id = existing.id
+                    session.commit()
                     return JSONResponse({"board": {"id": existing.id, "name": existing.name}, "created": False})
                 board = KanbanBoard(name=project.name, description=f"Board for project: {project.name}", source="database", default_project_id=project_id)
                 session.add(board)
                 session.flush()
+                # Set the explicit kanban_board_id link
+                project.kanban_board_id = board.id
+                session.commit()
+                
                 for i, lane_name in enumerate(["Backlog", "Current", "QA / Assess", "Done"]):
                     session.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
                 session.flush()
@@ -889,9 +994,13 @@ def register_routes(router, templates):
         # Queue for RPC events to be sent to this WebSocket
         event_queue = asyncio.Queue()
 
+        # The RPC reader runs in a background thread, so we need a thread-safe
+        # way to push events into the asyncio queue.
+        loop = asyncio.get_event_loop()
+
         def _on_event(event_dict):
             try:
-                event_queue.put_nowait(event_dict)
+                loop.call_soon_threadsafe(event_queue.put_nowait, event_dict)
             except Exception:
                 pass
 
@@ -930,10 +1039,10 @@ def register_routes(router, templates):
                 msg_type = msg.get("type")
 
                 if msg_type == "prompt":
-                    # User sent a prompt to pi via the terminal input
+                    # User sent a prompt to pi via the CLI input
                     instruction = msg.get("message", "")
                     if instruction:
-                        rpc.send_prompt(instruction)
+                        rpc.send_prompt(instruction, origin="cli")
                 elif msg_type == "steer":
                     # User is steering/redirecting pi
                     instruction = msg.get("message", "")
@@ -977,6 +1086,7 @@ def register_routes(router, templates):
             "project_id": project_id,
         })
 
+
     @router.post("/projects/{project_id}/terminal/restart")
     async def restart_terminal(project_id: int):
         """Kill and recreate the pi RPC session for a project."""
@@ -1005,6 +1115,125 @@ def register_routes(router, templates):
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    # ── Startup instructions: one PTY per line (Projects → Startup tab) ─────
+
+    @router.get("/projects/{project_id}/startup-sessions")
+    async def list_startup_sessions(project_id: int):
+        """Return all alive startup PTY sessions for a project.
+        Used by the frontend to reconnect after a page reload.
+        Automatically cleans up dead sessions from the registry."""
+        from distr.core.terminal import get_startup_sessions_for_project
+        sessions = get_startup_sessions_for_project(project_id)
+        return JSONResponse({"sessions": sessions})
+
+    @router.post("/projects/startup-terminal")
+    async def start_startup_terminal(request: Request):
+        """Spawn a shell command in a PTY; client opens WebSocket for output."""
+        body = await request.json()
+        project_id = int(body.get("project_id") or 0)
+        command = (body.get("command") or "").strip()
+        working_dir = (body.get("working_dir") or "").strip()
+        if not project_id or not command:
+            return JSONResponse({"success": False, "error": "project_id and command required"}, status_code=400)
+
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+        from distr.core.terminal import create_startup_shell_session
+
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
+            folder = (project.folder_location or "").strip()
+            if not folder or not os.path.isdir(folder):
+                return JSONResponse({"success": False, "error": "Project has no valid folder location"}, status_code=400)
+            canonical = os.path.realpath(folder)
+            if working_dir:
+                try:
+                    req = os.path.realpath(os.path.expanduser(working_dir))
+                except OSError:
+                    return JSONResponse({"success": False, "error": "Invalid working_dir"}, status_code=400)
+                if req != canonical:
+                    return JSONResponse({"success": False, "error": "working_dir must match the project's folder"}, status_code=400)
+
+        try:
+            terminal_id, _sess = await create_startup_shell_session(project_id, canonical, command)
+        except Exception as e:
+            logger.error(f"startup-terminal spawn failed: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+        return JSONResponse({
+            "success": True,
+            "process_id": terminal_id,
+            "pid": _sess.pid,
+        })
+
+    @router.websocket("/projects/startup-terminal/{terminal_id}/ws")
+    async def startup_terminal_websocket(websocket: WebSocket, terminal_id: str):
+        from distr.core.terminal import get_startup_session
+        from distr.gui.web.security import websocket_has_valid_internal_token, is_allowed_local_origin
+
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        if not websocket_has_valid_internal_token(websocket):
+            await websocket.close(code=1008, reason="Unauthorized")
+            return
+
+        sess = get_startup_session(terminal_id)
+        if not sess:
+            await websocket.close(code=1008, reason="Session not found")
+            return
+
+        await websocket.accept()
+
+        # Replay buffered output so the reconnected terminal shows previous output
+        if sess._raw_buffer:
+            try:
+                replay = sess._raw_buffer.decode("utf-8", errors="replace")
+                await websocket.send_text(
+                    json.dumps({"type": "output", "data": replay, "terminal_id": terminal_id})
+                )
+            except Exception as e:
+                logger.debug(f"startup terminal replay failed: {e}")
+
+        sess.add_websocket(websocket)
+        try:
+            while True:
+                data = await websocket.receive_text()
+                try:
+                    msg = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                if msg.get("type") == "resize":
+                    rows = int(msg.get("rows") or 24)
+                    cols = int(msg.get("cols") or 80)
+                    sess.resize(max(2, min(rows, 200)), max(20, min(cols, 500)))
+                elif msg.get("type") == "input":
+                    inp = msg.get("data")
+                    if isinstance(inp, str) and inp:
+                        sess.write(inp)
+        except WebSocketDisconnect:
+            pass
+        except Exception as e:
+            logger.debug(f"startup terminal ws: {e}")
+        finally:
+            sess.remove_websocket(websocket)
+
+    @router.post("/projects/kill-terminal")
+    async def kill_terminal_process(request: Request):
+        body = await request.json()
+        process_id = (body.get("process_id") or "").strip()
+        if not process_id:
+            return JSONResponse({"success": False, "error": "process_id required"}, status_code=400)
+        from distr.core.terminal import kill_startup_session, get_startup_session
+        sess = get_startup_session(process_id)
+        pid = sess.pid if sess else None
+        ok = await kill_startup_session(process_id)
+        logger.info(f"kill-terminal: key={process_id} pid={pid} success={ok}")
+        return JSONResponse({"success": ok, "pid": pid})
+
     @router.post("/projects/{project_id}/terminal/overview")
     async def terminal_overview(project_id: int):
         """Get pi RPC session transcript, produce a natural spoken summary, and speak it aloud."""
@@ -1023,9 +1252,10 @@ def register_routes(router, templates):
         if not messages:
             return JSONResponse({"summary": "The terminal is empty — nothing has been output yet.", "empty": True})
 
-        # Extract only user commands and assistant responses (skip thinking, tool calls, tool results)
+        # Extract user commands, assistant responses, and tool activity
         user_msgs = []
         assistant_msgs = []
+        tool_msgs = []
         for msg in messages:
             role = msg.get("role", "")
             if role == "user":
@@ -1036,12 +1266,17 @@ def register_routes(router, templates):
                 content = (msg.get("content", "") or "").strip()
                 if content:
                     assistant_msgs.append(content)
+            elif role == "tool_result":
+                tool_name = msg.get("tool_name", "") or "tool"
+                tool_result = (msg.get("tool_result", "") or "").strip()
+                is_error = msg.get("is_error", False)
+                tool_msgs.append(f"{'ERROR' if is_error else 'OK'} {tool_name}: {tool_result[:200]}")
 
-        if not user_msgs and not assistant_msgs:
+        if not user_msgs and not assistant_msgs and not tool_msgs:
             return JSONResponse({"summary": "The terminal has no commands yet.", "empty": True})
 
         # Build a focused transcript for LLM summarization
-        # Last 5 commands and responses, truncated for the LLM
+        # Last commands, responses, and tool calls, truncated for the LLM
         transcript_parts = []
         for cmd in user_msgs[-5:]:
             truncated = cmd[:200] + "..." if len(cmd) > 200 else cmd
@@ -1049,6 +1284,8 @@ def register_routes(router, templates):
         for resp in assistant_msgs[-5:]:
             truncated = resp[:400] + "..." if len(resp) > 400 else resp
             transcript_parts.append(f"[resp] {truncated}")
+        for tool_msg in tool_msgs[-5:]:
+            transcript_parts.append(f"[tool] {tool_msg}")
 
         buffer = "\n".join(transcript_parts)
         if len(buffer) > 4000:

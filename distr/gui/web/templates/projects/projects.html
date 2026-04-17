@@ -2,6 +2,10 @@
 
 {% block title %}Projects{% endblock %}
 
+{% block extra_head %}
+<link rel="stylesheet" href="/static/vendor/xterm/xterm.min.css">
+{% endblock %}
+
 {% block content %}
 <style>
 /* Pi RPC Terminal */
@@ -90,8 +94,142 @@
     font-size: 0.9em;
 }
 @keyframes blink { 50% { opacity: 0; } }
+
+/* Startup Terminal Grid */
+#startup-terminal-grid {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 0.75rem;
+}
+.startup-terminal-card {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 8px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    height: 140px;
+}
+.startup-terminal-header {
+    background: #161b22;
+    padding: 8px 12px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}
+.startup-terminal-title {
+    color: #e6edf3;
+    font-size: 10px;
+    font-weight: 500;
+    font-family: monospace;
+    flex: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.startup-terminal-close,
+.startup-terminal-expand {
+    background: #21262d;
+    color: #e6edf3;
+    border: none;
+    border-radius: 4px;
+    width: 24px;
+    height: 24px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    font-size: 11px;
+    transition: background 0.2s;
+    flex-shrink: 0;
+}
+.startup-terminal-expand:hover { background: #1f6feb; color: white; }
+.startup-terminal-close:hover  { background: #da3633; color: white; }
+.startup-terminal-btns { display: flex; gap: 3px; }
+
+/* Expanded terminal modal */
+#terminal-expand-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.75);
+    z-index: 9000;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    backdrop-filter: blur(2px);
+}
+#terminal-expand-modal.hidden { display: none; }
+#terminal-expand-inner {
+    background: #0d1117;
+    border: 1px solid #30363d;
+    border-radius: 12px;
+    width: 92vw;
+    height: 88vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    box-shadow: 0 24px 80px rgba(0,0,0,0.6);
+}
+#terminal-expand-header {
+    background: #161b22;
+    padding: 10px 16px;
+    border-bottom: 1px solid #30363d;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+}
+#terminal-expand-title {
+    color: #e6edf3;
+    font-size: 13px;
+    font-weight: 500;
+    font-family: monospace;
+}
+.terminal-expand-btn {
+    background: #21262d;
+    color: #e6edf3;
+    border: none;
+    border-radius: 4px;
+    height: 28px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 5px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: background 0.2s;
+    white-space: nowrap;
+}
+#terminal-expand-collapse:hover { background: #1f6feb; color: white; }
+#terminal-expand-stop:hover { background: #da3633; color: white; }
+#terminal-expand-btns { display: flex; gap: 6px; }
+#terminal-expand-body {
+    flex: 1;
+    overflow: hidden;
+    padding: 8px;
+    position: relative;
+}
+.startup-terminal-xterm {
+    flex: 1;
+    padding: 4px 8px 8px;
+    overflow: hidden;
+    position: relative;
+}
+.startup-terminal-xterm .xterm {
+            font-size: 10px !important;
+    font-size: 11px !important;
+    height: 100%;
+}
+.startup-terminal-xterm .xterm-viewport::-webkit-scrollbar {
+    width: 0 !important;
+}
+.startup-terminal-xterm .xterm-rows {
+    font-family: monospace !important;
+}
 </style>
-<div class="container mx-auto px-6 py-4 max-w-7xl flex gap-6 h-[calc(100vh-4rem)]">
+<div class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
     <!-- Left panel: search + project list + Add -->
     <div class="w-80 flex-shrink-0 flex flex-col gap-4">
         <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
@@ -106,10 +244,10 @@
     </div>
 
     <!-- Project list context menu (right-click) -->
-    <div id="project-context-menu" class="fixed hidden z-50 min-w-[140px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
-        <button type="button" class="project-ctx-use w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Use</button>
-        <button type="button" class="project-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Edit</button>
-        <button type="button" class="project-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">Delete</button>
+    <div id="project-context-menu" class="fixed hidden z-50 min-w-[160px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+        <button type="button" class="project-ctx-use w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4 text-[#f97316]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"/></svg>Use</button>
+        <button type="button" class="project-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>Edit</button>
+        <button type="button" class="project-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
     </div>
 
     <!-- Right panel: empty state or detail form -->
@@ -132,36 +270,71 @@
             </div>
             <div class="flex-1 overflow-hidden flex flex-col relative">
                 <div class="projects-tabs border-b border-white/20 px-6 flex gap-1">
-                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="details">Details</button>
-                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="board">Board</button>
-                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="startup">Startup Instructions</button>
-                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="terminal">Terminal</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="details">
+                            <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>Details</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="startup">
+                            <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>Startup</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="terminal">
+                            <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 111.414 1.414L5.414 9l1.293 1.293a1 1 0 11-1.414 1.414l-2-2a1 1 0 010-1.414l2-2z" clip-rule="evenodd"/></svg>CLI</button>
                 </div>
                 <div class="flex-1 overflow-y-auto p-6" id="projects-tab-content">
-                    <!-- Details tab -->
+                                        <!-- Details tab -->
                     <div id="tab-details" class="project-tab-pane space-y-4">
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-1">Name</label>
-                            <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                        </div>
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-1">Description</label>
-                            <input type="text" id="detail-description" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                        </div>
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-1">Folder location</label>
-                            <div class="flex gap-2">
-                                <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
-                                <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
+                        <!-- Row 1: Name + Folder location -->
+                        <div class="flex gap-4">
+                            <div class="flex-1 min-w-0">
+                                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                                <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                            </div>
+                            <div class="flex-1 min-w-0">
+                                <label class="block text-sm text-gray-400 mb-1">Folder location</label>
+                                <div class="flex gap-2">
+                                    <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
+                                    <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
+                                </div>
                             </div>
                         </div>
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
-                            <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300">
-                                <!-- Badges rendered by JS; add input below -->
+                        <!-- Row 2: Description + Trigger words -->
+                        <div class="flex gap-4">
+                            <div class="flex-1 min-w-0">
+                                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                                <input type="text" id="detail-description" class="w-full h-[42px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
                             </div>
-                            <input type="text" id="detail-triggers-input" class="mt-2 w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="Type a word, then Enter or comma to add">
+                            <div class="flex-1 min-w-0">
+                                <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
+                                <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300 relative">
+                                    <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
+                                    <input type="text" id="detail-triggers-input" style="border: 1px solid transparent; background: #152054; color: white; padding: 8px 12px; border-radius: 4px;" class="w-48 text-sm placeholder-gray-400 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
+                                </div>
+                            </div>
                         </div>
+                        <!-- Board (merged from Board tab) -->
+                        <div class="border-t border-white/20 pt-4">
+                            <label class="block text-sm text-gray-400 mb-2">Board</label>
+                            <div class="flex gap-4 flex-wrap">
+                                <div class="flex-1 min-w-[180px]">
+                                    <label class="block text-xs text-gray-500 mb-1">Provider</label>
+                                    <select id="detail-provider" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                        <option value="">None</option>
+                                    </select>
+                                </div>
+                                <div class="flex-1 min-w-[180px]">
+                                    <label class="block text-xs text-gray-500 mb-1">Board</label>
+                                    <select id="detail-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                        <option value="">None</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <p id="board-hint" class="text-xs text-gray-500 mt-1">Connect Trello or Jira in Settings → Advanced to see boards.</p>
+                            <div id="kanban-board-section" class="mt-3">
+                                <label class="block text-sm text-gray-400 mb-2">Ticket Board</label>
+                                <div id="kanban-board-actions" class="flex items-center gap-3">
+                                    <span id="kanban-board-status" class="text-sm text-gray-500">Checking...</span>
+                                </div>
+                            </div>
+                        </div>
+                        <hr class="border-white/20">
+                        <!-- Context items & files -->
                         <div>
                             <div class="flex items-center justify-between mb-2">
                                 <label class="block text-sm text-gray-400">Context items &amp; files</label>
@@ -182,62 +355,47 @@
                             </div>
                         </div>
                     </div>
-                    <!-- Board tab -->
-                    <div id="tab-board" class="project-tab-pane hidden space-y-4">
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-2">External Board (Trello / Jira)</label>
-                        </div>
-                        <div class="flex gap-4 flex-wrap">
-                            <div class="flex-1 min-w-[180px]">
-                                <label class="block text-sm text-gray-400 mb-1">Provider</label>
-                                <select id="detail-provider" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                    <option value="">None</option>
-                                    <!-- Trello/Jira options added by JS when available -->
-                                </select>
-                            </div>
-                            <div class="flex-1 min-w-[180px]">
-                                <label class="block text-sm text-gray-400 mb-1">Board</label>
-                                <select id="detail-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                    <option value="">None</option>
-                                    <!-- Options populated by JS when provider is selected -->
-                                </select>
-                            </div>
-                        </div>
-                        <p id="board-hint" class="text-xs text-gray-500">Connect Trello or Jira in Settings → Advanced to see boards.</p>
-                        <div id="kanban-board-section" class="border-t border-white/20 pt-4">
-                            <label class="block text-sm text-gray-400 mb-2">Ticket Board</label>
-                            <div id="kanban-board-actions" class="flex items-center gap-3">
-                                <span id="kanban-board-status" class="text-sm text-gray-500">Checking...</span>
-                            </div>
-                        </div>
-                    </div>
-                    <!-- Startup Instructions tab -->
+<!-- Startup Instructions tab -->
                     <div id="tab-startup" class="project-tab-pane hidden space-y-4">
                         <div>
                             <label class="block text-sm text-gray-400 mb-1">Startup instructions</label>
-                            <p class="text-xs text-gray-500 mb-1">One command per line. When you say &quot;start the project&quot;, each runs in a new terminal.</p>
+                            <p class="text-xs text-gray-500 mb-1">One command per line. Each runs in a separate PTY on the server; output streams below.</p>
                             <textarea id="detail-startup" rows="6" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="npm run dev&#10;python manage.py runserver"></textarea>
+                            <div id="startup-actions-row" class="flex gap-2 mt-3">
+                                <button type="button" id="startup-start-btn" class="bg-[#22c55e] text-white px-4 py-2 rounded text-sm font-medium hover:bg-[#16a34a] transition-colors flex items-center gap-2">
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Start All Terminals
+                                </button>
+                                <button type="button" id="startup-terminate-all-btn" class="hidden bg-[#ef4444] text-white px-4 py-2 rounded text-sm font-medium hover:bg-[#dc2626] transition-colors flex items-center gap-2" disabled>
+                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+                                    Terminate All
+                                </button>
+                            </div>
+                        </div>
+                        <!-- Terminal Grid Container (shown when running) -->
+                        <div id="startup-terminal-grid" class="hidden grid grid-cols-2 gap-4 mt-4">
+                            <!-- Terminals will be rendered here -->
                         </div>
                     </div>
 </div>
                 <div id="tab-terminal" class="project-tab-pane hidden flex flex-col gap-2 p-2 flex-1 min-h-0 relative">
-                    <div class="flex items-center justify-between px-1">
-                        <div class="flex items-center gap-2">
+                    <!-- Input bar: input + model dropdown + send -->
+                    <div class="flex gap-2 px-1 items-center">
+                        <input type="text" id="terminal-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="What would you like me to build...">
+                        <select id="terminal-model-select" class="px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs focus:border-[#f97316] focus:outline-none cursor-pointer max-w-[180px]" title="Select CLI model">
+                            <option value="">Loading models...</option>
+                        </select>
+                        <button type="button" id="terminal-input-send" class="text-xs px-3 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Send instruction to pi"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</button>
+                    </div>
+                    <!-- Transcript panel (relative for floating controls) -->
+                    <div id="terminal-container" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10 bg-[#0d1117] p-3 font-mono text-sm leading-relaxed relative">
+                        <!-- Floating top-right controls inside transcript -->
+                        <div class="sticky top-0 float-right flex items-center gap-2 z-[5] bg-[#0d1117]/80 backdrop-blur-sm rounded-bl px-2 py-1">
                             <span id="terminal-status" class="w-2 h-2 rounded-full bg-gray-500"></span>
                             <span id="terminal-status-text" class="text-xs text-gray-400">Not connected</span>
+                            <button type="button" id="terminal-restart" class="text-xs px-2 py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>
+                            <button type="button" id="terminal-overview" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]" title="Summarize terminal output via AI and read aloud">Read Overview</button>
                         </div>
-                        <div class="flex gap-2">
-                            <button type="button" id="terminal-input-send" class="text-xs px-3 py-1.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Send instruction to pi"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"/></svg>Send</button>
-                            <button type="button" id="terminal-overview" class="text-xs px-3 py-1.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Summarize terminal output via AI and read aloud"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M12 6a7 7 0 010 12M8.464 15.536a5 5 0 010-7.072M12 18a7 7 0 010-12"/></svg>Read Out Overview</button>
-                            <button type="button" id="terminal-restart" class="text-xs px-3 py-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal">↻ Restart</button>
-                        </div>
-                    </div>
-                    <!-- Input bar -->
-                    <div class="flex gap-2 px-1">
-                        <input type="text" id="terminal-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm font-mono" placeholder="Type an instruction for pi...">
-                    </div>
-                    <!-- Transcript panel -->
-                    <div id="terminal-container" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10 bg-[#0d1117] p-3 font-mono text-sm leading-relaxed">
                         <div id="terminal-transcript">
                         <!-- transcript entries rendered here -->
                         </div>
@@ -307,9 +465,29 @@
         </div>
     </div>
 </div>
+<!-- Expanded terminal modal -->
+<div id="terminal-expand-modal" class="hidden">
+    <div id="terminal-expand-inner">
+        <div id="terminal-expand-header">
+            <span id="terminal-expand-title">Terminal</span>
+            <div id="terminal-expand-btns">
+                <button type="button" id="terminal-expand-collapse" class="terminal-expand-btn" title="Collapse back to grid (Esc)">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M5 1V5H1M7 11V7h4M5 5L1 1M7 7l4 4"/></svg>
+                    Collapse
+                </button>
+                <button type="button" id="terminal-expand-stop" class="terminal-expand-btn" title="Terminate this terminal">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>
+                    Stop
+                </button>
+            </div>
+        </div>
+        <div id="terminal-expand-body"></div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/shared/js/api.js"></script>
 <script src="/projects/static/js/projects.js"></script>
 {% endblock %}

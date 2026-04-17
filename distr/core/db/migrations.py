@@ -882,6 +882,20 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add board_name column: {e}")
 
+    # Handle database migration for kanban_board_id column in projects table
+    try:
+        with Session() as session:
+            session.execute(text("SELECT kanban_board_id FROM projects LIMIT 1"))
+    except Exception:
+        # Column doesn't exist, add it
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN kanban_board_id INTEGER DEFAULT NULL"))
+                conn.commit()
+                logger.info("Added kanban_board_id column to projects table")
+            except Exception as e:
+                logger.warning(f"Could not add kanban_board_id column: {e}")
+
     # Ensure board tables exist
     try:
         from .projects import BoardColumn, BoardTicket  # Imported here to avoid circular imports
@@ -1530,6 +1544,7 @@ def run_migrations():
                         raw_data TEXT,
                         processed BOOLEAN DEFAULT 0,
                         processed_date DATETIME,
+                        snapshot_group VARCHAR,
                         agent_chat_id INTEGER,
                         created_date DATETIME DEFAULT CURRENT_TIMESTAMP,
                         modified_date DATETIME DEFAULT CURRENT_TIMESTAMP
@@ -1578,6 +1593,24 @@ def run_migrations():
             except Exception as e:
                 if "duplicate column" not in str(e).lower():
                     logger.warning(f"Could not add {_wcol} to kanban_tickets: {e}")
+
+    # ── WhatsApp messages: add missing columns to existing tables ──
+    for _wcol, _wtype, _wdef in [
+        ("snapshot_group", "VARCHAR", "NULL"),
+        ("agent_chat_id", "INTEGER", "NULL"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_wcol} FROM whatsapp_messages LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE whatsapp_messages ADD COLUMN {_wcol} {_wtype} DEFAULT {_wdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_wcol} column to whatsapp_messages table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_wcol} to whatsapp_messages: {e}")
 
     # ── Masko (AI skin generation) provider columns ──
     for _wcol, _wtype, _wdef in [

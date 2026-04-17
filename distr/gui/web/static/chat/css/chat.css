@@ -283,7 +283,9 @@ body {
     padding: 4px 0;
 }
 .chat-context-menu-item {
-    display: block;
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
     width: 100%;
     padding: 8px 16px;
     border: none;

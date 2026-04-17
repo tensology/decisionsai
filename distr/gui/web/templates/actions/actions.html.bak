@@ -18,10 +18,10 @@
     </div>
 
     <!-- Action list context menu (right-click) -->
-    <div id="action-context-menu" class="fixed hidden z-50 min-w-[160px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
-        <button type="button" class="action-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>Edit</button>
-        <button type="button" class="action-ctx-play w-full text-left px-4 py-2 text-sm text-[#f97316] hover:bg-[#f97316]/20 flex items-center gap-2"><svg class="w-4 h-4" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clip-rule="evenodd"/></svg>Play</button>
-        <button type="button" class="action-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
+    <div id="action-context-menu" class="fixed hidden z-50 min-w-[140px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+        <button type="button" class="action-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Edit</button>
+        <button type="button" class="action-ctx-play w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Play</button>
+        <button type="button" class="action-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">Delete</button>
     </div>
 
     <!-- Right panel: empty state or detail form -->
@@ -55,9 +55,8 @@
                         <div>
                             <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
                             <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-[#3b82f6]/50 rounded text-sm text-gray-300 relative">
-                                <!-- Badges rendered by JS -->
-                                <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
-                                <input type="text" id="detail-triggers-input" style="border: 1px solid transparent; background: #152054; color: white; padding: 8px 12px; border-radius: 4px;" class="w-48 text-sm placeholder-gray-400 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
+                                <!-- Badges rendered by JS; add input below -->
+                                <input type="text" id="detail-triggers-input" class="w-48 px-3 py-2 bg-[#152054] text-white placeholder-gray-400 text-sm border-2 border-blue-500 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
                             </div>
                         </div>
                     </div>
@@ -70,21 +69,11 @@
                     <!-- Record tab -->
                     <div id="tab-record" class="action-tab-pane space-y-4">
                         <div class="flex flex-col items-center justify-center py-8 text-center">
-                            <p class="text-base text-gray-400 mb-2">Press Record to capture keyboard input and mouse movements.</p>
-                            <p class="text-base text-gray-400">Play from here or say: <span class="font-semibold text-[#f97316]">"run action [trigger_words]"</span> to execute.</p>
-                            <div class="flex gap-4 mt-4">
-                                <button type="button" id="detail-record-btn" class="px-6 py-3 rounded-full bg-red-600/80 text-white hover:bg-red-600 font-medium text-sm flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></svg>
-                                    <span>Record</span>
-                                </button>
-                                <button type="button" id="detail-stop-btn" class="px-6 py-3 rounded-full bg-gray-600 text-white hover:bg-gray-500 font-medium text-sm hidden flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>
-                                    <span>Stop</span>
-                                </button>
-                                <button type="button" id="detail-play-btn" class="px-6 py-3 rounded-full bg-green-600/80 text-white hover:bg-green-600 font-medium text-sm hidden flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg>
-                                    <span>Play</span>
-                                </button>
+                            <p class="text-sm text-gray-400 mb-4">Record keyboard and mouse movements with the desktop app running. Play back from here or by saying the action’s trigger word.</p>
+                            <div class="flex gap-3">
+                                <button type="button" id="detail-record-btn" class="px-6 py-3 rounded-full bg-red-600/80 text-white hover:bg-red-600 font-medium text-sm">Record</button>
+                                <button type="button" id="detail-stop-btn" class="px-6 py-3 rounded-full bg-gray-600 text-white hover:bg-gray-500 font-medium text-sm hidden">Stop</button>
+                                <button type="button" id="detail-play-btn" class="px-6 py-3 rounded-full bg-green-600/80 text-white hover:bg-green-600 font-medium text-sm hidden">Play</button>
                             </div>
                         </div>
                     </div>

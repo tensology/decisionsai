@@ -1,0 +1,193 @@
+    // ═════════════════════════════════════════════════════════════════════════
+    // ── Startup Terminals (xterm.js grid) ─────────────────────────────────────
+    var _startupTerminals = {};  // Map of terminalId -> { term, closeBtn, processId }
+    var _nextTerminalId = 0;
+
+    function startStartupTerminals() {
+        if (!currentProjectId) {
+            showSnackbar("Select a project first", "error");
+            return;
+        }
+        var startupText = document.getElementById("detail-startup")?.value || "";
+        var commands = startupText.split("\n").filter(function(line) {
+            return line.trim() !== "";
+        }).map(function(cmd) { return cmd.trim(); });
+        
+        if (!commands.length) {
+            showSnackbar("No startup commands to run", "info");
+            return;
+        }
+        
+        // Hide the textarea, show the grid
+        var grid = document.getElementById("startup-terminal-grid");
+        var btns = document.querySelectorAll("#tab-startup .flex.gap-2");
+        btns.forEach(function(b) { b.classList.add("hidden"); });
+        grid.classList.remove("hidden");
+        grid.innerHTML = "";
+        
+        // Show "Terminate All" button
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (termBtn) termBtn.disabled = false;
+        
+        // Create terminals - max 4 in grid (2x2)
+        commands.slice(0, 4).forEach(function(cmd, idx) {
+            createStartupTerminal(cmd, idx);
+        });
+        
+        if (commands.length > 4) {
+            showSnackbar("Only first 4 commands will appear in grid", "warning");
+        }
+    }
+
+    function createStartupTerminal(command, index) {
+        var termId = "term-" + (_nextTerminalId++);
+        var grid = document.getElementById("startup-terminal-grid");
+        if (!grid) return;
+        
+        // Create terminal card
+        var card = document.createElement("div");
+        card.className = "startup-terminal-card";
+        card.dataset.termId = termId;
+        
+        var shortCmd = command.length > 28 ? command.substring(0, 26) + ".." : command;
+        card.innerHTML = '<div class="startup-terminal-header">' +
+            '<span class="startup-terminal-title" title="' + esc(command) + '">' + esc(shortCmd) + '</span>' +
+            '<button class="startup-terminal-close" title="Close terminal">\u2716</button>' +
+            '</div>' +
+            '<div class="startup-terminal-xterm" id="' + termId + '-xterm"></div>';
+        grid.appendChild(card);
+        
+        // Initialize xterm.js
+        var xtermContainer = document.getElementById(termId + "-xterm");
+        var term = new XTerm({ 
+            convertEol: true,
+            cursorBlink: true,
+            fontSize: 11,
+            lineHeight: 1.2,
+            theme: {
+                background: "#0d1117",
+                foreground: "#e6edf3",
+                cursor: "#f97316",
+                selection: "rgba(249, 115, 22, 0.3)"
+            }
+        });
+        term.open(xtermContainer, true);
+        
+        // Resize term to fit container
+        setTimeout(function() { term.resize(term.cols, term.rows); }, 100);
+        
+        // Add close button handler
+        var closeBtn = card.querySelector(".startup-terminal-close");
+        closeBtn.addEventListener("click", function() {
+            closeStartupTerminal(termId);
+        });
+        
+        // Store reference
+        _startupTerminals[termId] = {
+            term: term,
+            closeBtn: closeBtn,
+            command: command,
+            processId: null
+        };
+        
+        // Start process via API
+        startTerminalProcess(termId);
+    }
+
+    function startTerminalProcess(termId) {
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+        
+        // Determine project folder
+        var project = projectsData.find(function(p) { return p.id === currentProjectId; });
+        var projectFolder = project?.folder_location || "/Users/paul/development/TENSOLOGY/DecisionsAI";
+        
+        apiFetch("/api/projects/startup-terminal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                project_id: currentProjectId,
+                command: termData.command,
+                working_dir: projectFolder
+            })
+        }).then(function(response) {
+            if (!response.success) {
+                showSnackbar("Failed to start terminal: " + (response.error || "unknown error"), "error");
+                return;
+            }
+            termData.processId = response.process_id;
+            connectTerminalsWebSocket(termId, response.socket_path);
+        }).catch(function(err) {
+            showSnackbar("Failed to start terminal process", "error");
+            console.error("Terminal start error:", err);
+        });
+    }
+
+    function connectTerminalsWebSocket(termId, socketPath) {
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+        
+        // For now, use a simple approach - since we can't use XTerm socket, 
+        // we'll create a read-only terminal that just shows static output
+        // In production, this would connect to a WebSocket server
+        
+        var term = termData.term;
+        term.writeln("\u001B[32m$ " + termData.command + "\u001B[0m");
+        term.writeln("Terminal running... (read-only mode)");
+        term.writeln("Use 'Terminate All' to stop this process.");
+        term.writeln("");
+        term.writeln("Note: Full interactive terminal requires WebSocket connection.");
+        term.writeln("This is a demonstration of the startup terminal grid layout.");
+        term.writeln("");
+        term.write("\u001B[33m[Ready]\u001B[0m\n");
+    }
+
+    function closeStartupTerminal(termId) {
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+        
+        // Kill process if running
+        if (termData.processId) {
+            apiFetch("/api/projects/kill-terminal", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ process_id: termData.processId })
+            }).catch(function() {});
+        }
+        
+        // Close xterm
+        if (termData.term) {
+            termData.term.destroy();
+        }
+        
+        // Remove from DOM and map
+        delete _startupTerminals[termId];
+        var card = document.querySelector(".startup-terminal-card[data-term-id='" + termId + "']");
+        if (card) card.remove();
+    }
+
+    function terminateAllStartupTerminals() {
+        if (!currentProjectId) {
+            showSnackbar("Select a project first", "error");
+            return;
+        }
+        
+        if (!confirm("Terminate all startup terminals?")) return;
+        
+        // Close all terminals
+        Object.keys(_startupTerminals).forEach(function(termId) {
+            closeStartupTerminal(termId);
+        });
+        
+        // Hide grid and show start button again
+        var grid = document.getElementById("startup-terminal-grid");
+        grid.innerHTML = "";
+        grid.classList.add("hidden");
+        var btns = document.querySelectorAll("#tab-startup .flex.gap-2");
+        btns.forEach(function(b) { b.classList.remove("hidden"); });
+        
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (termBtn) termBtn.disabled = true;
+        
+        showSnackbar("All terminals terminated", "success");
+    }

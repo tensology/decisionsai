@@ -89,13 +89,14 @@ If no project is specified, uses the currently active project.
         if not rpc.is_alive:
             return f"Terminal session for {project_display_name} is not running. Open the terminal tab to start it."
 
-        # Extract user commands and assistant responses (skip tool noise)
+        # Extract user commands, assistant responses, and tool activity
         messages = rpc.get_messages()
         if not messages:
-            return f"Terminal for {project_display_name} is empty — no commands have been sent yet."
+            return f"No terminal session for {project_display_name}. The CLI hasn't been used yet."
 
         user_cmds = []
         assistant_resps = []
+        tool_activity = []
         for msg in messages:
             role = msg.get("role", "")
             content = (msg.get("content", "") or "").strip()
@@ -103,23 +104,31 @@ If no project is specified, uses the currently active project.
                 user_cmds.append(content)
             elif role == "assistant" and content:
                 assistant_resps.append(content)
+            elif role == "tool_result":
+                tool_name = msg.get("tool_name", "") or "tool"
+                tool_result = (msg.get("tool_result", "") or "").strip()
+                is_error = msg.get("is_error", False)
+                status_marker = "\u274c" if is_error else "\u2705"
+                preview = tool_result[:150] + "..." if len(tool_result) > 150 else tool_result
+                tool_activity.append(f"{status_marker} {tool_name}: {preview}")
 
-        if not user_cmds and not assistant_resps:
+        if not user_cmds and not assistant_resps and not tool_activity:
             return f"Terminal for {project_display_name} has activity but no readable output yet."
 
-        # Build a concise, natural summary for the agent to use
-        last_cmd = user_cmds[-1] if user_cmds else None
-        last_resp = assistant_resps[-1] if assistant_resps else None
-
-        parts = [f"**{project_display_name} terminal:**"]
-        if last_cmd:
-            # Truncate for agent context
-            cmd_preview = last_cmd[:150] + "..." if len(last_cmd) > 150 else last_cmd
+        # Build summary — include last user command, last response, AND recent tool activity
+        parts = [f"**{project_display_name} CLI:**"]
+        if user_cmds:
+            last_cmd = user_cmds[-1]
+            cmd_preview = last_cmd[:200] + "..." if len(last_cmd) > 200 else last_cmd
             parts.append(f"Last command: {cmd_preview}")
-        if last_resp:
-            resp_preview = last_resp[:500] + "..." if len(last_resp) > 500 else last_resp
-            parts.append(f"Last output: {resp_preview}")
-        parts.append(f"({len(user_cmds)} command(s) total)")
+        if assistant_resps:
+            last_resp = assistant_resps[-1]
+            resp_preview = last_resp[:600] + "..." if len(last_resp) > 600 else last_resp
+            parts.append(f"Last response: {resp_preview}")
+        if tool_activity:
+            recent_tools = tool_activity[-5:]
+            parts.append(f"Recent tools: {'; '.join(recent_tools)}")
+        parts.append(f"({len(user_cmds)} command(s), {len(tool_activity)} tool call(s))")
 
         return "\n".join(parts)
 

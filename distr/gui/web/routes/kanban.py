@@ -455,6 +455,16 @@ def create_routes():
                 board.position = payload.position
             if payload.agent_enabled is not None:
                 board.agent_enabled = payload.agent_enabled
+            s.commit()
+            
+            # Sync Project's kanban_board_id reference if default_project_id changed
+            if payload.default_project_id is not None:
+                from distr.core.db.projects import Project
+                if board.default_project_id:
+                    proj = s.query(Project).filter(Project.id == board.default_project_id).first()
+                    if proj and proj.kanban_board_id != board.id:
+                        proj.kanban_board_id = board.id
+                        s.commit()
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -1728,6 +1738,22 @@ source: kanban_ticket_{t.id}
             msg.processed = True
             msg.processed_date = datetime.utcnow()
             return JSONResponse({"success": True})
+
+    @router.post("/kanban/whatsapp/messages/mark-snapshot-group")
+    async def mark_whatsapp_messages_snapshot_group(payload: dict):
+        """Mark multiple WhatsApp messages with a snapshot group ID."""
+        from distr.core.db import WhatsAppMessage
+        jid_phone = payload.get("jid_phone", "")
+        snapshot_group = payload.get("snapshot_group", "")
+        if not jid_phone or not snapshot_group:
+            raise HTTPException(400, "jid_phone and snapshot_group required")
+        with get_session() as s:
+            # Get all messages for this phone
+            msgs = s.query(WhatsAppMessage).filter(WhatsAppMessage.jid_phone == jid_phone).all()
+            for msg in msgs:
+                msg.snapshot_group = snapshot_group
+            s.commit()
+            return JSONResponse({"success": True, "count": len(msgs)})
 
     @router.get("/kanban/whatsapp/media")
     async def get_whatsapp_media(path: str = ""):

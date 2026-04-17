@@ -1,0 +1,42 @@
+Failed to load Board routes: No module named 'PyQt6'
+Traceback (most recent call last):
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 189, in create_app
+    from distr.gui.web.routes.board import create_routes as create_board_routes
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/routes/board.py", line 12, in <module>
+    from distr.core.integrations.board_manager import BoardManager
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/integrations/board_manager.py", line 8, in <module>
+    from distr.core.settings import load_settings_from_db
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/settings.py", line 23, in <module>
+    from distr.core.utils import load_settings_from_db as core_load_settings
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/utils.py", line 4, in <module>
+    from PyQt6.QtWidgets import QApplication
+ModuleNotFoundError: No module named 'PyQt6'
+Failed to load Chat routes: No module named 'PyQt6'
+Traceback (most recent call last):
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 229, in create_app
+    from distr.gui.web.routes.chat import create_routes as create_chat_routes
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/routes/chat.py", line 24, in <module>
+    from distr.core.settings import load_settings_from_db
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/settings.py", line 23, in <module>
+    from distr.core.utils import load_settings_from_db as core_load_settings
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/utils.py", line 4, in <module>
+    from PyQt6.QtWidgets import QApplication
+ModuleNotFoundError: No module named 'PyQt6'
+Failed to load Ticket Board routes: No module named 'PyQt6'
+Traceback (most recent call last):
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 418, in create_app
+    from distr.gui.web.routes.kanban import create_routes as create_kanban_routes
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/routes/kanban.py", line 20, in <module>
+    from distr.core.kanban.agent import _active_agents, KanbanAgentCheckIn
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/kanban/agent.py", line 17, in <module>
+    from distr.core.settings import load_settings_from_db
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/settings.py", line 23, in <module>
+    from distr.core.utils import load_settings_from_db as core_load_settings
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/core/utils.py", line 4, in <module>
+    from PyQt6.QtWidgets import QApplication
+ModuleNotFoundError: No module named 'PyQt6'
+INFO:     Started server process [34846]
+INFO:     Waiting for application startup.
+Ticket Board settings migration could not run: No module named 'PyQt6'
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)

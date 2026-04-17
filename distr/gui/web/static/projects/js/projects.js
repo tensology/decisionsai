@@ -157,12 +157,13 @@
         document.getElementById("detail-provider").value = project.provider || "";
         document.getElementById("detail-startup").value = project.startup_instructions || "";
         loadBoardProvidersAndSelect(project.provider || "", project.board_id || "", project.board_name || "");
+        loadKanbanBoardStatus();
 
         var tbody = document.getElementById("detail-items-body");
         var rows = [];
         (project.context_items || []).forEach(function(c) {
             var preview = (c.content || "").length > 80 ? (c.content || "").substring(0, 80) + "..." : (c.content || "");
-            rows.push("<tr class=\"border-t border-white/10\"><td class=\"px-3 py-2\">Context</td><td class=\"px-3 py-2\">" + escapeAttr(c.title) + "</td><td class=\"px-3 py-2 text-gray-500\">" + escapeAttr(preview) + "</td><td class=\"px-3 py-2\">—</td><td class=\"px-3 py-2 flex gap-1\"><button type=\"button\" class=\"context-edit p-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Edit\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z\"/></svg></button><button type=\"button\" class=\"context-remove p-1.5 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Remove\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16\"/></svg></button></td></tr>");
+            rows.push("<tr class=\"border-t border-white/10\"><td class=\"px-3 py-2\">Context</td><td class=\"px-3 py-2\">" + escapeAttr(c.title) + "</td><td class=\"px-3 py-2 text-gray-500\">" + escapeAttr(preview) + "</td><td class=\"px-3 py-2\">�</td><td class=\"px-3 py-2 flex gap-1\"><button type=\"button\" class=\"context-edit p-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Edit\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z\"/></svg></button><button type=\"button\" class=\"context-remove p-1.5 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Remove\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16\"/></svg></button></td></tr>");
         });
         (project.files || []).forEach(function(f) {
             rows.push("<tr class=\"border-t border-white/10\"><td class=\"px-3 py-2\">File</td><td class=\"px-3 py-2\">" + escapeAttr(f.filename) + "</td><td class=\"px-3 py-2 text-gray-500\">" + escapeAttr(f.description || "") + "</td><td class=\"px-3 py-2\"><button type=\"button\" class=\"file-open-finder px-2 py-1 text-xs rounded border border-white/20 text-gray-300 hover:bg-white/10\" data-id=\"" + f.id + "\">Open in Finder</button></td><td class=\"px-3 py-2\"><button type=\"button\" class=\"file-remove px-2 py-1 text-xs rounded border border-red-500/50 text-red-400 hover:bg-red-500/20\" data-id=\"" + f.id + "\">Remove</button></td></tr>");
@@ -203,6 +204,12 @@
     function selectProject(id) {
         var prevProjectId = currentProjectId;
         currentProjectId = id;
+
+        // Save running terminals for the project we're leaving
+        if (prevProjectId && prevProjectId !== id && Object.keys(_startupTerminals).length > 0) {
+            detachProjectTerminals(prevProjectId);
+        }
+
         return fetch("/api/projects/" + id)
             .then(function(r) {
                 if (!r.ok) throw new Error(r.status);
@@ -210,7 +217,35 @@
             })
             .then(function(project) {
                 showDetail(project);
-                // If the terminal tab is active and project changed, reconnect
+                switchTab("details");
+                // Reconnect any running terminals for this project.
+                // First check in-memory state (navigation), then query server (page reload).
+                if (Object.keys(_startupTerminals).length === 0) {
+                    if (_projectTerminalState[id] && _projectTerminalState[id].length) {
+                        reattachProjectTerminals(id);
+                    } else {
+                        // No running terminals for this project — reset buttons
+                        var sBtn = document.getElementById("startup-start-btn");
+                        var tBtn = document.getElementById("startup-terminate-all-btn");
+                        if (sBtn) sBtn.classList.remove("hidden");
+                        if (tBtn) { tBtn.classList.add("hidden"); tBtn.disabled = true; }
+                        // Page was reloaded — ask server if any sessions are still running
+                        apiFetch("/api/projects/" + id + "/startup-sessions")
+                            .then(function(data) {
+                                if (!data.sessions || !data.sessions.length) return;
+                                var alive = data.sessions.filter(function(s) { return s.alive; });
+                                if (!alive.length) return;
+                                _projectTerminalState[id] = alive.map(function(s) {
+                                    return { processId: s.process_id, command: s.command, pid: s.pid || null };
+                                });
+                                reattachProjectTerminals(id);
+                                // Switch to startup tab so the terminals are visible
+                                switchTab("startup");
+                            })
+                            .catch(function() {});
+                    }
+                }
+                // If the pi-RPC terminal tab is active and project changed, reconnect
                 if (prevProjectId !== id) {
                     var tabEl = document.getElementById("tab-terminal");
                     if (tabEl && !tabEl.classList.contains("hidden")) {
@@ -242,14 +277,6 @@
             tabContent.classList.add("hidden");
         } else {
             tabContent.classList.remove("hidden");
-        }
-        if (tabName === "board") {
-            var ps = document.getElementById("detail-provider");
-            var bs = document.getElementById("detail-board");
-            var bid = bs && bs.value ? bs.value : null;
-            var bname = bs && bs.options[bs.selectedIndex] ? bs.options[bs.selectedIndex].textContent.trim() : "";
-            loadBoardProvidersAndSelect(ps ? ps.value : "", bid, bname);
-            loadKanbanBoardStatus();
         }
         if (tabName === "terminal") {
             initTerminal();
@@ -327,7 +354,7 @@
             return;
         }
         boardSel.disabled = true;
-        boardSel.innerHTML = "<option value=\"\">Loading boards…</option>";
+        boardSel.innerHTML = "<option value=\"\">Loading boards�</option>";
         boardSel.value = "";
         fetch("/api/projects/boards?provider=" + encodeURIComponent(p))
             .then(function(r) { return r.ok ? r.json() : { boards: [] }; })
@@ -342,7 +369,7 @@
     }
 
     function renderTriggerBadges(words) {
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return;
         wrap.innerHTML = "";
         (words || []).forEach(function(word) {
@@ -359,7 +386,7 @@
     }
 
     function getTriggerWordsArray() {
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return [];
         var seen = {};
         var words = [];
@@ -383,7 +410,7 @@
         var raw = (input.value || "").trim();
         if (!raw) return;
         var toAdd = raw.split(",").map(function(s) { return s.trim(); }).filter(Boolean);
-        var wrap = document.getElementById("detail-triggers-wrap");
+        var wrap = document.getElementById("trigger-badges-flex");
         if (!wrap) return;
         var existing = new Set();
         wrap.querySelectorAll(".trigger-badge[data-word]").forEach(function(b) { existing.add((b.getAttribute("data-word") || "").trim()); });
@@ -773,6 +800,10 @@
             });
         });
 
+        // Startup terminal buttons
+        document.getElementById("startup-start-btn")?.addEventListener("click", startStartupTerminals);
+        document.getElementById("startup-terminate-all-btn")?.addEventListener("click", terminateAllStartupTerminals);
+
         var detailProvider = document.getElementById("detail-provider");
         if (detailProvider) detailProvider.addEventListener("change", onBoardProviderChange);
 
@@ -856,9 +887,12 @@
                 inp.value = "";
             }
         });
+
+        // Load CLI models into dropdown
+        loadCliModels();
     }
 
-    // ── Terminal Management (pi RPC mode) ───────────────────────────────
+    // ?? Terminal Management (pi RPC mode) ???????????????????????????????
 
     var _termWs = null;     // WebSocket connection to pi RPC
     var _termWsProjectId = null;  // Which project the WS is connected to
@@ -877,7 +911,7 @@
             }
             return;
         }
-        // Different project (or first connection) — destroy old and reconnect
+        // Different project (or first connection) � destroy old and reconnect
         destroyTerminal();
         var transcript = document.getElementById("terminal-transcript");
         if (transcript) transcript.innerHTML = '';
@@ -962,7 +996,7 @@
         if (!transcript) return;
 
         switch (msg.type) {
-            // ── Connection ──
+            // ?? Connection ??
             case "connected":
                 updateTerminalStatus("connected");
                 _clearTerminalState();
@@ -974,7 +1008,7 @@
                 }
                 break;
 
-            // ── Agent lifecycle ──
+            // ?? Agent lifecycle ??
             case "agent_start":
                 _termAgentRunning = true;
                 break;
@@ -987,12 +1021,12 @@
                 scrollTranscript();
                 break;
 
-            // ── Turn lifecycle — no visual output ──
+            // ?? Turn lifecycle � no visual output ??
             case "turn_start":
             case "turn_end":
                 break;
 
-            // ── Message streaming (the main event) ──
+            // ?? Message streaming (the main event) ??
             case "message_update": {
                 var evt = msg.assistantMessageEvent;
                 if (!evt) break;
@@ -1012,24 +1046,24 @@
                         updateAssistantMessage(transcript, _currentAssistantText);
                         break;
                     case "text_end":
-                        // Text block complete — already shown
+                        // Text block complete � already shown
                         break;
                     case "thinking_start":
                     case "thinking_delta":
                     case "thinking_end":
-                        // Thinking blocks — don't render
+                        // Thinking blocks � don't render
                         break;
                     case "toolcall_start":
-                        // LLM decided to call a tool — DON'T render here.
+                        // LLM decided to call a tool � DON'T render here.
                         // tool_execution_start will fire with the real args and name.
                         // Just finalize any in-progress assistant text.
                         if (_currentAssistantEl) finalizeAssistantMessage(transcript);
                         break;
                     case "toolcall_delta":
-                        // Argument streaming — skip
+                        // Argument streaming � skip
                         break;
                     case "toolcall_end":
-                        // Tool call object fully resolved — skip, tool_execution_start shows it
+                        // Tool call object fully resolved � skip, tool_execution_start shows it
                         break;
                     case "done":
                         if (_currentAssistantEl) finalizeAssistantMessage(transcript);
@@ -1041,17 +1075,29 @@
                 break;
             }
 
-            // ── Message start/end ──
+            // ?? Message start/end ??
             case "message_start": {
                 var m = msg.message || {};
                 if (m.role === "assistant") {
-                    // Start a new assistant block — but message_update "start" may also do this
                     if (!_currentAssistantEl) {
                         _currentAssistantText = "";
                         startAssistantMessage(transcript);
                     }
+                } else if (m.role === "user") {
+                    // Show user messages that came from the backend (e.g., agent-sent prompts)
+                    // Check if we already rendered this locally (from sendTerminalPrompt)
+                    var content = m.content || "";
+                    if (typeof content === "string") content = content;
+                    else if (Array.isArray(content)) content = content.filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join("");
+                    if (content) {
+                        // Check if we already rendered this exact prompt locally
+                        var existing = transcript.querySelector('[data-prompt-text="' + content.substring(0, 100).replace(/"/g, '&quot;') + '"]');
+                        if (!existing) {
+                            appendTranscriptLine(transcript, "user", content);
+                            scrollTranscript();
+                        }
+                    }
                 }
-                // User messages already shown locally — skip entirely
                 break;
             }
             case "message_end": {
@@ -1062,7 +1108,7 @@
                 break;
             }
 
-            // ── Tool execution (the real tool call) ──
+            // ?? Tool execution (the real tool call) ??
             case "tool_execution_start": {
                 if (_currentAssistantEl) finalizeAssistantMessage(transcript);
                 var tName = msg.toolName || "tool";
@@ -1096,7 +1142,7 @@
                 break;
             }
 
-            // ── Compaction ──
+            // ?? Compaction ??
             case "compaction_start":
                 appendTranscriptLine(transcript, "system", "Compacting context...");
                 break;
@@ -1104,46 +1150,46 @@
                 appendTranscriptLine(transcript, "system", "Context compacted");
                 break;
 
-            // ── Auto-retry ──
+            // ?? Auto-retry ??
             case "auto_retry_start":
             case "auto_retry_end":
                 break;
 
-            // ── Queue updates ──
+            // ?? Queue updates ??
             case "queue_update":
                 break;
 
-            // ── Extension UI ──
+            // ?? Extension UI ??
             case "extension_ui_request":
                 // Fire-and-forget notifications like setStatus, notify
                 var method = msg.method || "";
                 if (method === "notify") {
                     appendTranscriptLine(transcript, "system", msg.message || "");
                 } else if (method === "setStatus") {
-                    // Status bar text — skip
+                    // Status bar text � skip
                 }
                 break;
             case "extension_error":
                 appendTranscriptLine(transcript, "error", msg.error || "Extension error");
                 break;
 
-            // ── RPC responses ──
+            // ?? RPC responses ??
             case "response":
-                // Command responses (prompt, steer, abort, etc.) — not rendered
+                // Command responses (prompt, steer, abort, etc.) � not rendered
                 break;
 
-            // ── Error from backend ──
+            // ?? Error from backend ??
             case "error":
                 appendTranscriptLine(transcript, "error", msg.message || "Unknown error");
                 updateTerminalStatus("error");
                 break;
 
-            // ── Keepalives ──
+            // ?? Keepalives ??
             case "pong":
             case "ping":
                 break;
 
-            // ── Unknown — suppress, don't render JSON ──
+            // ?? Unknown � suppress, don't render JSON ??
             default:
                 break;
         }
@@ -1188,7 +1234,7 @@
     function appendTranscriptLine(transcript, type, text) {
         var el = document.createElement("div");
         el.className = "transcript-msg " + escapeAttr(type);
-        // Tool calls and results may contain long text — preserve whitespace
+        // Tool calls and results may contain long text � preserve whitespace
         if (type === "tool-result" || type === "tool-error" || type === "assistant") {
             el.innerHTML = renderMarkdownLite(text);
         } else {
@@ -1235,7 +1281,7 @@
         // Line breaks
         s = s.replace(/\n/g, "<br>");
         // Streaming cursor
-        s += "<span class=\"streaming-cursor\">▌</span>";
+        s += "<span class=\"streaming-cursor\">?</span>";
         return s;
     }
 
@@ -1345,10 +1391,77 @@
         _clearTerminalState();
     }
 
+    // ?? CLI Model Dropdown ???????????????????????????????????????????
+
+    function loadCliModels() {
+        var sel = document.getElementById("terminal-model-select");
+        if (!sel) return;
+
+        apiFetch("/api/projects/cli-models")
+            .then(function(data) {
+                sel.innerHTML = "";
+                var models = data.models || [];
+                var current = data.current_model || "";
+                var currentProvider = data.current_provider || "";
+                if (!models.length) {
+                    var opt = document.createElement("option");
+                    opt.value = ""; opt.textContent = current || "(no models)";
+                    sel.appendChild(opt);
+                    return;
+                }
+                // Group by provider
+                var groups = {};
+                models.forEach(function(m) {
+                    var p = m.provider || "other";
+                    if (!groups[p]) groups[p] = [];
+                    groups[p].push(m);
+                });
+                Object.keys(groups).sort().forEach(function(prov) {
+                    var og = document.createElement("optgroup");
+                    og.label = prov.charAt(0).toUpperCase() + prov.slice(1);
+                    groups[prov].forEach(function(m) {
+                        var opt = document.createElement("option");
+                        opt.value = m.id;
+                        opt.dataset.provider = m.provider || "";
+                        opt.textContent = m.name || m.id;
+                        if (m.id === current) opt.selected = true;
+                        og.appendChild(opt);
+                    });
+                    sel.appendChild(og);
+                });
+                // If current not in list, add it
+                if (current && !models.some(function(m) { return m.id === current; })) {
+                    var opt = document.createElement("option");
+                    opt.value = current; opt.dataset.provider = currentProvider; opt.textContent = current + " (current)"; opt.selected = true;
+                    sel.insertBefore(opt, sel.firstChild);
+                }
+            })
+            .catch(function() {
+                sel.innerHTML = '<option value="">Failed to load</option>';
+            });
+
+        sel.addEventListener("change", function() {
+            var opt = sel.options[sel.selectedIndex];
+            var model = sel.value;
+            var provider = opt ? (opt.dataset.provider || "") : "";
+            if (!model) return;
+            apiFetch("/api/projects/cli-model", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ model: model, provider: provider })
+            }).then(function(resp) {
+                if (resp.success) showSnackbar("Model set to " + model, "success");
+                else showSnackbar("Failed to set model", "error");
+            }).catch(function() {
+                showSnackbar("Failed to set model", "error");
+            });
+        });
+    }
+
     function sendTerminalPrompt(instruction) {
         if (!instruction || !instruction.trim()) return;
         if (!_termWs || _termWs.readyState !== WebSocket.OPEN) {
-            showSnackbar("Terminal not connected — try restarting", "error");
+            showSnackbar("Terminal not connected � try restarting", "error");
             return;
         }
         // Show the user message immediately (pi will also echo it via message_start,
@@ -1389,7 +1502,7 @@
             .then(function(data) {
                 if (data.summary) {
                     if (overviewText) overviewText.textContent = data.summary;
-                    showSnackbar("Overview ready — speaking aloud", "success", { duration: 15000 });
+                    showSnackbar("Overview ready � speaking aloud", "success", { duration: 15000 });
                 } else if (data.error) {
                     if (overviewText) overviewText.textContent = "Error: " + data.error;
                     showSnackbar(data.error, "error");
@@ -1418,6 +1531,544 @@
         updateTerminalStatus("disconnected");
     }
 
+    // ?????????????????????????????????????????????????????????????????????????
+    // ?? Startup Terminals (xterm.js grid) ?????????????????????????????????????
+    var _startupTerminals = {};  // Map of terminalId -> { term, closeBtn, processId }
+    var _nextTerminalId = 0;
+    // Per-project terminal persistence: projectId -> [{termId, processId, command}]
+    var _projectTerminalState = {};
+
+    // Register a URL link provider on an xterm instance so URLs are clickable.
+    function _registerLinkProvider(term) {
+        if (typeof term.registerLinkProvider !== "function") return;
+        var urlRe = /https?:\/\/[^\s\x1b\x07\x08\x0d\x0a"'<>[\]{}|\\^`]+/g;
+        term.registerLinkProvider({
+            provideLinks: function(y, callback) {
+                var line = term.buffer && term.buffer.active && term.buffer.active.getLine(y - 1);
+                if (!line) { callback([]); return; }
+                var text = line.translateToString(true);
+                var links = [];
+                var m;
+                urlRe.lastIndex = 0;
+                while ((m = urlRe.exec(text)) !== null) {
+                    (function(url, startX) {
+                        links.push({
+                            text: url,
+                            range: {
+                                start: { x: startX + 1, y: y },
+                                end: { x: startX + url.length, y: y }
+                            },
+                            activate: function() { window.open(url, "_blank"); }
+                        });
+                    })(m[0], m.index);
+                }
+                callback(links);
+            }
+        });
+    }
+
+    function startStartupTerminals() {
+        if (!currentProjectId) {
+            showSnackbar("Select a project first", "error");
+            return;
+        }
+        var TermCtor = typeof window.Terminal === "function" ? window.Terminal : (typeof window.XTerm === "function" ? window.XTerm : null);
+        if (!TermCtor) {
+            showSnackbar("xterm.js failed to load � refresh the page", "error");
+            return;
+        }
+        var startupText = document.getElementById("detail-startup")?.value || "";
+        var commands = startupText.split("\n")
+            .map(function(line) { return line.trim(); })
+            .filter(function(line) {
+                return line.length && line.charAt(0) !== "#";
+            });
+
+        if (!commands.length) {
+            showSnackbar("No startup commands to run (empty or only # comments)", "info");
+            return;
+        }
+
+        var grid = document.getElementById("startup-terminal-grid");
+        var startBtn = document.getElementById("startup-start-btn");
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (startBtn) startBtn.classList.add("hidden");
+        if (termBtn) {
+            termBtn.classList.remove("hidden");
+            termBtn.disabled = false;
+        }
+        if (grid) {
+            grid.classList.remove("hidden");
+            grid.innerHTML = "";
+        }
+
+        commands.forEach(function(cmd, idx) {
+            createStartupTerminal(cmd, idx, TermCtor);
+        });
+    }
+
+    function createStartupTerminal(command, index, TermCtor) {
+        var termId = "term-" + (_nextTerminalId++);
+        var grid = document.getElementById("startup-terminal-grid");
+        if (!grid) return;
+
+        var card = document.createElement("div");
+        card.className = "startup-terminal-card";
+        card.dataset.termId = termId;
+
+        card.innerHTML = '<div class="startup-terminal-header">' +
+            '<span class="startup-terminal-title" title="' + escapeAttr(command) + '">PID: —</span>' +
+            '<div class="startup-terminal-btns">' +
+            '<button type="button" class="startup-terminal-expand" title="Expand">' +
+            '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M11 7v4H7M1 5l4-4M11 7l-4 4"/></svg>' +
+            '</button>' +
+            '<button type="button" class="startup-terminal-close" title="Close terminal">\u2716</button>' +
+            '</div>' +
+            '</div>' +
+            '<div class="startup-terminal-xterm" id="' + termId + '-xterm"></div>';
+        grid.appendChild(card);
+
+        var xtermContainer = document.getElementById(termId + "-xterm");
+        var term = new TermCtor({
+            convertEol: true,
+            cursorBlink: true,
+            cursorStyle: "bar",
+            fontSize: 10,
+            lineHeight: 1.2,
+            scrollback: 5000,
+            fontFamily: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
+            theme: {
+                background: "#0d1117",
+                foreground: "#e6edf3",
+                cursor: "#f97316",
+                selection: "rgba(249, 115, 22, 0.3)"
+            }
+        });
+        term.open(xtermContainer, true);
+        _registerLinkProvider(term);
+
+        var closeBtn = card.querySelector(".startup-terminal-close");
+        closeBtn.addEventListener("click", function() { closeStartupTerminal(termId); });
+
+        var expandBtn = card.querySelector(".startup-terminal-expand");
+        expandBtn.addEventListener("click", function() { expandTerminal(termId); });
+
+        _startupTerminals[termId] = {
+            term: term,
+            closeBtn: closeBtn,
+            command: command,
+            processId: null,
+            ws: null,
+            _roTarget: xtermContainer
+        };
+
+        function measureAndResize() {
+            if (!xtermContainer || !term.element) return;
+            var w = xtermContainer.clientWidth - 16 || 400;  // subtract padding
+            var h = xtermContainer.clientHeight - 8 || 180;  // subtract padding
+            if (w <= 0 || h <= 0) return;
+            var cols = Math.max(20, Math.floor(w / 7.2));
+            var rows = Math.max(5, Math.floor(h / 14));
+            try { term.resize(cols, rows); } catch (e) {}
+        }
+        setTimeout(function() {
+            measureAndResize();
+            term.reset();
+            term.writeln("\x1b[33mStarting\x1b[0m " + command + " ...");
+        }, 50);
+
+        var ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(function() {
+            measureAndResize();
+            var td = _startupTerminals[termId];
+            if (td && td.ws && td.ws.readyState === WebSocket.OPEN) {
+                try {
+                    td.ws.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+                } catch (e2) {}
+            }
+        }) : null;
+        if (ro && xtermContainer) ro.observe(xtermContainer);
+
+        _startupTerminals[termId]._resizeObserver = ro;
+
+        startTerminalProcess(termId);
+    }
+
+    function startTerminalProcess(termId) {
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+        
+        // Determine project folder
+        var project = projectsData.find(function(p) { return p.id === currentProjectId; });
+        var projectFolder = project?.folder_location || "/Users/paul/development/TENSOLOGY/DecisionsAI";
+        
+        apiFetch("/api/projects/startup-terminal", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                project_id: currentProjectId,
+                command: termData.command,
+                working_dir: projectFolder
+            })
+        }).then(function(response) {
+            if (!response.success) {
+                showSnackbar("Failed to start terminal: " + (response.error || "unknown error"), "error");
+                return;
+            }
+            termData.processId = response.process_id;
+            termData.osPid = response.pid || null;
+            // Update title to show OS PID
+            var titleEl = document.querySelector(".startup-terminal-card[data-term-id='" + termId + "'] .startup-terminal-title");
+            if (titleEl && response.pid) titleEl.textContent = "PID " + response.pid;
+            connectTerminalsWebSocket(termId, response.process_id);
+        }).catch(function(err) {
+            showSnackbar("Failed to start terminal process: " + (err && err.message ? err.message : ""), "error");
+            console.error("Terminal start error:", err);
+        });
+    }
+
+    function connectTerminalsWebSocket(termId, processId) {
+        var termData = _startupTerminals[termId];
+        if (!termData || !processId) return;
+
+        var term = termData.term;
+        var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
+        var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        var wsUrl = wsProtocol + "//" + window.location.host + "/api/projects/startup-terminal/" + encodeURIComponent(processId) + "/ws";
+        if (token) {
+            wsUrl += "?internal_token=" + encodeURIComponent(token);
+        }
+
+        var ws = new WebSocket(wsUrl);
+        termData.ws = ws;
+
+        ws.onopen = function() {
+            try {
+                ws.send(JSON.stringify({ type: "resize", rows: term.rows, cols: term.cols }));
+            } catch (e1) {}
+            term.onData(function(data) {
+                if (ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(JSON.stringify({ type: "input", data: data }));
+                    } catch (e2) {}
+                }
+            });
+        };
+
+        ws.onmessage = function(ev) {
+            try {
+                var msg = JSON.parse(ev.data);
+                if (msg.type === "output" && msg.data) {
+                    term.write(msg.data);
+                } else if (msg.type === "exit") {
+                    term.writeln("");
+                    term.writeln("\x1b[90m[Process ended]\x1b[0m");
+                }
+            } catch (e3) {}
+        };
+
+        ws.onerror = function() {
+            term.writeln("\r\n\x1b[31m[WebSocket error]\x1b[0m");
+        };
+
+        ws.onclose = function(ev) {
+            termData.ws = null;
+            if (ev.code === 1008) {
+                term.writeln("\r\n\x1b[31m[Session not found — process may have exited before connecting]\x1b[0m");
+            } else if (ev.code !== 1000) {
+                term.writeln("\r\n\x1b[90m[Disconnected]\x1b[0m");
+            }
+        };
+    }
+
+    // Detach all terminals for a project without killing backend processes.
+    // Called when navigating away from a project.
+    function detachProjectTerminals(projectId) {
+        if (!projectId) return;
+        var saved = [];
+        Object.keys(_startupTerminals).forEach(function(termId) {
+            var td = _startupTerminals[termId];
+            if (td.processId) {
+                saved.push({ termId: termId, processId: td.processId, command: td.command || "", pid: td.osPid || null });
+            }
+            // Disconnect WS silently
+            if (td.ws) {
+                try { td.ws.onclose = null; td.ws.onerror = null; td.ws.close(); } catch(e) {}
+                td.ws = null;
+            }
+            if (td._resizeObserver) {
+                try { td._resizeObserver.disconnect(); } catch(e) {}
+            }
+            if (td.term) {
+                try { td.term.dispose(); } catch(e) {}
+            }
+        });
+        if (saved.length) {
+            _projectTerminalState[projectId] = saved;
+        }
+        _startupTerminals = {};
+        var grid = document.getElementById("startup-terminal-grid");
+        if (grid) { grid.innerHTML = ""; grid.classList.add("hidden"); }
+        // Reset buttons to default state (no terminals running)
+        var startBtn = document.getElementById("startup-start-btn");
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (startBtn) startBtn.classList.remove("hidden");
+        if (termBtn) { termBtn.classList.add("hidden"); termBtn.disabled = true; }
+    }
+
+    // Reconnect terminals for a project that was previously running.
+    function reattachProjectTerminals(projectId) {
+        var saved = _projectTerminalState[projectId];
+        if (!saved || !saved.length) return;
+
+        var TermCtor = typeof window.Terminal === "function" ? window.Terminal : null;
+        if (!TermCtor) return;
+
+        var grid = document.getElementById("startup-terminal-grid");
+        var startBtn = document.getElementById("startup-start-btn");
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (startBtn) startBtn.classList.add("hidden");
+        if (termBtn) { termBtn.classList.remove("hidden"); termBtn.disabled = false; }
+        if (grid) { grid.classList.remove("hidden"); grid.innerHTML = ""; }
+
+        saved.forEach(function(entry) {
+            createStartupTerminalForProcess(entry.command, entry.processId, TermCtor, entry.pid || null);
+        });
+    }
+
+    // Create a terminal card and connect it to an already-running backend process.
+    function createStartupTerminalForProcess(command, processId, TermCtor, osPid) {
+        var termId = "term-" + (_nextTerminalId++);
+        var grid = document.getElementById("startup-terminal-grid");
+        if (!grid) return;
+
+        var card = document.createElement("div");
+        card.className = "startup-terminal-card";
+        card.dataset.termId = termId;
+        var titleText = osPid ? "PID " + osPid : "PID —";
+        card.innerHTML = '<div class="startup-terminal-header">' +
+            '<span class="startup-terminal-title" title="' + escapeAttr(command) + '">' + escapeAttr(titleText) + '</span>' +
+            '<div class="startup-terminal-btns">' +
+            '<button type="button" class="startup-terminal-expand" title="Expand">' +
+            '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M11 7v4H7M1 5l4-4M11 7l-4 4"/></svg>' +
+            '</button>' +
+            '<button type="button" class="startup-terminal-close" title="Close terminal">\u2716</button>' +
+            '</div>' +
+            '</div>' +
+            '<div class="startup-terminal-xterm" id="' + termId + '-xterm"></div>';
+        grid.appendChild(card);
+
+        var xtermContainer = document.getElementById(termId + "-xterm");
+        var term = new TermCtor({
+            convertEol: true, cursorBlink: true, cursorStyle: "bar",
+            fontSize: 10, lineHeight: 1.2,
+            fontFamily: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
+            theme: { background: "#0d1117", foreground: "#e6edf3", cursor: "#f97316", selection: "rgba(249,115,22,0.3)" }
+        });
+        term.open(xtermContainer);
+        _registerLinkProvider(term);
+
+        var closeBtn = card.querySelector(".startup-terminal-close");
+        closeBtn.addEventListener("click", function() { closeStartupTerminal(termId); });
+
+        var expandBtn2 = card.querySelector(".startup-terminal-expand");
+        if (expandBtn2) expandBtn2.addEventListener("click", function() { expandTerminal(termId); });
+
+        _startupTerminals[termId] = { term: term, command: command, processId: processId, ws: null, _roTarget: xtermContainer };
+
+        function measureAndResize() {
+            if (!xtermContainer || !term.element) return;
+            var w = xtermContainer.clientWidth - 16 || 400;
+            var h = xtermContainer.clientHeight - 8 || 180;
+            if (w <= 0 || h <= 0) return;
+            try { term.resize(Math.max(20, Math.floor(w / 7.2)), Math.max(5, Math.floor(h / 14))); } catch(e) {}
+        }
+        var ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(measureAndResize) : null;
+        if (ro) { ro.observe(xtermContainer); _startupTerminals[termId]._resizeObserver = ro; }
+
+        setTimeout(function() { measureAndResize(); }, 50);
+        connectTerminalsWebSocket(termId, processId);
+    }
+
+    function closeStartupTerminal(termId) {
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+
+        if (termData.ws) {
+            try {
+                termData.ws.onclose = null;
+                termData.ws.close();
+            } catch (e) {}
+            termData.ws = null;
+        }
+        if (termData._resizeObserver) {
+            try {
+                if (termData._roTarget) termData._resizeObserver.unobserve(termData._roTarget);
+            } catch (e2) {}
+            try { termData._resizeObserver.disconnect(); } catch (e2b) {}
+        }
+
+        if (termData.processId) {
+            apiFetch("/api/projects/kill-terminal", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ process_id: termData.processId })
+            }).catch(function() {});
+        }
+
+        if (termData.term) {
+            try { termData.term.dispose(); } catch (e3) {}
+        }
+
+        delete _startupTerminals[termId];
+        var card = document.querySelector(".startup-terminal-card[data-term-id='" + termId + "']");
+        if (card) card.remove();
+
+        if (Object.keys(_startupTerminals).length === 0) {
+            restoreStartupTerminalChrome();
+        }
+    }
+
+    // ── Terminal expand / collapse ───────────────────────────────────────────
+    var _expandedTermId = null;
+    var _expandOriginalParent = null;
+
+    function expandTerminal(termId) {
+        if (_expandedTermId) collapseTerminal();  // only one at a time
+
+        var termData = _startupTerminals[termId];
+        if (!termData) return;
+
+        var modal = document.getElementById("terminal-expand-modal");
+        var body  = document.getElementById("terminal-expand-body");
+        var title = document.getElementById("terminal-expand-title");
+        if (!modal || !body) return;
+
+        var xtermEl = termData._roTarget;
+        if (!xtermEl) return;
+
+        _expandedTermId = termId;
+        _expandOriginalParent = xtermEl.parentNode;
+
+        // Read PID from the card's title element (always up-to-date)
+        var cardTitle = document.querySelector(".startup-terminal-card[data-term-id='" + termId + "'] .startup-terminal-title");
+        title.textContent = cardTitle ? cardTitle.textContent : ("PID " + (termData.osPid || "—"));
+
+        // Move the xterm container into the modal body
+        body.appendChild(xtermEl);
+        // Enable scrollbar in expanded view
+        xtermEl.style.overflow = "auto";
+        var viewport = xtermEl.querySelector(".xterm-viewport");
+        if (viewport) viewport.style.overflowY = "auto";
+        modal.classList.remove("hidden");
+
+        // Resize xterm to fill the modal, then scroll to bottom
+        requestAnimationFrame(function() {
+            if (!termData.term || !termData.term.element) return;
+            var w = body.clientWidth - 16;
+            var h = body.clientHeight - 16;
+            if (w > 0 && h > 0) {
+                try {
+                    termData.term.resize(
+                        Math.max(20, Math.floor(w / 7.2)),
+                        Math.max(5,  Math.floor(h / 14))
+                    );
+                } catch(e) {}
+            }
+            try { termData.term.scrollToBottom(); } catch(e) {}
+        });
+    }
+
+    function collapseTerminal() {
+        if (!_expandedTermId) return;
+
+        var termData = _startupTerminals[_expandedTermId];
+        var modal = document.getElementById("terminal-expand-modal");
+        modal.classList.add("hidden");
+
+        if (termData && _expandOriginalParent) {
+            // Restore scrollbar hidden state for the card view
+            var xtermEl2 = termData._roTarget;
+            xtermEl2.style.overflow = "hidden";
+            var viewport2 = xtermEl2.querySelector(".xterm-viewport");
+            if (viewport2) viewport2.style.overflowY = "";
+            // Move the xterm container back to its card
+            _expandOriginalParent.appendChild(xtermEl2);
+            // Resize back to card dimensions
+            requestAnimationFrame(function() {
+                if (!termData.term || !termData.term.element) return;
+                var cont = termData._roTarget;
+                var w = cont.clientWidth - 16;
+                var h = cont.clientHeight - 8;
+                if (w > 0 && h > 0) {
+                    try {
+                        termData.term.resize(
+                            Math.max(20, Math.floor(w / 7.2)),
+                            Math.max(5,  Math.floor(h / 14))
+                        );
+                    } catch(e) {}
+                }
+            });
+        }
+
+        _expandedTermId = null;
+        _expandOriginalParent = null;
+    }
+
+    // Wire up modal buttons and ESC key
+    document.addEventListener("keydown", function(e) {
+        if (e.key === "Escape" && _expandedTermId) collapseTerminal();
+    });
+    document.addEventListener("DOMContentLoaded", function() {
+        var collapseBtn = document.getElementById("terminal-expand-collapse");
+        if (collapseBtn) collapseBtn.addEventListener("click", collapseTerminal);
+
+        var stopBtn = document.getElementById("terminal-expand-stop");
+        if (stopBtn) stopBtn.addEventListener("click", function() {
+            var termId = _expandedTermId;
+            collapseTerminal();          // restore card first
+            if (termId) closeStartupTerminal(termId);  // then kill process
+        });
+
+        // Click backdrop to collapse (not stop)
+        var modal = document.getElementById("terminal-expand-modal");
+        if (modal) modal.addEventListener("click", function(e) {
+            if (e.target === modal) collapseTerminal();
+        });
+    });
+    // ────────────────────────────────────────────────────────────────────────
+
+    function restoreStartupTerminalChrome() {
+        var grid = document.getElementById("startup-terminal-grid");
+        if (grid) {
+            grid.innerHTML = "";
+            grid.classList.add("hidden");
+        }
+        var startBtn = document.getElementById("startup-start-btn");
+        var termBtn = document.getElementById("startup-terminate-all-btn");
+        if (startBtn) startBtn.classList.remove("hidden");
+        if (termBtn) {
+            termBtn.classList.add("hidden");
+            termBtn.disabled = true;
+        }
+    }
+
+    function terminateAllStartupTerminals() {
+        if (!currentProjectId) {
+            showSnackbar("Select a project first", "error");
+            return;
+        }
+        
+        if (!confirm("Terminate all startup terminals?")) return;
+        
+        // Close all terminals and clear persisted state for this project
+        Object.keys(_startupTerminals).forEach(function(termId) {
+            closeStartupTerminal(termId);
+        });
+        delete _projectTerminalState[currentProjectId];
+        restoreStartupTerminalChrome();
+        showSnackbar("All terminals terminated", "success");
+    }
+    
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);
     } else {

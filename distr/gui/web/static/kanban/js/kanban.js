@@ -247,12 +247,7 @@
         if (!extCtxMenuData) return;
         var src = extCtxMenuData.source, bid = extCtxMenuData.boardId;
         hideExtBoardContextMenu();
-        selectBoard(src, bid, extCtxMenuData.boardUrl);
-        setTimeout(function() {
-            if (currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira")) {
-                openExternalBoardConfigModal(src, bid);
-            }
-        }, 500);
+        openExternalBoardConfigModal(src, bid);
     }
     function extCtxCreateTicket() {
         if (!extCtxMenuData) return;
@@ -1886,12 +1881,18 @@
                 // Local ticket
                 apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
                     var text = t.title + (t.description ? "\n\n" + t.description : "");
+                    if (t.files && t.files.length) {
+                        text += "\n\nAttachments:\n" + t.files.map(function(f) { return "- " + (f.download_url || f.url); }).join("\n");
+                    }
                     navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
                 });
             } else if (window._extTicketData) {
                 // External ticket
                 var ext = window._extTicketData;
                 var text = ext.title + (ext.description ? "\n\n" + stripHtml(ext.description) : "");
+                if (ext.media && ext.media.length) {
+                    text += "\n\nAttachments:\n" + ext.media.map(function(m) { return "- " + (m.url || m.download_url || ""); }).join("\n");
+                }
                 navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
             }
         });
@@ -2257,6 +2258,8 @@
                 html += '<span class="text-[10px] text-gray-500">' + timeStr + '</span>';
                 if (isMine) html += '<span class="text-[10px] text-blue-400">✓✓</span>';
                 if (msg.processed) html += '<span class="text-[10px] text-green-400" title="Processed">✓</span>';
+                // Show snapshot group if message was part of a snapshot
+                if (msg.snapshot_group) html += '<span class="text-[10px] text-[#f97316]" title="Snapshot: ' + esc(msg.snapshot_group) + '">📷</span>';
                 html += '</div>';
 
                 html += '</div></div>';
@@ -2346,31 +2349,129 @@
     function waCtxSnapshotToBoard() {
         hideWaChatContextMenu();
         if (!waCtxMenuData) return;
-        // First show board picker, then snapshot all unprocessed messages
         var phone = waCtxMenuData.phone;
+        var threadName = waCtxMenuData.name;
         // Get db boards for selection
         apiFetch("/api/kanban/boards").then(function(boards) {
             var dbBs = boards.filter(function(b) { return b.source === "database"; });
             if (!dbBs.length) { showSnackbar("No database boards to snapshot into"); return; }
             // Use current board or first board
             var targetBoard = (currentBoard && currentBoard.source === "database") ? currentBoard.id : dbBs[0].id;
-            // Fetch unprocessed messages for this phone
-            apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500&unprocessed_only=true").then(function(data) {
+            // Fetch ALL messages for this phone (not just unprocessed)
+            apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
                 var msgs = data.messages || [];
-                if (!msgs.length) { showSnackbar("No unprocessed messages from " + waCtxMenuData.name); return; }
-                var created = 0, errors = 0;
-                var promises = msgs.map(function(msg) {
-                    return apiFetch("/api/kanban/tickets/from-whatsapp/" + msg.id, {
+                if (!msgs.length) { showSnackbar("No messages from " + threadName); return; }
+                // Create ONE ticket from all messages (batch snapshot)
+                var ticketTitle = esc(threadName) + " - " + msgs.length + " messages";
+                var ticketDesc = "";
+                msgs.forEach(function(msg) {
+                    var msgDate = msg.whatsapp_timestamp ? new Date(msg.whatsapp_timestamp * 1000) : null;
+                    var timeStr = msgDate ? msgDate.toLocaleString() : "";
+                    ticketDesc += "[Snapshot: " + timeStr + "\n";
+                    if (msg.text) ticketDesc += "Message: " + esc(msg.text) + "\n";
+                    if (msg.caption) ticketDesc += "Caption: " + esc(msg.caption) + "\n";
+                    if (msg.media_type) ticketDesc += "Media: " + esc(msg.media_type) + "\n";
+                    ticketDesc += "----------------------------------------\n";
+                });
+                // Get the Backlog lane for this board
+                apiFetch("/api/kanban/boards/" + targetBoard).then(function(boardData) {
+                    var backlogLane = boardData.lanes && boardData.lanes.find(function(l) { return l.name === "Backlog"; });
+                    return apiFetch("/api/kanban/tickets", {
                         method: "POST",
                         headers: {"Content-Type": "application/json"},
-                        body: JSON.stringify({ board_id: targetBoard })
-                    }).then(function(r) {
-                        if (r.success) created++;
-                    }).catch(function() { errors++; });
-                });
-                Promise.all(promises).then(function() {
-                    showSnackbar("Created " + created + " ticket(s) from WhatsApp messages" + (errors ? " (" + errors + " errors)" : ""));
+                        body: JSON.stringify({
+                            title: ticketTitle,
+                            description: ticketDesc,
+                            lane_id: backlogLane ? backlogLane.id : null,
+                            priority: "medium",
+                            board_id: targetBoard
+                        })
+                    });
+                }).then(function(r) {
+                    showSnackbar("Snapshot created: " + ticketTitle);
+                    // Mark all messages with snapshot_group ID for grouping
+                    apiFetch("/api/kanban/whatsapp/messages/mark-snapshot-group", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            jid_phone: phone,
+                            snapshot_group: r.id + "_" + r.lane_id
+                        })
+                    }).catch(function() {}); // Best effort
                     reloadCurrentDatabaseBoard();
+                    // Refresh the thread view to show snapshot markers
+                    if (waSelectedJid) {
+                        showWhatsAppThread(waSelectedJid, document.getElementById("kb-wa-thread-title").textContent);
+                    }
+                }).catch(function(err) {
+                    showSnackbar("Failed: " + err.message, "error");
+                });
+            });
+        });
+    }
+
+    // ── Bottom snapshot (create ticket from all messages) ───────────────
+    function waCtxSnapshotToBoardBottom() {
+        if (!waSelectedJid) return;
+        var phone = waSelectedJid;
+        var threadName = document.getElementById("kb-wa-thread-title").textContent;
+        var snapshotCountEl = document.getElementById("kb-wa-thread-snapshot-count");
+        // Get db boards for selection
+        apiFetch("/api/kanban/boards").then(function(boards) {
+            var dbBs = boards.filter(function(b) { return b.source === "database"; });
+            if (!dbBs.length) { showSnackbar("No database boards to snapshot into"); return; }
+            // Use current board or first board
+            var targetBoard = (currentBoard && currentBoard.source === "database") ? currentBoard.id : dbBs[0].id;
+            // Fetch ALL messages for this phone
+            apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(phone) + "&limit=500").then(function(data) {
+                var msgs = data.messages || [];
+                if (!msgs.length) { showSnackbar("No messages from " + threadName); return; }
+                // Update counter text
+                snapshotCountEl.textContent = msgs.length + " messages to snapshot";
+                // Show confirmation before creating ticket
+                if (!confirm("Create a ticket with " + msgs.length + " messages from " + threadName + "?\n\nThis will add all messages to a single ticket in the Backlog lane.")) return;
+                // Create ONE ticket from all messages (batch snapshot)
+                var ticketTitle = esc(threadName) + " - " + msgs.length + " messages";
+                var ticketDesc = "";
+                msgs.forEach(function(msg) {
+                    var msgDate = msg.whatsapp_timestamp ? new Date(msg.whatsapp_timestamp * 1000) : null;
+                    var timeStr = msgDate ? msgDate.toLocaleString() : "";
+                    ticketDesc += "[Snapshot: " + timeStr + "\n";
+                    if (msg.text) ticketDesc += "Message: " + esc(msg.text) + "\n";
+                    if (msg.caption) ticketDesc += "Caption: " + esc(msg.caption) + "\n";
+                    if (msg.media_type) ticketDesc += "Media: " + esc(msg.media_type) + "\n";
+                    ticketDesc += "----------------------------------------\n";
+                });
+                // Get the Backlog lane for this board
+                apiFetch("/api/kanban/boards/" + targetBoard).then(function(boardData) {
+                    var backlogLane = boardData.lanes && boardData.lanes.find(function(l) { return l.name === "Backlog"; });
+                    return apiFetch("/api/kanban/tickets", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            title: ticketTitle,
+                            description: ticketDesc,
+                            lane_id: backlogLane ? backlogLane.id : null,
+                            priority: "medium",
+                            board_id: targetBoard
+                        })
+                    });
+                }).then(function(r) {
+                    showSnackbar("Snapshot created: " + ticketTitle);
+                    // Mark all messages with snapshot_group ID for grouping
+                    apiFetch("/api/kanban/whatsapp/messages/mark-snapshot-group", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            jid_phone: phone,
+                            snapshot_group: r.id + "_" + r.lane_id
+                        })
+                    }).catch(function() {}); // Best effort
+                    reloadCurrentDatabaseBoard();
+                    // Refresh the thread view to show snapshot markers
+                    showWhatsAppThread(waSelectedJid, document.getElementById("kb-wa-thread-title").textContent);
+                }).catch(function(err) {
+                    showSnackbar("Failed: " + err.message, "error");
                 });
             });
         });
@@ -2562,12 +2663,69 @@
         // WhatsApp thread back button
         document.getElementById("kb-wa-thread-back").addEventListener("click", closeWhatsAppThread);
 
-        // WhatsApp thread snapshot button
+        // WhatsApp thread snapshot button (top header - "Snapshot All")
         document.getElementById("kb-wa-thread-snapshot").addEventListener("click", function() {
             if (!waSelectedJid) return;
             var phone = waSelectedJid;
             waCtxMenuData = { jid: phone + "@s.whatsapp.net", phone: phone, name: document.getElementById("kb-wa-thread-title").textContent };
             waCtxSnapshotToBoard();
+        });
+
+        // WhatsApp thread clear button - clears all messages
+        document.getElementById("kb-wa-thread-clear").addEventListener("click", function() {
+            if (!waSelectedJid) return;
+            if (confirm("Clear all messages for this thread? This will delete them from the local cache.")) {
+                // Clear the messages container
+                var messagesDiv = document.getElementById("kb-wa-thread-messages");
+                messagesDiv.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>';
+                // Also clear the local cache
+                if (waMessageCache && waMessageCache[waSelectedJid]) {
+                    waMessageCache[waSelectedJid] = [];
+                }
+            }
+        });
+
+        // WhatsApp thread delete button - deletes the entire thread
+        document.getElementById("kb-wa-thread-delete").addEventListener("click", function() {
+            if (!waSelectedJid) return;
+            if (confirm("Delete this thread and all its messages? This will remove the thread from the sidebar and clear all messages.")) {
+                var phone = waSelectedJid;
+                // Close the thread view
+                closeWhatsAppThread();
+                // Remove from sidebar
+                var chatCard = document.querySelector('[data-wa-jid="' + escapeAttr(phone) + '"]');
+                if (chatCard) { chatCard.remove(); }
+                if (waMessageCache && waMessageCache[phone]) { delete waMessageCache[phone]; }
+                waSelectedJid = null;
+                showSnackbar("Thread deleted", "success");
+            }
+        });
+
+        // WhatsApp thread snapshot button (bottom - "Create Ticket from All Messages")
+        document.getElementById("kb-wa-thread-snapshot-bottom").addEventListener("click", function() {
+            if (!waSelectedJid) return;
+            waCtxSnapshotToBoardBottom();
+        });
+
+        // WhatsApp thread delete button - deletes the entire thread
+        document.getElementById("kb-wa-thread-delete").addEventListener("click", function() {
+            if (!waSelectedJid) return;
+            if (confirm("Delete this thread and all its messages? This will remove the thread from the sidebar and clear all messages.")) {
+                var phone = waSelectedJid;
+                // Close the thread view
+                closeWhatsAppThread();
+                // Remove from sidebar
+                var chatCard = document.querySelector('[data-wa-jid="' + escapeAttr(phone) + '"]');
+                if (chatCard) {
+                    chatCard.remove();
+                }
+                // Also clear from cache
+                if (waMessageCache && waMessageCache[phone]) {
+                    delete waMessageCache[phone];
+                }
+                waSelectedJid = null;
+                showSnackbar("Thread deleted", "success");
+            }
         });
 
         document.getElementById("kb-wa-refresh").addEventListener("click", function() { syncFromRelay(); });

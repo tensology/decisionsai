@@ -102,33 +102,22 @@ class PiAgentTool(BaseTool):
         except Exception:
             pass
 
-        # Try to use an existing RPC session for the project, or create one
-        from distr.core.pi_rpc import get_rpc_session, PiRpcSession as _PiRpcSession
+        # Use the unified CLI dispatch — creates RPC session if needed,
+        # sends via send_prompt (not send_and_wait) so CLI tab shows real-time output
+        from distr.core.agent.tools.integrations.unified_cli import dispatch_to_cli
 
-        if project_id:
-            rpc = get_rpc_session(project_id)
-            if not rpc or not rpc.is_alive:
-                # No terminal session yet — create one so the output is visible in the terminal tab
-                if folder and _PiRpcSession.find_pi():
-                    try:
-                        rpc = _PiRpcSession(project_id, folder, append_system_prompt=system_prompt_for_pi)
-                        rpc.start()
-                        from distr.core.pi_rpc import _rpc_sessions
-                        _rpc_sessions[project_id] = rpc
-                        logger.info(f"PiAgentTool: created new RPC session for project {project_id} ({resolved_name})")
-                    except Exception as e:
-                        logger.warning(f"PiAgentTool: could not create RPC session: {e}")
-                        rpc = None
-
-            if rpc and rpc.is_alive:
-                # Send via RPC and wait for Pi to finish — get the result back
-                result = rpc.send_and_wait(enriched_instruction, timeout=120)
-                self._create_audit(resolved_name, instruction, status="completed", result=(result or "")[:2000], project_id=project_id)
-                if not result:
-                    return f"[Pi — {resolved_name}] Pi completed but produced no output."
-                if len(result) > 2000:
-                    return f"[Pi — {resolved_name}]\n{result[:2000]}...\n\n(result truncated)"
-                return f"[Pi — {resolved_name}]\n{result}"
+        if project_id and folder:
+            result = dispatch_to_cli(
+                project_id=project_id,
+                cwd=folder,
+                instruction=enriched_instruction,
+                project_name=resolved_name,
+                append_system_prompt=system_prompt_for_pi,
+            )
+            self._create_audit(resolved_name, instruction, status="completed" if result["success"] else "failed", result=result["message"][:2000], project_id=project_id)
+            if result["success"]:
+                return f"[Pi — {resolved_name}] {result['message']}"
+            return f"[Pi — {resolved_name}] Failed: {result['message']}"
 
         # Fallback: use pi in print mode (non-interactive, one-shot)
         import subprocess

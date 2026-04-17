@@ -13,9 +13,164 @@ import json
 import os
 import subprocess
 import shutil
+import platform
+import shlex
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
+
+
+def _start_inapp_terminals(project_id: int, folder: str, commands: list[str]) -> tuple[int, int]:
+    """Spawn in-app PTY sessions for each command. Returns (started_count, failed_count)."""
+    import asyncio
+    from distr.core.terminal import create_startup_shell_session, _startup_sessions
+
+    # Kill any existing sessions for this project first
+    dead_keys = [k for k, s in list(_startup_sessions.items()) if s.project_id == project_id]
+    for k in dead_keys:
+        try:
+            sess = _startup_sessions.pop(k, None)
+            if sess:
+                asyncio.get_event_loop().run_until_complete(sess.kill())
+        except Exception:
+            pass
+
+    started = 0
+    failed = 0
+    for cmd in commands:
+        try:
+            loop = asyncio.get_event_loop()
+            if loop.is_running():
+                # We're inside an async context — use run_coroutine_threadsafe
+                import concurrent.futures
+                future = asyncio.run_coroutine_threadsafe(
+                    create_startup_shell_session(project_id, folder, cmd), loop
+                )
+                future.result(timeout=10)
+            else:
+                loop.run_until_complete(create_startup_shell_session(project_id, folder, cmd))
+            started += 1
+        except Exception as e:
+            logger.warning("Failed to start in-app terminal for '%s': %s", cmd, e)
+            failed += 1
+    return started, failed
+
+
+def _parse_startup_command_lines(startup_instructions: str) -> list[str]:
+    """Split startup instructions into runnable lines; skip blanks and # comments."""
+    out: list[str] = []
+    for line in (startup_instructions or "").splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        out.append(s)
+    return out
+
+
+def _applescript_escape_double_quoted(s: str) -> str:
+    return s.replace("\\", "\\\\").replace('"', '\\"')
+
+
+def _launch_startup_commands_in_terminal_app(folder_location: str, startup_instructions: str) -> tuple[bool, str]:
+    """
+    Run each configured startup command in Apple's Terminal.app (or separate windows on fallback).
+
+    On macOS, prefers one window with tabs (Cmd+T between commands). If that fails, opens one window per command.
+    On other OSes: best-effort separate terminal processes.
+    """
+    commands = _parse_startup_command_lines(startup_instructions)
+    if not commands:
+        return True, ""
+
+    system = platform.system()
+    if system != "Darwin":
+        return _launch_startup_commands_non_macos(folder_location, commands)
+
+    shell_lines = [f"cd {shlex.quote(folder_location)} && {c}" for c in commands]
+
+    # Try: first tab via do script; further tabs via Cmd+T + do script in front window
+    if len(shell_lines) == 1:
+        osa_tab = "\n".join(
+            [
+                'tell application "Terminal"',
+                "activate",
+                f'do script "{_applescript_escape_double_quoted(shell_lines[0])}"',
+                "end tell",
+            ]
+        )
+    else:
+        chunks: list[str] = [
+            'tell application "Terminal"',
+            "activate",
+            f'do script "{_applescript_escape_double_quoted(shell_lines[0])}"',
+            "end tell",
+        ]
+        for line in shell_lines[1:]:
+            chunks.append("delay 0.4")
+            chunks.append('tell application "System Events"')
+            chunks.append('keystroke "t" using command down')
+            chunks.append("end tell")
+            chunks.append("delay 0.3")
+            chunks.append('tell application "Terminal"')
+            chunks.append(f'do script "{_applescript_escape_double_quoted(line)}" in front window')
+            chunks.append("end tell")
+        osa_tab = "\n".join(chunks)
+
+    try:
+        r = subprocess.run(["osascript", "-e", osa_tab], capture_output=True, text=True, timeout=90)
+        if r.returncode == 0:
+            return True, f"Launched {len(commands)} startup command(s) in Terminal (tabs)."
+        logger.warning("Terminal tab AppleScript failed: %s — trying separate windows", r.stderr.strip())
+    except Exception as e:
+        logger.warning(f"Terminal tab launch error: {e}", exc_info=True)
+
+    # Fallback: one Terminal window per command (no System Events keystrokes)
+    osa_windows = "\n".join(
+        [
+            'tell application "Terminal"',
+            "activate",
+            "\n".join([f'do script "{_applescript_escape_double_quoted(sl)}"' for sl in shell_lines]),
+            "end tell",
+        ]
+    )
+    try:
+        r2 = subprocess.run(["osascript", "-e", osa_windows], capture_output=True, text=True, timeout=90)
+        if r2.returncode == 0:
+            return True, f"Launched {len(commands)} startup command(s) in Terminal (separate windows)."
+        return False, (r2.stderr or r2.stdout or "osascript failed")[:800]
+    except Exception as e:
+        logger.error(f"Terminal fallback launch failed: {e}", exc_info=True)
+        return False, str(e)
+
+
+def _launch_startup_commands_non_macos(folder_location: str, commands: list[str]) -> tuple[bool, str]:
+    """Best-effort: spawn a new terminal window per command on Linux/Windows."""
+    system = platform.system()
+    ok_count = 0
+    if system == "Linux":
+        gterm = shutil.which("gnome-terminal")
+        if not gterm:
+            return False, "Install gnome-terminal (or use macOS) to auto-launch startup commands."
+        for c in commands:
+            inner = f"cd {shlex.quote(folder_location)} && {c}; exec bash"
+            try:
+                subprocess.Popen([gterm, "--", "bash", "-lc", inner], start_new_session=True)
+                ok_count += 1
+            except Exception as e:
+                logger.warning("Failed to launch gnome-terminal for command %s: %s", c, e)
+        return (ok_count > 0, f"Started {ok_count}/{len(commands)} command(s) in gnome-terminal." if ok_count else "Could not launch any terminals.")
+    if system == "Windows":
+        for c in commands:
+            try:
+                subprocess.Popen(
+                    ["cmd", "/c", "start", "DecisionsAI-startup", "cmd", "/k", f'cd /d "{folder_location}" && {c}'],
+                    shell=False,
+                )
+                ok_count += 1
+            except Exception as e:
+                logger.warning("Failed to launch Windows console for command %s: %s", c, e)
+        return (ok_count > 0, f"Started {ok_count}/{len(commands)} command(s) in new console windows." if ok_count else "Could not launch any consoles.")
+    return False, f"Startup terminal launch not implemented for {system}."
 
 
 class ListProjectsTool(BaseTool):
@@ -239,7 +394,7 @@ class OpenAndStartProjectTool(BaseTool):
     """Tool for switching to a project and immediately starting it."""
 
     name: str = "open_and_start_project"
-    description: str = """Switch to a project by name and immediately start it (open in editor + generate startup file).
+    description: str = """Switch to a project by name and immediately start it (open in editor + run startup commands in Terminal).
 
     IMPORTANT: You MUST extract the project name from the user's request and pass it as project_name.
     
@@ -253,7 +408,7 @@ class OpenAndStartProjectTool(BaseTool):
     1. Find the project by name (with fuzzy matching for typos)
     2. Activate the project (set it as the current working project)
     3. Open the project folder in Cursor/VS Code
-    4. Generate STARTUP.md with configured startup commands
+    4. Launch each configured startup command in a new Terminal tab or window (macOS Terminal.app)
     """
     args_schema: type[BaseModel] = OpenAndStartProjectInput
     event_queue: Any = Field(default=None, exclude=True)
@@ -385,65 +540,27 @@ class OpenAndStartProjectTool(BaseTool):
                 if not project.folder_location:
                     return f"Project '{project.name}' has no folder location set. Please configure it in the Projects Manager first."
 
-                # Step 1: Activate the project
+                # Activate the project
                 activate_result = activate_project(project.id)
                 if not activate_result.get('success'):
                     return f"Error activating project: {activate_result.get('error')}"
 
                 logger.info(f"Activated project: {project.name} (ID: {project.id})")
-
-                # Step 2: Open in editor
                 folder_location = project.folder_location
-                editor_opened = False
-                editor_used = None
 
-                # Try Cursor first
-                if shutil.which('cursor'):
-                    try:
-                        subprocess.run(['cursor', folder_location], check=False)
-                        editor_opened = True
-                        editor_used = "Cursor"
-                        logger.info(f"Opened project folder in Cursor: {folder_location}")
-                    except Exception as e:
-                        logger.warning(f"Failed to open Cursor: {e}")
-
-                # Fall back to VS Code if Cursor not available
-                if not editor_opened and shutil.which('code'):
-                    try:
-                        subprocess.run(['code', folder_location], check=False)
-                        editor_opened = True
-                        editor_used = "Visual Studio Code"
-                        logger.info(f"Opened project folder in VS Code: {folder_location}")
-                    except Exception as e:
-                        logger.warning(f"Failed to open VS Code: {e}")
-
-                # Step 3: Generate STARTUP.md if startup instructions exist
+                # Start in-app PTY terminals for each startup command
                 startup_instructions = project.startup_instructions.strip() if project.startup_instructions else ""
-                startup_created = False
-                startup_path = None
-
                 if startup_instructions:
-                    tickets_folder = os.path.join(folder_location, '.tickets')
-                    try:
-                        os.makedirs(tickets_folder, exist_ok=True)
-                        startup_path = os.path.join(tickets_folder, "STARTUP.md")
+                    commands = _parse_startup_command_lines(startup_instructions)
+                    if commands:
+                        started, failed = _start_inapp_terminals(project.id, folder_location, commands)
+                        response = f"PROJECT ACTIVATED: {project.name}\n"
+                        response += f"Started {started} terminal(s) in the Projects panel."
+                        if failed:
+                            response += f" ({failed} failed to start.)"
+                        return response
 
-                        with open(startup_path, 'w', encoding='utf-8') as f:
-                            f.write(startup_instructions)
-
-                        startup_created = True
-                        logger.info(f"Created startup file: {startup_path}")
-                    except Exception as e:
-                        logger.error(f"Error creating startup file: {e}", exc_info=True)
-
-                # Build response - keep it minimal so the LLM doesn't over-explain
-                response = f"PROJECT ACTIVATED: {project.name}\n"
-                if editor_opened:
-                    response += f"Opened in {editor_used}.\n"
-                if startup_created:
-                    response += f"Startup file created.\n"
-
-                return response
+                return f"PROJECT ACTIVATED: {project.name}\nNo startup instructions configured."
 
             except Exception as e:
                 logger.error(f"Error opening and starting project: {e}", exc_info=True)
@@ -1155,18 +1272,15 @@ class OpenProjectTool(BaseTool):
 
 
 class StartProjectTool(BaseTool):
-    """Tool for starting a project by opening it in an editor and generating startup instructions."""
+    """Tool for starting a project by opening it in an editor and running startup commands in Terminal."""
 
     name: str = "start_project"
-    description: str = """Start the current project by opening it in Cursor/VS Code and creating a simple STARTUP.md file.
+    description: str = """Start the current project by opening it in Cursor/VS Code and launching startup commands in Terminal.
 
     This tool:
     1. Opens the project folder in Cursor (or VS Code if Cursor not available)
-    2. Reads the startup_instructions from the active project
-    3. Creates a minimal STARTUP.md file in .tickets/ folder with ONLY the startup commands
-
-    The STARTUP.md file contains ONLY bash commands - no extra metadata or ticket information.
-    Each line in startup_instructions represents a command that should run in a new terminal tab.
+    2. Reads the startup_instructions from the active project (one shell command per non-empty line)
+    3. Runs each command in a new Terminal tab or window (macOS Terminal.app; see implementation for Linux/Windows)
 
     Triggers (use this tool for these):
     - "Start the project"
@@ -1176,7 +1290,7 @@ class StartProjectTool(BaseTool):
     - "Boot up the project"
     - "Initialize the project"
 
-    Returns: Confirmation of editor opened and path to the generated STARTUP.md file.
+    Returns: Confirmation of editor opened and terminals launched.
     """
     event_queue: Any = Field(default=None, exclude=True)
 
@@ -1258,68 +1372,19 @@ class StartProjectTool(BaseTool):
             startup_instructions = project.get('startup_instructions', '').strip()
             if not startup_instructions:
                 return f"Project '{project['name']}' does not have any startup instructions configured.\n\nPlease add startup instructions in the Projects Manager (Advanced tab) first."
+            if not _parse_startup_command_lines(startup_instructions):
+                return f"Project '{project['name']}' startup instructions have no runnable commands (add one shell command per line, or remove # comments only)."
 
             folder_location = project['folder_location']
-
-            # Open project folder in Cursor or VS Code
-            editor_opened = False
-            editor_used = None
-
-            # Try Cursor first
-            if shutil.which('cursor'):
-                try:
-                    subprocess.run(['cursor', folder_location], check=False)
-                    editor_opened = True
-                    editor_used = "Cursor"
-                    logger.info(f"Opened project folder in Cursor: {folder_location}")
-                except Exception as e:
-                    logger.warning(f"Failed to open Cursor: {e}")
-
-            # Fall back to VS Code if Cursor not available
-            if not editor_opened and shutil.which('code'):
-                try:
-                    subprocess.run(['code', folder_location], check=False)
-                    editor_opened = True
-                    editor_used = "Visual Studio Code"
-                    logger.info(f"Opened project folder in VS Code: {folder_location}")
-                except Exception as e:
-                    logger.warning(f"Failed to open VS Code: {e}")
-
-            if not editor_opened:
-                logger.warning("Neither Cursor nor VS Code found in system PATH")
-
-            # Ensure .tickets folder exists
-            tickets_folder = os.path.join(folder_location, '.tickets')
-
-            try:
-                os.makedirs(tickets_folder, exist_ok=True)
-            except Exception as e:
-                logger.error(f"Error creating .tickets folder: {e}", exc_info=True)
-                return f"Error: Could not create .tickets folder at {tickets_folder}: {str(e)}"
-
-            # Generate STARTUP.md filename
-            startup_filename = "STARTUP.md"
-            startup_path = os.path.join(tickets_folder, startup_filename)
-
-            # Write STARTUP.md - exactly what's in the field, nothing else
-            try:
-                with open(startup_path, 'w', encoding='utf-8') as f:
-                    f.write(startup_instructions)
-
-                logger.info(f"Created startup file: {startup_path}")
-
-                response = f"PROJECT STARTED: {project['name']}\n"
-                if editor_opened:
-                    response += f"Opened in {editor_used}.\n"
-                else:
-                    response += f"Warning: Could not find Cursor or VS Code in system PATH.\n"
-                response += f"Startup file created.\n"
-
-                return response
-
-            except Exception as e:
-                logger.error(f"Error writing startup file: {e}", exc_info=True)
-                return f"Error writing startup file: {str(e)}"
+            commands = _parse_startup_command_lines(startup_instructions)
+            started, failed = _start_inapp_terminals(project_id=project['id'],
+                                                     folder=folder_location,
+                                                     commands=commands)
+            response = f"PROJECT STARTED: {project['name']}\n"
+            response += f"Started {started} terminal(s) in the Projects panel."
+            if failed:
+                response += f" ({failed} failed to start.)"
+            return response
 
         except Exception as e:
             logger.error(f"Error in start_project tool: {e}", exc_info=True)

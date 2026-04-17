@@ -16,6 +16,7 @@ class Project(Base):
     provider = Column(String, nullable=True)  # 'trello' or 'jira'
     board_id = Column(String, nullable=True)  # Board ID from provider
     board_name = Column(String, nullable=True)  # Board name for display
+    kanban_board_id = Column(Integer, nullable=True)  # FK to kanban_boards.id for local database boards
 
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

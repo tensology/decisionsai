@@ -2,6 +2,25 @@
 
 ---
 
+## [2.7.8] - 2026-04-17
+
+### Project Details Redesign, CLI Model Switcher, Terminal Cleanup, Auto-Overview
+
+**Compact project details** — The Details tab got a two-column layout. Name sits next to Folder location, Description sits next to Trigger words. The Board section (Provider, Board, Ticket Board) moved into Details under a separator so you don't need a separate tab. Three tabs instead of four: Details, Startup, CLI.
+
+**CLI model switcher** — A model dropdown sits right next to the CLI input, grouped by provider (Ollama, OpenAI). Pick a model and the pi agent restarts with `--provider` and `--model` flags pointing at your selection. No more editing settings by hand.
+
+**Floating CLI controls** — The transcript panel now has sticky top-right controls: connection badge, restart (circular-arrows icon), and a "Read Overview" text button. The input bar is a single row: text input, model dropdown, and paper-plane Send.
+
+**Auto-overview on completion** — When pi finishes a task, the system automatically builds a summary from the last command, last response, and last tool result, then routes it to the right channel: TTS for desktop/CLI, Telegram message for instructions that came from there.
+
+**Startup terminals are per-project** — Switching projects now properly saves and restores terminal state. Start and Terminate buttons reset when you leave a project, and reappear when you come back to one that has running terminals. No more ghost "Terminate All" on the wrong project.
+
+**Terminal cleanup on exit** — Both PTY terminals and pi RPC subprocesses now get killed automatically when the app exits via `atexit` handlers. No orphans left behind.
+
+---
+
+
 ## [2.7.7] - 2026-04-16
 
 ### Cloud Models, pi Agent, Terminal Overview
