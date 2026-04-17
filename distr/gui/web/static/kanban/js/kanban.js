@@ -23,6 +23,20 @@
     /** Strip HTML tags from a string, decode entities, and trim. */
     function stripHtml(html) {
         if (!html) return "";
+        // If it's a Jira ADF object (not a string), try to extract plain text
+        if (typeof html === "object") {
+            var parts = [];
+            (function walk(node) {
+                if (Array.isArray(node)) { node.forEach(walk); return; }
+                if (typeof node === "object" && node !== null) {
+                    if (node.type === "text") { parts.push(node.text || ""); }
+                    if (node.type === "hardBreak" || node.type === "paragraph") { parts.push("\n"); }
+                    if (node.content) walk(node.content);
+                    if (Array.isArray(node.marks)) node.marks.forEach(walk);
+                }
+            })(html);
+            return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
+        }
         var tmp = document.createElement("div");
         tmp.innerHTML = html;
         return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
@@ -208,8 +222,122 @@
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === source ? " active" : "");
             div.innerHTML = '<span class="kb-src-icon ' + cls + '"></span>' + esc(b.name);
             div.onclick = function() { selectBoard(source, b.id, b.url); };
+            div.oncontextmenu = function(e) { e.preventDefault(); showExtBoardContextMenu(e, source, b.id, b.url); };
             container.appendChild(div);
         });
+    }
+
+    // ── External board context menu (right-click on Trello/Jira boards) ──
+    var extCtxMenuData = null;
+    function showExtBoardContextMenu(e, source, boardId, boardUrl) {
+        extCtxMenuData = { source: source, boardId: boardId, boardUrl: boardUrl };
+        var menu = document.getElementById("kb-ext-board-ctx-menu");
+        var providerLabel = source === "trello" ? "Trello" : "Jira";
+        var createBtn = menu.querySelector(".kb-ext-ctx-create-ticket");
+        createBtn.textContent = "Create Ticket on " + providerLabel;
+        menu.style.left = e.clientX + "px";
+        menu.style.top = e.clientY + "px";
+        menu.classList.remove("hidden");
+    }
+    function hideExtBoardContextMenu() {
+        document.getElementById("kb-ext-board-ctx-menu").classList.add("hidden");
+        extCtxMenuData = null;
+    }
+    function extCtxConfigure() {
+        if (!extCtxMenuData) return;
+        var src = extCtxMenuData.source, bid = extCtxMenuData.boardId;
+        hideExtBoardContextMenu();
+        selectBoard(src, bid, extCtxMenuData.boardUrl);
+        setTimeout(function() {
+            if (currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira")) {
+                openExternalBoardConfigModal(src, bid);
+            }
+        }, 500);
+    }
+    function extCtxCreateTicket() {
+        if (!extCtxMenuData) return;
+        var src = extCtxMenuData.source, bid = extCtxMenuData.boardId;
+        hideExtBoardContextMenu();
+        selectBoard(src, bid, extCtxMenuData.boardUrl);
+        setTimeout(function() { openCreateExternalTicketModal(); }, 500);
+    }
+
+    // ── Create external ticket modal ──
+    function openCreateExternalTicketModal() {
+        if (!currentBoard || !currentBoard.source || currentBoard.source === "database") {
+            showSnackbar("Select a Trello or Jira board first", "error"); return;
+        }
+        var modal = document.getElementById("kb-create-ext-ticket-modal");
+        document.getElementById("kb-cet-title").value = "";
+        document.getElementById("kb-cet-desc").value = "";
+        document.getElementById("kb-cet-lane").innerHTML = '<option value="">Select a list/column...</option>';
+        if (currentBoardData && currentBoardData.lanes) {
+            currentBoardData.lanes.forEach(function(lane) {
+                var opt = document.createElement("option");
+                opt.value = lane.id; opt.textContent = lane.name;
+                document.getElementById("kb-cet-lane").appendChild(opt);
+            });
+        }
+        document.getElementById("kb-cet-priority").value = "medium";
+        document.getElementById("kb-cet-files-list").innerHTML = "";
+        document.getElementById("kb-cet-file-input").value = "";
+        document.getElementById("kb-cet-heading").textContent = "Create " + (currentBoard.source === "trello" ? "Trello" : "Jira") + " Ticket";
+        modal.classList.remove("hidden");
+    }
+    function closeCreateExtTicketModal() {
+        document.getElementById("kb-create-ext-ticket-modal").classList.add("hidden");
+    }
+    function submitCreateExtTicket() {
+        if (!currentBoard || !currentBoard.source || currentBoard.source === "database") return;
+        var title = document.getElementById("kb-cet-title").value.trim();
+        if (!title) { showSnackbar("Title is required", "error"); return; }
+        var desc = document.getElementById("kb-cet-desc").value.trim();
+        var laneId = document.getElementById("kb-cet-lane").value;
+        var priority = document.getElementById("kb-cet-priority").value;
+        var payload = { title: title, description: desc, lane_id: laneId || null, priority: priority };
+        var fileInput = document.getElementById("kb-cet-file-input");
+        var files = fileInput.files;
+        showSnackbar("Creating ticket on " + (currentBoard.source === "trello" ? "Trello" : "Jira") + "...");
+        apiFetch("/api/kanban/external-boards/" + currentBoard.source + "/" + encodeURIComponent(currentBoard.id) + "/create-ticket", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        }).then(function(r) {
+            if (r.success && r.ticket) {
+                if (files && files.length > 0 && r.ticket.id) {
+                    return uploadExtTicketAttachments(currentBoard.source, r.ticket.id, files).then(function() { return r; });
+                }
+                return r;
+            }
+            return r;
+        }).then(function() {
+            showSnackbar("Ticket created on " + (currentBoard.source === "trello" ? "Trello" : "Jira"));
+            closeCreateExtTicketModal();
+            if (currentBoard) selectBoard(currentBoard.source, currentBoard.id, currentBoard.extUrl);
+        }).catch(function(e) { showSnackbar("Failed to create ticket: " + e.message, "error"); });
+    }
+    function uploadExtTicketAttachments(source, extTicketId, files) {
+        var promises = [];
+        for (var i = 0; i < files.length; i++) {
+            var fd = new FormData();
+            fd.append("file", files[i]);
+            promises.push(apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(extTicketId) + "/attach", {
+                method: "POST", body: fd
+            }).catch(function(e) { console.error("Failed to upload attachment:", e); }));
+        }
+        return Promise.all(promises);
+    }
+    function handleCetFileSelect() {
+        var fileInput = document.getElementById("kb-cet-file-input");
+        var listDiv = document.getElementById("kb-cet-files-list");
+        listDiv.innerHTML = "";
+        var files = fileInput.files;
+        for (var i = 0; i < files.length; i++) {
+            var f = files[i];
+            var div = document.createElement("div");
+            div.className = "text-xs text-gray-400 flex items-center gap-1";
+            div.innerHTML = '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>' + esc(f.name) + ' <span class="text-gray-600">(' + (f.size < 1024*1024 ? (f.size/1024).toFixed(1) + 'KB' : (f.size/1024/1024).toFixed(1) + 'MB') + ')</span>';
+            listDiv.appendChild(div);
+        }
     }
 
     // ── Board context menu (right-click) ──
@@ -220,6 +348,12 @@
         menu.style.left = e.clientX + "px";
         menu.style.top = e.clientY + "px";
         menu.classList.remove("hidden");
+    }
+    function ctxConfigureBoard() {
+        if (!ctxMenuBoardId) return;
+        var boardId = ctxMenuBoardId;
+        hideBoardContextMenu();
+        openBoardModal(boardId);
     }
 
     function hideBoardContextMenu() {
@@ -362,19 +496,24 @@
             badge.style.backgroundColor = source === "trello" ? "#0079bf" : "#0052cc";
         }
 
-        document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
-        // Show edit/config button for all boards ("Configure" for external)
-        var editBtn = document.getElementById("kb-edit-board");
+        var addTicketBtn = document.getElementById("kb-add-ticket");
         if (!isLocal) {
-            editBtn.style.display = "";
-            editBtn.textContent = "Configure";
-            editBtn.title = "Configure this external board (link project, workflow, etc.)";
+            addTicketBtn.style.display = "";
+            addTicketBtn.textContent = "+ Create Ticket";
+            addTicketBtn.title = "Create a ticket on this " + (currentBoard.source === 'trello' ? 'Trello' : 'Jira') + ' board';
         } else {
-            editBtn.style.display = "";
-            editBtn.textContent = "Edit";
-            editBtn.title = "";
+            addTicketBtn.style.display = "";
+            addTicketBtn.textContent = "+ Add Ticket";
+            addTicketBtn.title = "";
         }
-        document.getElementById("kb-delete-board").style.display = isLocal ? "" : "none";
+        // Configure button — always shows gear icon + "Configure" label
+        var editBtn = document.getElementById("kb-edit-board");
+        var editLabel = document.getElementById("kb-edit-board-label");
+        editBtn.style.display = "";
+        if (editLabel) editLabel.textContent = "Configure";
+        editBtn.title = isLocal ? "Configure board settings" : "Configure this external board (link project, workflow, etc.)";
+        // Delete button — hidden from header (available in right-click context menu)
+        document.getElementById("kb-delete-board").style.display = "none";
 
         var extLink = document.getElementById("kb-board-ext-link");
         if (!isLocal && (data.url || currentBoard.extUrl)) {
@@ -508,11 +647,34 @@
     function openExternalTicketModal(ticket, source) {
         // Populate the modal with external ticket data
         document.getElementById("kb-modal-ticket-title").value = ticket.title || "";
-        // For external tickets, show the description as plain text (stripped of HTML)
+        // For external tickets, render description as HTML (Jira ADF→HTML done by backend, Trello is native HTML)
         var descArea = document.getElementById("kb-modal-ticket-desc");
-        descArea.value = stripHtml(ticket.description || "");
-        descArea.readOnly = true;
-        descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
+        var rawDesc = ticket.description || "";
+        if (rawDesc && (rawDesc.includes("<") || (source === "jira" && rawDesc.length > 0))) {
+            descArea.value = "";
+            descArea.readOnly = true;
+            descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
+            descArea.style.display = "none";
+            var existingRich = descArea.parentElement.querySelector(".kb-ext-rich-desc");
+            if (existingRich) existingRich.remove();
+            var richDiv = document.createElement("div");
+            richDiv.className = "kb-ext-rich-desc text-sm text-gray-300 bg-[#152054]/50 rounded p-3 border border-white/10 max-h-64 overflow-y-auto";
+            richDiv.innerHTML = rawDesc;
+            richDiv.querySelectorAll("img").forEach(function(img) {
+                img.style.maxWidth = "100%"; img.style.borderRadius = "4px"; img.loading = "lazy";
+            });
+            richDiv.querySelectorAll("a").forEach(function(a) {
+                a.target = "_blank"; a.rel = "noopener noreferrer";
+            });
+            descArea.parentElement.insertBefore(richDiv, descArea.nextSibling);
+        } else {
+            var prevRich = descArea.parentElement.querySelector(".kb-ext-rich-desc");
+            if (prevRich) prevRich.remove();
+            descArea.value = stripHtml(rawDesc);
+            descArea.readOnly = true;
+            descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
+            descArea.style.display = "";
+        }
 
         // Hide priority editing for external
         document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
@@ -521,10 +683,9 @@
         });
         setPriorityButtons(ticket.priority || "medium");
 
-        // Clear links/files/todos
+        // Clear links & show media/todos
         renderModalLinks([]);
-        renderModalFiles([]);
-        // Show todos from external ticket if available
+        renderExternalMedia(ticket.media || [], source);
         renderExternalTodos(ticket.todos || []);
 
         // Show external metadata
@@ -567,6 +728,41 @@
         // Show modal
         switchTicketTab("details");
         document.getElementById("kb-ticket-modal").classList.remove("hidden");
+    }
+
+    /** Render media attachments for external tickets. */
+    function renderExternalMedia(media, source) {
+        var container = document.getElementById("kb-modal-files");
+        container.innerHTML = "";
+        if (!media || !media.length) {
+            container.innerHTML = '<p class="text-xs text-gray-500 italic">No attachments</p>';
+            return;
+        }
+        var html = '<div class="space-y-2">';
+        media.forEach(function(m) {
+            var mtype = (m.type || "").startsWith("video/") ? "video" : "image";
+            var imgUrl = m.url;
+            var thumbUrl = m.thumbnail || m.url;
+            if (source === "jira" && imgUrl) {
+                imgUrl = '/api/kanban/external-boards/jira/proxy-image?url=' + encodeURIComponent(imgUrl);
+                thumbUrl = m.thumbnail ? '/api/kanban/external-boards/jira/proxy-image?url=' + encodeURIComponent(m.thumbnail) : imgUrl;
+            }
+            if (mtype === "image" && thumbUrl) {
+                html += '<div class="flex items-start gap-2 p-2 bg-[#152054] rounded border border-white/10">';
+                html += '<a href="' + esc(imgUrl) + '" target="_blank" class="flex-shrink-0"><img src="' + esc(thumbUrl) + '" alt="' + esc(m.name || 'image') + '" class="max-w-[160px] max-h-[120px] object-cover rounded border border-white/10" loading="lazy"/></a>';
+                html += '<div class="flex-1 min-w-0">';
+                html += '<div class="text-xs text-gray-300 truncate">' + esc(m.name || 'Attachment') + '</div>';
+                html += '<div class="text-[10px] text-gray-500">' + esc(m.type || '') + '</div>';
+                html += '</div></div>';
+            } else {
+                html += '<div class="flex items-center gap-2 p-2 bg-[#152054] rounded border border-white/10">';
+                html += '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="flex-shrink-0 text-gray-400"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>';
+                html += '<a href="' + esc(imgUrl) + '" target="_blank" class="text-xs text-blue-400 hover:underline truncate">' + esc(m.name || 'Download') + '</a>';
+                html += '</div>';
+            }
+        });
+        html += '</div>';
+        container.innerHTML = html;
     }
 
     /** Render todos from external sources (read-only). */
@@ -673,6 +869,29 @@
             if (ticket.time_spent) timeHtml += ' / ' + esc(ticket.time_spent) + ' done';
             timeHtml += '</div>';
         }
+        // Media (attachments/images) from external ticket
+        var mediaHtml = '';
+        if (ticket.media && ticket.media.length) {
+            mediaHtml = '<div class="flex flex-wrap gap-1 mt-1">';
+            ticket.media.forEach(function(m) {
+                var imgUrl = m.url;
+                var thumbUrl = m.thumbnail || m.url;
+                if (!isLocal && currentBoard && currentBoard.source === 'jira' && imgUrl) {
+                    imgUrl = '/api/kanban/external-boards/jira/proxy-image?url=' + encodeURIComponent(imgUrl);
+                    thumbUrl = m.thumbnail ? '/api/kanban/external-boards/jira/proxy-image?url=' + encodeURIComponent(m.thumbnail) : imgUrl;
+                }
+                var mtype = (m.type || '').startsWith('video/') ? 'video' : 'image';
+                if (mtype === 'image') {
+                    mediaHtml += '<div class="relative rounded overflow-hidden border border-white/10">';
+                    mediaHtml += '<img src="' + esc(thumbUrl || imgUrl) + '" alt="' + esc(m.name || 'attachment') + '" class="max-w-[80px] max-h-[60px] object-cover rounded" loading="lazy" onerror="this.style.display=\'none\'">';
+                    mediaHtml += '</div>';
+                } else {
+                    mediaHtml += '<a href="' + esc(imgUrl) + '" target="_blank" class="text-[10px] text-blue-400 hover:underline flex items-center gap-0.5">';
+                    mediaHtml += '<svg width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M13 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V9z"/><polyline points="13 2 13 9 20 9"/></svg>' + esc(m.name || 'file') + '</a>';
+                }
+            });
+            mediaHtml += '</div>';
+        }
         // Determine if project-linked actions should show
         var hasProject = !!(boardData.default_project_id || (isLocal && boardData.id));
         // Source badge for external tickets
@@ -692,7 +911,7 @@
             '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + '<span class="' + priClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + esc(pri) + '</span>' + extLinkHtml + '</div>' +
             '</div>' +
             (truncatedDesc ? '<p class="text-xs text-gray-500 mt-1 line-clamp-2">' + esc(truncatedDesc) + '</p>' : '') +
-            labelsHtml + membersHtml + timeHtml +
+            labelsHtml + membersHtml + timeHtml + mediaHtml +
             '<div class="flex items-center justify-center gap-2 mt-2 kb-card-actions">' +
                 '<button class="kb-act-copy text-gray-500 hover:text-white transition-colors" title="Copy title & description"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>' +
                 (hasProject ? '<button class="kb-act-cli text-gray-500 hover:text-orange-400 transition-colors" title="Push to CLI"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>' : '<button class="kb-act-cli text-gray-700 cursor-not-allowed" title="Push to CLI (link a project to this board first)" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>') +
@@ -843,6 +1062,10 @@
         modalTicketId = null;
         window._extTicketData = null;
         window._extTicketSource = null;
+        var descArea = document.getElementById("kb-modal-ticket-desc");
+        var richDiv = descArea.parentElement.querySelector(".kb-ext-rich-desc");
+        if (richDiv) richDiv.remove();
+        descArea.style.display = "";
         resetTicketModalForLocal();
     }
 
@@ -851,6 +1074,9 @@
         var descArea = document.getElementById("kb-modal-ticket-desc");
         descArea.readOnly = false;
         descArea.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
+        descArea.style.display = "";
+        var richDiv = descArea.parentElement.querySelector(".kb-ext-rich-desc");
+        if (richDiv) richDiv.remove();
         document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
             btn.classList.remove("opacity-50", "cursor-not-allowed");
             btn.disabled = false;
@@ -1328,7 +1554,11 @@
     // ── Add ticket ──
 
     function addTicket() {
-        if (!currentBoard || currentBoard.source !== "database" || !currentBoardData) return;
+        if (!currentBoard) return;
+        if (currentBoard.source !== "database") {
+            openCreateExternalTicketModal(); return;
+        }
+        if (!currentBoardData) return;
         var firstLane = (currentBoardData.lanes || [])[0];
         if (!firstLane) { showSnackbar("Board has no lanes", "error"); return; }
         apiFetch("/api/kanban/tickets", {
@@ -2414,19 +2644,51 @@
     // End WhatsApp Integration
     // ═══════════════════════════════════════════════════════════════════
 
-        // Context menu
+        // Load initial data first (populates board menu with context menu elements)
+        loadBoards();
+        initWhatsApp();
+        
+        // Context menu (after boards are populated to ensure DOM elements exist)
         document.querySelector(".kb-ctx-activate").addEventListener("click", ctxActivateBoard);
-        document.querySelector(".kb-ctx-edit").addEventListener("click", ctxEditBoard);
+        document.querySelector(".kb-ctx-configure").addEventListener("click", ctxConfigureBoard);
         document.querySelector(".kb-ctx-rename").addEventListener("click", ctxRenameBoard);
         document.querySelector(".kb-ctx-archive").addEventListener("click", ctxArchiveBoard);
         document.querySelector(".kb-ctx-delete").addEventListener("click", ctxDeleteBoard);
         document.addEventListener("click", function(e) {
             if (!e.target.closest("#kb-board-ctx-menu")) hideBoardContextMenu();
+            if (!e.target.closest("#kb-ext-board-ctx-menu")) hideExtBoardContextMenu();
         });
-
-        // Load initial data
-        loadBoards();
-        initWhatsApp();
+        // External board context menu
+        document.querySelector(".kb-ext-ctx-configure").addEventListener("click", extCtxConfigure);
+        document.querySelector(".kb-ext-ctx-create-ticket").addEventListener("click", extCtxCreateTicket);
+        // Create external ticket modal
+        document.getElementById("kb-cet-cancel").addEventListener("click", closeCreateExtTicketModal);
+        document.getElementById("kb-cet-cancel-2").addEventListener("click", closeCreateExtTicketModal);
+        document.getElementById("kb-cet-create").addEventListener("click", submitCreateExtTicket);
+        document.getElementById("kb-cet-file-input").addEventListener("change", handleCetFileSelect);
+        // CET priority buttons
+        document.querySelectorAll("#kb-cet-priority-btns button").forEach(function(btn) {
+            btn.addEventListener("click", function() {
+                var pri = btn.dataset.cetPri;
+                document.getElementById("kb-cet-priority").value = pri;
+                document.querySelectorAll("#kb-cet-priority-btns button").forEach(function(b) {
+                    b.className = "px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400";
+                    if (b.dataset.cetPri === "low") b.className += " hover:border-green-500";
+                    if (b.dataset.cetPri === "medium") b.className += " hover:border-yellow-500";
+                    if (b.dataset.cetPri === "high") b.className += " hover:border-orange-500";
+                    if (b.dataset.cetPri === "critical") b.className += " hover:border-red-500";
+                });
+                btn.className = "px-3 py-1.5 rounded text-xs font-medium border ";
+                if (pri === "low") btn.className += "border-green-500 text-green-400 bg-green-500/10";
+                if (pri === "medium") btn.className += "border-[#f97316] text-[#f97316] bg-[#f97316]/10";
+                if (pri === "high") btn.className += "border-orange-500 text-orange-400 bg-orange-500/10";
+                if (pri === "critical") btn.className += "border-red-500 text-red-400 bg-red-500/10";
+            });
+        });
+        document.getElementById("kb-create-ext-ticket-modal").addEventListener("click", function(e) {
+            if (e.target === this) closeCreateExtTicketModal();
+        });
+        
         // Initially hide the tab bar since Messages is hidden by default
         updateTabBarVisibility();
     }

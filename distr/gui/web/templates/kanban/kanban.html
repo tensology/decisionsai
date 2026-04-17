@@ -78,12 +78,12 @@
 <div class="container mx-auto px-6 py-8 max-w-7xl">
     <div class="flex gap-6" style="height: calc(100vh - 130px);">
         <!-- Left panel: board sources -->
-        <div class="w-72 flex-shrink-0 flex flex-col gap-4">
+        <div class="w-72 flex-shrink-0 flex flex-col">
             <!-- Tabs (hidden when only Tickets is visible) -->
-            <div id="kb-tab-bar" class="flex items-center gap-1 bg-[#1a1f3a] rounded-lg border border-white/20 px-2 pt-2">
+            <div id="kb-tab-bar" class="flex items-center justify-center gap-1">
                 <button type="button" id="kb-tab-tickets" class="kb-sidebar-tab active" data-tab="tickets">
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
-                    Tickets
+                    Boards
                 </button>
                 <button type="button" id="kb-tab-messages" class="kb-sidebar-tab hidden" data-tab="messages">
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
@@ -91,10 +91,10 @@
                 </button>
             </div>
 
-            <!-- Tickets panel -->
-            <div id="kb-panel-tickets" class="flex-1 min-h-0 flex flex-col gap-4">
+            <!-- Boards panel -->
+            <div id="kb-panel-tickets" class="flex-1 min-h-0 flex flex-col">
                 <!-- Search -->
-                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
+                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 pb-2 mb-1">
                     <div class="flex items-center gap-2">
                         <input type="text" id="kb-search" placeholder="Search boards..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
                         <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0" title="Ticket Boards Settings">
@@ -106,7 +106,7 @@
                     </div>
                 </div>
                 <!-- Source tabs (hidden when only Local is available) -->
-                <div id="kb-src-tabs-row" class="flex gap-1 hidden">
+                <div id="kb-src-tabs-row" class="flex gap-1 hidden py-2">
                     <button type="button" id="kb-src-local" class="kb-src-tab active" data-src="local">
                         <span class="kb-src-icon kb-src-db" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Local
                     </button>
@@ -118,7 +118,7 @@
                     </button>
                 </div>
                 <!-- Board list -->
-                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
+                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto mt-2">
                     <!-- Local boards container -->
                     <div id="kb-local-boards-container" class="flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
@@ -152,9 +152,9 @@
             </div>
 
             <!-- Messages panel -->
-            <div id="kb-panel-messages" class="flex-1 min-h-0 flex flex-col gap-4 hidden">
+            <div id="kb-panel-messages" class="flex-1 min-h-0 flex flex-col hidden">
                 <!-- Search messages -->
-                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
+                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 pb-2">
                     <div class="flex items-center gap-2">
                         <input type="text" id="kb-wa-search" placeholder="Search messages..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-sm">
                         <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Sync messages from server">Sync</button>
@@ -190,8 +190,8 @@
                     <div class="flex items-center gap-2" id="kb-board-actions">
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
                         <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
-                        <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Edit</button>
-                        <button type="button" id="kb-delete-board" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
+                        <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 flex items-center gap-1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span id="kb-edit-board-label">Configure</span></button>
+                        <button type="button" id="kb-delete-board" class="hidden"></button>
                     </div>
                 </div>
                 <!-- Lanes -->
@@ -411,10 +411,74 @@
 <!-- Board context menu (right-click on sidebar) -->
 <div id="kb-board-ctx-menu" class="fixed hidden z-50 min-w-[140px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
     <button type="button" class="kb-ctx-activate w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Set as Active</button>
-    <button type="button" class="kb-ctx-edit w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Edit</button>
+    <button type="button" class="kb-ctx-configure w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        Configure
+    </button>
     <button type="button" class="kb-ctx-rename w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Rename</button>
     <button type="button" class="kb-ctx-archive w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">Archive</button>
     <button type="button" class="kb-ctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">Delete</button>
+</div>
+
+<!-- External board context menu (right-click on Trello/Jira boards) -->
+<div id="kb-ext-board-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-ext-ctx-configure w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1-1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
+        Configure
+    </button>
+    <button type="button" class="kb-ext-ctx-create-ticket w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Create Ticket
+    </button>
+</div>
+
+<!-- Create external ticket modal (Trello/Jira) -->
+<div id="kb-create-ext-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-6" style="width: 520px;">
+        <div class="flex items-center justify-between mb-4">
+            <h3 id="kb-cet-heading" class="text-lg font-semibold text-white">Create Ticket</h3>
+            <button type="button" id="kb-cet-cancel" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div class="space-y-4">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Title <span class="text-red-400">*</span></label>
+                <input type="text" id="kb-cet-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Ticket title">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <textarea id="kb-cet-desc" rows="4" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Describe the ticket..."></textarea>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">List / Column</label>
+                <select id="kb-cet-lane" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                    <option value="">Select a list/column...</option>
+                </select>
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                <div class="flex gap-2" id="kb-cet-priority-btns">
+                    <button type="button" data-cet-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                    <button type="button" data-cet-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-[#f97316] text-[#f97316] bg-[#f97316]/10">Medium</button>
+                    <button type="button" data-cet-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                    <button type="button" data-cet-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                </div>
+                <input type="hidden" id="kb-cet-priority" value="medium">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Attachments</label>
+                <input type="file" id="kb-cet-file-input" multiple class="hidden">
+                <button type="button" class="px-3 py-1.5 rounded bg-[#152054] border border-white/20 text-gray-300 text-xs hover:bg-white/10" onclick="document.getElementById('kb-cet-file-input').click()">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline -mt-0.5 mr-1"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
+                    Add Files
+                </button>
+                <div id="kb-cet-files-list" class="mt-2 space-y-1"></div>
+            </div>
+        </div>
+        <div class="flex justify-end gap-2 mt-5">
+            <button type="button" id="kb-cet-cancel-2" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-cet-create" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Create Ticket</button>
+        </div>
+    </div>
 </div>
 
 <!-- Board create/edit modal (tabbed) -->
