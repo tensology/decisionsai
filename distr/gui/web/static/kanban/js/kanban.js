@@ -2372,6 +2372,37 @@
 
         // Load chats
         loadWhatsAppChats();
+
+        // ── SSE: real-time WhatsApp message updates ──
+        var waSSE = null;
+        function connectWaSSE() {
+            if (waSSE) return;  // already connected
+            try {
+                waSSE = new EventSource("/api/kanban/whatsapp/stream");
+                waSSE.addEventListener("whatsapp_message", function(e) {
+                    try {
+                        var msg = JSON.parse(e.data);
+                        // Flash a snackbar notification
+                        var who = msg.sender_push_name || msg.sender_phone || msg.jid_phone || "Unknown";
+                        var preview = msg.text ? msg.text.substring(0, 50) : (msg.media_type ? "📎 " + msg.media_type : "");
+                        showSnackbar("WhatsApp: " + who + " — " + preview, "success");
+                        // Refresh the chat list to show the new message
+                        loadWhatsAppChats(true);
+                        // If a thread is open for this sender, refresh it too
+                        if (waSelectedJid && (waSelectedJid === msg.jid_phone || waSelectedJid === msg.sender_phone)) {
+                            showWhatsAppThread(waSelectedJid, document.getElementById("kb-wa-thread-title").textContent);
+                        }
+                    } catch(err) {}
+                });
+                waSSE.onerror = function() {
+                    // Reconnect after disconnect
+                    waSSE.close();
+                    waSSE = null;
+                    setTimeout(connectWaSSE, 5000);
+                };
+            } catch(err) {}
+        }
+        connectWaSSE();
     }
 
     // ═══════════════════════════════════════════════════════════════════

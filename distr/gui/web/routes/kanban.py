@@ -1401,4 +1401,88 @@ source: kanban_ticket_{t.id}
             s.flush()
             return JSONResponse({"success": True, "id": ticket.id})
 
+    # ── SSE: real-time WhatsApp message updates ──
+
+    _wa_sse_queues: list = []  # list of asyncio.Queue objects
+    _wa_sse_hooked = False
+
+    def _hook_whatsapp_signal():
+        """Connect the WhatsApp manager's message_received signal to SSE queues."""
+        nonlocal _wa_sse_hooked
+        if _wa_sse_hooked:
+            return
+        try:
+            from PyQt6.QtWidgets import QApplication
+            _app = QApplication.instance()
+            whatsapp_manager = getattr(_app, 'whatsapp_manager', None) if _app else None
+            if not whatsapp_manager:
+                return
+
+            import asyncio
+            from PyQt6.QtCore import QMetaObject, Qt
+
+            def _on_message_received(data: dict):
+                """Called when a WhatsApp message arrives — push to all SSE clients."""
+                import json as _json
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = None
+
+                event_data = _json.dumps({
+                    "type": "whatsapp_message",
+                    "jid_phone": data.get("jid_phone", ""),
+                    "sender_phone": data.get("sender", {}).get("phone", ""),
+                    "sender_push_name": data.get("sender", {}).get("push_name", ""),
+                    "text": data.get("text", ""),
+                    "media_type": data.get("media", {}).get("type") if isinstance(data.get("media"), dict) else None,
+                })
+                for q in list(_wa_sse_queues):
+                    try:
+                        if loop and not loop.is_closed():
+                            loop.call_soon_threadsafe(q.put_nowait, event_data)
+                        else:
+                            q.put_nowait(event_data)
+                    except Exception:
+                        _wa_sse_queues.remove(q)
+
+            whatsapp_manager.message_received.connect(_on_message_received)
+            _wa_sse_hooked = True
+            logger.info("WhatsApp SSE signal hook connected")
+        except Exception as e:
+            logger.debug(f"WhatsApp SSE hook failed: {e}")
+
+    @router.get("/kanban/whatsapp/stream")
+    async def stream_whatsapp_messages():
+        """SSE endpoint — pushes an event whenever a WhatsApp message arrives in real-time."""
+        import asyncio
+        from fastapi.responses import StreamingResponse
+
+        # Try to hook the signal on first SSE connection
+        _hook_whatsapp_signal()
+
+        async def event_generator():
+            q = asyncio.Queue()
+            _wa_sse_queues.append(q)
+            try:
+                # Send initial keepalive
+                yield ": keepalive\n\n"
+                while True:
+                    try:
+                        data = await asyncio.wait_for(q.get(), timeout=30.0)
+                        yield f"event: whatsapp_message\ndata: {data}\n\n"
+                    except asyncio.TimeoutError:
+                        yield ": keepalive\n\n"
+            except asyncio.CancelledError:
+                pass
+            finally:
+                if q in _wa_sse_queues:
+                    _wa_sse_queues.remove(q)
+
+        return StreamingResponse(
+            event_generator(),
+            media_type="text/event-stream",
+            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+        )
+
     return router
