@@ -1862,14 +1862,16 @@
         // Sort by most recent message first
         waChats.sort(function(a, b) { return b.lastTs - a.lastTs; });
         if (messages.length === 0) {
-            el.textContent = "No captured messages yet";
+            el.textContent = waConnected ? "No captured messages yet" : "Not connected";
             chatListEl.innerHTML = "<div class='text-xs text-gray-500 italic py-2'>No captured messages yet</div>";
-            waConnected = false;
-            document.getElementById("kb-tab-messages").classList.add("hidden");
-            updateTabBarVisibility();
+            // Don't hide the tab if WhatsApp is connected — just show empty state
+            if (!waConnected) {
+                document.getElementById("kb-tab-messages").classList.add("hidden");
+                updateTabBarVisibility();
+            }
             return;
         }
-        // Show Messages tab only when WhatsApp has captured messages
+        // Show Messages tab when WhatsApp has captured messages
         waConnected = true;
         document.getElementById("kb-tab-messages").classList.remove("hidden");
         updateTabBarVisibility();
@@ -2369,6 +2371,15 @@
 
         // Board modal: WhatsApp tab — add link button
         document.getElementById("kb-bm-wa-add-btn").addEventListener("click", addWaLinkFromBoardModal);
+
+        // Check WhatsApp connection status first — show Messages tab if connected
+        apiFetch("/api/settings/advanced/whatsapp/status").then(function(statusData) {
+            if (statusData.status === "connected") {
+                waConnected = true;
+                document.getElementById("kb-tab-messages").classList.remove("hidden");
+                updateTabBarVisibility();
+            }
+        }).catch(function() {});
 
         // Load chats
         loadWhatsAppChats();
