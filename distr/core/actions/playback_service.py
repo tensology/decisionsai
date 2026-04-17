@@ -11,6 +11,7 @@ import threading
 import time
 from distr.core.db import get_session, Action
 from distr.core.paths import RECORDINGS_DIR
+from distr.core.signals import speak_text_directly_event_queue
 from .player_process import ActionPlayerProcess
 from pathlib import Path
 from PyQt6.QtCore import QObject, pyqtSignal, QTimer
@@ -104,8 +105,7 @@ class ActionPlaybackService(QObject):
                     error_msg = f"Action '{action_name}' not found"
                     self.playback_failed.emit(error_msg)
                     # Speak error via TTS
-                    from distr.core.signals import signal_manager
-                    signal_manager.speak_text_directly.emit(error_msg)
+                    speak_text_directly_event_queue(error_msg)
                     return
                 
                 # Check if this is an instruction action (should not be handled here)
@@ -114,8 +114,7 @@ class ActionPlaybackService(QObject):
                     error_msg = f"Action '{action.title}' is an instruction action, not a recorded action"
                     self.playback_failed.emit(error_msg)
                     # Speak error via TTS
-                    from distr.core.signals import signal_manager
-                    signal_manager.speak_text_directly.emit(error_msg)
+                    speak_text_directly_event_queue(error_msg)
                     return
                 
                 if not action.recording_filename:
@@ -123,8 +122,7 @@ class ActionPlaybackService(QObject):
                     error_msg = f"Action '{action.title}' has no recording file"
                     self.playback_failed.emit(error_msg)
                     # Speak error via TTS
-                    from distr.core.signals import signal_manager
-                    signal_manager.speak_text_directly.emit(error_msg)
+                    speak_text_directly_event_queue(error_msg)
                     return
                 
                 # Get the recording file path
@@ -136,8 +134,7 @@ class ActionPlaybackService(QObject):
                     error_msg = f"Recording file not found for action '{action.title}'"
                     self.playback_failed.emit(error_msg)
                     # Speak error via TTS
-                    from distr.core.signals import signal_manager
-                    signal_manager.speak_text_directly.emit(error_msg)
+                    speak_text_directly_event_queue(error_msg)
                     return
                 
                 # Start playback process
@@ -152,8 +149,7 @@ class ActionPlaybackService(QObject):
             error_msg = f"Error playing action: {str(e)}"
             self.playback_failed.emit(error_msg)
             # Speak error via TTS
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit(error_msg)
+            speak_text_directly_event_queue(error_msg)
     
     def _start_playback(self, file_path: str, play_sticky: bool, action_title: str):
         """Start the playback process"""
@@ -182,16 +178,14 @@ class ActionPlaybackService(QObject):
                 error_msg = error or "Failed to start playback"
                 self.playback_failed.emit(error_msg)
                 # Speak error via TTS
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit(error_msg)
+                speak_text_directly_event_queue(error_msg)
                 self.current_playback_process = None
                 return
             
             logger.info(f"[ACTION PLAYBACK SERVICE] Playback process started successfully, monitoring status...")
             
             # Speak "Running action X" AFTER playback has started
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit(f"Running action {action_title}")
+            speak_text_directly_event_queue(f"Running action {action_title}")
             logger.info(f"[ACTION PLAYBACK SERVICE] Spoke 'Running action {action_title}' via TTS after playback started")
             
             # Start Escape key listener to stop playback
@@ -246,8 +240,7 @@ class ActionPlaybackService(QObject):
         signal_manager.emit_hide_player_window()
         
         # Speak "Done" via TTS
-        from distr.core.signals import signal_manager
-        signal_manager.speak_text_directly.emit("Done")
+        speak_text_directly_event_queue("Done")
         logger.info("[ACTION PLAYBACK SERVICE] Playback completed - spoke 'Done' via TTS")
     
     def _on_playback_failed(self, error_message: str):
@@ -271,11 +264,10 @@ class ActionPlaybackService(QObject):
         _sm.action_playback_stopped.emit(error_message)
         
         # Speak error via TTS
-        from distr.core.signals import signal_manager
         error_text = f"Action playback failed: {error_message}"
         if len(error_text) > 100:
             error_text = "Action playback failed"
-        signal_manager.speak_text_directly.emit(error_text)
+        speak_text_directly_event_queue(error_text)
         logger.warning(f"[ACTION PLAYBACK SERVICE] Playback failed: {error_message} - spoke error via TTS")
     
     def _start_escape_listener(self):
@@ -389,8 +381,7 @@ class ActionPlaybackService(QObject):
             self._is_paused = False
             self.current_playback_process.resume()
             logger.info("[ACTION PLAYBACK SERVICE] Playback resumed")
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit("Resumed")
+            speak_text_directly_event_queue("Resumed")
             if self._pause_overlay:
                 self._pause_overlay.dismiss()
         else:
@@ -398,8 +389,7 @@ class ActionPlaybackService(QObject):
             self._is_paused = True
             self.current_playback_process.pause()
             logger.info("[ACTION PLAYBACK SERVICE] Playback paused")
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit("Paused")
+            speak_text_directly_event_queue("Paused")
             try:
                 from distr.gui.countdown_overlay import PauseOverlay
                 if not self._pause_overlay:
@@ -432,8 +422,7 @@ class ActionPlaybackService(QObject):
             _sm.emit_hide_player_window()
             
             # Speak via TTS
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit("Action Stopped")
+            speak_text_directly_event_queue("Action Stopped")
             logger.info("[ACTION PLAYBACK SERVICE] Playback stopped - spoke 'Action Stopped' via TTS")
         except Exception as e:
             logger.error(f"[ACTION PLAYBACK SERVICE] Error stopping playback: {e}", exc_info=True)

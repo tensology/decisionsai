@@ -227,3 +227,43 @@ class SignalManager(QObject):
         self.hide_player_window.emit()
 
 signal_manager = SignalManager()
+
+
+# Module-level event queue reference, set by AgentSession at startup.
+# Used by speak_text_directly_event_queue() to route TTS text to the main process
+# when running in the agent subprocess. Qt signals don't cross process boundaries,
+# and without a running Qt event loop, cross-thread signal delivery is unreliable.
+# The multiprocessing Queue (event_queue) works reliably across threads and processes.
+_agent_event_queue = None
+
+
+def set_agent_event_queue(event_queue):
+    """Set the event queue reference for the agent subprocess.
+
+    Called by AgentSession during startup so that speak_text_directly_event_queue()
+    can route TTS text through the event_queue instead of relying on Qt signals.
+    """
+    global _agent_event_queue
+    _agent_event_queue = event_queue
+
+
+def speak_text_directly_event_queue(text: str):
+    """Emit speak_text_directly through event_queue (preferred) or signal_manager (fallback).
+
+    In the agent subprocess, Qt signals don't reach the main process.
+    Use this instead of signal_manager.speak_text_directly.emit() from any code
+    that runs in the agent subprocess (tools, LLM service, workflows, etc.).
+    """
+    global _agent_event_queue
+    if _agent_event_queue:
+        try:
+            _agent_event_queue.put(('speak_text_directly', {'text': text}), block=False)
+            return
+        except Exception:
+            pass
+    # Fallback: signal_manager only works in the main process or same-thread
+    # with DirectConnection in the agent subprocess.
+    try:
+        signal_manager.speak_text_directly.emit(text)
+    except Exception:
+        pass

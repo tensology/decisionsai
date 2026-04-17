@@ -156,6 +156,12 @@ class AgentSession:
         self.event_queue = event_queue
         self.confirmation_results_dict = confirmation_results_dict
         self.skip_welcome = skip_welcome
+
+        # Set module-level event queue so speak_text_directly_event_queue()
+        # can route TTS text through the event_queue from anywhere in the
+        # agent subprocess (tools, LLM service, workflows, etc.).
+        from distr.core.signals import set_agent_event_queue
+        set_agent_event_queue(event_queue)
         
         self.running = False
         self._stop_event = threading.Event()
@@ -758,6 +764,12 @@ class AgentSession:
             )
             signal_manager.chat_message_added.connect(
                 lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
+            )
+            # Bridge speak_text_directly so TTS works from agent subprocess.
+            # Qt signals don't cross process boundaries, so we route via event_queue
+            # to the main process which re-emits on its signal_manager (which has slots connected).
+            signal_manager.speak_text_directly.connect(
+                lambda text: self.event_queue.put(('speak_text_directly', {'text': text}))
             )
             # Model hot-reload signal - update ChatManager model immediately
             signal_manager.model_hot_reload.connect(self._on_model_hot_reload)

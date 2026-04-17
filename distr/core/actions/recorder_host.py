@@ -17,7 +17,7 @@ import string
 from PyQt6.QtCore import QObject, QTimer
 
 from distr.core.db import get_session, Action
-from distr.core.signals import signal_manager
+from distr.core.signals import signal_manager, speak_text_directly_event_queue
 from distr.core.paths import RECORDINGS_DIR
 
 logger = logging.getLogger(__name__)
@@ -158,7 +158,7 @@ class ActionRecorderHost(QObject):
         """Create a new action with auto-incremented name and start recording."""
         if self.recorder_process and self.recorder_process.is_alive():
             logger.warning("Cannot start recording: already recording")
-            signal_manager.speak_text_directly.emit("Already recording. Stop the current recording first.")
+            speak_text_directly_event_queue("Already recording. Stop the current recording first.")
             return
         try:
             from distr.core.agent.tools.actions.create_action import get_next_title, generate_trigger_words
@@ -192,7 +192,7 @@ class ActionRecorderHost(QObject):
             self._start_recording_for_action(action_id, title)
         except Exception as e:
             logger.error(f"Error starting recording silently: {e}", exc_info=True)
-            signal_manager.speak_text_directly.emit(f"Failed to start recording: {str(e)}")
+            speak_text_directly_event_queue(f"Failed to start recording: {str(e)}")
 
     def _start_recording_for_action(self, action_id: int, action_title: str):
         """Start recording for a specific action — shows countdown first."""
@@ -227,10 +227,10 @@ class ActionRecorderHost(QObject):
                 self._start_recording_key_listener()
             else:
                 logger.error(f"[RECORDER_HOST] Failed to start recording: {result}")
-                signal_manager.speak_text_directly.emit(f"Failed to start recording: {result}")
+                speak_text_directly_event_queue(f"Failed to start recording: {result}")
         except Exception as e:
             logger.error(f"Error starting recording: {e}", exc_info=True)
-            signal_manager.speak_text_directly.emit(f"Failed to start recording: {str(e)}")
+            speak_text_directly_event_queue(f"Failed to start recording: {str(e)}")
 
     def _show_countdown(self, on_complete):
         """Show the 3-2-1-GO countdown overlay, then call on_complete."""
@@ -248,7 +248,7 @@ class ActionRecorderHost(QObject):
         """Start recording for a workflow step — uses same recorder, saves to step."""
         if self.recorder_process and self.recorder_process.is_alive():
             logger.warning("Cannot start step recording: already recording")
-            signal_manager.speak_text_directly.emit("Already recording. Stop the current recording first.")
+            speak_text_directly_event_queue("Already recording. Stop the current recording first.")
             return
         self._recording_for_step_id = step_id
         self.waiting_for_action_name_id = None
@@ -276,12 +276,12 @@ class ActionRecorderHost(QObject):
                 self._start_recording_key_listener()
             else:
                 logger.error(f"[RECORDER_HOST] Failed to start step recording: {result}")
-                signal_manager.speak_text_directly.emit(f"Failed to start recording: {result}")
+                speak_text_directly_event_queue(f"Failed to start recording: {result}")
                 self.recorder_process = None
                 self._recording_for_step_id = None
         except Exception as e:
             logger.error(f"Error starting step recording: {e}", exc_info=True)
-            signal_manager.speak_text_directly.emit(f"Failed to start recording: {str(e)}")
+            speak_text_directly_event_queue(f"Failed to start recording: {str(e)}")
             self.recorder_process = None
             self._recording_for_step_id = None
 
@@ -291,11 +291,11 @@ class ActionRecorderHost(QObject):
         step_id = self._recording_for_step_id
         if not step_id:
             logger.warning("No step recording in progress")
-            signal_manager.speak_text_directly.emit("No recording in progress for this step.")
+            speak_text_directly_event_queue("No recording in progress for this step.")
             return
         if not self.recorder_process:
             logger.warning("Cannot stop step recording: no recorder process")
-            signal_manager.speak_text_directly.emit("Recording was not active. Try recording again.")
+            speak_text_directly_event_queue("Recording was not active. Try recording again.")
             self._recording_for_step_id = None
             return
         try:
@@ -342,10 +342,10 @@ class ActionRecorderHost(QObject):
             update_step(step_id, recording_filename=recording_filename, action_id=new_action_id)
             logger.info(f"[RECORDER_HOST] Step recording saved: {recording_filename} for step {step_id}, action_id={new_action_id}")
             signal_manager.step_recording_stopped.emit(step_id)
-            signal_manager.speak_text_directly.emit("Step recording saved.")
+            speak_text_directly_event_queue("Step recording saved.")
         except Exception as e:
             logger.error(f"Error stopping step recording: {e}", exc_info=True)
-            signal_manager.speak_text_directly.emit(f"Error saving recording: {str(e)}")
+            speak_text_directly_event_queue(f"Error saving recording: {str(e)}")
         finally:
             self.recorder_process = None
             self.current_recording_filename = None
@@ -409,7 +409,7 @@ class ActionRecorderHost(QObject):
                         if not title or is_auto:
                             self.waiting_for_action_name_id = action_id
                             signal_manager.waiting_for_action_name.emit(action_id)
-                            signal_manager.speak_text_directly.emit("Recording saved. What would you like to name this action?")
+                            speak_text_directly_event_queue("Recording saved. What would you like to name this action?")
                         else:
                             self.waiting_for_action_name_id = None
                             trigger_words = []
@@ -419,7 +419,7 @@ class ActionRecorderHost(QObject):
                                 except (json.JSONDecodeError, ValueError):
                                     pass
                             msg = f"Recording saved. You can run this action by saying 'run action {', '.join(trigger_words[:3])}'" if trigger_words else f"Recording saved. You can run this action by saying 'run action {title}'"
-                            signal_manager.speak_text_directly.emit(msg)
+                            speak_text_directly_event_queue(msg)
             except Exception as e:
                 logger.error(f"Error after stop recording: {e}", exc_info=True)
                 self.waiting_for_action_name_id = None
@@ -552,7 +552,7 @@ class ActionRecorderHost(QObject):
         self._is_paused = paused
         if paused:
             logger.info("[RECORDER_HOST] Recording paused")
-            signal_manager.speak_text_directly.emit("Paused")
+            speak_text_directly_event_queue("Paused")
             # Show pause overlay
             try:
                 from distr.gui.countdown_overlay import PauseOverlay
@@ -563,7 +563,7 @@ class ActionRecorderHost(QObject):
                 logger.error(f"[RECORDER_HOST] Error showing pause overlay: {e}")
         else:
             logger.info("[RECORDER_HOST] Recording resumed")
-            signal_manager.speak_text_directly.emit("Resumed")
+            speak_text_directly_event_queue("Resumed")
             if self._pause_overlay:
                 self._pause_overlay.dismiss()
 
@@ -572,14 +572,14 @@ class ActionRecorderHost(QObject):
         name_stripped = (name or "").strip()
         if not name_stripped:
             logger.warning("Empty name in set_action_name")
-            signal_manager.speak_text_directly.emit("Please provide a name for the action.")
+            speak_text_directly_event_queue("Please provide a name for the action.")
             return
         # Reject STT artifacts like [BLANK_AUDIO], fillers, etc.
         if _is_stt_artifact(name_stripped):
             logger.debug(f"Ignoring STT artifact as action name: '{name_stripped}'")
             return
         if _is_trigger_word_taken(name_stripped, exclude_action_id=action_id):
-            signal_manager.speak_text_directly.emit(f"The trigger word '{name_stripped}' is already used. Please choose a different name.")
+            speak_text_directly_event_queue(f"The trigger word '{name_stripped}' is already used. Please choose a different name.")
             return
         try:
             with get_session() as session:
@@ -601,6 +601,6 @@ class ActionRecorderHost(QObject):
                 action.modified_date = datetime.utcnow()
                 session.commit()
             self.waiting_for_action_name_id = None
-            signal_manager.speak_text_directly.emit(f"Recording saved. You can run this action by saying 'run action {name_stripped}'")
+            speak_text_directly_event_queue(f"Recording saved. You can run this action by saying 'run action {name_stripped}'")
         except Exception as e:
             logger.error(f"Error setting action name: {e}", exc_info=True)

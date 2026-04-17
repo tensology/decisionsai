@@ -313,9 +313,9 @@ def _transcribe_to_text(input_path: str, output_path: str, chat_manager=None, ch
             
             # Notify user via TTS
             try:
-                from distr.core.signals import signal_manager
+                from distr.core.signals import speak_text_directly_event_queue
                 notification = f"Transcription complete. Saved to {os.path.basename(output_path)}"
-                signal_manager.speak_text_directly.emit(notification)
+                speak_text_directly_event_queue(notification)
             except Exception as e:
                 logger.warning(f"FileConverter: Could not send TTS notification: {e}")
             
@@ -375,9 +375,9 @@ def _convert_worker_thread(file_path: str, output_path: str, target_format: str,
             # Notify user via TTS (only for single file conversions to avoid spam)
             if not progress_callback:
                 try:
-                    from distr.core.signals import signal_manager
+                    from distr.core.signals import speak_text_directly_event_queue
                     notification = f"File conversion complete. Saved to {os.path.basename(output_path)}"
-                    signal_manager.speak_text_directly.emit(notification)
+                    speak_text_directly_event_queue(notification)
                     logger.info(f"FileConverter: Sent completion notification via TTS")
                 except Exception as e:
                     logger.warning(f"FileConverter: Could not send TTS notification: {e}")
@@ -399,8 +399,8 @@ def _convert_worker_thread(file_path: str, output_path: str, target_format: str,
             # Notify user of error (only for single file)
             if not progress_callback:
                 try:
-                    from distr.core.signals import signal_manager
-                    signal_manager.speak_text_directly.emit(f"File conversion failed: {error_msg[:100]}")
+                    from distr.core.signals import speak_text_directly_event_queue
+                    speak_text_directly_event_queue(f"File conversion failed: {error_msg[:100]}")
                 except Exception:
                     pass
         
@@ -415,8 +415,8 @@ def _convert_worker_thread(file_path: str, output_path: str, target_format: str,
         # Notify user of error (only for single file)
         if not progress_callback:
             try:
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit(f"Conversion error: {str(e)[:100]}")
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue(f"Conversion error: {str(e)[:100]}")
             except Exception:
                 pass
         
@@ -793,8 +793,8 @@ class FileConverterTool(BaseTool):
             
             # Send final notification
             try:
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit(f"Converted {completed_count} of {len(conversion_tasks)} files")
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue(f"Converted {completed_count} of {len(conversion_tasks)} files")
             except Exception:
                 pass
             

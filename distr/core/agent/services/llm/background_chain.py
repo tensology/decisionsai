@@ -269,10 +269,13 @@ class BackgroundChainRunner:
         cleaned = clean_text_for_tts(content)
 
         # 1. Announce via TTS
+        # Must use event_queue (not signal_manager) because the agent runs in a
+        # subprocess. Qt signals don't cross process boundaries, and cross-thread
+        # signal delivery requires a running Qt event loop (agent uses asyncio.run).
         if self.service._speaker_enabled and not getattr(self.service, '_is_telegram_request', False):
             try:
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit(cleaned[:500])  # Cap TTS at 500 chars
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue(cleaned[:500])  # Cap TTS at 500 chars
             except Exception as e:
                 logger.debug("BackgroundChain TTS announcement error: %s", e)
 

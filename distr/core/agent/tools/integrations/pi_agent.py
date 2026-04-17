@@ -96,9 +96,9 @@ class PiAgentTool(BaseTool):
             system_prompt_for_pi += f"\n{condensed}"
 
         # Acknowledge immediately so the user isn't left in silence
-        from distr.core.signals import signal_manager
+        from distr.core.signals import speak_text_directly_event_queue
         try:
-            signal_manager.speak_text_directly.emit(f"Let me check that in {resolved_name}.")
+            speak_text_directly_event_queue(f"Let me check that in {resolved_name}.")
         except Exception:
             pass
 

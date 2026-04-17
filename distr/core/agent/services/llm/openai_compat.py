@@ -615,8 +615,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return
 
         try:
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit("On it.")
+            from distr.core.signals import speak_text_directly_event_queue
+            speak_text_directly_event_queue("On it.")
         except Exception:
             pass
 
@@ -709,8 +709,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if getattr(self, '_is_telegram_request', False) or not self._speaker_enabled:
                 return
             try:
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit("Sorry, something went wrong with that task.")
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue("Sorry, something went wrong with that task.")
             except Exception:
                 pass
         finally:

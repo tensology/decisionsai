@@ -159,9 +159,9 @@ def _transcribe_worker_thread(audio_file_path: str, output_file_path: str, use_a
             
             # Notify user via TTS
             try:
-                from distr.core.signals import signal_manager
+                from distr.core.signals import speak_text_directly_event_queue
                 notification = f"Transcription complete. Saved to {os.path.basename(output_file_path)}"
-                signal_manager.speak_text_directly.emit(notification)
+                speak_text_directly_event_queue(notification)
                 logger.info(f"AudioTranscriber: Sent completion notification via TTS")
             except Exception as e:
                 logger.warning(f"AudioTranscriber: Could not send TTS notification: {e}")
@@ -184,8 +184,8 @@ def _transcribe_worker_thread(audio_file_path: str, output_file_path: str, use_a
             
             # Notify user of error
             try:
-                from distr.core.signals import signal_manager
-                signal_manager.speak_text_directly.emit("Transcription failed. Please check the logs.")
+                from distr.core.signals import speak_text_directly_event_queue
+                speak_text_directly_event_queue("Transcription failed. Please check the logs.")
                 logger.info(f"AudioTranscriber: Sent error notification via TTS")
             except Exception as e:
                 logger.warning(f"AudioTranscriber: Could not send error notification: {e}")
@@ -196,8 +196,8 @@ def _transcribe_worker_thread(audio_file_path: str, output_file_path: str, use_a
         
         # Notify user of error
         try:
-            from distr.core.signals import signal_manager
-            signal_manager.speak_text_directly.emit(f"Transcription error: {str(e)[:100]}")
+            from distr.core.signals import speak_text_directly_event_queue
+            speak_text_directly_event_queue(f"Transcription error: {str(e)[:100]}")
         except Exception:
             pass
 

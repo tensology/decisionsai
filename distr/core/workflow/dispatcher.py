@@ -1072,11 +1072,11 @@ class StepDispatcher:
         increment_workflow_updated()
         # Notify main agent via TTS
         try:
-            from distr.core.signals import signal_manager
+            from distr.core.signals import speak_text_directly_event_queue
             speak = result_text.strip()[:400]
             if len(result_text.strip()) > 400:
                 speak += "..."
-            signal_manager.speak_text_directly.emit(
+            speak_text_directly_event_queue(
                 f"{speak}. Step '{step_name}' is now waiting for your input.")
         except Exception as e:
             logger.debug("Could not speak wait notification: %s", e)

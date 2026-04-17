@@ -375,11 +375,11 @@ class StepRouter:
         """Speak result via TTS and queue a report for the main agent."""
         # TTS notification
         try:
-            from distr.core.signals import signal_manager
+            from distr.core.signals import speak_text_directly_event_queue
             speak_text = result.strip()[:400]
             if len(result.strip()) > 400:
                 speak_text += "..."
-            signal_manager.speak_text_directly.emit(
+            speak_text_directly_event_queue(
                 f"{speak_text}. Step '{step_name}' is now waiting for your input.",
             )
         except Exception as e:
