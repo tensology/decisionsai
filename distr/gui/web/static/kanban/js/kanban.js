@@ -2373,7 +2373,7 @@
         document.getElementById("kb-bm-wa-add-btn").addEventListener("click", addWaLinkFromBoardModal);
 
         // Check WhatsApp connection status first — show Messages tab if connected
-        apiFetch("/api/settings/advanced/whatsapp/status").then(function(statusData) {
+        apiFetch("/api/advanced/whatsapp/status").then(function(statusData) {
             if (statusData.status === "connected") {
                 waConnected = true;
                 document.getElementById("kb-tab-messages").classList.remove("hidden");
