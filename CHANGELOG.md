@@ -4,19 +4,13 @@
 
 ## [2.7.8] - 2026-04-17
 
-### Project Details Redesign, CLI Model Switcher, Terminal Cleanup, Auto-Overview
+### CLI Model Switcher, Smarter Project Layout, Auto-Readback
 
-**Compact project details** — The Details tab got a two-column layout. Name sits next to Folder location, Description sits next to Trigger words. The Board section (Provider, Board, Ticket Board) moved into Details under a separator so you don't need a separate tab. Three tabs instead of four: Details, Startup, CLI.
+**Switch models from the CLI** — Pick any model right next to the input bar. Ollama and OpenAI models are grouped by provider. Change it and pi restarts with your selection instantly.
 
-**CLI model switcher** — A model dropdown sits right next to the CLI input, grouped by provider (Ollama, OpenAI). Pick a model and the pi agent restarts with `--provider` and `--model` flags pointing at your selection. No more editing settings by hand.
+**Simpler project view** — Two columns now: Name + Folder on one row, Description + Trigger words on the next. Board config moved into Details so there's one less tab. Details, Startup, CLI — that's it.
 
-**Floating CLI controls** — The transcript panel now has sticky top-right controls: connection badge, restart (circular-arrows icon), and a "Read Overview" text button. The input bar is a single row: text input, model dropdown, and paper-plane Send.
-
-**Auto-overview on completion** — When pi finishes a task, the system automatically builds a summary from the last command, last response, and last tool result, then routes it to the right channel: TTS for desktop/CLI, Telegram message for instructions that came from there.
-
-**Startup terminals are per-project** — Switching projects now properly saves and restores terminal state. Start and Terminate buttons reset when you leave a project, and reappear when you come back to one that has running terminals. No more ghost "Terminate All" on the wrong project.
-
-**Terminal cleanup on exit** — Both PTY terminals and pi RPC subprocesses now get killed automatically when the app exits via `atexit` handlers. No orphans left behind.
+**Pi reads back its work** — When pi finishes a task, it summarizes what it did and speaks it aloud. Sent from Telegram? The summary goes back to your chat instead.
 
 ---
 
