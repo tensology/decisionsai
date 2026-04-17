@@ -28,7 +28,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "hands_free_listening": {
       "animation": "0.webm",
@@ -43,7 +43,7 @@
       "glow_speed": 875,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "ptt_active": {
       "animation": "0.webm",
@@ -58,7 +58,7 @@
       "glow_speed": 875,
       "glow_style": "pulse",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "dictation": {
       "animation": "0.webm",
@@ -73,7 +73,7 @@
       "glow_speed": 1000,
       "glow_style": "fade",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "recording_action": {
       "animation": "0.webm",
@@ -88,7 +88,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "recording",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "file_drop_success": {
       "animation": "0.webm",
@@ -103,7 +103,7 @@
       "glow_speed": 500,
       "glow_style": "flash",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "tts_response": {
       "animation": "0.webm",
@@ -118,7 +118,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "running_action": {
       "animation": "0.webm",
@@ -133,7 +133,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "running_step_runner": {
       "animation": "0.webm",
@@ -148,7 +148,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "snippet_copied": {
       "animation": "0.webm",
@@ -163,7 +163,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "thinking": {
       "animation": "0.webm",
@@ -178,7 +178,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     },
     "needs_attention": {
       "animation": "0.webm",
@@ -193,7 +193,7 @@
       "glow_speed": 1000,
       "glow_style": "breathing",
       "tray_icon": "default",
-      "playback": "pingpong"
+      "playback": "loop"
     }
   },
   "transitions": {}

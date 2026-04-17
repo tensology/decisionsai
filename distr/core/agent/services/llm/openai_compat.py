@@ -114,6 +114,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # the tool calls, that was already streamed in _consume_stream above.)
             if tool_calls and not full_content.strip():
                 self._speak_acknowledgment()
+                # The acknowledgment's EndFrame closes the TTS transport session.
+                # Push a new StartFrame so follow-up text (after tool execution)
+                # is recognized as a new response by the transport/pipeline.
+                await self.push_frame(LLMFullResponseStartFrame())
 
             while tool_calls and round_num < MAX_TOOL_ROUNDS:
                 round_num += 1
