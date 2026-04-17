@@ -35,6 +35,11 @@
 .kb-card:hover { border-color: var(--kb-accent, #f97316) !important; opacity: 0.85; }
 /* Disabled copy button */
 .kb-copy-btn.disabled { opacity: 0.3 !important; cursor: not-allowed; }
+/* Card action buttons row */
+.kb-card-actions { opacity: 0; transition: opacity 0.15s; }
+.kb-card:hover .kb-card-actions { opacity: 1; }
+/* Disabled card action buttons */
+.kb-card-actions button:disabled { opacity: 0.35 !important; }
 /* Scrollbar for lanes container */
 .kb-lanes-wrap::-webkit-scrollbar { height: 8px; }
 .kb-lanes-wrap::-webkit-scrollbar-track { background: transparent; }
@@ -58,6 +63,10 @@
 .kb-sidebar-tab { cursor: pointer; padding: 6px 16px; border-radius: 6px 6px 0 0; font-size: 0.8rem; font-weight: 600; color: #9ca3af; border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; user-select: none; }
 .kb-sidebar-tab:hover { color: #d1d5db; }
 .kb-sidebar-tab.active { color: #f97316; border-bottom-color: #f97316; }
+/* Source tabs */
+.kb-src-tab { cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; color: #9ca3af; border: 1px solid transparent; transition: color 0.15s, background-color 0.15s, border-color 0.15s; user-select: none; display: inline-flex; align-items: center; gap: 4px; }
+.kb-src-tab:hover { color: #d1d5db; background: rgba(255,255,255,0.05); }
+.kb-src-tab.active { color: #fff; background: rgba(249,115,22,0.15); border-color: #f97316; }
 /* WhatsApp message bubbles */
 .wa-msg-bubble { max-width: 85%; border-radius: 8px; padding: 8px 12px; }
 .wa-msg-mine { background: #005c4b; }
@@ -70,8 +79,8 @@
     <div class="flex gap-6" style="height: calc(100vh - 130px);">
         <!-- Left panel: board sources -->
         <div class="w-72 flex-shrink-0 flex flex-col gap-4">
-            <!-- Tabs -->
-            <div class="flex items-center gap-1 bg-[#1a1f3a] rounded-lg border border-white/20 px-2 pt-2">
+            <!-- Tabs (hidden when only Tickets is visible) -->
+            <div id="kb-tab-bar" class="flex items-center gap-1 bg-[#1a1f3a] rounded-lg border border-white/20 px-2 pt-2">
                 <button type="button" id="kb-tab-tickets" class="kb-sidebar-tab active" data-tab="tickets">
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                     Tickets
@@ -80,45 +89,62 @@
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
                     Messages
                 </button>
-                <div class="flex-1"></div>
-                <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0 mb-1" title="Ticket Boards Settings">
-                    <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
-                        <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
-                    </svg>
-                </button>
             </div>
 
             <!-- Tickets panel -->
             <div id="kb-panel-tickets" class="flex-1 min-h-0 flex flex-col gap-4">
                 <!-- Search -->
                 <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
-                    <input type="text" id="kb-search" placeholder="Search boards..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                    <div class="flex items-center gap-2">
+                        <input type="text" id="kb-search" placeholder="Search boards..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                        <button type="button" id="kb-settings-cog" class="text-gray-400 hover:text-white flex-shrink-0" title="Ticket Boards Settings">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <!-- Source tabs (hidden when only Local is available) -->
+                <div id="kb-src-tabs-row" class="flex gap-1 hidden">
+                    <button type="button" id="kb-src-local" class="kb-src-tab active" data-src="local">
+                        <span class="kb-src-icon kb-src-db" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Local
+                    </button>
+                    <button type="button" id="kb-src-trello" class="kb-src-tab hidden" data-src="trello">
+                        <span class="kb-src-icon kb-src-trello" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Trello
+                    </button>
+                    <button type="button" id="kb-src-jira" class="kb-src-tab hidden" data-src="jira">
+                        <span class="kb-src-icon kb-src-jira" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Jira
+                    </button>
                 </div>
                 <!-- Board list -->
                 <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
-                    <!-- Database boards -->
-                    <div class="mb-3">
+                    <!-- Local boards container -->
+                    <div id="kb-local-boards-container" class="flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
-                            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Boards</span>
+                            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Local Boards</span>
                             <div class="flex items-center gap-1">
                                 <button type="button" id="kb-checkin-btn" class="text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
                                 <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
                             </div>
                         </div>
-                        <div id="kb-db-boards" class="space-y-1"></div>
+                        <div id="kb-db-boards" class="space-y-1 flex-1 overflow-y-auto"></div>
                     </div>
-                    <!-- Trello boards -->
-                    <div class="mb-3">
-                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
-                        <div id="kb-trello-boards" class="space-y-1 mt-2">
+                    <!-- Trello boards container -->
+                    <div id="kb-trello-boards-container" class="hidden flex-1 flex flex-col min-h-0">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
+                        </div>
+                        <div id="kb-trello-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Trello account connected</p>
                         </div>
                     </div>
-                    <!-- Jira boards -->
-                    <div>
-                        <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
-                        <div id="kb-jira-boards" class="space-y-1 mt-2">
+                    <!-- Jira boards container -->
+                    <div id="kb-jira-boards-container" class="hidden flex-1 flex flex-col min-h-0">
+                        <div class="flex items-center justify-between mb-2">
+                            <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
+                        </div>
+                        <div id="kb-jira-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Jira account connected</p>
                         </div>
                     </div>
@@ -131,7 +157,7 @@
                 <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3">
                     <div class="flex items-center gap-2">
                         <input type="text" id="kb-wa-search" placeholder="Search messages..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-sm">
-                        <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Refresh WhatsApp messages">Refresh</button>
+                        <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Sync messages from server">Sync</button>
                     </div>
                 </div>
                 <!-- Chat list (incoming messages only) -->
@@ -148,6 +174,10 @@
             <div id="kb-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
                 <p class="text-gray-400 text-sm max-w-md mb-6">Select a board from the left panel, or create a new database board to get started with your Ticket Boards workflow.</p>
                 <button type="button" id="kb-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Board</button>
+            </div>
+            <!-- Loading spinner -->
+            <div id="kb-loading" class="hidden flex-1 flex items-center justify-center">
+                <svg class="animate-spin h-8 w-8 text-[#f97316]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
             </div>
             <!-- Board view -->
             <div id="kb-board-view" class="hidden flex-1 flex flex-col min-h-0">
@@ -254,6 +284,9 @@
         <div style="min-height: 320px;">
             <!-- Details tab -->
             <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
+                <div id="kb-modal-external-meta" class="hidden space-y-2 mb-3 p-3 bg-[#152054] rounded border border-blue-500/30">
+                    <!-- Populated dynamically for external tickets -->
+                </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
                     <input type="text" id="kb-modal-ticket-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
@@ -333,8 +366,11 @@
                 <button type="button" id="kb-modal-act-cli" class="text-gray-400 hover:text-orange-400 transition-colors" title="Push to CLI">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                 </button>
-                <button type="button" id="kb-modal-act-cursor" class="text-gray-400 hover:text-blue-400 transition-colors" title="Send to Cursor (.ticket)">
+                <button type="button" id="kb-modal-act-project" class="text-gray-400 hover:text-blue-400 transition-colors" title="Send to Project (.tickets)">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </button>
+                <button type="button" id="kb-modal-transfer-ext" class="hidden text-gray-400 hover:text-green-400 transition-colors" title="Copy to local board">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 16H3v-5"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
                 </button>
             </div>
             <div class="flex gap-2">

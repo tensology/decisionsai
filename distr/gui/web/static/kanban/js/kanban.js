@@ -3,6 +3,7 @@
 
     var currentBoard = null;       // { id, source, ... }
     var currentBoardData = null;   // full board data with lanes/tickets
+    var currentBoardHasProject = false; // whether current board has a linked project
     var dbBoards = [];
     var editingBoardId = null;     // null = create, number = edit
     var modalTicketId = null;
@@ -13,10 +14,26 @@
     var waCtxMenuData = null;      // { jid, phone, name }
     var waMsgCtxData = null;       // { message_id (db id) }
     var waConnected = false;
+    var activeSourceTab = "local";
 
     // ── Helpers ──
 
     function esc(s) { var d = document.createElement("div"); d.textContent = s || ""; return d.innerHTML; }
+
+    /** Strip HTML tags from a string, decode entities, and trim. */
+    function stripHtml(html) {
+        if (!html) return "";
+        var tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
+    }
+
+    /** Truncate text to maxLen characters, adding ellipsis if truncated. */
+    function truncate(s, maxLen) {
+        if (!s) return "";
+        s = s.replace(/\s+/g, " ").trim();
+        return s.length > maxLen ? s.substring(0, maxLen) + "…" : s;
+    }
 
     var apiFetch = window.DecisionsAPI.fetch;
     function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "kb-snackbar" }); }
@@ -103,6 +120,25 @@
         }
     }
 
+    function updateSourceTabsVisibility() {
+        var trelloTab = document.getElementById("kb-src-trello");
+        var jiraTab = document.getElementById("kb-src-jira");
+        var tabsRow = document.getElementById("kb-src-tabs-row");
+        // Show tabs row only if at least one external source is available
+        var hasExternal = !trelloTab.classList.contains("hidden") || !jiraTab.classList.contains("hidden");
+        tabsRow.classList.toggle("hidden", !hasExternal);
+    }
+
+    function switchSourceTab(src) {
+        activeSourceTab = src;
+        document.querySelectorAll(".kb-src-tab").forEach(function(btn) {
+            btn.classList.toggle("active", btn.dataset.src === src);
+        });
+        document.getElementById("kb-local-boards-container").classList.toggle("hidden", src !== "local");
+        document.getElementById("kb-trello-boards-container").classList.toggle("hidden", src !== "trello");
+        document.getElementById("kb-jira-boards-container").classList.toggle("hidden", src !== "jira");
+    }
+
     function renderSidebarBoards(boards) {
         var container = document.getElementById("kb-db-boards");
         var search = (document.getElementById("kb-search").value || "").toLowerCase();
@@ -148,13 +184,24 @@
 
     function renderExternalBoards(containerId, boards, source) {
         var container = document.getElementById(containerId);
+        // Show/hide the source tab based on whether there are boards
+        var tabId = source === "trello" ? "kb-src-trello" : "kb-src-jira";
+        var tabBtn = document.getElementById(tabId);
+        if (boards.length > 0) {
+            tabBtn.classList.remove("hidden");
+        } else {
+            tabBtn.classList.add("hidden");
+            // If we were on this tab and it became empty, switch to local
+            if (activeSourceTab === source) switchSourceTab("local");
+        }
+        updateSourceTabsVisibility();
         if (!boards.length) {
             container.innerHTML = '<p class="text-xs text-gray-500 italic">No ' + source + ' account connected</p>';
             return;
         }
         var search = (document.getElementById("kb-search").value || "").toLowerCase();
         var filtered = search ? boards.filter(function(b) { return b.name.toLowerCase().indexOf(search) >= 0; }) : boards;
-        container.innerHTML = "";
+        container.innerHTML = filtered.length ? "" : '<p class="text-xs text-gray-500 italic">No matching boards</p>';
         filtered.forEach(function(b) {
             var div = document.createElement("div");
             var cls = source === "trello" ? "kb-src-trello" : "kb-src-jira";
@@ -213,6 +260,7 @@
             if (currentBoard && currentBoard.id === boardId) {
                 currentBoard = null; currentBoardData = null;
                 document.getElementById("kb-board-view").classList.add("hidden");
+                document.getElementById("kb-loading").classList.add("hidden");
                 document.getElementById("kb-empty").classList.remove("hidden");
             }
             loadBoards(true);
@@ -231,6 +279,7 @@
             if (currentBoard && currentBoard.id === boardId) {
                 currentBoard = null; currentBoardData = null;
                 document.getElementById("kb-board-view").classList.add("hidden");
+                document.getElementById("kb-loading").classList.add("hidden");
                 document.getElementById("kb-empty").classList.remove("hidden");
             }
             loadBoards(true);
@@ -258,9 +307,14 @@
 
     function selectBoard(source, id, extUrl) {
         currentBoard = { id: id, source: source, extUrl: extUrl || "" };
+        // Auto-switch source tab when selecting a board
+        var srcTab = source === "database" ? "local" : source;
+        switchSourceTab(srcTab);
         try { localStorage.setItem("kb_last_selected", JSON.stringify({ source: source, id: id })); } catch (e) {}
+        // Show loading spinner
         document.getElementById("kb-empty").classList.add("hidden");
-        document.getElementById("kb-board-view").classList.remove("hidden");
+        document.getElementById("kb-board-view").classList.add("hidden");
+        document.getElementById("kb-loading").classList.remove("hidden");
         // Close any open WhatsApp thread view
         document.getElementById("kb-wa-thread-view").classList.add("hidden");
         waSelectedJid = null;
@@ -268,20 +322,32 @@
         if (source === "database") {
             apiFetch("/api/kanban/boards/" + id).then(function(data) {
                 currentBoardData = data;
+                document.getElementById("kb-loading").classList.add("hidden");
+                document.getElementById("kb-board-view").classList.remove("hidden");
                 renderBoard(data, true);
-            }).catch(function(e) { showSnackbar("Failed to load board: " + e.message, "error"); });
+            }).catch(function(e) {
+                document.getElementById("kb-loading").classList.add("hidden");
+                document.getElementById("kb-empty").classList.remove("hidden");
+                showSnackbar("Failed to load board: " + e.message, "error");
+            });
         } else {
             apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id)).then(function(data) {
                 currentBoardData = data;
+                document.getElementById("kb-loading").classList.add("hidden");
+                document.getElementById("kb-board-view").classList.remove("hidden");
                 renderBoard(data, false);
-            }).catch(function(e) { showSnackbar("Failed to load external board: " + e.message, "error"); });
+            }).catch(function(e) {
+                document.getElementById("kb-loading").classList.add("hidden");
+                document.getElementById("kb-empty").classList.remove("hidden");
+                showSnackbar("Failed to load external board: " + e.message, "error");
+            });
         }
         loadBoards(); // uses cache, just re-renders sidebar active state
     }
 
     function renderBoard(data, isLocal) {
         // Apply board accent color as CSS variable
-        var boardColor = data.color || "#f97316";
+        var boardColor = data.color || (isLocal ? null : (currentBoard.source === "trello" ? "#0079bf" : "#0052cc")) || "#f97316";
         document.getElementById("kb-board-view").style.setProperty("--kb-accent", boardColor);
 
         document.getElementById("kb-board-title").textContent = data.name || "Board";
@@ -297,8 +363,19 @@
         }
 
         document.getElementById("kb-add-ticket").style.display = isLocal ? "" : "none";
-        document.getElementById("kb-edit-board").style.display = isLocal ? "" : "none";
+        // Show edit/config button for all boards ("Configure" for external)
+        var editBtn = document.getElementById("kb-edit-board");
+        if (!isLocal) {
+            editBtn.style.display = "";
+            editBtn.textContent = "Configure";
+            editBtn.title = "Configure this external board (link project, workflow, etc.)";
+        } else {
+            editBtn.style.display = "";
+            editBtn.textContent = "Edit";
+            editBtn.title = "";
+        }
         document.getElementById("kb-delete-board").style.display = isLocal ? "" : "none";
+
         var extLink = document.getElementById("kb-board-ext-link");
         if (!isLocal && (data.url || currentBoard.extUrl)) {
             extLink.classList.remove("hidden");
@@ -306,12 +383,21 @@
         } else {
             extLink.classList.add("hidden");
         }
-        renderLanes(data.lanes || [], isLocal);
+
+        // Store board-level data for conditional actions
+        currentBoardData = data;
+        currentBoardHasProject = !!(data.default_project_id || (currentBoard.source === "database" && data.id));
+        if (!isLocal && data.local_id) {
+            currentBoard._localId = data.local_id;
+        }
+
+        renderLanes(data.lanes || [], isLocal, data);
     }
 
     function renderLanes(lanes, isLocal) {
         var container = document.getElementById("kb-lanes");
         container.innerHTML = "";
+        var boardData = currentBoardData || {};
         lanes.forEach(function(lane) {
             var col = document.createElement("div");
             col.className = "kb-lane flex flex-col bg-[#152054]/50 rounded-lg border border-white/10";
@@ -330,13 +416,182 @@
                     if (ticketId) moveTicket(parseInt(ticketId, 10), lane.id, body, e.clientY);
                 });
             }
-            (lane.tickets || []).forEach(function(ticket) { body.appendChild(createTicketCard(ticket, isLocal)); });
+            (lane.tickets || []).forEach(function(ticket) { body.appendChild(createTicketCard(ticket, isLocal, boardData)); });
             col.appendChild(body);
             container.appendChild(col);
         });
     }
 
-    function _pollCliStatus(ticketId, btnEl) {
+    /** Push a local ticket to CLI (with confirmation and spinners). */
+    function pushTicketToCli(ticketId, btnEl) {
+        if (!confirm("Push ticket #" + ticketId + " to the project CLI?")) return;
+        if (btnEl) {
+            btnEl.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/\u003e</svg\u003e';
+            btnEl.classList.add("text-orange-400");
+            btnEl.disabled = true;
+        }
+        apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-cli", { method: "POST" })
+            .then(function(r) {
+                showSnackbar(r.message || "Sent to CLI");
+                _pollCliStatus(ticketId, btnEl);
+            })
+            .catch(function(err) {
+                showSnackbar("CLI error: " + err.message, "error");
+                if (btnEl) {
+                    btnEl.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<polyline points="4 17 10 11 4 5"/\u003e<line x1="12" y1="19" x2="20" y2="19"/\u003e</svg\u003e';
+                    btnEl.classList.remove("text-orange-400");
+                    btnEl.disabled = false;
+                }
+            });
+    }
+
+    /** Send a local ticket to project by ID. */
+    function sendTicketToProjectById(ticketId) {
+        apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-project", { method: "POST" })
+            .then(function(r) { showSnackbar(r.message || "Sent to project"); })
+            .catch(function(err) { showSnackbar("Error: " + err.message, "error"); });
+    }
+
+    /** Copy an external ticket to the local board, then optionally send to CLI or project. */
+    function copyAndPushExternalTicket(ticket, source, action) {
+        if (!dbBoards.length) { showSnackbar("No local boards available", "error"); return; }
+        // Find the best target board
+        var targetBoard = (currentBoardData && currentBoardData.local_id) ? null : null;
+        // Prefer a board linked to the same project as the external board config
+        var preferredBoard = null;
+        for (var i = 0; i < dbBoards.length; i++) {
+            if (currentBoardData && currentBoardData.default_project_id && dbBoards[i].default_project_id === currentBoardData.default_project_id) {
+                preferredBoard = dbBoards[i]; break;
+            }
+        }
+        if (!preferredBoard && currentBoardData && currentBoardData.local_id) {
+            for (var j = 0; j < dbBoards.length; j++) {
+                if (dbBoards[j].id === currentBoardData.local_id) { preferredBoard = dbBoards[j]; break; }
+            }
+        }
+        if (!preferredBoard) preferredBoard = dbBoards[0];
+
+        var payload = {
+            board_id: preferredBoard.id,
+            title: ticket.title,
+            description: stripHtml(ticket.description || ""),
+            priority: ticket.priority || "medium",
+            external_source: source,
+            external_id: String(ticket.id),
+            external_url: ticket.url || "",
+            auto_send_to_project: action === 'project',
+            auto_send_to_cli: action === 'cli',
+        };
+
+        apiFetch("/api/kanban/tickets/copy-external-to-board", {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload)
+        }).then(function(r) {
+            if (action === 'cli' && r.id) {
+                showSnackbar("Ticket copied — pushing to CLI…");
+                pushTicketToCli(r.id, null);
+            } else if (action === 'project') {
+                showSnackbar(r.sent_to_project ? "Ticket copied & sent to project: " + (r.project_name || "") : "Ticket copied to board");
+            } else {
+                showSnackbar("Ticket copied to board");
+            }
+            // Refresh the target board if it's currently displayed
+            if (currentBoard && currentBoard.source === "database" && currentBoard.id === preferredBoard.id) {
+                selectBoard("database", preferredBoard.id);
+            }
+        }).catch(function(err) {
+            showSnackbar("Error: " + err.message, "error");
+        });
+    }
+
+    /** Open a detail modal for an external (Trello/Jira) ticket. */
+    function openExternalTicketModal(ticket, source) {
+        // Populate the modal with external ticket data
+        document.getElementById("kb-modal-ticket-title").value = ticket.title || "";
+        // For external tickets, show the description as plain text (stripped of HTML)
+        var descArea = document.getElementById("kb-modal-ticket-desc");
+        descArea.value = stripHtml(ticket.description || "");
+        descArea.readOnly = true;
+        descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
+
+        // Hide priority editing for external
+        document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
+            btn.classList.add("opacity-50", "cursor-not-allowed");
+            btn.disabled = true;
+        });
+        setPriorityButtons(ticket.priority || "medium");
+
+        // Clear links/files/todos
+        renderModalLinks([]);
+        renderModalFiles([]);
+        // Show todos from external ticket if available
+        renderExternalTodos(ticket.todos || []);
+
+        // Show external metadata
+        var metaContainer = document.getElementById("kb-modal-external-meta");
+        if (metaContainer) {
+            var metaHtml = '';
+            if (ticket.url) {
+                metaHtml += '<div class="flex items-center gap-2"\u003e<span class="text-xs text-gray-500"\u003eSource:</span\u003e<a href="' + esc(ticket.url) + '" target="_blank" class="text-xs text-[#f97316] hover:underline"\u003eOpen in ' + esc(source.charAt(0).toUpperCase() + source.slice(1)) + '</a\u003e</div\u003e';
+            }
+            if (ticket.members && ticket.members.length) {
+                metaHtml += '<div class="text-xs text-gray-400"\u003eMembers: ' + ticket.members.map(esc).join(', ') + '</div\u003e';
+            }
+            if (ticket.labels && ticket.labels.length) {
+                metaHtml += '<div class="flex flex-wrap gap-1"\u003e' + ticket.labels.map(function(lb) { return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300"\u003e' + esc(lb) + '</span\u003e'; }).join('') + '</div\u003e';
+            }
+            if (ticket.time_estimate || ticket.time_spent) {
+                metaHtml += '<div class="text-xs text-gray-400"\u003e';
+                if (ticket.time_estimate) metaHtml += 'Estimate: ' + esc(ticket.time_estimate);
+                if (ticket.time_spent) metaHtml += ' | Spent: ' + esc(ticket.time_spent);
+                metaHtml += '</div\u003e';
+            }
+            if (ticket.reporter) {
+                metaHtml += '<div class="text-xs text-gray-400"\u003eReporter: ' + esc(ticket.reporter) + '</div\u003e';
+            }
+            metaContainer.innerHTML = metaHtml;
+            metaContainer.classList.remove("hidden");
+        }
+
+        // Show transfer/copy button, hide save/delete
+        document.getElementById("kb-modal-transfer-ext").classList.remove("hidden");
+        document.getElementById("kb-modal-save").classList.add("hidden");
+        document.getElementById("kb-modal-delete").classList.add("hidden");
+        // Change title to show source
+        document.getElementById("kb-modal-title").textContent = ticket.title || "Ticket";
+
+        // Store external ticket data for actions
+        window._extTicketData = ticket;
+        window._extTicketSource = source;
+
+        // Show modal
+        switchTicketTab("details");
+        document.getElementById("kb-ticket-modal").classList.remove("hidden");
+    }
+
+    /** Render todos from external sources (read-only). */
+    function renderExternalTodos(todos) {
+        var container = document.getElementById("kb-modal-todos");
+        container.innerHTML = "";
+        if (!todos.length) {
+            container.innerHTML = '<p class="text-xs text-gray-500 italic"\u003eNo tasks</p\u003e';
+            return;
+        }
+        todos.forEach(function(todo) {
+            var row = document.createElement("div");
+            row.className = "flex items-center gap-2 text-xs";
+            row.innerHTML = '<input type="checkbox" ' + (todo.done ? "checked" : "") + ' class="accent-[#f97316]" disabled\u003e' +
+                '<span class="flex-1 ' + (todo.done ? "line-through text-gray-500" : "text-gray-300") + '"\u003e' + esc(todo.text) + '</span\u003e';
+            container.appendChild(row);
+        });
+    }
+
+    // ── Drag & drop move ──
+    /**
+     * 0-based index where the ticket should land in the target lane, from pointer Y.
+     * Skips the dragged card in the same lane so reordering within a lane is not always "append".
+     */
+    function computeTicketDropPosition(bodyEl, ticketId, clientY) {
         // Poll the workflow audit log for the CLI session to complete
         var attempts = 0;
         var maxAttempts = 120; // 10 minutes at 5s intervals
@@ -380,7 +635,8 @@
         }, 5000);
     }
 
-    function createTicketCard(ticket, isLocal) {
+    function createTicketCard(ticket, isLocal, boardData) {
+        boardData = boardData || currentBoardData || {};
         var card = document.createElement("div");
         card.className = "kb-card bg-[#1a1f3a] rounded-lg border border-white/20 p-3 cursor-pointer hover:border-[#f97316]/50 transition-colors relative";
         card.dataset.ticketId = String(ticket.id);
@@ -392,93 +648,130 @@
             });
             card.addEventListener("dragend", function() { card.classList.remove("dragging"); });
         }
-        var priClass = "kb-pri-" + (ticket.priority || "medium");
+        var pri = (ticket.priority || "medium").toLowerCase();
+        var priClass = "kb-pri-" + pri;
+        // Strip HTML from description for display
+        var cleanDesc = stripHtml(ticket.description || "");
+        var truncatedDesc = truncate(cleanDesc, 120);
         var todoCount = (ticket.todos || []).length;
         var todoDone = (ticket.todos || []).filter(function(t) { return t.done; }).length;
-        var todoHtml = todoCount ? '<span class="text-xs text-gray-500 ml-2">✓ ' + todoDone + '/' + todoCount + '</span>' : '';
-        card.innerHTML = '<div class="flex items-start justify-between gap-2">' +
-            '<span class="text-sm text-white leading-snug flex-1">' + esc(ticket.title) + '</span>' +
-            '<span class="' + priClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium flex-shrink-0">' + esc(ticket.priority || "medium") + '</span>' +
-            '</div>' +
-            (ticket.description ? '<p class="text-xs text-gray-500 mt-1 line-clamp-2">' + esc(ticket.description).substring(0, 100) + '</p>' : '') +
-            (isLocal ? '<div class="flex items-center justify-center gap-3 mt-2 kb-card-actions">' +
-                '<button class="kb-act-copy text-gray-500 hover:text-white transition-colors" title="Copy title &amp; description"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg></button>' +
-                '<button class="kb-act-cli text-gray-500 hover:text-orange-400 transition-colors" title="Push to CLI"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg></button>' +
-                '<button class="kb-act-cursor text-gray-500 hover:text-blue-400 transition-colors" title="Send to Cursor (.ticket)"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg></button>' +
-                '<button class="kb-act-delete text-gray-500 hover:text-red-400 transition-colors" title="Delete ticket"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg></button>' +
-            '</div>' : '') +
-            '<div class="flex items-center mt-2">' + todoHtml + '</div>';
-        if (!isLocal) {
-            var copyBtn = document.createElement("button");
-            copyBtn.className = "kb-copy-btn absolute top-2 right-2 text-xs px-1.5 py-0.5 rounded bg-[#f97316] text-white hover:bg-[#ea580c]";
-            copyBtn.textContent = "⧉ Copy";
-            copyBtn.title = "Copy to a database board";
-            if (!dbBoards.length) { copyBtn.classList.add("disabled"); copyBtn.title = "No database boards available"; }
-            copyBtn.onclick = function(e) { e.stopPropagation(); if (!dbBoards.length) return; openCopyModal(ticket); };
-            card.appendChild(copyBtn);
+        var todoHtml = todoCount ? '<span class="text-xs text-gray-500 ml-2"\u003e✓ ' + todoDone + '/' + todoCount + '</span\u003e' : '';
+        // Labels for external tickets
+        var labelsHtml = '';
+        if (ticket.labels && ticket.labels.length) {
+            labelsHtml = '<div class="flex flex-wrap gap-1 mt-1"\u003e' +
+                ticket.labels.map(function(lb) { return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300"\u003e' + esc(lb) + '</span\u003e'; }).join('') +
+                '</div\u003e';
         }
+        // Members for external tickets
+        var membersHtml = '';
+        if (ticket.members && ticket.members.length) {
+            membersHtml = '<div class="flex items-center gap-1 mt-1"\u003e' +
+                ticket.members.map(function(m) { return '<span class="text-[10px] text-gray-400"\u003e' + esc(m) + '</span\u003e'; }).join(', ') +
+                '</div\u003e';
+        }
+        // Time tracking for Jira
+        var timeHtml = '';
+        if (ticket.time_estimate || ticket.time_spent) {
+            timeHtml = '<div class="text-[10px] text-gray-500 mt-1"\u003e';
+            if (ticket.time_estimate) timeHtml += '⏱ ' + esc(ticket.time_estimate);
+            if (ticket.time_spent) timeHtml += ' / ' + esc(ticket.time_spent) + ' done';
+            timeHtml += '</div\u003e';
+        }
+        // Determine if project-linked actions should show
+        var hasProject = !!(boardData.default_project_id || (isLocal && boardData.id));
+        // Source badge for external tickets
+        var sourceBadge = '';
+        if (!isLocal && currentBoard.source) {
+            var srcColor = currentBoard.source === 'trello' ? '#0079bf' : '#0052cc';
+            sourceBadge = '<span class="text-[9px] px-1 py-0.5 rounded text-white" style="background:' + srcColor + '"\u003e' + esc(currentBoard.source) + '</span\u003e';
+        }
+        // External URL link icon
+        var extLinkHtml = '';
+        if (!isLocal && ticket.url) {
+            extLinkHtml = '<a href="' + esc(ticket.url) + '" target="_blank" class="text-gray-500 hover:text-blue-400 transition-colors" title="Open in ' + esc(currentBoard.source || 'browser') + '" onclick="event.stopPropagation()"\u003e' +
+                '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/\u003e<polyline points="15 3 21 3 21 9"/\u003e<line x1="10" y1="14" x2="21" y2="3"/\u003e</svg\u003e</a\u003e';
+        }
+        card.innerHTML = '<div class="flex items-start justify-between gap-2"\u003e' +
+            '<span class="text-sm text-white leading-snug flex-1"\u003e' + esc(ticket.title) + '</span\u003e' +
+            '<div class="flex items-center gap-1.5 flex-shrink-0"\u003e' + sourceBadge + '<span class="' + priClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium"\u003e' + esc(pri) + '</span\u003e' + extLinkHtml + '</div\u003e' +
+            '</div\u003e' +
+            (truncatedDesc ? '<p class="text-xs text-gray-500 mt-1 line-clamp-2"\u003e' + esc(truncatedDesc) + '</p\u003e' : '') +
+            labelsHtml + membersHtml + timeHtml +
+            '<div class="flex items-center justify-center gap-2 mt-2 kb-card-actions"\u003e' +
+                '<button class="kb-act-copy text-gray-500 hover:text-white transition-colors" title="Copy title & description"\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<rect x="9" y="9" width="13" height="13" rx="2"/\u003e<path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/\u003e</svg\u003e</button\u003e' +
+                (hasProject ? '<button class="kb-act-cli text-gray-500 hover:text-orange-400 transition-colors" title="Push to CLI"\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<polyline points="4 17 10 11 4 5"/\u003e<line x1="12" y1="19" x2="20" y2="19"/\u003e</svg\u003e</button\u003e' : '<button class="kb-act-cli text-gray-700 cursor-not-allowed" title="Push to CLI (link a project to this board first)" disabled\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<polyline points="4 17 10 11 4 5"/\u003e<line x1="12" y1="19" x2="20" y2="19"/\u003e</svg\u003e</button\u003e') +
+                (hasProject ? '<button class="kb-act-project text-gray-500 hover:text-blue-400 transition-colors" title="Send to Project (.tickets)"\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/\u003e<polyline points="14 2 14 8 20 8"/\u003e</svg\u003e</button\u003e' : '<button class="kb-act-project text-gray-700 cursor-not-allowed" title="Send to Project (.tickets) — link a project to this board first" disabled\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/<polyline points="14 2 14 8 20 8"/\u003e</svg\u003e</button\u003e') +
+                (!isLocal ? '<button class="kb-act-transfer text-gray-500 hover:text-green-400 transition-colors" title="Copy to local board"\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<path d="M16 3h5v5"/\u003e<path d="M8 16H3v-5"/\u003e<path d="M21 3l-7 7"/\u003e<path d="M3 21l7-7"/\u003e</svg\u003e</button\u003e' : '') +
+                (isLocal ? '<button class="kb-act-delete text-gray-500 hover:text-red-400 transition-colors" title="Delete ticket"\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<polyline points="3 6 5 6 21 6"/\u003e<path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/\u003e</svg\u003e</button\u003e' : '<button class="kb-act-delete text-gray-700 cursor-not-allowed" title="Delete not available for external tickets" disabled\u003e<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"\u003e<polyline points="3 6 5 6 21 6"/\u003e<path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/\u003e</svg\u003e</button\u003e') +
+            '</div\u003e' +
+            '<div class="flex items-center mt-1"\u003e' + todoHtml + '</div\u003e';
+        // Click handler: open modal for ALL tickets (local and external)
         card.addEventListener("click", function(e) {
-            if (e.target.closest(".kb-copy-btn")) return;
-            if (e.target.closest(".kb-card-actions")) return;
-            if (isLocal) { openTicketModal(ticket.id); }
-            else if (ticket.url) { window.open(ticket.url, "_blank"); }
+            if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-act-transfer") || e.target.closest("a")) return;
+            if (isLocal) {
+                openTicketModal(ticket.id);
+            } else {
+                openExternalTicketModal(ticket, currentBoard.source);
+            }
         });
-        // Wire up action buttons for local tickets
-        if (isLocal) {
-            var copyBtn2 = card.querySelector(".kb-act-copy");
-            if (copyBtn2) copyBtn2.addEventListener("click", function(e) {
-                e.stopPropagation();
-                var text = ticket.title + (ticket.description ? "\n\n" + ticket.description : "");
-                navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
+        // Wire up action buttons
+        // Copy title + description
+        var copyBtn = card.querySelector(".kb-act-copy");
+        if (copyBtn) copyBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var text = stripHtml(ticket.title) + (cleanDesc ? "\n\n" + cleanDesc : "");
+            navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
+        });
+        // Push to CLI
+        var cliBtn = card.querySelector(".kb-act-cli");
+        if (cliBtn && !cliBtn.disabled) cliBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            if (isLocal) {
+                pushTicketToCli(ticket.id, cliBtn);
+            } else {
+                // External ticket: copy to local board first, then push
+                copyAndPushExternalTicket(ticket, currentBoard.source, 'cli');
+            }
+        });
+        // Send to Project
+        var projectBtn = card.querySelector(".kb-act-project");
+        if (projectBtn && !projectBtn.disabled) projectBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            if (isLocal) {
+                sendTicketToProjectById(ticket.id);
+            } else {
+                // External ticket: copy to local board first, then send
+                copyAndPushExternalTicket(ticket, currentBoard.source, 'project');
+            }
+        });
+        // Transfer/Copy to local board (external only)
+        var transferBtn = card.querySelector(".kb-act-transfer");
+        if (transferBtn) transferBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            openCopyModal(ticket);
+        });
+        // Delete (local only)
+        var delBtn = card.querySelector(".kb-act-delete");
+        if (delBtn && isLocal) delBtn.addEventListener("click", function(e) {
+            e.stopPropagation();
+            var tid = ticket.id;
+            showKanbanConfirm({
+                title: "Delete ticket",
+                message: "Delete \"" + ticket.title + "\"? This cannot be undone.",
+                confirmLabel: "Delete",
+                danger: true,
+                onConfirm: function() {
+                    hideKanbanConfirm();
+                    apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" })
+                        .then(function() {
+                            showSnackbar("Ticket deleted");
+                            reloadCurrentDatabaseBoard();
+                        })
+                        .catch(function(err) { showSnackbar("Delete failed: " + err.message, "error"); });
+                }
             });
-            var cliBtn = card.querySelector(".kb-act-cli");
-            if (cliBtn) cliBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                if (!confirm("Push ticket #" + ticket.id + " to the project CLI?")) return;
-                cliBtn.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
-                cliBtn.classList.add("text-orange-400");
-                cliBtn.disabled = true;
-                apiFetch("/api/kanban/tickets/" + ticket.id + "/send-to-cli", { method: "POST" })
-                    .then(function(r) {
-                        showSnackbar(r.message || "Sent to CLI");
-                        // Poll for completion
-                        _pollCliStatus(ticket.id, cliBtn);
-                    })
-                    .catch(function(err) {
-                        showSnackbar("CLI error: " + err.message, "error");
-                        cliBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
-                        cliBtn.classList.remove("text-orange-400");
-                        cliBtn.disabled = false;
-                    });
-            });
-            var cursorBtn = card.querySelector(".kb-act-cursor");
-            if (cursorBtn) cursorBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                apiFetch("/api/kanban/tickets/" + ticket.id + "/send-to-project", { method: "POST" })
-                    .then(function(r) { showSnackbar(r.message || "Sent to project"); })
-                    .catch(function(err) { showSnackbar("Error: " + err.message, "error"); });
-            });
-            var delBtn = card.querySelector(".kb-act-delete");
-            if (delBtn) delBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                var tid = ticket.id;
-                showKanbanConfirm({
-                    title: "Delete ticket",
-                    message: "Delete \"" + ticket.title + "\"? This cannot be undone.",
-                    confirmLabel: "Delete",
-                    danger: true,
-                    onConfirm: function() {
-                        hideKanbanConfirm();
-                        apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" })
-                            .then(function() {
-                                showSnackbar("Ticket deleted");
-                                reloadCurrentDatabaseBoard();
-                            })
-                            .catch(function(err) { showSnackbar("Delete failed: " + err.message, "error"); });
-                    }
-                });
-            });
-        }
+        });
         return card;
     }
 
@@ -523,6 +816,8 @@
     function openTicketModal(ticketId) {
         modalTicketId = ticketId;
         switchTicketTab("details");
+        // Reset modal to local-ticket mode
+        resetTicketModalForLocal();
         apiFetch("/api/kanban/tickets/" + ticketId).then(function(t) {
             document.getElementById("kb-modal-ticket-title").value = t.title || "";
             document.getElementById("kb-modal-ticket-desc").value = t.description || "";
@@ -541,7 +836,9 @@
                 wfSel.disabled = cliCb.checked;
                 if (cliCb.checked) wfSel.value = "";
             };
-            // Modal action buttons are always visible (wired up in init)
+            // Hide external metadata section for local tickets
+            var extMeta = document.getElementById("kb-modal-external-meta");
+            if (extMeta) extMeta.classList.add("hidden");
             document.getElementById("kb-ticket-modal").classList.remove("hidden");
         }).catch(function(e) { showSnackbar("Failed to load ticket: " + e.message, "error"); });
     }
@@ -549,6 +846,27 @@
     function closeTicketModal() {
         document.getElementById("kb-ticket-modal").classList.add("hidden");
         modalTicketId = null;
+        window._extTicketData = null;
+        window._extTicketSource = null;
+        resetTicketModalForLocal();
+    }
+
+    /** Reset modal UI back to local-ticket (editable) mode. */
+    function resetTicketModalForLocal() {
+        var descArea = document.getElementById("kb-modal-ticket-desc");
+        descArea.readOnly = false;
+        descArea.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
+        document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
+            btn.classList.remove("opacity-50", "cursor-not-allowed");
+            btn.disabled = false;
+        });
+        document.getElementById("kb-modal-save").classList.remove("hidden");
+        document.getElementById("kb-modal-delete").classList.remove("hidden");
+        var transferBtn = document.getElementById("kb-modal-transfer-ext");
+        if (transferBtn) transferBtn.classList.add("hidden");
+        // Clear todos input
+        var todoInput = document.getElementById("kb-modal-todo-input");
+        if (todoInput) todoInput.readOnly = false;
     }
 
     function setPriorityButtons(pri) {
@@ -865,6 +1183,41 @@
         loadBoardDefaults(data);
     }
 
+    /** Open config modal for an external (Trello/Jira) board.
+     *  This creates/updates a local KanbanBoard record to store project, workflow, color, agent config.
+     */
+    function openExternalBoardConfigModal(provider, extBoardId) {
+        // Pre-populate from currentBoardData (returned by the API with local config if any)
+        var data = currentBoardData || {};
+        document.getElementById("kb-board-modal-title").textContent = "Configure " + (provider === "trello" ? "Trello" : "Jira") + " Board";
+        document.getElementById("kb-board-modal-save").textContent = "Save";
+        editingBoardId = data.local_id || null;
+
+        // Set name from current board
+        document.getElementById("kb-board-modal-name").value = data.name || "";
+        document.getElementById("kb-board-modal-name").readOnly = false;
+        document.getElementById("kb-board-modal-desc").value = "";
+        document.getElementById("kb-board-modal-agent-enabled").checked = !!data.agent_enabled;
+
+        var colorInput = document.getElementById("kb-board-modal-color");
+        var colorHex = document.getElementById("kb-board-modal-color-hex");
+        var c = data.color || (provider === "trello" ? "#0079bf" : "#0052cc");
+        colorInput.value = c;
+        colorHex.textContent = c;
+
+        // Load board defaults — will populate workflow/project dropdowns
+        loadBoardDefaults({
+            default_workflow_id: data.default_workflow_id,
+            default_project_id: data.default_project_id,
+        });
+
+        // Store external board info for saving
+        window._extBoardConfig = { provider: provider, extBoardId: extBoardId };
+
+        switchBoardModalTab("details");
+        document.getElementById("kb-board-modal").classList.remove("hidden");
+    }
+
     function switchBoardModalTab(tab) {
         document.querySelectorAll(".kb-bm-tab").forEach(function(btn) {
             var isActive = btn.dataset.tab === tab;
@@ -898,9 +1251,33 @@
     function closeBoardModal() {
         document.getElementById("kb-board-modal").classList.add("hidden");
         editingBoardId = null;
+        window._extBoardConfig = null;
     }
 
     function saveBoardModal() {
+        // Handle external board config saving
+        if (window._extBoardConfig) {
+            var extCfg = window._extBoardConfig;
+            var payload = {
+                name: document.getElementById("kb-board-modal-name").value.trim(),
+                default_project_id: parseInt(document.getElementById("kb-board-def-project").value) || 0,
+                default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value) || 0,
+                color: document.getElementById("kb-board-modal-color").value || "",
+                agent_enabled: document.getElementById("kb-board-modal-agent-enabled").checked,
+            };
+            apiFetch("/api/kanban/external-boards/" + extCfg.provider + "/" + encodeURIComponent(extCfg.extBoardId) + "/register", {
+                method: "POST", headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(payload)
+            }).then(function(r) {
+                showSnackbar("External board configured");
+                window._extBoardConfig = null;
+                closeBoardModal();
+                // Refresh the current board view
+                if (currentBoard) selectBoard(currentBoard.source, currentBoard.id, currentBoard.extUrl);
+                loadBoards(true);
+            }).catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
+            return;
+        }
         var name = document.getElementById("kb-board-modal-name").value.trim();
         if (!name) { showSnackbar("Board name is required", "error"); return; }
         var boardColor = document.getElementById("kb-board-modal-color").value || "";
@@ -947,6 +1324,7 @@
             showSnackbar("Board deleted");
             currentBoard = null; currentBoardData = null;
             document.getElementById("kb-board-view").classList.add("hidden");
+            document.getElementById("kb-loading").classList.add("hidden");
             document.getElementById("kb-empty").classList.remove("hidden");
             loadBoards(true);
         }).catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
@@ -970,7 +1348,14 @@
     // ── Copy external ticket to local board ──
 
     function openCopyModal(ticket) {
-        copyTicketData = { title: ticket.title || "", description: ticket.description || "" };
+        copyTicketData = {
+            title: ticket.title || "",
+            description: ticket.description || "",
+            priority: ticket.priority || "medium",
+            external_source: ticket.external_source || (currentBoard.source !== "database" ? currentBoard.source : null),
+            external_id: ticket.external_id || (currentBoard.source !== "database" ? String(ticket.id) : null),
+            external_url: ticket.external_url || ticket.url || "",
+        };
         var sel = document.getElementById("kb-copy-board-select");
         sel.innerHTML = "";
         if (!dbBoards.length) {
@@ -996,11 +1381,23 @@
         if (!copyTicketData) return;
         var boardId = parseInt(document.getElementById("kb-copy-board-select").value);
         if (!boardId) { showSnackbar("Select a board", "error"); return; }
-        apiFetch("/api/kanban/tickets/copy-to-board", {
+        apiFetch("/api/kanban/tickets/copy-external-to-board", {
             method: "POST", headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ board_id: boardId, title: copyTicketData.title, description: copyTicketData.description })
+            body: JSON.stringify({
+                board_id: boardId,
+                title: copyTicketData.title,
+                description: stripHtml(copyTicketData.description),
+                priority: copyTicketData.priority || "medium",
+                external_source: copyTicketData.external_source,
+                external_id: copyTicketData.external_id,
+                external_url: copyTicketData.external_url,
+            })
         }).then(function() {
             showSnackbar("Ticket copied to board"); closeCopyModal();
+            // Refresh the target board if currently displayed
+            if (currentBoard && currentBoard.source === "database" && currentBoard.id === boardId) {
+                selectBoard("database", boardId);
+            }
         }).catch(function(e) { showSnackbar("Copy failed: " + e.message, "error"); });
     }
 
@@ -1170,6 +1567,10 @@
                 btn.disabled = false; btn.textContent = "Check-in";
             });
         });
+        // Source tab switching
+        document.querySelectorAll(".kb-src-tab").forEach(function(btn) {
+            btn.addEventListener("click", function() { switchSourceTab(btn.dataset.src); });
+        });
         document.getElementById("kb-search").addEventListener("input", function() { loadBoards(); });
 
         // Global settings modal
@@ -1215,6 +1616,9 @@
         document.getElementById("kb-edit-board").addEventListener("click", function() {
             if (currentBoard && currentBoard.source === "database" && currentBoard.id) {
                 openBoardModal(currentBoard.id);
+            } else if (currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira")) {
+                // External board — open config modal
+                openExternalBoardConfigModal(currentBoard.source, currentBoard.id);
             } else if (currentBoardData && currentBoardData.id) {
                 openBoardModal(currentBoardData.id);
             }
@@ -1251,37 +1655,44 @@
         document.getElementById("kb-modal-close").addEventListener("click", closeTicketModal);
         document.getElementById("kb-modal-save").addEventListener("click", saveTicket);
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
-        // Modal action buttons (copy, CLI, cursor)
+        // Modal action buttons (copy, CLI, send-to-project, transfer)
         document.getElementById("kb-modal-act-copy").addEventListener("click", function() {
-            if (!modalTicketId) return;
-            apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
-                var text = t.title + (t.description ? "\n\n" + t.description : "");
+            if (modalTicketId) {
+                // Local ticket
+                apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
+                    var text = t.title + (t.description ? "\n\n" + t.description : "");
+                    navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
+                });
+            } else if (window._extTicketData) {
+                // External ticket
+                var ext = window._extTicketData;
+                var text = ext.title + (ext.description ? "\n\n" + stripHtml(ext.description) : "");
                 navigator.clipboard.writeText(text).then(function() { showSnackbar("Copied to clipboard"); });
-            });
+            }
         });
         document.getElementById("kb-modal-act-cli").addEventListener("click", function() {
-            if (!modalTicketId) return;
-            if (!confirm("Push ticket #" + modalTicketId + " to the project CLI?")) return;
-            var btn = document.getElementById("kb-modal-act-cli");
-            btn.innerHTML = '<svg class="animate-spin" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
-            btn.classList.add("text-orange-400");
-            var tid = modalTicketId;
-            apiFetch("/api/kanban/tickets/" + tid + "/send-to-cli", { method: "POST" })
-                .then(function(r) {
-                    showSnackbar(r.message || "Sent to CLI");
-                    _pollCliStatus(tid, btn);
-                })
-                .catch(function(e) {
-                    showSnackbar("CLI error: " + e.message, "error");
-                    btn.innerHTML = '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>';
-                    btn.classList.remove("text-orange-400");
-                });
+            if (modalTicketId) {
+                pushTicketToCli(modalTicketId, document.getElementById("kb-modal-act-cli"));
+            } else if (window._extTicketData) {
+                copyAndPushExternalTicket(window._extTicketData, window._extTicketSource, 'cli');
+            }
         });
-        document.getElementById("kb-modal-act-cursor").addEventListener("click", function() {
-            if (!modalTicketId) return;
-            apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
-                .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
-                .catch(function(e) { showSnackbar("Error: " + e.message, "error"); });
+        document.getElementById("kb-modal-act-project").addEventListener("click", function() {
+            if (modalTicketId) {
+                apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
+                    .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
+                    .catch(function(e) { showSnackbar("Error: " + e.message, "error"); });
+            } else if (window._extTicketData) {
+                copyAndPushExternalTicket(window._extTicketData, window._extTicketSource, 'project');
+            }
+        });
+        // Transfer/copy button (external tickets)
+        var transferBtn = document.getElementById("kb-modal-transfer-ext");
+        if (transferBtn) transferBtn.addEventListener("click", function() {
+            if (window._extTicketData) {
+                openCopyModal(window._extTicketData);
+                closeTicketModal();
+            }
         });
         document.getElementById("kb-ticket-modal").addEventListener("click", function(e) {
         });
@@ -1337,6 +1748,13 @@
 
     // ── Sidebar tab switching ──
 
+    function updateTabBarVisibility() {
+        var tabMessages = document.getElementById("kb-tab-messages");
+        var tabBar = document.getElementById("kb-tab-bar");
+        // Hide the entire tab bar when Messages tab is hidden (only one tab = no need for tabs)
+        tabBar.classList.toggle("hidden", tabMessages.classList.contains("hidden"));
+    }
+
     function switchSidebarTab(tab) {
         var ticketsPanel = document.getElementById("kb-panel-tickets");
         var messagesPanel = document.getElementById("kb-panel-messages");
@@ -1357,51 +1775,111 @@
         }
     }
 
+    // ── Relay server base URL (for syncing messages when desktop app is offline) ──
+    var waRelayBase = window.DecisionsAI && window.DecisionsAI.waRelayBase
+        ? window.DecisionsAI.waRelayBase
+        : "https://www.decisionsai.net/api/whatsapp";
+
     function loadWhatsAppChats(forceRefresh) {
         var el = document.getElementById("kb-wa-status");
         var chatListEl = document.getElementById("kb-wa-chats");
 
         el.textContent = "Loading...";
-        // Load ALL stored messages from the DB (not raw chats from Baileys)
-        apiFetch("/api/kanban/whatsapp/messages?limit=500").then(function(data) {
-            var messages = data.messages || [];
-            // Group messages by jid_phone (the conversation/chat key)
-            var chatMap = {};
-            messages.forEach(function(msg) {
-                var chatPhone = msg.jid_phone || (msg.jid || "").split("@")[0];
-                var chatName = msg.sender_push_name || msg.sender_phone || chatPhone || "Unknown";
-                if (!chatMap[chatPhone]) {
-                    chatMap[chatPhone] = { sender: chatPhone, name: chatName, messages: [], lastTs: 0, unread: 0 };
-                }
-                chatMap[chatPhone].messages.push(msg);
-                if (msg.whatsapp_timestamp && msg.whatsapp_timestamp > chatMap[chatPhone].lastTs) {
-                    chatMap[chatPhone].lastTs = msg.whatsapp_timestamp;
-                }
-                if (!msg.processed) chatMap[chatPhone].unread++;
-                // Use the latest sender push name as the display name
-                if (msg.sender_push_name) chatMap[chatPhone].name = msg.sender_push_name;
-            });
-            waChats = Object.values(chatMap);
-            // Sort by most recent message first
-            waChats.sort(function(a, b) { return b.lastTs - a.lastTs; });
-            if (messages.length === 0) {
-                el.textContent = "No captured messages yet";
-                chatListEl.innerHTML = "<div class='text-xs text-gray-500 italic py-2'>No captured messages yet</div>";
-                waConnected = false;
-                document.getElementById("kb-tab-messages").classList.add("hidden");
-                return;
+        // First try local desktop app, then fall back to relay server
+        var localUrl = "/api/kanban/whatsapp/messages?limit=500";
+        var relayUrl = waRelayBase + "/messages?limit=500";
+
+        apiFetch(localUrl).then(function(data) {
+            if (data.messages && data.messages.length > 0) {
+                return data;
             }
-            // Show Messages tab only when WhatsApp has captured messages
-            waConnected = true;
-            document.getElementById("kb-tab-messages").classList.remove("hidden");
-            el.textContent = waChats.length + " contacts with messages";
-            renderWhatsAppChatList();
-        }).catch(function(err) {
+            // Local DB empty — try relay server for stored messages
+            return fetchFromRelay();
+        }).catch(function() {
+            // Local endpoint not available (desktop app offline) — try relay
+            return fetchFromRelay();
+        }).then(processWhatsAppMessages).catch(function(err) {
             el.textContent = "WhatsApp not connected";
             chatListEl.innerHTML = "";
             waConnected = false;
             document.getElementById("kb-tab-messages").classList.add("hidden");
+            updateTabBarVisibility();
         });
+
+        function fetchFromRelay() {
+            return fetch(relayUrl, { mode: "cors" }).then(function(resp) {
+                if (!resp.ok) throw new Error("Relay returned " + resp.status);
+                return resp.json();
+            });
+        }
+    }
+
+    function syncFromRelay() {
+        var el = document.getElementById("kb-wa-status");
+        var chatListEl = document.getElementById("kb-wa-chats");
+        el.textContent = "Syncing from server...";
+        var relayUrl = waRelayBase + "/messages?limit=500&unprocessed_only=true";
+        fetch(relayUrl, { mode: "cors" }).then(function(resp) {
+            if (!resp.ok) throw new Error("Relay returned " + resp.status);
+            return resp.json();
+        }).then(function(data) {
+            var newCount = (data.messages || []).length;
+            if (newCount > 0) {
+                showSnackbar("Synced " + newCount + " new message" + (newCount !== 1 ? "s" : "") + " from server", "success");
+                // Mark them as processed on the relay so they won't appear in future syncs
+                data.messages.forEach(function(msg) {
+                    fetch(waRelayBase + "/messages/" + msg.id + "/processed", {
+                        method: "POST", mode: "cors"
+                    }).catch(function() {});
+                });
+            } else {
+                showSnackbar("No new messages on server");
+            }
+            // Merge relay messages with existing local data and refresh
+            loadWhatsAppChats(true);
+        }).catch(function(err) {
+            el.textContent = "Sync failed";
+            showSnackbar("Sync failed: " + err.message, "error");
+        });
+    }
+
+    function processWhatsAppMessages(data) {
+        var el = document.getElementById("kb-wa-status");
+        var chatListEl = document.getElementById("kb-wa-chats");
+        var messages = data.messages || [];
+        // Group messages by jid_phone (the conversation/chat key)
+        var chatMap = {};
+        messages.forEach(function(msg) {
+            var chatPhone = msg.jid_phone || (msg.jid || "").split("@")[0];
+            var chatName = msg.sender_push_name || msg.sender_phone || chatPhone || "Unknown";
+            if (!chatMap[chatPhone]) {
+                chatMap[chatPhone] = { sender: chatPhone, name: chatName, messages: [], lastTs: 0, unread: 0 };
+            }
+            chatMap[chatPhone].messages.push(msg);
+            if (msg.whatsapp_timestamp && msg.whatsapp_timestamp > chatMap[chatPhone].lastTs) {
+                chatMap[chatPhone].lastTs = msg.whatsapp_timestamp;
+            }
+            if (!msg.processed) chatMap[chatPhone].unread++;
+            // Use the latest sender push name as the display name
+            if (msg.sender_push_name) chatMap[chatPhone].name = msg.sender_push_name;
+        });
+        waChats = Object.values(chatMap);
+        // Sort by most recent message first
+        waChats.sort(function(a, b) { return b.lastTs - a.lastTs; });
+        if (messages.length === 0) {
+            el.textContent = "No captured messages yet";
+            chatListEl.innerHTML = "<div class='text-xs text-gray-500 italic py-2'>No captured messages yet</div>";
+            waConnected = false;
+            document.getElementById("kb-tab-messages").classList.add("hidden");
+            updateTabBarVisibility();
+            return;
+        }
+        // Show Messages tab only when WhatsApp has captured messages
+        waConnected = true;
+        document.getElementById("kb-tab-messages").classList.remove("hidden");
+        updateTabBarVisibility();
+        el.textContent = waChats.length + " contacts with messages";
+        renderWhatsAppChatList();
     }
 
     function renderWhatsAppChatList() {
@@ -1486,6 +1964,13 @@
         msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>';
 
         apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").then(function(data) {
+            if (data.messages && data.messages.length > 0) return data;
+            // Fallback to relay server
+            return fetch(waRelayBase + "/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200", { mode: "cors" }).then(function(r) { return r.json(); });
+        }).catch(function() {
+            // Local endpoint failed — try relay
+            return fetch(waRelayBase + "/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200", { mode: "cors" }).then(function(r) { return r.json(); });
+        }).then(function(data) {
             var messages = data.messages || [];
             countEl.textContent = messages.length + " messages";
             if (!messages.length) {
@@ -1578,6 +2063,7 @@
         var msgView = document.getElementById("kb-wa-thread-view");
         msgView.classList.add("hidden");
         // Restore the previous board view or empty state
+        document.getElementById("kb-loading").classList.add("hidden");
         if (currentBoard) {
             document.getElementById("kb-board-view").classList.remove("hidden");
         } else {
@@ -1863,7 +2349,7 @@
             waCtxSnapshotToBoard();
         });
 
-        document.getElementById("kb-wa-refresh").addEventListener("click", function() { loadWhatsAppChats(true); });
+        document.getElementById("kb-wa-refresh").addEventListener("click", function() { syncFromRelay(); });
         document.getElementById("kb-wa-search").addEventListener("input", renderWhatsAppChatList);
 
         // Chat context menu
@@ -1910,6 +2396,8 @@
         // Load initial data
         loadBoards();
         initWhatsApp();
+        // Initially hide the tab bar since Messages is hidden by default
+        updateTabBarVisibility();
     }
 
     // Auto-refresh provider dropdowns when third-party keys are saved (same page)

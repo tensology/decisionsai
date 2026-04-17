@@ -590,8 +590,85 @@ class WhatsAppWebSocketManager(QObject):
             return {"messages": [], "total": 0, "error": str(e)}
 
     # ═════════════════════════════════════════════════════════════════════════
-    # Settings Persistence
     # ═════════════════════════════════════════════════════════════════════════
+    # Relay Sync
+    # ═════════════════════════════════════════════════════════╒══════════════
+
+    def sync_from_relay(self, mark_processed: bool = True) -> dict:
+        """Pull stored messages from the relay server and save to local DB.
+
+        Fallback sync for messages that arrived while the desktop app was offline.
+        After syncing, messages are marked processed on the relay so they
+        won't appear in future syncs.
+        """
+        try:
+            import requests
+            resp = requests.get(
+                f"{self.api_base}/messages",
+                params={"limit": 1000, "unprocessed_only": "true"},
+                timeout=15,
+            )
+            data = resp.json()
+            messages = data.get("messages", [])
+            synced = 0
+
+            from distr.core.db import get_session, WhatsAppMessage
+            with get_session() as session:
+                for msg in messages:
+                    existing = session.query(WhatsAppMessage).filter_by(
+                        message_id=msg.get("message_id", "")
+                    ).first()
+                    if existing:
+                        if mark_processed:
+                            self._mark_relay_processed(msg.get("id"))
+                        continue
+
+                    row = WhatsAppMessage(
+                        message_id=msg.get("message_id", ""),
+                        jid=msg.get("jid", ""),
+                        jid_phone=msg.get("jid_phone", ""),
+                        chat_type=msg.get("chat_type", "private"),
+                        sender_jid=msg.get("sender_jid", ""),
+                        sender_phone=msg.get("sender_phone", ""),
+                        sender_push_name=msg.get("sender_push_name", ""),
+                        text=msg.get("text"),
+                        caption=msg.get("caption"),
+                        media_type=msg.get("media_type"),
+                        media_mime_type=msg.get("media_mime_type"),
+                        media_filename=msg.get("media_filename"),
+                        media_local_path=msg.get("media_local_path"),
+                        media_file_length=msg.get("media_file_length"),
+                        whatsapp_timestamp=msg.get("whatsapp_timestamp"),
+                        from_me=msg.get("from_me", False),
+                        processed=True,
+                    )
+                    session.add(row)
+                    synced += 1
+                    if mark_processed:
+                        self._mark_relay_processed(msg.get("id"))
+
+                session.commit()
+
+            logger.info(f"WhatsApp: Synced {synced} messages from relay ({len(messages)} total)")
+            return {"synced": synced, "total": len(messages)}
+
+        except Exception as e:
+            logger.error(f"WhatsApp: sync_from_relay failed: {e}", exc_info=True)
+            return {"synced": 0, "total": 0, "error": str(e)}
+
+    def _mark_relay_processed(self, relay_id: int):
+        """Mark a message as processed on the relay server."""
+        try:
+            import requests
+            requests.post(
+                f"{self.api_base}/messages/{relay_id}/processed",
+                timeout=5,
+            )
+        except Exception as e:
+            logger.debug(f"WhatsApp: Failed to mark relay msg {relay_id} as processed: {e}")
+
+    # ══════════════════════════════════════════════════════════╒═══════════════\n    # Settings Persistence
+    # ═══════════════════════════════════════════╒═════════════════╒═════════════\n
 
     def _save_connection(self, status_data: dict):
         """Save WhatsApp connection info to connected_accounts in settings."""

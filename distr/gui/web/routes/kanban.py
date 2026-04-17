@@ -80,6 +80,29 @@ class CopyToBoard(BaseModel):
     title: str
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
+    external_source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_url: Optional[str] = None
+
+
+class ExternalBoardRegister(BaseModel):
+    name: Optional[str] = None
+    default_project_id: Optional[int] = None
+    default_workflow_id: Optional[int] = None
+    color: Optional[str] = None
+    agent_enabled: Optional[bool] = False
+
+
+class CopyExternalTicket(BaseModel):
+    board_id: int
+    title: str
+    description: Optional[str] = ""
+    priority: Optional[str] = "medium"
+    external_source: Optional[str] = None
+    external_id: Optional[str] = None
+    external_url: Optional[str] = None
+    auto_send_to_project: Optional[bool] = False
+    auto_send_to_cli: Optional[bool] = False
 
 
 ALLOWED_FREQUENCIES = {"5min", "10min", "15min", "30min", "hourly", "daily", "weekly", "fortnightly", "monthly"}
@@ -581,10 +604,114 @@ def create_routes():
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
                 position=max_pos + 1,
+                external_source=payload.external_source,
+                external_id=payload.external_id,
+                external_url=payload.external_url,
+                linked_workflow_id=board.default_workflow_id,
+                linked_project_id=board.default_project_id,
             )
             s.add(ticket)
             s.flush()
+            # Inherit board defaults
+            if board.default_workflow_id:
+                ticket.linked_workflow_id = board.default_workflow_id
+            if board.default_project_id:
+                ticket.linked_project_id = board.default_project_id
+            s.flush()
             return JSONResponse({"success": True, "id": ticket.id})
+
+    @router.post("/kanban/tickets/copy-external-to-board")
+    async def copy_external_ticket_to_board(payload: CopyExternalTicket):
+        """Copy an external (Trello/Jira) ticket to a local board and optionally send to project/CLI."""
+        with get_session() as s:
+            board = s.query(KanbanBoard).filter_by(id=payload.board_id, source="database").first()
+            if not board:
+                raise HTTPException(404, "Database board not found")
+            first_lane = s.query(KanbanLane).filter_by(board_id=board.id).order_by(KanbanLane.position).first()
+            if not first_lane:
+                raise HTTPException(400, "Board has no lanes")
+            max_pos = max([t.position for t in first_lane.tickets], default=-1)
+            ticket = KanbanTicket(
+                lane_id=first_lane.id, title=payload.title,
+                description=payload.description or "", priority=payload.priority or "medium",
+                position=max_pos + 1,
+                external_source=payload.external_source,
+                external_id=payload.external_id,
+                external_url=payload.external_url,
+                linked_workflow_id=board.default_workflow_id,
+                linked_project_id=board.default_project_id,
+            )
+            s.add(ticket)
+            s.flush()
+            result = {"success": True, "id": ticket.id}
+
+            # Auto-send to project if requested
+            if payload.auto_send_to_project:
+                project_id = ticket.linked_project_id or board.default_project_id
+                if project_id:
+                    from distr.core.db.projects import Project
+                    project = s.query(Project).get(project_id)
+                    if project and project.folder_location:
+                        tickets_folder = os.path.join(project.folder_location, ".tickets")
+                        os.makedirs(tickets_folder, exist_ok=True)
+                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
+                        content = f"---\nid: ticket_{timestamp}\ntitle: {ticket.title}\nproject: {project.name}\ncreated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\npriority: {ticket.priority}\nstatus: open\nsource: {payload.external_source or 'external'}_{payload.external_id or ''}\n---\n\n## Description\n{ticket.description or '(no description)'}\n\n---\n*Sent from Ticket Board via DecisionsAI*\n"
+                        try:
+                            with open(ticket_path, "w", encoding="utf-8") as f:
+                                f.write(content)
+                            result["sent_to_project"] = True
+                            result["project_name"] = project.name
+                        except Exception as e:
+                            result["sent_to_project"] = False
+                            result["project_error"] = str(e)
+
+            return JSONResponse(result)
+
+    @router.post("/kanban/external-boards/{provider}/{ext_board_id}/register")
+    async def register_external_board(provider: str, ext_board_id: str, payload: ExternalBoardRegister):
+        """Create or update a local KanbanBoard record for an external (Trello/Jira) board configuration."""
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        with get_session() as s:
+            board = s.query(KanbanBoard).filter_by(source=provider, external_board_id=ext_board_id).first()
+            if not board:
+                # Get name from payload or use a default
+                name = payload.name or f"{provider.title()} Board"
+                board = KanbanBoard(
+                    name=name,
+                    source=provider,
+                    external_board_id=ext_board_id,
+                    agent_enabled=payload.agent_enabled or False,
+                )
+                s.add(board)
+                s.flush()
+                # Create default lanes
+                for i, lane_name in enumerate(DEFAULT_LANES):
+                    s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+            else:
+                if payload.name is not None:
+                    board.name = payload.name
+            if payload.default_project_id is not None:
+                board.default_project_id = payload.default_project_id if payload.default_project_id else None
+            if payload.default_workflow_id is not None:
+                board.default_workflow_id = payload.default_workflow_id if payload.default_workflow_id else None
+            if payload.color is not None:
+                board.color = payload.color if payload.color else None
+            if payload.agent_enabled is not None:
+                board.agent_enabled = payload.agent_enabled
+            s.flush()
+            return JSONResponse({
+                "success": True,
+                "id": board.id,
+                "name": board.name,
+                "source": board.source,
+                "external_board_id": board.external_board_id,
+                "default_project_id": board.default_project_id,
+                "default_workflow_id": board.default_workflow_id,
+                "color": board.color,
+                "agent_enabled": board.agent_enabled,
+            })
 
     # ── Linkable entities (for linking tickets to workflows/projects/etc.) ──
 
@@ -605,7 +732,7 @@ def create_routes():
 
     @router.get("/kanban/external-boards")
     async def get_external_boards():
-        """Fetch Trello and Jira boards from connected accounts."""
+        """Fetch Trello and Jira boards from connected accounts, enriched with local config."""
         trello_boards = []
         jira_boards = []
         try:
@@ -623,11 +750,21 @@ def create_routes():
             if not accounts:
                 logger.info("External boards: no connected accounts found")
                 return JSONResponse({"trello": [], "jira": []})
+            # Load local config for external boards
+            local_configs = {}
+            with get_session() as s:
+                for b in s.query(KanbanBoard).filter(KanbanBoard.source.in_(["trello", "jira"])):
+                    key = f"{b.source}:{b.external_board_id}"
+                    local_configs[key] = {
+                        "local_id": b.id,
+                        "default_project_id": b.default_project_id,
+                        "default_workflow_id": b.default_workflow_id,
+                        "color": b.color,
+                        "agent_enabled": b.agent_enabled or False,
+                    }
             logger.info("External boards: found %d connected accounts", len(accounts))
             for acct in accounts:
                 provider = acct.get("provider", "").lower()
-                logger.info("External boards: account provider='%s' has_key=%s has_token=%s has_email=%s",
-                            provider, bool(acct.get("api_key")), bool(acct.get("api_token")), bool(acct.get("email")))
                 if provider == "trello" and acct.get("api_key") and acct.get("api_token") and acct.get("is_valid", True):
                     try:
                         import requests
@@ -636,11 +773,13 @@ def create_routes():
                             params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url,closed"},
                             timeout=10,
                         )
-                        logger.info("Trello API response: %d", resp.status_code)
                         if resp.status_code == 200:
                             for b in resp.json():
                                 if not b.get("closed", False):
-                                    trello_boards.append({"id": b["id"], "name": b["name"], "url": b.get("url", "")})
+                                    config = local_configs.get(f"trello:{b['id']}", {})
+                                    board_data = {"id": b["id"], "name": b["name"], "url": b.get("url", "")}
+                                    board_data.update(config)
+                                    trello_boards.append(board_data)
                     except Exception as e:
                         logger.warning("Trello board fetch failed: %s", e)
                 elif provider == "jira" and acct.get("email") and acct.get("api_token") and acct.get("is_valid", True):
@@ -650,39 +789,53 @@ def create_routes():
                         if server_url:
                             domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
                     if not domain:
-                        logger.warning("Jira account has no domain or server_url, skipping")
                         continue
                     try:
                         import requests
                         from requests.auth import HTTPBasicAuth
                         base_url = f"https://{domain}"
-                        logger.info("Fetching Jira boards from %s", base_url)
                         resp = requests.get(
                             f"{base_url}/rest/agile/1.0/board",
                             auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
                             headers={"Accept": "application/json"},
                             timeout=10,
                         )
-                        logger.info("Jira API response: %d", resp.status_code)
                         if resp.status_code == 200:
                             for b in resp.json().get("values", []):
-                                jira_boards.append({
+                                config = local_configs.get(f"jira:{b['id']}", {})
+                                board_data = {
                                     "id": str(b["id"]), "name": b["name"],
                                     "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
-                                })
+                                }
+                                board_data.update(config)
+                                jira_boards.append(board_data)
                     except Exception as e:
                         logger.warning("Jira board fetch failed: %s", e)
         except Exception as e:
             logger.warning("External board fetch error: %s", e)
-        logger.info("External boards result: %d trello, %d jira", len(trello_boards), len(jira_boards))
         return JSONResponse({"trello": trello_boards, "jira": jira_boards})
 
     @router.get("/kanban/external-boards/{provider}/{board_id}")
     async def get_external_board_detail(provider: str, board_id: str):
-        """Fetch lanes and tickets from an external Trello or Jira board (read-only view)."""
+        """Fetch lanes and tickets from an external Trello or Jira board, enriched with local config."""
         lanes = []
         board_name = ""
         board_url = ""
+        # Check for local board config
+        local_config = {}
+        with get_session() as s:
+            local_board = s.query(KanbanBoard).filter(
+                KanbanBoard.source == provider,
+                KanbanBoard.external_board_id == board_id
+            ).first()
+            if local_board:
+                local_config = {
+                    "local_id": local_board.id,
+                    "default_project_id": local_board.default_project_id,
+                    "default_workflow_id": local_board.default_workflow_id,
+                    "color": local_board.color,
+                    "agent_enabled": local_board.agent_enabled or False,
+                }
         try:
             from distr.core.settings import load_settings_from_db
             import json as _json
@@ -706,10 +859,33 @@ def create_routes():
                             board_name = bd.get("name", "")
                             board_url = bd.get("url", "")
                         lr = requests.get(f"https://api.trello.com/1/boards/{board_id}/lists",
-                                          params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url"}, timeout=10)
+                                          params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url,labels,checklists,due"}, timeout=10)
                         if lr.status_code == 200:
                             for lst in lr.json():
-                                cards = [{"id": c["id"], "title": c["name"], "description": c.get("desc", ""), "url": c.get("url", "")} for c in lst.get("cards", [])]
+                                cards = []
+                                for c in lst.get("cards", []):
+                                    card_data = {
+                                        "id": c["id"], "title": c["name"],
+                                        "description": c.get("desc", "") or "",
+                                        "url": c.get("url", ""),
+                                    }
+                                    # Fetch card details (labels, checklists, members)
+                                    try:
+                                        cd = requests.get(f"https://api.trello.com/1/cards/{c['id']}",
+                                                          params={"key": acct["api_key"], "token": acct["api_token"],
+                                                                   "fields": "name,desc,url,labels,checklists,due,members,shortUrl"},
+                                                          timeout=5)
+                                        if cd.status_code == 200:
+                                            cd_data = cd.json()
+                                            card_data["labels"] = [lb.get("name", lb.get("color", "")) for lb in cd_data.get("labels", [])]
+                                            card_data["todos"] = [{"text": cl_item.get("name", ""), "done": cl_item.get("state", "") == "complete"}
+                                                                     for cl in cd_data.get("checklists", [])
+                                                                     for cl_item in cl.get("checkItems", [])]
+                                            card_data["due"] = cd_data.get("due")
+                                            card_data["members"] = [m.get("fullName", m.get("username", "")) for m in cd_data.get("members", [])]
+                                    except Exception:
+                                        pass
+                                    cards.append(card_data)
                                 lanes.append({"id": lst["id"], "name": lst["name"], "tickets": cards})
                         break
             elif provider == "jira":
@@ -746,6 +922,30 @@ def create_routes():
                                     "description": fields.get("description", "") or "",
                                     "url": f"https://{domain}/browse/{issue['key']}",
                                 }
+                                # Enrich with Jira-specific fields
+                                assignee = fields.get("assignee")
+                                if assignee:
+                                    card["members"] = [assignee.get("displayName", assignee.get("name", ""))]
+                                reporter = fields.get("reporter")
+                                if reporter:
+                                    card["reporter"] = reporter.get("displayName", reporter.get("name", ""))
+                                # Time tracking
+                                timetracking = fields.get("timetracking")
+                                if timetracking:
+                                    card["time_estimate"] = timetracking.get("originalEstimate", "")
+                                    card["time_spent"] = timetracking.get("timeSpent", "")
+                                # Priority
+                                priority = fields.get("priority")
+                                if priority:
+                                    card["priority"] = priority.get("name", "medium").lower()
+                                # Labels
+                                labels = fields.get("labels", [])
+                                if labels:
+                                    card["labels"] = labels
+                                # Subtasks
+                                subtasks = fields.get("subtasks", [])
+                                if subtasks:
+                                    card["todos"] = [{"text": st.get("fields", {}).get("summary", ""), "done": st.get("fields", {}).get("status", {}).get("name", "").lower() in ("done", "closed")} for st in subtasks]
                                 for lane in lanes:
                                     if lane["name"].lower() == status_name.lower():
                                         lane["tickets"].append(card)
@@ -753,7 +953,9 @@ def create_routes():
                         break
         except Exception as e:
             logger.warning("External board detail fetch error: %s", e)
-        return JSONResponse({"name": board_name, "url": board_url, "lanes": lanes})
+        response_data = {"name": board_name, "url": board_url, "lanes": lanes}
+        response_data.update(local_config)
+        return JSONResponse(response_data)
 
     # ── Send ticket to project (.tickets folder) ──
 
