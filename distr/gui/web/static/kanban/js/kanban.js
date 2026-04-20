@@ -4480,6 +4480,12 @@ function closeCreateExtTicketModal() {
     // End WhatsApp Integration
     // ═══════════════════════════════════════════════════════════════════
     function init() {
+        // Ensure modals are hidden on init (safety net)
+        var confirmModal = document.getElementById("kb-confirm-modal");
+        if (confirmModal) confirmModal.classList.add("hidden");
+        var settingsModal = document.getElementById("kb-global-settings-modal");
+        if (settingsModal) settingsModal.classList.add("hidden");
+
         // Apply sidebar tab from URL before any initial board rendering to avoid tab flicker.
         var initialSidebarTab = getSidebarTabFromUrl();
         if (initialSidebarTab === "messages") {
@@ -4713,8 +4719,8 @@ function closeCreateExtTicketModal() {
 
         // Load initial data first (populates board menu with context menu elements)
         loadBoards();
-        initWhatsApp();
-        connectKanbanBoardWS();
+        try { initWhatsApp(); } catch(e) { console.warn('WhatsApp init skipped:', e); }
+        try { connectKanbanBoardWS(); } catch(e) { console.warn('Board WS skipped:', e); }
         
         // Context menu (after boards are populated to ensure DOM elements exist)
         document.querySelector(".kb-ctx-activate").addEventListener("click", ctxActivateBoard);

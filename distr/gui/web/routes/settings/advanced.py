@@ -378,7 +378,7 @@ def register_routes(router, templates):
                 resp = await client.get(f"{base_url}/qr", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
-            logger.error(f"WhatsApp QR proxy: {e}"))
+            logger.error(f"WhatsApp QR proxy: {e}")
             return JSONResponse({"status": "error", "qr_code": None, "error": str(e)}, status_code=500)
 
     @router.get("/advanced/whatsapp/status")
@@ -393,7 +393,7 @@ def register_routes(router, templates):
                 resp = await client.get(f"{base_url}/status", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
-            logger.error(f"WhatsApp status proxy: {e}"))
+            logger.error(f"WhatsApp status proxy: {e}")
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
     @router.post("/advanced/whatsapp/disconnect")
