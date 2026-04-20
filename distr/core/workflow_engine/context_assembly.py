@@ -1,4 +1,4 @@
-"""Step Input Context Assembly for the Step Runner.
+"""Step input context assembly for the workflow engine.
 
 Assembles the execution context for each step based on its type. Different step
 types receive different slices of the available context (workflow input, rules,

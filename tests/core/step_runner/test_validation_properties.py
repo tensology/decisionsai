@@ -12,8 +12,8 @@ import copy
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from distr.core.step_runner.step_types import StepType, HttpMethod
-from distr.core.step_runner.validation import StepValidator, ValidationError
+from distr.core.workflow_engine.step_types import StepType, HttpMethod
+from distr.core.workflow_engine.validation import StepValidator, ValidationError
 
 
 validator = StepValidator()

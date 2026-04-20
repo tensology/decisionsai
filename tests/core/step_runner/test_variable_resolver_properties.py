@@ -11,7 +11,7 @@ import json
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from distr.core.step_runner.variable_resolver import resolve_http_variables
+from distr.core.workflow_engine.variable_resolver import resolve_http_variables
 
 
 # ---------------------------------------------------------------------------

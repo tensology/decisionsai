@@ -185,31 +185,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     if not _chat_ws_connections[subscribed_chat_id]:
                         del _chat_ws_connections[subscribed_chat_id]
 
-    @router.websocket("/ws/step-runner")
-    async def step_runner_websocket(websocket: WebSocket):
-        """WebSocket for real-time Step Runner updates. Local-only, no auth required."""
-        origin = websocket.headers.get("origin")
-        if origin and not is_allowed_local_origin(origin):
-            await websocket.close(code=1008, reason="Origin not allowed")
-            return
-        await websocket.accept()
-        loop = asyncio.get_event_loop()
-        from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
-        register_wf_websocket(websocket, loop)
-        logger.info("Step Runner WS: client connected")
-        try:
-            while True:
-                try:
-                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
-                except asyncio.TimeoutError:
-                    await websocket.send_text('{"type":"ping"}')
-        except WebSocketDisconnect:
-            pass
-        except Exception:
-            pass
-        finally:
-            unregister_wf_websocket(websocket)
-
     @router.websocket("/ws/workflows")
     async def workflows_websocket(websocket: WebSocket):
         """WebSocket for real-time Workflow updates (unified). Local-only, no auth required."""

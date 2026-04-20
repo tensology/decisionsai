@@ -22,14 +22,38 @@
     line-height: 1.6;
     font-size: 13px;
 }
-/* User messages — orange chevron like pi CLI */
+/* User messages — orange bordered prompt card */
 .transcript-msg.user {
-    color: #f97316;
-    font-weight: 600;
+    color: #fed7aa;
+    font-weight: 500;
+    background: rgba(249, 115, 22, 0.08);
+    border: 1px solid rgba(249, 115, 22, 0.55);
+    border-radius: 10px;
+    padding: 10px 12px;
+    margin: 6px 0;
 }
-.transcript-msg.user::before {
-    content: "\25b6 "; /* ▶ */
-    color: #f97316;
+/* Same prompt card in scroll — dimmer than sticky “Last sent” */
+.transcript-msg.user.transcript-msg-user-archived {
+    opacity: 0.78;
+    border-style: dashed;
+    border-color: rgba(249, 115, 22, 0.38);
+    background: rgba(249, 115, 22, 0.04);
+}
+.transcript-msg.user.transcript-msg-user-archived::before {
+    content: "Prompt";
+    display: block;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    color: rgba(251, 191, 36, 0.55);
+    font-weight: 600;
+    margin-bottom: 6px;
+}
+#cli-session-header #terminal-last-question-wrap {
+    border: 1px solid rgba(249, 115, 22, 0.5);
+    border-radius: 10px;
+    background: rgba(249, 115, 22, 0.1);
+    padding: 8px 10px;
 }
 /* Assistant text — clean white */
 .transcript-msg.assistant {
@@ -92,6 +116,90 @@
     padding: 2px 6px;
     border-radius: 4px;
     font-size: 0.9em;
+}
+/* Collapsible thinking/tooling callouts */
+.transcript-callout {
+    border: 1px solid rgba(255, 255, 255, 0.15);
+    border-radius: 10px;
+    margin: 8px 0;
+    overflow: hidden;
+    background: rgba(255, 255, 255, 0.02);
+}
+.transcript-callout > summary {
+    list-style: none;
+    cursor: pointer;
+    user-select: none;
+    position: relative;
+    padding: 10px 12px;
+    padding-right: 30px;
+    font-size: 12px;
+    display: flex;
+    align-items: center;
+    color: #cbd5e1;
+    background: rgba(255, 255, 255, 0.03);
+}
+.transcript-callout > summary::-webkit-details-marker { display: none; }
+.transcript-callout > summary::after {
+    content: "▾";
+    font-size: 12px;
+    color: #94a3b8;
+    position: absolute;
+    right: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+}
+.transcript-callout:not([open]) > summary::after { content: "▸"; }
+.transcript-callout-body {
+    padding: 14px;
+    font-size: 12px;
+    color: #cbd5e1;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+}
+.transcript-callout.outcome .transcript-callout-body {
+    padding: 16px 14px;
+}
+.transcript-callout.thinking .transcript-callout-body {
+    min-height: 86px;
+    max-height: 180px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+.transcript-callout.tooling .transcript-callout-body {
+    max-height: 220px;
+    overflow-y: auto;
+    white-space: pre-wrap;
+    line-height: 1.5;
+}
+.transcript-callout.outcome {
+    background: rgba(255, 255, 255, 0.05);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+.transcript-callout.outcome > summary {
+    background: rgba(255, 255, 255, 0.07);
+}
+.transcript-chip {
+    font-size: 10px;
+    border-radius: 999px;
+    padding: 2px 7px;
+    border: 1px solid transparent;
+    letter-spacing: 0.01em;
+    margin-left: auto;
+}
+.transcript-chip-live {
+    color: #fdba74;
+    background: rgba(249, 115, 22, 0.15);
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.transcript-chip-done {
+    color: #86efac;
+    background: rgba(34, 197, 94, 0.13);
+    border-color: rgba(34, 197, 94, 0.35);
+}
+.transcript-chip-error {
+    color: #fca5a5;
+    background: rgba(239, 68, 68, 0.15);
+    border-color: rgba(239, 68, 68, 0.35);
 }
 @keyframes blink { 50% { opacity: 0; } }
 
@@ -274,146 +382,17 @@
                             <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clip-rule="evenodd"/></svg>Details</button>
                     <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="startup">
                             <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M11.3 1.046A1 1 0 0112 2v5h4a1 1 0 01.82 1.573l-7 10A1 1 0 018 18v-5H4a1 1 0 01-.82-1.573l7-10a1 1 0 011.12-.38z" clip-rule="evenodd"/></svg>Startup</button>
-                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="terminal">
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="cli">
                             <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 111.414 1.414L5.414 9l1.293 1.293a1 1 0 11-1.414 1.414l-2-2a1 1 0 010-1.414l2-2z" clip-rule="evenodd"/></svg>CLI</button>
+                    <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="terminal">
+                            <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 111.414 1.414L5.414 9l1.293 1.293a1 1 0 11-1.414 1.414l-2-2a1 1 0 010-1.414l2-2z" clip-rule="evenodd"/></svg>Terminal</button>
                 </div>
                 <div class="flex-1 overflow-y-auto p-6" id="projects-tab-content">
-                                        <!-- Details tab -->
-                    <div id="tab-details" class="project-tab-pane space-y-4">
-                        <!-- Row 1: Name + Folder location -->
-                        <div class="flex gap-4">
-                            <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Name</label>
-                                <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Folder location</label>
-                                <div class="flex gap-2">
-                                    <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
-                                    <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Row 2: Description + Trigger words -->
-                        <div class="flex gap-4">
-                            <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Description</label>
-                                <input type="text" id="detail-description" class="w-full h-[42px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                            </div>
-                            <div class="flex-1 min-w-0">
-                                <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
-                                <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300 relative">
-                                    <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
-                                    <input type="text" id="detail-triggers-input" style="border: 1px solid transparent; background: #152054; color: white; padding: 8px 12px; border-radius: 4px;" class="w-48 text-sm placeholder-gray-400 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
-                                </div>
-                            </div>
-                        </div>
-                        <!-- Board (merged from Board tab) -->
-                        <div class="border-t border-white/20 pt-4">
-                            <label class="block text-sm text-gray-400 mb-2">Board</label>
-                            <div class="flex gap-4 flex-wrap">
-                                <div class="flex-1 min-w-[180px]">
-                                    <label class="block text-xs text-gray-500 mb-1">Provider</label>
-                                    <select id="detail-provider" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                        <option value="">None</option>
-                                    </select>
-                                </div>
-                                <div class="flex-1 min-w-[180px]">
-                                    <label class="block text-xs text-gray-500 mb-1">Board</label>
-                                    <select id="detail-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                                        <option value="">None</option>
-                                    </select>
-                                </div>
-                            </div>
-                            <p id="board-hint" class="text-xs text-gray-500 mt-1">Connect Trello or Jira in Settings → Advanced to see boards.</p>
-                            <div id="kanban-board-section" class="mt-3">
-                                <label class="block text-sm text-gray-400 mb-2">Ticket Board</label>
-                                <div id="kanban-board-actions" class="flex items-center gap-3">
-                                    <span id="kanban-board-status" class="text-sm text-gray-500">Checking...</span>
-                                </div>
-                            </div>
-                        </div>
-                        <hr class="border-white/20">
-                        <!-- Context items & files -->
-                        <div>
-                            <div class="flex items-center justify-between mb-2">
-                                <label class="block text-sm text-gray-400">Context items &amp; files</label>
-                                <div class="flex gap-2">
-                                    <button type="button" id="context-item-add" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Add Context Item</button>
-                                    <button type="button" id="file-upload-btn" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Upload file</button>
-                                    <input type="file" id="file-upload-input" class="hidden" multiple>
-                                </div>
-                            </div>
-                            <p class="text-xs text-gray-500 mb-2">Context items: text chunks. Files: upload PDFs, docs, etc. as project context.</p>
-                            <div id="detail-items-table" class="border border-white/20 rounded overflow-hidden">
-                                <table class="w-full text-sm">
-                                    <thead class="bg-[#152054] text-left">
-                                        <tr><th class="px-3 py-2 text-gray-400 font-medium">Type</th><th class="px-3 py-2 text-gray-400 font-medium">Title / Name</th><th class="px-3 py-2 text-gray-400 font-medium">Description / Preview</th><th class="px-3 py-2 text-gray-400 font-medium">Path</th><th class="px-3 py-2 text-gray-400 font-medium w-28">Actions</th></tr>
-                                    </thead>
-                                    <tbody id="detail-items-body" class="text-gray-300"></tbody>
-                                </table>
-                            </div>
-                        </div>
-                    </div>
-<!-- Startup Instructions tab -->
-                    <div id="tab-startup" class="project-tab-pane hidden space-y-4">
-                        <div>
-                            <label class="block text-sm text-gray-400 mb-1">Startup instructions</label>
-                            <p class="text-xs text-gray-500 mb-1">One command per line. Each runs in a separate PTY on the server; output streams below.</p>
-                            <textarea id="detail-startup" rows="6" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="npm run dev&#10;python manage.py runserver"></textarea>
-                            <div id="startup-actions-row" class="flex gap-2 mt-3">
-                                <button type="button" id="startup-start-btn" class="bg-[#22c55e] text-white px-4 py-2 rounded text-sm font-medium hover:bg-[#16a34a] transition-colors flex items-center gap-2">
-                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    Start All Terminals
-                                </button>
-                                <button type="button" id="startup-terminate-all-btn" class="hidden bg-[#ef4444] text-white px-4 py-2 rounded text-sm font-medium hover:bg-[#dc2626] transition-colors flex items-center gap-2" disabled>
-                                    <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-                                    Terminate All
-                                </button>
-                            </div>
-                        </div>
-                        <!-- Terminal Grid Container (shown when running) -->
-                        <div id="startup-terminal-grid" class="hidden grid grid-cols-2 gap-4 mt-4">
-                            <!-- Terminals will be rendered here -->
-                        </div>
-                    </div>
-</div>
-                <div id="tab-terminal" class="project-tab-pane hidden flex flex-col gap-2 p-2 flex-1 min-h-0 relative">
-                    <!-- Input bar: input + model dropdown + send -->
-                    <div class="flex gap-2 px-1 items-center">
-                        <input type="text" id="terminal-input" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="What would you like me to build...">
-                        <select id="terminal-model-select" class="px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs focus:border-[#f97316] focus:outline-none cursor-pointer max-w-[180px]" title="Select CLI model">
-                            <option value="">Loading models...</option>
-                        </select>
-                        <button type="button" id="terminal-input-send" class="text-xs px-3 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Send instruction to pi"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</button>
-                    </div>
-                    <!-- Transcript panel (relative for floating controls) -->
-                    <div id="terminal-container" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10 bg-[#0d1117] p-3 font-mono text-sm leading-relaxed relative">
-                        <!-- Floating top-right controls inside transcript -->
-                        <div class="sticky top-0 float-right flex items-center gap-2 z-[5] bg-[#0d1117]/80 backdrop-blur-sm rounded-bl px-2 py-1">
-                            <span id="terminal-status" class="w-2 h-2 rounded-full bg-gray-500"></span>
-                            <span id="terminal-status-text" class="text-xs text-gray-400">Not connected</span>
-                            <button type="button" id="terminal-restart" class="text-xs px-2 py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal"><svg class="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"/></svg></button>
-                            <button type="button" id="terminal-overview" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]" title="Summarize terminal output via AI and read aloud">Read Overview</button>
-                        </div>
-                        <div id="terminal-transcript">
-                        <!-- transcript entries rendered here -->
-                        </div>
-                    </div>
-                    <!-- Overview overlay -->
-                    <div id="terminal-overview-overlay" class="hidden absolute bottom-4 left-4 right-4 bg-[#1a1f3a]/95 border border-[#f97316]/40 rounded-lg p-4 backdrop-blur-sm z-10">
-                        <div class="flex items-start justify-between gap-3">
-                            <div class="flex-1">
-                                <div class="flex items-center gap-2 mb-1">
-                                    <svg class="w-4 h-4 text-[#f97316]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072M12 6a7 7 0 010 12"/></svg>
-                                    <span class="text-xs font-medium text-[#f97316]">AI Overview</span>
-                                </div>
-                                <p id="terminal-overview-text" class="text-sm text-gray-200"></p>
-                            </div>
-                            <button type="button" id="terminal-overview-close" class="text-gray-400 hover:text-white text-lg leading-none">&times;</button>
-                        </div>
-                    </div>
+                    {% include "projects/tabs/details.html" %}
+                    {% include "projects/tabs/startup.html" %}
                 </div>
+                {% include "projects/tabs/cli.html" %}
+                {% include "projects/tabs/terminal.html" %}
             </div>
         </div>
     </div>
@@ -489,5 +468,9 @@
 {% block extra_scripts %}
 <script src="/static/vendor/xterm/xterm.js"></script>
 <script src="/static/shared/js/api.js"></script>
+<script src="/projects/static/js/tabs/details-section.js"></script>
+<script src="/projects/static/js/tabs/startup-section.js"></script>
+<script src="/projects/static/js/tabs/cli-section.js"></script>
+<script src="/projects/static/js/tabs/terminal-section.js"></script>
 <script src="/projects/static/js/projects.js"></script>
 {% endblock %}

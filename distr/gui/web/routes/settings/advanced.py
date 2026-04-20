@@ -24,6 +24,14 @@ from ._shared import (
 _oauth_states: Dict[str, float] = {}
 
 
+def _relay_headers() -> dict:
+    """Return headers for authenticating with the www.decisionsai.net relay server."""
+    token = (os.environ.get("RELAY_INTERNAL_TOKEN", "") or "").strip()
+    if token:
+        return {"X-Relay-Internal-Token": token}
+    return {}
+
+
 def register_routes(router, templates):
 
     @router.get("/advanced")
@@ -367,10 +375,10 @@ def register_routes(router, templates):
             if os.environ.get("DEBUG", "").upper() == "TRUE":
                 base_url = "http://localhost:8090/api/whatsapp"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{base_url}/qr")
+                resp = await client.get(f"{base_url}/qr", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
-            logger.error(f"WhatsApp QR proxy: {e}")
+            logger.error(f"WhatsApp QR proxy: {e}"))
             return JSONResponse({"status": "error", "qr_code": None, "error": str(e)}, status_code=500)
 
     @router.get("/advanced/whatsapp/status")
@@ -382,10 +390,10 @@ def register_routes(router, templates):
             if os.environ.get("DEBUG", "").upper() == "TRUE":
                 base_url = "http://localhost:8090/api/whatsapp"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.get(f"{base_url}/status")
+                resp = await client.get(f"{base_url}/status", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
         except Exception as e:
-            logger.error(f"WhatsApp status proxy: {e}")
+            logger.error(f"WhatsApp status proxy: {e}"))
             return JSONResponse({"status": "error", "error": str(e)}, status_code=500)
 
     @router.post("/advanced/whatsapp/disconnect")
@@ -397,7 +405,7 @@ def register_routes(router, templates):
             if os.environ.get("DEBUG", "").upper() == "TRUE":
                 base_url = "http://localhost:8090/api/whatsapp"
             async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(f"{base_url}/disconnect")
+                resp = await client.post(f"{base_url}/disconnect", headers=_relay_headers())
                 data = resp.json()
                 if data.get("success"):
                     # Also remove from connected_accounts
@@ -760,7 +768,7 @@ def register_routes(router, templates):
     async def telegram_link_request():
         """Proxy to decisionsai.net to get Telegram QR link (same as native _fetch_qr_code)."""
         try:
-            import os, time, secrets, hashlib, hmac as _hmac
+            import os
             import requests as req
             import base64
 
@@ -773,19 +781,6 @@ def register_routes(router, templates):
             headers = {"Content-Type": "application/json"}
 
             payload_str = "{}"
-            # HMAC signing
-            hmac_secret = os.environ.get("DECISIONSAI_HMAC_SECRET", "")
-            if hmac_secret:
-                nonce = secrets.token_hex(16)
-                ts = str(time.time())
-                sig = _hmac.new(
-                    hmac_secret.encode(),
-                    f"{payload_str}|{nonce}|{ts}".encode(),
-                    hashlib.sha256,
-                ).hexdigest()
-                headers["X-Signature"] = sig
-                headers["X-Nonce"] = nonce
-                headers["X-Timestamp"] = ts
 
             response = req.post(api_url, headers=headers, data=payload_str, timeout=10)
             if response.status_code != 200:

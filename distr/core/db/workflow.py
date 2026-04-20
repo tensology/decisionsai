@@ -1,7 +1,7 @@
 """
 Automation Workflow database models.
 
-Replaces the old Step Runner. An AutoWorkflow is a reusable, schedulable
+Workflow engine data model. An AutoWorkflow is a reusable, schedulable
 sequence of steps. Each step IS a single action with validation and routing.
 
 Named "Auto" to avoid conflict with the existing Workflow model (template/job card system).
@@ -155,6 +155,8 @@ class AutoWorkflowRun(Base):
 
     id = Column(Integer, primary_key=True)
     workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
+    board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=True)  # Board this run belongs to
+    ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)  # Ticket this run belongs to
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     status = Column(String, default='running')  # running, completed, failed, cancelled, waiting

@@ -14,6 +14,7 @@ import time
 import atexit
 from typing import Optional, Dict, Any
 import uuid
+import json
 
 logger = logging.getLogger(__name__)
 
@@ -23,22 +24,101 @@ _sessions: Dict[int, "TerminalSession"] = {}
 
 # ── Startup sessions for project terminals ────────────────────────────────
 _startup_sessions: Dict[str, "TerminalSession"] = {}
+_startup_queue_lock = asyncio.Lock()
 
 # ── ANSI escape regex (compiled once) ─────────────────────────────────────
 import re
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[.*?[a-zA-Z]')
 
 
+def _startup_queue_path() -> str:
+    from distr.core.paths import DB_DIR
+    return os.path.join(DB_DIR, "startup_terminal_queue.json")
+
+
+def queue_startup_terminal_launch(project_id: int, cwd: str, commands: list[str]) -> int:
+    """Persist startup commands so the web runtime can materialize terminals."""
+    if not commands:
+        return 0
+    path = _startup_queue_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    payload = {
+        "project_id": int(project_id),
+        "cwd": cwd,
+        "commands": commands,
+        "created_at": time.time(),
+    }
+    try:
+        existing: list[dict[str, Any]] = []
+        if os.path.exists(path):
+            with open(path, "r", encoding="utf-8") as f:
+                existing = json.load(f) or []
+                if not isinstance(existing, list):
+                    existing = []
+        existing.append(payload)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(existing, f)
+        return len(commands)
+    except Exception as e:
+        logger.error("Failed to queue startup terminal launch: %s", e, exc_info=True)
+        return 0
+
+
+async def materialize_queued_startup_terminals(project_id: int) -> tuple[int, int]:
+    """Create startup PTY sessions for queued requests for this project."""
+    path = _startup_queue_path()
+    if not os.path.exists(path):
+        return 0, 0
+
+    async with _startup_queue_lock:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                queued = json.load(f) or []
+                if not isinstance(queued, list):
+                    queued = []
+        except Exception:
+            queued = []
+
+        to_process = [item for item in queued if int(item.get("project_id") or 0) == int(project_id)]
+        remaining = [item for item in queued if int(item.get("project_id") or 0) != int(project_id)]
+
+        if to_process:
+            with open(path, "w", encoding="utf-8") as f:
+                json.dump(remaining, f)
+
+    started = 0
+    failed = 0
+    for item in to_process:
+        cwd = (item.get("cwd") or "").strip()
+        if not cwd or not os.path.isdir(cwd):
+            failed += len(item.get("commands") or [])
+            continue
+        for cmd in item.get("commands") or []:
+            command = (cmd or "").strip()
+            if not command:
+                continue
+            try:
+                await create_startup_shell_session(int(project_id), cwd, command)
+                started += 1
+            except Exception as e:
+                logger.warning("Failed to materialize queued startup command '%s': %s", command, e)
+                failed += 1
+
+    return started, failed
+
+
 class TerminalSession:
     """A single PTY terminal session bound to a project."""
 
     def __init__(self, project_id: int, cwd: str, command: str = "pi",
-                 shell_command: Optional[str] = None, session_key: Optional[str] = None):
+                 shell_command: Optional[str] = None, session_key: Optional[str] = None,
+                 purpose: str = "startup"):
         self.project_id = project_id
         self.cwd = cwd
         self.command = command
         self.shell_command = shell_command
         self.session_key = session_key or str(uuid.uuid4())
+        self.purpose = purpose
         self._raw_buffer = bytearray()  # raw PTY output for replay on reconnect (256 KB cap)
         self._max_raw_buffer = 256 * 1024
         self.master_fd: Optional[int] = None
@@ -519,11 +599,11 @@ def get_startup_session(terminal_id: str) -> Optional[TerminalSession]:
     return _startup_sessions.get(terminal_id)
 
 
-async def create_startup_shell_session(project_id: int, cwd: str, shell_command: str) -> tuple[str, TerminalSession]:
+async def create_startup_shell_session(project_id: int, cwd: str, shell_command: str, purpose: str = "startup") -> tuple[str, TerminalSession]:
     """Spawn a PTY running the shell command in cwd. Returns (terminal_id, session)."""
     terminal_id = str(uuid.uuid4())
     session = TerminalSession(project_id=project_id, cwd=cwd, command="shell",
-                               shell_command=shell_command, session_key=terminal_id)
+                               shell_command=shell_command, session_key=terminal_id, purpose=purpose)
     await session.start_with_shell_command()
     _startup_sessions[terminal_id] = session
     logger.info(f"Startup session created: key={terminal_id} cmd={shell_command!r} cwd={cwd}")
@@ -546,17 +626,20 @@ def cleanup_dead_startup_sessions() -> int:
     return len(dead_keys)
 
 
-def get_startup_sessions_for_project(project_id: int) -> list[dict]:
+def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "startup") -> list[dict]:
     """Return all alive startup sessions for a project (and clean up dead ones)."""
     cleanup_dead_startup_sessions()
     results = []
     for session_key, sess in list(_startup_sessions.items()):
         if sess.project_id == project_id and sess.is_alive:
+            if purpose and sess.purpose != purpose:
+                continue
             results.append({
                 "process_id": session_key,
                 "pid": sess.pid,
                 "command": sess.shell_command or "",
                 "alive": True,
+                "purpose": sess.purpose,
             })
     return results
 

@@ -1,4 +1,4 @@
-"""Unit tests for distr.core.step_runner.test_loop.TestLoopService."""
+"""Unit tests for distr.core.workflow_engine.test_loop.TestLoopService."""
 
 import os
 import sys
@@ -6,8 +6,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from distr.core.step_runner.step_types import StepType
-from distr.core.step_runner.test_loop import (
+from distr.core.workflow_engine.step_types import StepType
+from distr.core.workflow_engine.test_loop import (
     ExecutionResult,
     TestLoopService,
     TestResult,

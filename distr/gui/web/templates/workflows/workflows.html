@@ -26,6 +26,7 @@
 .tab-btn.active { border-bottom-color: #f97316; color: #fff; }
 .chevron { transition: transform 0.15s; display: inline-block; }
 .chevron.open { transform: rotate(90deg); }
+.wf-live-run { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
 </style>
 {% endblock %}
 
@@ -169,8 +170,25 @@
                     </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">
+                        <div class="mb-4">
+                            <div class="flex items-center justify-between mb-2">
+                                <p class="text-xs text-gray-400">Active check-ins across boards</p>
+                                <div class="flex items-center gap-2">
+                                    <select id="wf-active-runs-scope" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs">
+                                        <option value="all">All active runs</option>
+                                        <option value="current">This workflow only</option>
+                                    </select>
+                                    <button type="button" id="wf-refresh-active-runs" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                </div>
+                            </div>
+                            <div id="wf-active-runs-list" class="space-y-2"></div>
+                            <p id="wf-active-runs-empty" class="text-sm text-gray-500">No active runs.</p>
+                        </div>
+                        <div class="border-t border-white/10 pt-4">
+                            <p class="text-xs text-gray-400 mb-2">Recent runs for this workflow</p>
                         <div id="wf-runs-list" class="space-y-2"></div>
                         <p id="wf-runs-empty" class="text-sm text-gray-500">No runs yet.</p>
+                        </div>
                     </div>
                 </div>
             </div>

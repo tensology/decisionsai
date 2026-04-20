@@ -150,3 +150,71 @@ class TestSeedDataIdempotency:
             assert wf.steps[0].id == existing_step_id
             assert wf.steps[0].name == existing_step_name
             session.close()
+
+    def test_development_workflow_uses_phase_fixture_with_validation_requirements(self):
+        """Development workflow fixture is loaded as Planning/Execution/Validation."""
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        with patch("distr.core.db.seed_workflows.get_session", patched_get_session):
+            session = factory()
+            wf = AutoWorkflow(name="Development", status="draft")
+            session.add(wf)
+            session.commit()
+            wf_id = wf.id
+            session.close()
+
+            seed_workflows()
+
+            session = factory()
+            wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == wf_id).first()
+            steps = sorted(wf.steps, key=lambda s: s.position)
+            assert [s.name for s in steps] == ["Planning", "Execution", "Validation"]
+            assert steps[0].validation_type == "text_match"
+            assert steps[0].validation_prompt == "success criteria"
+            assert steps[1].validation_type == "rule_based"
+            assert "contains: implemented" in (steps[1].validation_prompt or "")
+            assert steps[2].validation_type == "rule_based"
+            assert "contains: requirement" in (steps[2].validation_prompt or "")
+            session.close()
+
+    def test_seed_force_reset_replaces_existing_seeded_steps(self):
+        """Force reset should replace existing steps on seeded workflows."""
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        with patch("distr.core.db.seed_workflows.get_session", patched_get_session):
+            session = factory()
+            wf = AutoWorkflow(name="Development", status="draft")
+            session.add(wf)
+            session.flush()
+            session.add(
+                AutoWorkflowStep(
+                    workflow_id=wf.id,
+                    position=0,
+                    name="Legacy Step",
+                    action_type="agent_instruction",
+                )
+            )
+            session.commit()
+            wf_id = wf.id
+            session.close()
+
+            # Default seed should skip because workflow has existing steps.
+            summary = seed_workflows()
+            assert summary["seeded_count"] == 0
+            assert "Development" in summary["skipped_names"]
+
+            # Force reset should overwrite with phase fixtures.
+            summary = seed_workflows(force_reset=True)
+            assert "Development" in summary["seeded_names"]
+
+            session = factory()
+            wf = session.query(AutoWorkflow).filter(AutoWorkflow.id == wf_id).first()
+            names = [s.name for s in sorted(wf.steps, key=lambda s: s.position)]
+            assert names == ["Planning", "Execution", "Validation"]
+            session.close()

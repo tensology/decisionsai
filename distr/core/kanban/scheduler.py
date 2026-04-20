@@ -6,8 +6,6 @@ Supports hourly, daily, weekly, fortnightly, and monthly frequencies.
 from datetime import datetime, timedelta
 from typing import List, Optional
 import calendar
-
-
 def compute_next_run(
     frequency: str,
     last_run_at: Optional[datetime],
@@ -169,24 +167,23 @@ def check_kanban_schedules() -> None:
     """
     import json
     import logging
-    import threading
 
     from distr.core.db import get_session
     from distr.core.db.kanban import KanbanBoard
     from distr.core.db.workflow import AutoWorkflowRun
-    from distr.core.kanban.agent import KanbanAgentCheckIn
+    from distr.core.kanban.agent import start_agent_checkin
     from distr.core.settings import load_settings_from_db
 
     logger = logging.getLogger(__name__)
     now = datetime.utcnow()
 
     settings = load_settings_from_db()
-
+    # Global scheduler switch: when off, no automatic board check-ins are fired.
     if not settings.get("kanban_agent_enabled", False):
         return
 
-    frequency = settings.get("kanban_agent_frequency", "daily")
-    agent_time = settings.get("kanban_agent_time", "09:00")
+    global_frequency = settings.get("kanban_agent_frequency", "daily")
+    global_agent_time = settings.get("kanban_agent_time", "09:00")
 
     # Parse JSON-encoded hours and days from global settings
     raw_hours = settings.get("kanban_agent_hours", "[]")
@@ -207,22 +204,21 @@ def check_kanban_schedules() -> None:
     else:
         agent_days = raw_days if isinstance(raw_days, list) else []
 
-    agent_monthly_day = settings.get("kanban_agent_monthly_day", 1)
+    global_agent_monthly_day = settings.get("kanban_agent_monthly_day", 1)
 
     with get_session() as db:
         boards = (
             db.query(KanbanBoard)
             .filter(KanbanBoard.default_workflow_id.isnot(None))
-            .filter(KanbanBoard.agent_enabled == True)
             .all()
         )
         board_infos = []
         for b in boards:
-            # Determine last_run_at: most recent workflow run for this board's workflow
+            # Determine last_run_at from this board's own runs to keep schedules isolated.
             last_run_at = None
             last_run = (
                 db.query(AutoWorkflowRun)
-                .filter(AutoWorkflowRun.workflow_id == b.default_workflow_id)
+                .filter(AutoWorkflowRun.board_id == b.id)
                 .order_by(AutoWorkflowRun.started_at.desc())
                 .first()
             )
@@ -233,21 +229,49 @@ def check_kanban_schedules() -> None:
                 "id": b.id,
                 "last_run_at": last_run_at,
                 "created_date": b.created_date,
+                "frequency": (b.agent_frequency or global_frequency or "daily"),
+                "agent_time": (b.agent_time or global_agent_time or "09:00"),
+                "agent_days": b.agent_days,
+                "agent_monthly_day": (
+                    b.agent_monthly_day
+                    if b.agent_monthly_day is not None
+                    else global_agent_monthly_day
+                ),
             })
 
     for info in board_infos:
+        board_days = info.get("agent_days", "[]")
+        if isinstance(board_days, str):
+            try:
+                parsed_days = json.loads(board_days)
+            except (json.JSONDecodeError, ValueError):
+                parsed_days = []
+        else:
+            parsed_days = board_days if isinstance(board_days, list) else []
+
         next_run_at = compute_next_run(
-            frequency=frequency,
+            frequency=info.get("frequency", global_frequency),
             last_run_at=info["last_run_at"],
-            agent_time=agent_time,
+            agent_time=info.get("agent_time", global_agent_time),
             created_date=info["created_date"],
             agent_hours=agent_hours,
-            agent_days=agent_days,
-            agent_monthly_day=agent_monthly_day,
+            agent_days=parsed_days if parsed_days else agent_days,
+            agent_monthly_day=info.get("agent_monthly_day", global_agent_monthly_day),
         )
         if next_run_at is None:
             continue
         if next_run_at <= now:
-            logger.info("Ticket Board scheduler: board %s is due, firing agent check-in", info["id"])
-            agent = KanbanAgentCheckIn(info["id"])
-            threading.Thread(target=agent.run, daemon=True).start()
+            result = start_agent_checkin(info["id"])
+            if result["status"] == "already_running":
+                logger.info(
+                    "Ticket Board scheduler: board %s already has active check-in, skipping duplicate fire",
+                    info["id"],
+                )
+            elif result["status"] == "started":
+                logger.info("Ticket Board scheduler: board %s is due, firing agent check-in", info["id"])
+            else:
+                logger.info(
+                    "Ticket Board scheduler: board %s due but not runnable (%s)",
+                    info["id"],
+                    result.get("reason", "unknown"),
+                )

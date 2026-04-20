@@ -1517,8 +1517,8 @@ class ScreenshotAnalyzerTool(BaseTool):
         vision_intent = classify_vision_intent(original_text or prompt)
         if vision_intent == VisionIntent.MULTI_STEP:
             return (
-                "This looks like a complex multi-step task. Use the Step Runner page "
-                "(Settings > Step Runner) to break it down into ordered steps."
+                "This looks like a complex multi-step task. Use the Workflows page "
+                "to break it down into ordered steps."
             )
 
         # ── Detect action vs informational request ──

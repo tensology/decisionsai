@@ -55,8 +55,8 @@ def register_routes(router, templates):
             "vision_model": _model(settings.get("vision_llm_model"), "vision"),
             "image_provider": _provider(settings.get("image_llm_provider")),
             "image_model": _model(settings.get("image_llm_model"), "image"),
-            "step_runner_provider": (settings.get("step_runner_llm_provider") or "").strip().lower() or "",
-            "step_runner_model": (settings.get("step_runner_llm_model") or "").strip(),
+            "workflow_provider": ((settings.get("workflow_llm_provider") or "").strip().lower() or ""),
+            "workflow_model": (settings.get("workflow_llm_model") or "").strip(),
             "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
             "kanban_provider": (settings.get("kanban_agent_orchestrator_provider") or "").strip().lower() or "",
@@ -92,8 +92,10 @@ def register_routes(router, templates):
         settings["vision_llm_model"] = (settings_data.get("vision_model") or "").strip()
         settings["image_llm_provider"] = (settings_data.get("image_provider") or "ollama").strip()
         settings["image_llm_model"] = (settings_data.get("image_model") or "").strip()
-        settings["step_runner_llm_provider"] = (settings_data.get("step_runner_provider") or "").strip()
-        settings["step_runner_llm_model"] = (settings_data.get("step_runner_model") or "").strip()
+        workflow_provider = (settings_data.get("workflow_provider") or "").strip()
+        workflow_model = (settings_data.get("workflow_model") or "").strip()
+        settings["workflow_llm_provider"] = workflow_provider
+        settings["workflow_llm_model"] = workflow_model
         settings["computer_use_provider"] = (settings_data.get("computer_use_provider") or "").strip()
         settings["computer_use_model"] = (settings_data.get("computer_use_model") or "").strip()
         settings["kanban_agent_orchestrator_provider"] = (settings_data.get("kanban_provider") or "").strip()
@@ -169,7 +171,8 @@ def register_routes(router, templates):
                 "coding": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
                 "vision": lambda m: not _is_dict(m) or "image" in (m.get("input_modalities") or []),
                 "image": lambda m: not _is_dict(m) or "image" in (m.get("output_modalities") or []),
-                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "workflow": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
+                "step_runner": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),  # legacy alias
                 "computer_use": lambda m: True,
                 "kanban": lambda m: not _is_dict(m) or m.get("supports_tools", not (provider == "ollama")),
             }

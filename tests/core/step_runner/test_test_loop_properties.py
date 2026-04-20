@@ -10,8 +10,8 @@ from unittest.mock import MagicMock, patch
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from distr.core.step_runner.step_types import StepType
-from distr.core.step_runner.test_loop import (
+from distr.core.workflow_engine.step_types import StepType
+from distr.core.workflow_engine.test_loop import (
     ExecutionResult,
     TestLoopService,
     TestResult,

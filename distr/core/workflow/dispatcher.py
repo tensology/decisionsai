@@ -78,7 +78,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 steps_summary.append({
                     "title": step_obj.name if step_obj else f"Step {sr.step_id}",
                     "status": sr.status,
-                    "result": (sr.agent_response or "")[:300],
+                    "result": (sr.agent_response or "")[:2000],
                 })
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
@@ -92,7 +92,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     }
 
     try:
-        from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+        from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
         WorkflowAgentBridge().on_workflow_completed(workflow_id, run_result)
     except Exception:
         logger.error("WorkflowAgentBridge notification failed for run %d", run_id, exc_info=True)
@@ -113,6 +113,9 @@ def start_workflow_run(
     workflow_id: int,
     context: Optional[str] = None,
     start_step_id: Optional[int] = None,
+    board_id: Optional[int] = None,
+    ticket_id: Optional[int] = None,
+    run_metadata: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Start a full workflow run.
 
@@ -130,9 +133,16 @@ def start_workflow_run(
         active_run = db.query(AutoWorkflowRun).filter(
             AutoWorkflowRun.workflow_id == workflow_id,
             AutoWorkflowRun.status.in_(["running", "waiting"]),
-        ).first()
+        )
+        # Scope by board_id and ticket_id if provided — allow concurrent
+        # runs of the same workflow from different boards/tickets
+        if board_id is not None:
+            active_run = active_run.filter(AutoWorkflowRun.board_id == board_id)
+        if ticket_id is not None:
+            active_run = active_run.filter(AutoWorkflowRun.ticket_id == ticket_id)
+        active_run = active_run.first()
         if active_run:
-            return {"error": "A run is already in progress"}
+            return {"error": "A run is already in progress for this board/ticket"}
 
         # Validate all steps before starting
         sorted_steps = sorted(wf.steps, key=lambda s: s.position)
@@ -161,7 +171,13 @@ def start_workflow_run(
                 step.status = "pending"
                 step.result = None
 
-        run = AutoWorkflowRun(workflow_id=workflow_id, status="running")
+        run = AutoWorkflowRun(
+            workflow_id=workflow_id,
+            status="running",
+            board_id=board_id,
+            ticket_id=ticket_id,
+            run_data=json.dumps(run_metadata or {}),
+        )
         db.add(run)
         db.flush()
         run_id = run.id
@@ -279,8 +295,20 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         run.status = status
         run.completed_at = datetime.utcnow()
         workflow_id = run.workflow_id
+        board_id = run.board_id
+        ticket_id = run.ticket_id
         db.commit()
     increment_workflow_updated()
+    try:
+        if board_id is not None:
+            from distr.gui.web.kanban_events import increment_kanban_updated
+            increment_kanban_updated(board_id=board_id, event_type="run_completed", payload={
+                "run_id": run_id,
+                "ticket_id": ticket_id,
+                "status": status,
+            })
+    except Exception:
+        logger.debug("Could not emit run_completed kanban event", exc_info=True)
     _finalize_terminal_run(run_id, workflow_id, status)
     _clear_workflow_env()
     return True
@@ -319,6 +347,7 @@ class StepDispatcher:
         step_data = self._load_step(step_id)
         if "error" in step_data:
             return step_data
+        self._set_run_phase(run_id, step_data)
         errors = self._validate_before_dispatch(step_data)
         if errors:
             self._fail_step(step_id, f"Validation failed: {errors}")
@@ -327,9 +356,12 @@ class StepDispatcher:
         result = self._execute(step_data, run_id=run_id)
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}
-        self._record_result(step_id, run_id=run_id,
-                            result_text=result.get("output", ""),
-                            passed=result.get("passed", False))
+        self._record_result_and_route(
+            step_id,
+            run_id=run_id,
+            result_text=result.get("output", ""),
+            passed=result.get("passed", False),
+        )
         # If step entered waiting state, return early — routing handled by wait state
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
@@ -340,6 +372,54 @@ class StepDispatcher:
             "success": True, "status": "passed" if result.get("passed") else "failed",
             "output": result.get("output", ""), "passed": result.get("passed", False),
         }
+
+    def _set_run_phase(self, run_id: int, step_data: Dict[str, Any]) -> None:
+        """Update run_data with current phase for progress reporting."""
+        try:
+            workflow_id = step_data.get("workflow_id")
+            position = int(step_data.get("position", 0))
+            name = (step_data.get("name") or "").strip().lower()
+            total_steps = 0
+            with get_session() as db:
+                if workflow_id is not None:
+                    total_steps = db.query(AutoWorkflowStep).filter(
+                        AutoWorkflowStep.workflow_id == workflow_id).count()
+                phase = "execution"
+                if "plan" in name:
+                    phase = "planning"
+                elif "valid" in name or "verify" in name or "test" in name:
+                    phase = "validation"
+                elif total_steps > 0:
+                    if position <= 0:
+                        phase = "planning"
+                    elif position >= total_steps - 1:
+                        phase = "validation"
+
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if not run:
+                    return
+                run_data = json.loads(run.run_data or "{}")
+                run_data["phase"] = phase
+                run_data["current_step_id"] = step_data.get("id")
+                run_data["current_step_name"] = step_data.get("name")
+                run.run_data = json.dumps(run_data)
+                board_id = run.board_id
+                ticket_id = run.ticket_id
+                db.commit()
+            try:
+                if board_id is not None:
+                    from distr.gui.web.kanban_events import increment_kanban_updated
+                    increment_kanban_updated(board_id=board_id, event_type="run_phase", payload={
+                        "run_id": run_id,
+                        "ticket_id": ticket_id,
+                        "phase": phase,
+                        "step_id": step_data.get("id"),
+                        "step_name": step_data.get("name"),
+                    })
+            except Exception:
+                logger.debug("Could not emit run_phase kanban event", exc_info=True)
+        except Exception:
+            logger.debug("Could not update run phase for run %s", run_id, exc_info=True)
 
     # ── Step loading ────────────────────────────────────────────────
 
@@ -383,7 +463,7 @@ class StepDispatcher:
         if action_type == "agent_instruction":
             return "No instruction provided" if not step_data["instruction"].strip() else None
         try:
-            from distr.core.step_runner.validation import StepValidator
+            from distr.core.workflow_engine.validation import StepValidator
             config = self._build_config(step_data)
             errors = StepValidator().validate(action_type, config)
             if errors:
@@ -448,7 +528,7 @@ class StepDispatcher:
         if not exec_code:
             return {"output": "No code or instruction provided", "passed": False}
         try:
-            from distr.core.step_runner.test_loop import TestLoopService
+            from distr.core.workflow_engine.test_loop import TestLoopService
             svc = TestLoopService()
             # Resolve project working directory if step has a linked project
             cwd = None
@@ -722,7 +802,7 @@ class StepDispatcher:
         results, user feedback from wait_for_continue steps, step position,
         variable resolution, and step description.
         """
-        from distr.core.step_runner.context_assembly import assemble_step_context
+        from distr.core.workflow_engine.context_assembly import assemble_step_context
         from distr.core.workflow.planning import build_step_context_prompt
 
         step_id = step_data["id"]
@@ -731,19 +811,41 @@ class StepDispatcher:
         # ── Load workflow-level context ──
         workflow_description = ""
         context_rules = ""
+        workflow_input_context = ""
         prior_results: List[Dict[str, str]] = []
         total_steps = 1
         step_index = 0
         continuation_input = ""
         wf = None
         step_obj = None
-
         try:
             with get_session() as db:
                 wf = db.query(AutoWorkflow).filter(
                     AutoWorkflow.id == workflow_id).first()
                 step_obj = db.query(AutoWorkflowStep).filter(
                     AutoWorkflowStep.id == step_id).first()
+
+                if wf:
+                    workflow_description = wf.description or ""
+                    context_rules = getattr(wf, 'context_rules', None) or ""
+                    all_steps = sorted(wf.steps, key=lambda s: s.position)
+                    total_steps = len(all_steps)
+                    for i, s in enumerate(all_steps):
+                        if s.id == step_id:
+                            step_index = i
+                            break
+
+                # Use shared context assembly while session is still open.
+                if wf and step_obj:
+                    try:
+                        step_input_ctx = assemble_step_context(
+                            session=wf,
+                            step=step_obj,
+                            prior_results=prior_results,
+                        )
+                        context_rules = step_input_ctx.workflow_rules or context_rules
+                    except Exception as ce:
+                        logger.debug("_build_agent_prompt: assemble_step_context failed: %s", ce)
         except Exception as e:
             logger.debug("_build_agent_prompt: failed to load workflow/step objects: %s", e)
 
@@ -766,7 +868,7 @@ class StepDispatcher:
                         if result:
                             prior_results.append({
                                 "title": title,
-                                "result": result[:300],
+                                "result": result[:2000],
                                 "step_type": s.action_type if s else "agent_instruction",
                             })
             except Exception as e:
@@ -785,30 +887,15 @@ class StepDispatcher:
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed to load feedback: %s", e)
 
-        # ── Determine step position and total steps ──
-        if wf:
-            workflow_description = wf.description or ""
-            context_rules = getattr(wf, 'context_rules', None) or ""
-            all_steps = sorted(wf.steps, key=lambda s: s.position)
-            total_steps = len(all_steps)
-            for i, s in enumerate(all_steps):
-                if s.id == step_id:
-                    step_index = i
-                    break
-
-        # ── Use shared context assembly if we have real model objects ──
-        step_input_ctx = None
-        if wf and step_obj and prior_results is not None:
+        # ── Inject run context (ticket/board/project context) from start_workflow_run(context=...) ──
+        if run_id is not None:
             try:
-                step_input_ctx = assemble_step_context(
-                    session=wf,
-                    step=step_obj,
-                    prior_results=prior_results,
-                )
-                # Override context_rules from the assembled context
-                context_rules = step_input_ctx.workflow_rules or context_rules
+                with _runs_lock:
+                    run_ctx = _active_runs.get(run_id)
+                if run_ctx and (run_ctx.context_prefix or "").strip():
+                    workflow_input_context = run_ctx.context_prefix.strip()
             except Exception as e:
-                logger.debug("_build_agent_prompt: assemble_step_context failed: %s", e)
+                logger.debug("_build_agent_prompt: failed to load run context prefix: %s", e)
 
         # ── Build the prompt using the shared function ──
         step_instruction = step_data["instruction"].strip()
@@ -822,7 +909,11 @@ class StepDispatcher:
         prompt = build_step_context_prompt(
             step_index=step_index,
             total_steps=total_steps,
-            workflow_description=workflow_description or "Complete the requested workflow.",
+            workflow_description=(
+                f"{workflow_description}\n\nWorkflow input:\n{workflow_input_context}".strip()
+                if workflow_input_context
+                else (workflow_description or "Complete the requested workflow.")
+            ),
             step_title=step_title,
             step_instruction=step_instruction,
             prior_results=prior_results,
@@ -884,8 +975,8 @@ class StepDispatcher:
         feedback, description) so the generated code is contextually aware.
         """
         try:
-            from distr.core.step_runner.code_generator import CodeGeneratorService
-            from distr.core.step_runner.step_types import StepType
+            from distr.core.workflow_engine.code_generator import CodeGeneratorService
+            from distr.core.workflow_engine.step_types import StepType
             step_type = StepType.PLAYWRIGHT if action_type == "playwright" else StepType.EXECUTE_CODE
 
             # Build context string from workflow run history
@@ -905,7 +996,7 @@ class StepDispatcher:
                             title = s.name if s else f"Step {sr.step_id}"
                             result = (sr.agent_response or "").strip()
                             if result:
-                                context_parts.append(f"{title}: {result[:200]}")
+                                context_parts.append(f"{title}: {result[:500]}")
 
                         run = db.query(AutoWorkflowRun).filter(
                             AutoWorkflowRun.id == run_id).first()
@@ -913,7 +1004,7 @@ class StepDispatcher:
                             run_data = json.loads(run.run_data or "{}")
                             feedback = run_data.get("feedback", "")
                             if feedback and feedback.strip():
-                                context_parts.append(f"User feedback: {feedback.strip()[:300]}")
+                                context_parts.append(f"User feedback: {feedback.strip()[:500]}")
                 except Exception as e:
                     logger.debug("_generate_code: failed to load context: %s", e)
 
@@ -949,7 +1040,7 @@ class StepDispatcher:
                 return
             # Check wait_for_continue before finalizing
             if step.wait_for_continue:
-                if self._enter_wait_state(step_id, result_text, passed):
+                if self._enter_wait_state(step_id, result_text, passed, run_id=run_id):
                     return
             verified_passed = _run_verification(step, result_text, passed)
             status = "passed" if verified_passed else "failed"
@@ -985,25 +1076,9 @@ class StepDispatcher:
                 return
             self._routed_steps.add(step_id)
 
-        # First, record the result (verification, DB update, etc.)
-        self._record_result(step_id, run_id, result_text, passed)
-
-        # Check if the step entered waiting state during _record_result.
-        # If so, skip routing — the StepRouter will handle routing when the
-        # user continues from the wait state, and we avoid a duplicate TTS speak.
-        step_in_waiting = False
-        if step_id:
-            with get_session() as db:
-                _step = db.query(AutoWorkflowStep).filter(
-                    AutoWorkflowStep.id == step_id).first()
-                if _step and _step.status == "waiting":
-                    step_in_waiting = True
-
-        if step_in_waiting:
-            logger.info("Step %s entered waiting state — skipping router to avoid duplicate TTS", step_id)
-            return
-
-        # Route to the next step if we're in a workflow run
+        # Route to the next step if we're in a workflow run.
+        # NOTE: StepRouter.route() is the single writer for step results/status
+        # in workflow mode to avoid duplicate result rows and duplicated context.
         if run_id is not None:
             try:
                 from distr.core.workflow.router import StepRouter
@@ -1047,7 +1122,13 @@ class StepDispatcher:
                 except Exception:
                     pass
 
-    def _enter_wait_state(self, step_id: int, result_text: str, passed: bool) -> bool:
+    def _enter_wait_state(
+        self,
+        step_id: int,
+        result_text: str,
+        passed: bool,
+        run_id: Optional[int] = None,
+    ) -> bool:
         """Put step into waiting state if wait_for_continue is set. Returns True if entered."""
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
@@ -1055,15 +1136,21 @@ class StepDispatcher:
                 return False
             step.status = "waiting"
             step_name, workflow_id = step.name, step.workflow_id
-            run = db.query(AutoWorkflowRun).filter(
-                AutoWorkflowRun.workflow_id == workflow_id,
-                AutoWorkflowRun.current_step_id == step_id,
-                AutoWorkflowRun.status == "running",
-            ).first()
-            run_id = None
+            if run_id is not None:
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.id == run_id,
+                ).first()
+            else:
+                # Legacy fallback path for isolated callers that do not pass run_id.
+                run = db.query(AutoWorkflowRun).filter(
+                    AutoWorkflowRun.workflow_id == workflow_id,
+                    AutoWorkflowRun.current_step_id == step_id,
+                    AutoWorkflowRun.status == "running",
+                ).first()
+            resolved_run_id = None
             if run:
                 run.status = "waiting"
-                run_id = run.id
+                resolved_run_id = run.id
                 run_data = json.loads(run.run_data or "{}")
                 run_data["waiting_result"] = result_text
                 run_data["waiting_passed"] = passed
@@ -1082,11 +1169,11 @@ class StepDispatcher:
             logger.debug("Could not speak wait notification: %s", e)
         # Queue report for the main agent
         try:
-            from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+            from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
             WorkflowAgentBridge().queue_report_to_agent(
                 workflow_id,
                 f"Workflow step '{step_name}' completed and is now WAITING for your input. "
-                f"Run ID: {run_id}. Result: {result_text[:500]}")
+                f"Run ID: {resolved_run_id}. Result: {result_text[:1000]}")
         except Exception as e:
             logger.debug("Could not queue wait report: %s", e)
         return True

@@ -328,7 +328,7 @@ class SignalBridgeMixin:
         def on_workflow_finished(session_id, summary):
             """When a workflow finishes, drain the report queue and send the summary to the agent."""
             try:
-                from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+                from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
                 reports = WorkflowAgentBridge.get_pending_reports()
                 # Use the most recent report for this session, or fall back to the signal summary.
                 # Re-queue reports that belong to other sessions so they are not lost.

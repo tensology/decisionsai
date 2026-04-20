@@ -280,7 +280,7 @@ def get_tool_parameters(tool_name: str) -> dict:
             "properties": {
                 "instruction": {
                     "type": "string",
-                    "description": "The task or workflow to break down into steps. Extract from user message (e.g. 'check my calendar every morning' from 'create steps to check my calendar every morning'). Use when user says 'create steps for the step runner', 'break down [task] into steps', 'add a workflow to the step runner'."
+                    "description": "The task or workflow to break down into steps. Extract from user message (e.g. 'check my calendar every morning' from 'create steps to check my calendar every morning'). Use when user says 'create a workflow', 'break down [task] into steps', or 'build a workflow for this'."
                 }
             },
             "required": []

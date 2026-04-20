@@ -15,45 +15,110 @@ import subprocess
 import shutil
 import platform
 import shlex
+import urllib.request
+import urllib.error
 from datetime import datetime
 
 logger = logging.getLogger(__name__)
 
 
-def _start_inapp_terminals(project_id: int, folder: str, commands: list[str]) -> tuple[int, int]:
-    """Spawn in-app PTY sessions for each command. Returns (started_count, failed_count)."""
-    import asyncio
-    from distr.core.terminal import create_startup_shell_session, _startup_sessions
+def _get_internal_api_token_for_web() -> str:
+    token = (os.getenv("DECISIONSAI_INTERNAL_API_TOKEN") or "").strip()
+    if token:
+        return token
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:8765/settings", timeout=2.0) as resp:
+            html = resp.read().decode("utf-8", errors="replace")
+        m = re.search(r'<meta name="decisionsai-internal-api-token" content="([^"]+)"', html)
+        return (m.group(1).strip() if m else "")
+    except Exception:
+        return ""
 
-    # Kill any existing sessions for this project first
-    dead_keys = [k for k, s in list(_startup_sessions.items()) if s.project_id == project_id]
-    for k in dead_keys:
-        try:
-            sess = _startup_sessions.pop(k, None)
-            if sess:
-                asyncio.get_event_loop().run_until_complete(sess.kill())
-        except Exception:
-            pass
+
+def _start_via_web_runtime(project_id: int, folder: str, commands: list[str]) -> tuple[int, int, list[dict[str, str]]]:
+    token = _get_internal_api_token_for_web()
+    if not token:
+        diagnostics = [{"command": c, "status": "failed", "reason": "Missing internal API token"} for c in commands]
+        return 0, len(commands), diagnostics
 
     started = 0
     failed = 0
+    diagnostics: list[dict[str, str]] = []
+    url = "http://127.0.0.1:8765/api/projects/startup-terminal"
     for cmd in commands:
+        body = json.dumps({
+            "project_id": int(project_id),
+            "command": cmd,
+            "working_dir": folder,
+        }).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=body,
+            method="POST",
+            headers={
+                "Content-Type": "application/json",
+                "X-DecisionsAI-Internal-Token": token,
+            },
+        )
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                # We're inside an async context — use run_coroutine_threadsafe
-                import concurrent.futures
-                future = asyncio.run_coroutine_threadsafe(
-                    create_startup_shell_session(project_id, folder, cmd), loop
-                )
-                future.result(timeout=10)
+            with urllib.request.urlopen(req, timeout=5.0) as resp:
+                payload = json.loads(resp.read().decode("utf-8", errors="replace") or "{}")
+            if payload.get("success"):
+                started += 1
+                diagnostics.append({"command": cmd, "status": "started", "reason": "spawned in web runtime"})
             else:
-                loop.run_until_complete(create_startup_shell_session(project_id, folder, cmd))
-            started += 1
-        except Exception as e:
-            logger.warning("Failed to start in-app terminal for '%s': %s", cmd, e)
+                failed += 1
+                diagnostics.append({"command": cmd, "status": "failed", "reason": payload.get("error") or "Unknown web runtime error"})
+        except urllib.error.HTTPError as e:
             failed += 1
-    return started, failed
+            err_text = ""
+            try:
+                err_text = e.read().decode("utf-8", errors="replace")
+            except Exception:
+                err_text = str(e)
+            diagnostics.append({"command": cmd, "status": "failed", "reason": f"HTTP {e.code}: {err_text[:180] or e.reason}"})
+        except Exception as e:
+            logger.warning("Web runtime startup-terminal failed for '%s': %s", cmd, e)
+            failed += 1
+            diagnostics.append({"command": cmd, "status": "failed", "reason": str(e)})
+    return started, failed, diagnostics
+
+
+def _start_inapp_terminals(project_id: int, folder: str, commands: list[str]) -> tuple[int, int, list[dict[str, str]]]:
+    """Start terminals in web runtime; fallback to queue if needed."""
+    started, failed, diagnostics = _start_via_web_runtime(project_id=project_id, folder=folder, commands=commands)
+    if started > 0 and failed == 0:
+        return started, failed, diagnostics
+
+    from distr.core.terminal import queue_startup_terminal_launch
+
+    queue_candidates = [d["command"] for d in diagnostics if d.get("status") == "failed" and d.get("command")]
+    queued = queue_startup_terminal_launch(project_id=project_id, cwd=folder, commands=queue_candidates)
+    queue_failed = max(0, len(queue_candidates) - queued)
+    if queued or queue_failed:
+        logger.info("Startup fallback queue for project %s: queued=%s failed=%s", project_id, queued, queue_failed)
+    remaining_queued = queued
+    for d in diagnostics:
+        if d.get("status") == "failed" and remaining_queued > 0:
+            d["status"] = "queued"
+            d["reason"] = "queued for web runtime fallback"
+            remaining_queued -= 1
+
+    total_started = started + queued
+    total_failed = max(0, len(commands) - total_started)
+    return total_started, total_failed, diagnostics
+
+
+def _format_startup_diagnostics(diagnostics: list[dict[str, str]]) -> str:
+    lines: list[str] = []
+    for idx, item in enumerate(diagnostics, start=1):
+        cmd = (item.get("command") or "").strip()
+        status = (item.get("status") or "unknown").strip()
+        reason = (item.get("reason") or "").strip()
+        if len(cmd) > 100:
+            cmd = cmd[:97] + "..."
+        lines.append(f"{idx}. [{status}] {cmd} — {reason}")
+    return "\n".join(lines)
 
 
 def _parse_startup_command_lines(startup_instructions: str) -> list[str]:
@@ -553,11 +618,13 @@ class OpenAndStartProjectTool(BaseTool):
                 if startup_instructions:
                     commands = _parse_startup_command_lines(startup_instructions)
                     if commands:
-                        started, failed = _start_inapp_terminals(project.id, folder_location, commands)
+                        started, failed, diagnostics = _start_inapp_terminals(project.id, folder_location, commands)
                         response = f"PROJECT ACTIVATED: {project.name}\n"
-                        response += f"Started {started} terminal(s) in the Projects panel."
+                        response += f"Started or queued {started} terminal(s) for the Projects panel."
                         if failed:
-                            response += f" ({failed} failed to start.)"
+                            response += f" ({failed} failed.)"
+                        if diagnostics:
+                            response += "\n\nStartup command results:\n" + _format_startup_diagnostics(diagnostics)
                         return response
 
                 return f"PROJECT ACTIVATED: {project.name}\nNo startup instructions configured."
@@ -1377,13 +1444,15 @@ class StartProjectTool(BaseTool):
 
             folder_location = project['folder_location']
             commands = _parse_startup_command_lines(startup_instructions)
-            started, failed = _start_inapp_terminals(project_id=project['id'],
-                                                     folder=folder_location,
-                                                     commands=commands)
+            started, failed, diagnostics = _start_inapp_terminals(project_id=project['id'],
+                                                                  folder=folder_location,
+                                                                  commands=commands)
             response = f"PROJECT STARTED: {project['name']}\n"
-            response += f"Started {started} terminal(s) in the Projects panel."
+            response += f"Started or queued {started} terminal(s) for the Projects panel."
             if failed:
-                response += f" ({failed} failed to start.)"
+                response += f" ({failed} failed.)"
+            if diagnostics:
+                response += "\n\nStartup command results:\n" + _format_startup_diagnostics(diagnostics)
             return response
 
         except Exception as e:

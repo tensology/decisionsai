@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board")
+    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
@@ -38,6 +38,11 @@ class KanbanTicketInput(BaseModel):
     linked_project_id: int = Field(default=0, description="Link ticket to a project by ID")
     linked_workflow_id: int = Field(default=0, description="Link ticket to a workflow by ID")
     send_to_cli: bool = Field(default=False, description="If True, send ticket directly to project CLI instead of running a workflow")
+    jid_phone: str = Field(default="", description="WhatsApp chat phone/group key")
+    jid: str = Field(default="", description="WhatsApp full JID")
+    message_ids: List[int] = Field(default_factory=list, description="WhatsApp message IDs for read/snapshot actions")
+    message_limit: int = Field(default=50, description="Limit for WhatsApp list actions")
+    unprocessed_only: bool = Field(default=False, description="Filter only unprocessed WhatsApp messages")
 
 
 class KanbanTicketTool(BaseTool):
@@ -62,6 +67,11 @@ class KanbanTicketTool(BaseTool):
       add_link           — add a URL link (requires ticket_id, title, url)
       delete_link        — remove a link (requires ticket_id, url)
       send_to_project    — send ticket to linked project's .tickets folder (requires ticket_id)
+      checkin_overview          — show orchestrator view of active board check-ins and workflow runs
+      whatsapp_list_chats       — list WhatsApp chats available to the agent
+      whatsapp_list_messages    — read latest WhatsApp messages for a chat
+      whatsapp_snapshot_to_ticket — create a ticket snapshot from WhatsApp messages
+      whatsapp_send_message     — send a WhatsApp message to a chat/group
 
     REQUIRED PARAMETERS:
       action  — one of the actions above
@@ -78,6 +88,10 @@ class KanbanTicketTool(BaseTool):
       file_path    — local file path for attach_file action
       url          — URL for add_link action
       todo_text    — text for add_todo action
+      jid_phone    — WhatsApp phone/group key for WhatsApp actions
+      jid          — explicit WhatsApp JID for WhatsApp send action
+      message_ids  — message IDs used by WhatsApp snapshot action
+      message_limit — fetch limit for WhatsApp list actions
 
     CONVERSATION CONTEXT:
       When creating a ticket, the tool automatically gathers the recent conversation
@@ -100,6 +114,11 @@ class KanbanTicketTool(BaseTool):
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
         "Use action='send_to_cli' with ticket_id to send ticket to pi coding agent for execution. "
+        "Use action='checkin_overview' to get active board check-ins and workflow run phases. "
+        "Use action='whatsapp_list_chats' to list WhatsApp chats. "
+        "Use action='whatsapp_list_messages' with jid_phone to read recent messages. "
+        "Use action='whatsapp_snapshot_to_ticket' with board_name/board_id and jid_phone or message_ids to snapshot into a ticket. "
+        "Use action='whatsapp_send_message' with jid or jid_phone plus text to reply in WhatsApp. "
         "The tool automatically gathers conversation context and attaches any "
         "images/documents from the chat thread to the ticket. "
         "IMPORTANT: When user says 'create a ticket', call this tool with "
@@ -466,10 +485,16 @@ class KanbanTicketTool(BaseTool):
         linked_project_id: int = 0,
         linked_workflow_id: int = 0,
         send_to_cli: bool = False,
+        jid_phone: str = "",
+        jid: str = "",
+        message_ids: Optional[List[int]] = None,
+        message_limit: int = 50,
+        unprocessed_only: bool = False,
         **kwargs,
     ) -> str:
         try:
             action = (action or "create_ticket").strip().lower().replace(" ", "_")
+            message_ids = message_ids or []
             logger.info("KanbanTicketTool: action=%s board_name=%s board_id=%s title=%s",
                         action, board_name, board_id, title[:50] if title else "")
 
@@ -543,12 +568,33 @@ class KanbanTicketTool(BaseTool):
                 return self._action_activate_board(board_id or None, board_name or text)
             elif action in ("send_to_cli", "push_to_cli", "run_cli"):
                 return self._action_send_to_cli(ticket_id or self._last_ticket_id)
+            elif action in ("checkin_overview", "workflow_overview", "board_overview", "agent_status"):
+                return self._action_checkin_overview()
+            elif action in ("whatsapp_list_chats", "wa_list_chats"):
+                return self._action_whatsapp_list_chats(limit=message_limit)
+            elif action in ("whatsapp_list_messages", "wa_list_messages", "whatsapp_read"):
+                return self._action_whatsapp_list_messages(
+                    jid_phone=jid_phone or text,
+                    limit=message_limit,
+                    unprocessed_only=unprocessed_only,
+                )
+            elif action in ("whatsapp_snapshot_to_ticket", "wa_snapshot_to_ticket", "snapshot_whatsapp"):
+                return self._action_whatsapp_snapshot_to_ticket(
+                    board_id=board_id or None,
+                    board_name=board_name,
+                    jid_phone=jid_phone,
+                    message_ids=message_ids,
+                    title=title,
+                )
+            elif action in ("whatsapp_send_message", "wa_send_message", "send_whatsapp"):
+                return self._action_whatsapp_send_message(jid=jid, jid_phone=jid_phone, text=text or description or title)
             else:
                 return (
                     f"Unknown action '{action}'. Valid actions: list_boards, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
                     "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
-                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli"
+                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
+                    "whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message"
                 )
 
         except Exception as e:
@@ -1294,7 +1340,7 @@ class KanbanTicketTool(BaseTool):
 
         if self.event_queue:
             try:
-                self.event_queue.put(("step_runner_updated", {}), block=False)
+                self.event_queue.put(("workflow_updated", {}), block=False)
             except Exception:
                 pass
 
@@ -1312,3 +1358,252 @@ class KanbanTicketTool(BaseTool):
             if result["success"]:
                 return f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to CLI. Check the CLI tab for progress."
             return f"[Pi — {project_name}] Ticket #{ticket_id_val} failed: {result['message']}"
+
+    def _action_checkin_overview(self) -> str:
+        """Return a concise status report of active board check-ins and workflow runs."""
+        from distr.core.kanban.agent import _active_agents, _active_agents_lock
+        from distr.core.workflow.service import get_active_runs
+        with _active_agents_lock:
+            agents = list(_active_agents.items())
+
+        if not agents:
+            runs = get_active_runs(limit=25)
+            if not runs:
+                return "No active board check-ins or workflow runs."
+            lines = ["No in-memory board agents, but active workflow runs exist:"]
+            for r in runs[:10]:
+                lines.append(
+                    f"- run #{r.get('id')} board='{r.get('board_name') or r.get('board_id')}' "
+                    f"ticket='{r.get('ticket_title') or r.get('ticket_id')}' "
+                    f"phase={r.get('phase') or 'unknown'} status={r.get('status')}"
+                )
+            return "\n".join(lines)
+
+        board_lines = []
+        for board_id, agent in agents:
+            s = agent.status
+            board_lines.append(
+                f"- board #{board_id}: state={s.state} ticket='{s.current_ticket_title or s.current_ticket_id or 'none'}' "
+                f"phase={s.current_phase or 'unknown'} progress={s.processed_count}/{s.total_tickets}"
+            )
+
+        runs = get_active_runs(limit=25)
+        run_lines = []
+        for r in runs[:10]:
+            run_lines.append(
+                f"- run #{r.get('id')} board='{r.get('board_name') or r.get('board_id')}' "
+                f"ticket='{r.get('ticket_title') or r.get('ticket_id')}' step='{r.get('current_step_name') or r.get('current_step_id')}' "
+                f"phase={r.get('phase') or 'unknown'} elapsed={r.get('elapsed_seconds', 0)}s"
+            )
+
+        parts = ["Active board check-ins:", *board_lines]
+        if run_lines:
+            parts.extend(["", "Active workflow runs:", *run_lines])
+        return "\n".join(parts)
+
+    def _get_whatsapp_manager(self):
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            return getattr(app, "whatsapp_manager", None) if app else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _jid_from_phone(jid_phone: str) -> str:
+        raw = (jid_phone or "").strip()
+        if not raw:
+            return ""
+        if "@" in raw:
+            return raw
+        if "-" in raw:
+            return f"{raw}@g.us"
+        return f"{raw}@s.whatsapp.net"
+
+    def _action_whatsapp_list_chats(self, limit: int = 50) -> str:
+        from distr.core.db import WhatsAppMessage
+
+        limit = max(1, min(int(limit or 50), 200))
+        wm = self._get_whatsapp_manager()
+        if wm:
+            try:
+                chats = (wm.get_chats(limit=limit, offset=0, search="") or {}).get("chats", [])
+                if chats:
+                    lines = []
+                    for c in chats[:limit]:
+                        jid = str(c.get("jid") or "")
+                        name = c.get("name") or c.get("subject") or jid.split("@")[0] or "Unknown"
+                        lines.append(f"- {name} ({jid})")
+                    return "WhatsApp chats:\n" + "\n".join(lines)
+            except Exception as e:
+                logger.debug("WhatsApp manager chat list failed, fallback to DB: %s", e)
+
+        with self._get_session() as s:
+            rows = (
+                s.query(WhatsAppMessage)
+                .order_by(WhatsAppMessage.whatsapp_timestamp.desc())
+                .limit(2000)
+                .all()
+            )
+        seen = {}
+        for m in rows:
+            phone = m.jid_phone or (m.jid or "").split("@")[0]
+            if not phone or phone in seen:
+                continue
+            chat_name = m.sender_push_name or m.sender_phone or phone
+            if (m.chat_type or "").lower() == "group":
+                chat_name = phone
+            seen[phone] = {"name": chat_name, "jid": m.jid or self._jid_from_phone(phone), "chat_type": m.chat_type or "private"}
+            if len(seen) >= limit:
+                break
+        if not seen:
+            return "No WhatsApp chats found."
+        lines = [f"- {v['name']} ({v['jid']}) [{v['chat_type']}]" for v in seen.values()]
+        return "WhatsApp chats:\n" + "\n".join(lines)
+
+    def _action_whatsapp_list_messages(self, jid_phone: str, limit: int = 50, unprocessed_only: bool = False) -> str:
+        from distr.core.db import WhatsAppMessage
+
+        phone = (jid_phone or "").strip()
+        if not phone:
+            return "Please provide jid_phone for whatsapp_list_messages."
+        limit = max(1, min(int(limit or 50), 200))
+
+        wm = self._get_whatsapp_manager()
+        if wm:
+            try:
+                data = wm.get_stored_messages(
+                    jid_phone=phone,
+                    limit=limit,
+                    offset=0,
+                    unprocessed_only=bool(unprocessed_only),
+                ) or {}
+                msgs = data.get("messages") or []
+                if not msgs:
+                    return f"No WhatsApp messages found for '{phone}'."
+                lines = []
+                for m in msgs[-limit:]:
+                    who = "Me" if m.get("from_me") else (m.get("sender_push_name") or m.get("sender_phone") or "Unknown")
+                    body = (m.get("text") or m.get("caption") or f"[{m.get('media_type') or 'message'}]").strip()
+                    lines.append(f"- #{m.get('id')} {who}: {body[:180]}")
+                return f"WhatsApp messages for '{phone}' ({len(msgs)}):\n" + "\n".join(lines)
+            except Exception as e:
+                logger.debug("WhatsApp manager message list failed, fallback to DB: %s", e)
+
+        with self._get_session() as s:
+            query = s.query(WhatsAppMessage).filter(WhatsAppMessage.jid_phone == phone)
+            if unprocessed_only:
+                query = query.filter(WhatsAppMessage.processed == False)
+            rows = query.order_by(WhatsAppMessage.whatsapp_timestamp.asc()).limit(limit).all()
+        if not rows:
+            return f"No WhatsApp messages found for '{phone}'."
+        lines = []
+        for m in rows:
+            who = "Me" if m.from_me else (m.sender_push_name or m.sender_phone or "Unknown")
+            body = (m.text or m.caption or f"[{m.media_type or 'message'}]").strip()
+            lines.append(f"- #{m.id} {who}: {body[:180]}")
+        return f"WhatsApp messages for '{phone}' ({len(rows)}):\n" + "\n".join(lines)
+
+    def _action_whatsapp_send_message(self, jid: str, jid_phone: str, text: str) -> str:
+        message_text = (text or "").strip()
+        target_jid = (jid or "").strip() or self._jid_from_phone(jid_phone)
+        if not target_jid:
+            return "Please provide jid or jid_phone for whatsapp_send_message."
+        if not message_text:
+            return "Please provide text for whatsapp_send_message."
+
+        wm = self._get_whatsapp_manager()
+        if not wm:
+            return "WhatsApp manager is not available."
+        try:
+            import requests
+            payload = {"jid": target_jid, "text": message_text, "caption": "", "audio": None}
+            payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True)
+            headers = wm._relay_auth_headers(payload_str)
+            resp = requests.post(f"{wm.api_base}/send", json=payload, headers=headers, timeout=10)
+            data = {}
+            try:
+                data = resp.json()
+            except Exception:
+                data = {"raw": resp.text[:300]}
+            if resp.status_code == 200 and data.get("success", True):
+                return f"Sent WhatsApp message to {target_jid}."
+            return f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}"
+        except Exception as e:
+            logger.error("WhatsApp send via tool failed: %s", e, exc_info=True)
+            return f"Failed to send WhatsApp message: {e}"
+
+    def _action_whatsapp_snapshot_to_ticket(
+        self,
+        board_id: Optional[int] = None,
+        board_name: str = "",
+        jid_phone: str = "",
+        message_ids: Optional[List[int]] = None,
+        title: str = "",
+    ) -> str:
+        from distr.core.db import WhatsAppMessage
+        from distr.core.db.kanban import KanbanLane, KanbanTicket, KanbanTicketFile
+
+        message_ids = message_ids or []
+        board = self._find_board(board_id, board_name)
+        if not board:
+            return "Board not found for whatsapp_snapshot_to_ticket. Provide board_id or board_name."
+        lane = self._find_lane(board["id"], "")
+        if not lane:
+            return f"No lanes found in board '{board['name']}'."
+
+        with self._get_session() as s:
+            query = s.query(WhatsAppMessage)
+            if message_ids:
+                query = query.filter(WhatsAppMessage.id.in_(message_ids))
+            else:
+                if not jid_phone:
+                    return "Provide message_ids or jid_phone for whatsapp_snapshot_to_ticket."
+                query = query.filter(WhatsAppMessage.jid_phone == jid_phone)
+            msgs = query.order_by(WhatsAppMessage.whatsapp_timestamp.asc()).all()
+            if not msgs:
+                return "No WhatsApp messages found for snapshot."
+
+            lane_obj = s.query(KanbanLane).get(lane["id"])
+            if not lane_obj:
+                return "Lane not found for snapshot ticket."
+
+            base_phone = msgs[0].jid_phone or jid_phone or "unknown"
+            ticket_title = (title or "").strip() or f"[WA Snapshot] {base_phone} ({len(msgs)} messages)"
+            lines = [f"WhatsApp snapshot from {base_phone}", ""]
+            for m in msgs:
+                who = "Me" if m.from_me else (m.sender_push_name or m.sender_phone or "Unknown")
+                body = (m.text or m.caption or f"[{m.media_type or 'message'}]").strip()
+                lines.append(f"- #{m.id} {who}: {body[:400]}")
+            description = "\n".join(lines)
+
+            max_pos = max([t.position for t in lane_obj.tickets], default=-1)
+            ticket = KanbanTicket(
+                lane_id=lane_obj.id,
+                title=ticket_title[:250],
+                description=description,
+                priority="medium",
+                position=max_pos + 1,
+                whatsapp_message_id=msgs[-1].id,
+                whatsapp_message_wa_id=msgs[-1].message_id,
+            )
+            s.add(ticket)
+            s.flush()
+
+            snapshot_group = f"{ticket.id}_{lane_obj.id}"
+            for m in msgs:
+                m.processed = True
+                m.snapshot_group = snapshot_group
+                if m.media_local_path and os.path.exists(m.media_local_path):
+                    safe_name = os.path.basename(m.media_local_path)
+                    s.add(KanbanTicketFile(
+                        ticket_id=ticket.id,
+                        filename=safe_name,
+                        file_path=m.media_local_path,
+                        description=f"WhatsApp {m.media_type or 'media'}: {safe_name}",
+                    ))
+
+            created_id = ticket.id
+            created_title = ticket.title
+
+        return f"Created ticket #{created_id} on board '{board['name']}' from {len(msgs)} WhatsApp messages: {created_title}"

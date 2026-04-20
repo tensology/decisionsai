@@ -571,7 +571,7 @@ var CS_STEP_NAMES = ['', 'name', 'description', 'style', 'mode', 'confirm', 'pro
 var EVENT_HOOKS_DISPLAY = {
     idle: 'Idle', hands_free_listening: 'Listening', ptt_active: 'PTT Active',
     dictation: 'Dictation', recording_action: 'Recording', file_drop_success: 'File Drop',
-    tts_response: 'TTS Response', running_action: 'Running Action', running_step_runner: 'Step Runner',
+    tts_response: 'TTS Response', running_action: 'Running Action', running_step_runner: 'Workflow',
     snippet_copied: 'Snippet Copied', thinking: 'Thinking', needs_attention: 'Needs Attention'
 };
 

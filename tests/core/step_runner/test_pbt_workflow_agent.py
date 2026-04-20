@@ -40,9 +40,9 @@ sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
 sys.modules.setdefault("distr.core.db.workflow", MagicMock())
 
 # Mock sub-modules used by local imports
-sys.modules.setdefault("distr.core.step_runner.context_assembly", MagicMock())
-sys.modules.setdefault("distr.core.step_runner.agent_bridge", MagicMock())
-sys.modules.setdefault("distr.core.step_runner.validation", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.agent_bridge", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.validation", MagicMock())
 sys.modules.setdefault("distr.core.workflow.service", MagicMock())
 sys.modules.setdefault("distr.core.workflow.scheduler", MagicMock())
 sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())

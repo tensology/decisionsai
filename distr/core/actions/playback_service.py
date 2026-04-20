@@ -234,7 +234,7 @@ class ActionPlaybackService(QObject):
         # Emit signal for UI updates (if window exists) and TTS
         self.playback_finished.emit()
         
-        # Emit global signal for step runner and other listeners
+        # Emit global signal for workflow listeners and other subscribers
         from distr.core.signals import signal_manager
         signal_manager.action_playback_finished.emit()
         signal_manager.emit_hide_player_window()
@@ -259,7 +259,7 @@ class ActionPlaybackService(QObject):
         # Emit signal for UI updates (if window exists)
         self.playback_failed.emit(error_message)
         
-        # Emit global signal for step runner and other listeners
+        # Emit global signal for workflow listeners and other subscribers
         from distr.core.signals import signal_manager as _sm
         _sm.action_playback_stopped.emit(error_message)
         
@@ -416,7 +416,7 @@ class ActionPlaybackService(QObject):
             # Emit signal for UI updates
             self.playback_failed.emit("Playback stopped by user")
             
-            # Emit global signal for step runner and other listeners
+            # Emit global signal for workflow listeners and other subscribers
             from distr.core.signals import signal_manager as _sm
             _sm.action_playback_stopped.emit("Playback stopped by user")
             _sm.emit_hide_player_window()

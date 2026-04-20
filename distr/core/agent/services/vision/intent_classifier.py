@@ -28,7 +28,7 @@ backend: fast text-based locate (pytesseract), UI grounding, or full vision LLM.
 
 Plus:
  - BROWSER_TASK  — Multi-element browser interaction
- - MULTI_STEP    — Complex workflow → Step Runner
+ - MULTI_STEP    — Complex workflow task
  - UNKNOWN       — Fallback to vision LLM
 """
 

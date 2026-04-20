@@ -12,7 +12,7 @@ from types import SimpleNamespace
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st
 
-from distr.core.step_runner.context_assembly import (
+from distr.core.workflow_engine.context_assembly import (
     StepInputContext,
     WorkflowInput,
     assemble_step_context,

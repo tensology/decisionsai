@@ -115,13 +115,13 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
     else:
         # Check dedicated workflow LLM, then fall back to conversational
         provider = (
-            (settings.get("step_runner_llm_provider") or "").strip()
+            (settings.get("workflow_llm_provider") or "").strip()
             or (settings.get("conversational_llm_provider") or "").strip()
             or (settings.get("agent_provider") or "").strip()
             or "Ollama"
         ).strip().lower()
         model = (
-            (settings.get("step_runner_llm_model") or "").strip()
+            (settings.get("workflow_llm_model") or "").strip()
             or (settings.get("conversational_llm_model") or "").strip()
             or (settings.get("agent_model") or "").strip()
             or ""
@@ -264,7 +264,7 @@ def build_step_context_prompt(
     group captures.
 
     When ``context_rules`` is non-empty, it is prepended as a ``[CONTEXT AND RULES]``
-    section before the step runner header.
+    section before the workflow header.
 
     When ``continuation_input`` is non-empty, it is appended as a ``[USER INPUT]``
     section after the main prompt body.
@@ -277,7 +277,7 @@ def build_step_context_prompt(
 
     **Validates: Requirements 6.1, 6.2, 6.3, 6.4, 6.5**
     """
-    from distr.core.step_runner.variable_resolver import resolve_variables
+    from distr.core.workflow_engine.variable_resolver import resolve_variables
 
     # Backward-compatible alias: session_instruction → workflow_description
     if session_instruction and not workflow_description:
@@ -300,7 +300,7 @@ def build_step_context_prompt(
         parts.append(f"[CONTEXT AND RULES]\n{context_rules}\n")
 
     lines = [
-        f"[STEP RUNNER] Executing step {step_index + 1} of {total_steps}.",
+        f"[WORKFLOW ENGINE] Executing step {step_index + 1} of {total_steps}.",
         f"Overall goal: {workflow_description}",
         "",
     ]
@@ -408,8 +408,8 @@ def generate_step_code(step_id: int, instruction: str, step_type: str) -> str:
 
     **Validates: Requirements 2.3**
     """
-    from distr.core.step_runner.code_generator import CodeGeneratorService
-    from distr.core.step_runner.step_types import StepType
+    from distr.core.workflow_engine.code_generator import CodeGeneratorService
+    from distr.core.workflow_engine.step_types import StepType
 
     try:
         stype = StepType(step_type)
@@ -446,8 +446,8 @@ def test_step_code(
 
     **Validates: Requirements 2.4**
     """
-    from distr.core.step_runner.test_loop import TestLoopService
-    from distr.core.step_runner.step_types import StepType
+    from distr.core.workflow_engine.test_loop import TestLoopService
+    from distr.core.workflow_engine.step_types import StepType
 
     try:
         stype = StepType(step_type)

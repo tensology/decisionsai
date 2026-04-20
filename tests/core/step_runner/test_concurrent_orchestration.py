@@ -33,8 +33,8 @@ sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
 sys.modules.setdefault("distr.core.db.workflow", MagicMock())
 
 # Mock sub-modules used by local imports
-sys.modules.setdefault("distr.core.step_runner.context_assembly", MagicMock())
-sys.modules.setdefault("distr.core.step_runner.agent_bridge", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.agent_bridge", MagicMock())
 sys.modules.setdefault("distr.core.workflow.service", MagicMock())
 sys.modules.setdefault("distr.core.workflow.scheduler", MagicMock())
 sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())
@@ -201,7 +201,7 @@ class TestConcurrentOrchestrationCreation:
 class TestOrchestrationCleanup:
     """WorkflowAgent.shutdown() called and entry removed on finish/cancel."""
 
-    @patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge")
+    @patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge")
     @patch("distr.gui.web.workflow_events.increment_workflow_updated")
     @patch("distr.core.db.get_session")
     def test_finish_calls_shutdown_and_removes_entry(self, mock_db, mock_inc, mock_bridge):
@@ -222,7 +222,7 @@ class TestOrchestrationCleanup:
         mock_loop.call_soon_threadsafe.assert_called_once()
         assert 42 not in mixin._workflow_orchestrations
 
-    @patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge")
+    @patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge")
     @patch("distr.gui.web.workflow_events.increment_workflow_updated")
     @patch("distr.core.db.get_session")
     def test_finish_on_failure_still_cleans_up(self, mock_db, mock_inc, mock_bridge):
@@ -240,7 +240,7 @@ class TestOrchestrationCleanup:
         mock_agent.shutdown.assert_called_once()
         assert 7 not in mixin._workflow_orchestrations
 
-    @patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge")
+    @patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge")
     @patch("distr.gui.web.workflow_events.increment_workflow_updated")
     @patch("distr.core.db.get_session")
     def test_cancel_cleans_up_orchestration(self, mock_db, mock_inc, mock_bridge):
@@ -270,7 +270,7 @@ class TestOrchestrationCleanup:
         assert finish_calls[0]["cancelled"] is True
         assert 99 not in mixin._workflow_orchestrations
 
-    @patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge")
+    @patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge")
     @patch("distr.gui.web.workflow_events.increment_workflow_updated")
     @patch("distr.core.db.get_session")
     def test_finish_one_does_not_affect_other(self, mock_db, mock_inc, mock_bridge):
@@ -291,7 +291,7 @@ class TestOrchestrationCleanup:
         assert 1 not in mixin._workflow_orchestrations
         assert 2 in mixin._workflow_orchestrations
 
-    @patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge")
+    @patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge")
     @patch("distr.gui.web.workflow_events.increment_workflow_updated")
     @patch("distr.core.db.get_session")
     def test_finish_nonexistent_workflow_is_noop(self, mock_db, mock_inc, mock_bridge):
@@ -309,14 +309,14 @@ class TestSendWorkflowInstructionRouting:
     """Verify instructions route to WorkflowAgent, not signal_manager.send_text_input."""
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
     def test_agent_instruction_routes_to_workflow_agent(
         self, mock_get_session, mock_build, mock_assemble, mock_run_coro
     ):
         """Agent instruction steps call WorkflowAgent.execute via run_coroutine_threadsafe."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_session = SimpleNamespace(id=1, context_rules=None, workflow_input=None)
         db_step = SimpleNamespace(id=10, step_type="agent_instruction", config=None)
@@ -372,7 +372,7 @@ class TestSendWorkflowInstructionRouting:
         assert args[1] is mock_loop
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="prompt")
     @patch("distr.core.db.get_session")
     @patch("distr.app.workflow.signal_manager")
@@ -380,7 +380,7 @@ class TestSendWorkflowInstructionRouting:
         self, mock_signals, mock_get_session, mock_build, mock_assemble, mock_run_coro
     ):
         """Agent instructions must NOT go through signal_manager.send_text_input."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_session = SimpleNamespace(id=1, context_rules=None, workflow_input=None)
         db_step = SimpleNamespace(id=10, step_type="agent_instruction", config=None)

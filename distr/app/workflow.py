@@ -529,7 +529,7 @@ class WorkflowOrchestrationMixin:
         """
         from distr.core.workflow.dispatcher import StepDispatcher
         from distr.core.workflow.service import build_step_context_prompt
-        from distr.core.step_runner.context_assembly import assemble_step_context
+        from distr.core.workflow_engine.context_assembly import assemble_step_context
 
         workflow_id = orch.get("workflow_id")
         run_id = orch.get("run_id")
@@ -705,7 +705,7 @@ class WorkflowOrchestrationMixin:
 
     @staticmethod
     def _exec_http_request(config: dict, step_input_ctx) -> tuple:
-        from distr.core.step_runner.variable_resolver import resolve_http_variables
+        from distr.core.workflow_engine.variable_resolver import resolve_http_variables
 
         prior_results = (
             step_input_ctx.previous_results
@@ -743,7 +743,7 @@ class WorkflowOrchestrationMixin:
 
     @staticmethod
     def _exec_execute_code(config: dict, step_data: dict) -> tuple:
-        from distr.core.step_runner.test_loop import TestLoopService
+        from distr.core.workflow_engine.test_loop import TestLoopService
 
         code = config.get("code", "") or step_data.get("code", "") or ""
         if not code.strip():
@@ -756,7 +756,7 @@ class WorkflowOrchestrationMixin:
 
     @staticmethod
     def _exec_playwright(config: dict, step_data: dict) -> tuple:
-        from distr.core.step_runner.test_loop import TestLoopService
+        from distr.core.workflow_engine.test_loop import TestLoopService
 
         code = config.get("code", "") or step_data.get("code", "") or ""
         if not code.strip():
@@ -1240,7 +1240,7 @@ class WorkflowOrchestrationMixin:
 
         # Notify the Workflow Agent Bridge so the Voice Agent receives a summary.
         try:
-            from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+            from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
 
             run_result = {
                 "session_id": workflow_id,

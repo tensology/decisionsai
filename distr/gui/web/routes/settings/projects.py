@@ -13,6 +13,41 @@ import re
 from ._shared import logger, ProjectUpdate, ContextItemCreate, ContextItemUpdate, PROJECT_UPLOADS_DIR
 
 
+def _resolve_terminal_overview_llm(settings: dict) -> tuple:
+    """Provider/model for CLI Read Overview: match Projects CLI (coding_llm_*), then conversational LLM.
+
+    Terminal overview previously read agent_model_name/default_model_name, which are often empty or
+    OpenAI-style names while the app uses conversational_llm_* / coding_llm_* — causing Ollama to
+    receive e.g. gpt-4o-mini and return 404.
+    """
+    from distr.core.llm_factory import normalize_provider, resolve_settings_keys
+
+    cm = (settings.get("coding_llm_model") or "").strip()
+    cp = (settings.get("coding_llm_provider") or "").strip()
+    if cm:
+        p = normalize_provider(cp or "Ollama")
+        logger.debug("Terminal overview LLM: using coding_llm (%s / %s)", p, cm)
+        return p, cm
+
+    prov, model = resolve_settings_keys(settings)
+    prov = normalize_provider(prov)
+    model = (model or "").strip()
+    if model:
+        logger.debug("Terminal overview LLM: using resolve_settings_keys (%s / %s)", prov, model)
+        return prov, model
+
+    am = (settings.get("agent_model") or settings.get("agent_model_name") or settings.get("default_model_name") or "").strip()
+    ap = (settings.get("agent_provider") or settings.get("default_provider") or "").strip()
+    if am:
+        p = normalize_provider(ap or "Ollama")
+        logger.debug("Terminal overview LLM: using legacy agent model keys (%s / %s)", p, am)
+        return p, am
+
+    p = normalize_provider("Ollama")
+    logger.debug("Terminal overview LLM: using fallback llama3.2 for Ollama")
+    return p, "llama3.2"
+
+
 def register_routes(router, templates):
 
     @router.get("/projects")
@@ -208,14 +243,22 @@ def register_routes(router, templates):
                 session.commit()
             logger.info(f"CLI model set to: {provider}/{model}")
             
-            # Restart any active RPC sessions so they pick up the new model
+            # Mark active RPC sessions as stale so they restart on next prompt
+            # (don't kill all sessions — they'll lazily restart with new model)
             try:
-                from distr.core.pi_rpc import get_or_create_rpc_session, kill_rpc_session, _rpc_sessions
-                project_ids = list(_rpc_sessions.keys())
-                for pid in project_ids:
-                    await kill_rpc_session(pid)
+                from distr.core.pi_rpc import _rpc_sessions
+                for pid, rpc in list(_rpc_sessions.items()):
+                    rpc._provider = provider or "ollama"
+                    rpc._model = model
+                    # If there's a running pi, kill it so next prompt spawns with new model
+                    if rpc.is_alive:
+                        rpc._running = False
+                        try:
+                            rpc._process.terminate()
+                        except Exception:
+                            pass
             except Exception as e:
-                logger.debug(f"Could not restart RPC sessions after model change: {e}")
+                logger.debug(f"Could not update RPC sessions after model change: {e}")
             
             return JSONResponse({"success": True, "model": model, "provider": provider})
         except Exception as e:
@@ -982,9 +1025,9 @@ def register_routes(router, templates):
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
 
-        # Create or get the pi RPC session
+        # Create or get the pi RPC session (lazy: don't auto-start pi until first prompt)
         try:
-            rpc = await get_or_create_rpc_session(project_id, cwd)
+            rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True)
         except Exception as e:
             logger.error(f"Terminal: failed to create pi RPC session: {e}")
             await websocket.send_json({"type": "error", "message": f"Failed to start pi: {e}"})
@@ -1042,7 +1085,9 @@ def register_routes(router, templates):
                     # User sent a prompt to pi via the CLI input
                     instruction = msg.get("message", "")
                     if instruction:
-                        rpc.send_prompt(instruction, origin="cli")
+                        # send_prompt auto-starts pi if lazy-started (first prompt)
+                        if not rpc.send_prompt(instruction, origin="cli"):
+                            await websocket.send_json({"type": "error", "message": "Failed to send prompt — pi may not be available"})
                 elif msg_type == "steer":
                     # User is steering/redirecting pi
                     instruction = msg.get("message", "")
@@ -1055,7 +1100,7 @@ def register_routes(router, templates):
                     # Kill and restart pi RPC session
                     await kill_rpc_session(project_id)
                     try:
-                        rpc = await get_or_create_rpc_session(project_id, cwd)
+                        rpc = await get_or_create_rpc_session(project_id, cwd, lazy_start=True)
                         rpc.add_event_callback(_on_event)
                         await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": rpc.get_messages()})
                     except Exception as e:
@@ -1122,9 +1167,64 @@ def register_routes(router, templates):
         """Return all alive startup PTY sessions for a project.
         Used by the frontend to reconnect after a page reload.
         Automatically cleans up dead sessions from the registry."""
-        from distr.core.terminal import get_startup_sessions_for_project
-        sessions = get_startup_sessions_for_project(project_id)
+        from distr.core.terminal import get_startup_sessions_for_project, materialize_queued_startup_terminals
+        try:
+            started, failed = await materialize_queued_startup_terminals(project_id)
+            if started or failed:
+                logger.info("Materialized queued startup sessions for project %s: started=%s failed=%s", project_id, started, failed)
+        except Exception as e:
+            logger.warning("Failed to materialize queued startup sessions for project %s: %s", project_id, e)
+        sessions = get_startup_sessions_for_project(project_id, purpose="startup")
         return JSONResponse({"sessions": sessions})
+
+    @router.get("/projects/{project_id}/shell-terminal")
+    async def get_project_shell_terminal(project_id: int):
+        """Return alive interactive shell terminal sessions for this project."""
+        from distr.core.terminal import get_startup_sessions_for_project
+        sessions = get_startup_sessions_for_project(project_id, purpose="cli_shell")
+        return JSONResponse({"sessions": sessions})
+
+    @router.post("/projects/{project_id}/shell-terminal/start")
+    async def start_project_shell_terminal(project_id: int):
+        """Create one interactive shell PTY for the project's root folder."""
+        import shutil
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+        from distr.core.terminal import create_startup_shell_session, get_startup_sessions_for_project
+
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return JSONResponse({"success": False, "error": "Project not found"}, status_code=404)
+            folder = (project.folder_location or "").strip()
+            if not folder or not os.path.isdir(folder):
+                return JSONResponse({"success": False, "error": "Project has no valid folder location"}, status_code=400)
+            canonical = os.path.realpath(folder)
+
+        existing = get_startup_sessions_for_project(project_id, purpose="cli_shell")
+        if existing:
+            return JSONResponse({"success": True, "process_id": existing[0]["process_id"], "pid": existing[0]["pid"], "reused": True})
+
+        user_shell = os.environ.get("SHELL", "").strip()
+        shell_name = os.path.basename(user_shell) if user_shell else ""
+        if "zsh" in shell_name:
+            shell_cmd = "[zsh] exec zsh -il"
+        elif "bash" in shell_name:
+            shell_cmd = "[bash] exec bash -il"
+        else:
+            fallback_shell = shutil.which("zsh") or shutil.which("bash") or "/bin/bash"
+            if os.path.basename(fallback_shell) == "zsh":
+                shell_cmd = "[zsh] exec zsh -il"
+            else:
+                shell_cmd = "[bash] exec bash -il"
+
+        try:
+            terminal_id, sess = await create_startup_shell_session(project_id, canonical, shell_cmd, purpose="cli_shell")
+        except Exception as e:
+            logger.error(f"shell-terminal spawn failed: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+        return JSONResponse({"success": True, "process_id": terminal_id, "pid": sess.pid, "reused": False})
 
     @router.post("/projects/startup-terminal")
     async def start_startup_terminal(request: Request):
@@ -1291,29 +1391,25 @@ def register_routes(router, templates):
         if len(buffer) > 4000:
             buffer = buffer[-4000:]
 
-        # Get LLM settings
         settings = load_settings_from_db()
-        provider = (settings.get("agent_provider") or settings.get("default_provider") or "ollama").strip()
-        model = (settings.get("agent_model_name") or settings.get("default_model_name") or "").strip()
-        if not provider:
-            provider = "ollama"
-        if not model:
-            model = "llama3.2" if provider == "ollama" else "gpt-4o-mini"
+        provider, model = _resolve_terminal_overview_llm(settings)
+        logger.info("Terminal overview: LLM provider=%s model=%s", provider, model)
 
         # LLM prompt: produce natural spoken language for TTS
         system_prompt = (
             "You produce short TTS-friendly summaries of terminal activity. "
+            "Always use this structure in plain spoken English:\n"
+            "1) Intent: what the user asked for.\n"
+            "2) Actions: what was run or done (high-level, no raw commands).\n"
+            "3) Outcome: what was found or achieved.\n"
             "Rules:\n"
-            "1. Speak naturally, as if talking to a colleague.\n"
-            "2. Never say file paths, directory trees, or raw command output.\n"
-            "3. Describe what happened in plain English — e.g. 'listed the project files', 'checked the config', 'read the main source file'.\n"
-            "4. Quantify when useful — 'about 30 files', 'a few hundred lines'.\n"
-            "5. 1-2 sentences max.\n"
-            "6. If there were errors, mention the outcome not the error details.\n"
+            "- Sound natural, as if talking to a colleague.\n"
+            "- Never read file paths, directory trees, JSON blobs, or raw command output.\n"
+            "- Mention errors only as high-level outcome, not stack traces/details.\n"
+            "- Keep it concise (2-4 short sentences total).\n"
             "Examples:\n"
-            "- 'Listed the project directory — about 30 files including the main source and config.'\n"
-            "- 'Read the config file — it has database and API settings.'\n"
-            "- 'Found an error so listed the directory instead — about 15 files.'\n"
+            "- 'You asked to inspect the project setup. I listed the main files and checked the package configuration. The project uses a standard frontend setup with the expected scripts and dependencies.'\n"
+            "- 'You asked to verify what happened in the terminal. I reviewed the recent steps and tool checks. The flow completed successfully and produced the expected result.'\n"
         )
         llm_messages = [
             {"role": "system", "content": system_prompt},
@@ -1341,69 +1437,6 @@ def register_routes(router, templates):
         # Speak the summary aloud
         try:
             logger.info(f"Terminal overview: speaking {len(summary)} chars")
-            signal_manager.speak_text_directly.emit(summary)
-        except Exception as e:
-            logger.warning(f"Failed to speak terminal overview: {e}", exc_info=True)
-
-        return JSONResponse({"summary": summary, "empty": False, "buffer_lines": len(messages)})
-
-        # For longer sessions, build a focused transcript for LLM summarization
-        # Only include user commands and final assistant responses
-        transcript_parts = []
-        for i, cmd in enumerate(user_msgs):
-            transcript_parts.append(f"[cmd {i+1}] {cmd}")
-        for i, resp in enumerate(assistant_msgs):
-            # Truncate each response to keep the LLM input manageable
-            truncated = resp[:600] + "..." if len(resp) > 600 else resp
-            transcript_parts.append(f"[resp {i+1}] {truncated}")
-
-        buffer = "\n".join(transcript_parts)
-        if len(buffer) > 8000:
-            buffer = buffer[-8000:]
-
-        # Get LLM settings
-        settings = load_settings_from_db()
-        provider = (settings.get("agent_provider") or settings.get("default_provider") or "ollama").strip()
-        model = (settings.get("agent_model_name") or settings.get("default_model_name") or "").strip()
-        if not provider:
-            provider = "ollama"
-        if not model:
-            model = "llama3.2" if provider == "ollama" else "gpt-4o-mini"
-
-        # Call LLM to summarize — focus on commands and results only
-        system_prompt = (
-            "You summarize terminal sessions. You receive a transcript containing user commands [cmd N] "
-            "and agent responses [resp N]. Give a 1-2 sentence spoken summary of what commands ran "
-            "and what the key results were. Speak naturally. Examples:\n"
-            "- 'ls showed 12 files in the project directory including package.json and src.'\n"
-            "- 'read failed on that path because it's a directory, so ls was used instead to list the contents.'\n"
-        )
-        llm_messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": "Terminal transcript:\n\n" + buffer},
-        ]
-
-        # Run the LLM call in a thread pool so it doesn't block the uvicorn event loop
-        def _summarize():
-            try:
-                summary_parts = []
-                for token in create_stream(provider, model, llm_messages, settings):
-                    summary_parts.append(token)
-                return "".join(summary_parts).strip()
-            except Exception as e:
-                logger.error(f"Terminal overview LLM call failed: {e}", exc_info=True)
-                return f"Error summarizing: {str(e)[:200]}"
-
-        try:
-            loop = asyncio.get_running_loop()
-            summary = await loop.run_in_executor(None, _summarize)
-        except Exception as e:
-            logger.error(f"Terminal overview executor failed: {e}", exc_info=True)
-            summary = f"Error: {str(e)[:200]}"
-
-        # Speak the summary aloud
-        try:
-            logger.info(f"Terminal overview (LLM): speaking {len(summary)} chars")
             signal_manager.speak_text_directly.emit(summary)
         except Exception as e:
             logger.warning(f"Failed to speak terminal overview: {e}", exc_info=True)

@@ -9,7 +9,7 @@ import logging
 import re
 from typing import Optional, Tuple
 
-from distr.core.step_runner.step_types import StepType
+from distr.core.workflow_engine.step_types import StepType
 
 logger = logging.getLogger(__name__)
 

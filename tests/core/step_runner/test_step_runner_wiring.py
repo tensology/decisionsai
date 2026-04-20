@@ -57,12 +57,12 @@ class TestSendWorkflowInstructionWiring:
     """Verify that _send_workflow_instruction uses assemble_step_context."""
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
     def test_calls_assemble_step_context(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """assemble_step_context is called with session, step, and prior_results."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_session = _make_db_session(context_rules="Be concise.")
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
@@ -88,12 +88,12 @@ class TestSendWorkflowInstructionWiring:
         assert call_kwargs.kwargs["prior_results"] == [{"title": "S1", "result": "ok"}]
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
     def test_uses_workflow_rules_from_assembled_context(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """build_step_context_prompt receives workflow_rules from the assembled context."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_session = _make_db_session(context_rules="My rules")
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
@@ -114,12 +114,12 @@ class TestSendWorkflowInstructionWiring:
         assert mock_build.call_args.kwargs["context_rules"] == "My rules"
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="built prompt")
     @patch("distr.core.db.get_session")
     def test_stores_step_input_context_on_orch(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):
         """The assembled StepInputContext is stored on orch['step_input_context']."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_session = _make_db_session()
         db_step = _make_db_step(step_id=10, step_type="agent_instruction")
@@ -151,7 +151,7 @@ class TestSendWorkflowInstructionWiring:
         assert "step_input_context" not in orch
 
     @patch("asyncio.run_coroutine_threadsafe")
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="fallback prompt")
     @patch("distr.core.db.get_session")
     def test_fallback_on_db_error(self, mock_get_session, mock_build, mock_assemble, mock_run_coro):

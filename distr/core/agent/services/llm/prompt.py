@@ -75,7 +75,7 @@ def build_tools_description(tools: List) -> str:
         'WINDOWS & NAVIGATION': ['open_window', 'keyboard_shortcut', 'open_file_menu', 'oracle_control', 'oracle_globe', 'smart_open', 'mode_control', 'shortcut'],
         'MEDIA': ['media_control', 'save_audio', 'audio_transcriber', 'video_transcriber', 'transcription_doctor', 'file_converter'],
         'CLIPBOARD': ['clipboard_action', 'rework_clipboard', 'summarize_clipboard'],
-        'ACTIONS & SKILLS': ['create_action', 'create_step_runner', 'play_action', 'stop_action', 'list_actions', 'find_skill', 'push_skill', 'start_recording', 'stop_recording'],
+        'ACTIONS & SKILLS': ['create_action', 'play_action', 'stop_action', 'list_actions', 'find_skill', 'push_skill', 'start_recording', 'stop_recording'],
         'CHAT': ['new_chat', 'clear_chat', 'open_page'],
         'APPLICATION': ['exit_app', 'wake_up', 'system_info'],
         'INTEGRATIONS': ['send_file_to_telegram', 'send_voice_note_to_telegram', 'git_operations', 'create_cursor_ticket', 'google_workspace', 'markdown_to_google_doc', 'upload_doc_to_google', 'playwright_browser'],

@@ -13,8 +13,8 @@ import tempfile
 from dataclasses import dataclass, field
 from typing import Any, Dict, List
 
-from distr.core.step_runner.code_generator import CodeGeneratorService
-from distr.core.step_runner.step_types import StepType
+from distr.core.workflow_engine.code_generator import CodeGeneratorService
+from distr.core.workflow_engine.step_types import StepType
 
 logger = logging.getLogger(__name__)
 

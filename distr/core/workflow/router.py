@@ -163,13 +163,13 @@ class StepRouter:
 
         # null / -1 → end run
         if next_step_id is None or next_step_id == -1:
-            return self._end_run(run)
+            return self._end_run(run, status="completed" if verified_passed else "failed")
 
         next_step = db.query(AutoWorkflowStep).filter(
             AutoWorkflowStep.id == next_step_id,
         ).first()
         if not next_step:
-            return self._end_run(run)
+            return self._end_run(run, status="completed" if verified_passed else "failed")
 
         # Self-routing guard
         if next_step.id == step.id:
@@ -349,14 +349,15 @@ class StepRouter:
     @staticmethod
     def _end_run(
         run: AutoWorkflowRun,
+        status: str = "completed",
         warning: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Mark run as completed and return end_run decision."""
-        run.status = "completed"
+        run.status = status
         run.completed_at = datetime.utcnow()
         decision: Dict[str, Any] = {
             "action": "end_run",
-            "status": "completed",
+            "status": status,
             "run_id": run.id,
         }
         if warning:
@@ -387,7 +388,7 @@ class StepRouter:
 
         # Queue report for the main agent
         try:
-            from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+            from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
             WorkflowAgentBridge().queue_report_to_agent(
                 workflow_id,
                 f"Workflow step '{step_name}' completed and is now WAITING "

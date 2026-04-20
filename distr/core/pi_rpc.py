@@ -60,6 +60,10 @@ class PiRpcSession:
         self._reader_thread: Optional[threading.Thread] = None
         self._running = False
 
+        # Model/provider — set by start() or by set_cli_model before start
+        self._provider: str = "ollama"
+        self._model: str = ""
+
         # Origin tracking (for auto-overview on completion)
         self._origin: str = "cli"  # "cli", "desktop", "telegram"
         self._telegram_chat_id: Optional[str] = None
@@ -560,8 +564,8 @@ def get_rpc_session(project_id: int) -> Optional[PiRpcSession]:
     return _rpc_sessions.get(project_id)
 
 
-async def get_or_create_rpc_session(project_id: int, cwd: str, append_system_prompt: str = "") -> PiRpcSession:
-    """Get or create an RPC session for a project."""
+async def get_or_create_rpc_session(project_id: int, cwd: str, append_system_prompt: str = "", lazy_start: bool = False) -> PiRpcSession:
+    """Get or create an RPC session for a project. If lazy_start=True, don't auto-start the pi subprocess."""
     session = _rpc_sessions.get(project_id)
     if session and session.is_alive:
         return session
@@ -569,7 +573,8 @@ async def get_or_create_rpc_session(project_id: int, cwd: str, append_system_pro
     if session:
         await session.kill()
     session = PiRpcSession(project_id, cwd, append_system_prompt=append_system_prompt)
-    session.start()
+    if not lazy_start:
+        session.start()
     _rpc_sessions[project_id] = session
     return session
 

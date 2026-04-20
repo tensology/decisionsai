@@ -1199,7 +1199,7 @@ class FastActionDetector:
                     'transcribe', 'record', 'screenshot', 'capture',
                     # Misc tools
                     'snippet', 'telegram', 'generate', 'export', 'import',
-                    'automate', 'step runner', 'project', 'ticket board', 'ticket',
+                    'automate', 'workflow', 'project', 'ticket board', 'ticket',
                     # Clipboard — any mention means the user wants clipboard content processed
                     'clipboard', 'clip board',
                 ]

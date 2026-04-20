@@ -7,7 +7,7 @@ returning structured errors with field names and human-readable messages.
 from dataclasses import dataclass
 from typing import List
 
-from distr.core.step_runner.step_types import StepType
+from distr.core.workflow_engine.step_types import StepType
 
 
 @dataclass

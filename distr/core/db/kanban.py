@@ -73,6 +73,8 @@ class KanbanTicket(Base):
     title = Column(String, nullable=False)
     description = Column(Text)
     priority = Column(String, default='medium')  # low, medium, high, critical
+    time_estimate = Column(String, nullable=True)  # Initial estimate (e.g. "2h", "1d")
+    time_spent = Column(String, nullable=True)  # Actual duration spent (e.g. "45m", "3h")
     position = Column(Integer, default=0)
 
     # External source (for copied Trello/Jira tickets)

@@ -1,4 +1,4 @@
-"""HTTP Request variable resolution for the Step Runner.
+"""HTTP request variable resolution for the workflow engine.
 
 Resolves {{step_N}}, {{step_N.field}}, and {{variable_name}} placeholders
 in HTTP request configuration from previous step outputs and explicit variables.

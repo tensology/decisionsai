@@ -2,7 +2,7 @@
 
 import unittest
 
-from distr.core.step_runner.validation import StepValidator, ValidationError
+from distr.core.workflow_engine.validation import StepValidator, ValidationError
 
 
 class TestStepValidator(unittest.TestCase):

@@ -18,9 +18,14 @@
         return fetch(url, opts).then(function (r) {
             if (!r.ok) {
                 return r.json().catch(function () {
-                    return { detail: r.statusText };
+                    return {};
                 }).then(function (e) {
-                    throw new Error(e.detail || r.statusText);
+                    var msg = e.error || e.detail || e.message;
+                    if (msg == null && typeof e === "string") msg = e;
+                    if (typeof msg !== "string") {
+                        msg = msg != null ? JSON.stringify(msg) : r.statusText;
+                    }
+                    throw new Error(msg || r.statusText);
                 });
             }
             // Handle 204 No Content

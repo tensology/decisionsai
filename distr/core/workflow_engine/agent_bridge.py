@@ -17,7 +17,7 @@ _agent_report_queue: queue.Queue = queue.Queue()
 
 
 class WorkflowAgentBridge:
-    """Bridge between the Step Runner workflow engine and the Voice Agent."""
+    """Bridge between the workflow engine and the Voice Agent."""
 
     def on_workflow_completed(self, session_id: int, run_result: dict) -> None:
         """Finalize a workflow run and notify the Voice Agent.

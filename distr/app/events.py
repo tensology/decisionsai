@@ -113,7 +113,7 @@ class EventHandlerMixin:
                         'transcription_for_action_name', 'set_action_name'):
             self._evt_actions(event, data)
 
-        # --- Step Runner (websocket refresh) ---
+        # --- Workflows (websocket refresh) ---
         elif event == 'step_runner_updated':
             try:
                 from distr.gui.web.workflow_events import increment_workflow_updated
@@ -485,6 +485,16 @@ class EventHandlerMixin:
         error = data.get('error')
         input_type = data.get('input_type', 'voice')
 
+        # Generic in-app STT callbacks (e.g., WhatsApp/media transcription via agent STT service).
+        if hasattr(self, '_pending_stt_callbacks'):
+            cb = self._pending_stt_callbacks.pop(request_id, None)
+            if cb:
+                result_event, result_holder = cb
+                result_holder['transcript'] = transcript if success else None
+                result_holder['error'] = error
+                result_event.set()
+                return
+
         # Check if this is a pending remote UI voice transcription
         if hasattr(self, 'telegram_manager') and self.telegram_manager:
             if hasattr(self.telegram_manager, '_pending_voice_callbacks'):
@@ -616,7 +626,7 @@ class EventHandlerMixin:
             if screenshot_file:
                 logger.info(f"[Telegram] 📤 Sending with screenshot_file: {screenshot_file} (exists: {screenshot_file.exists() if screenshot_file else False})")
             if not audio_file and not screenshot_file:
-                logger.warning(f"[Telegram] ⚠️ No audio_file or screenshot_file to send")
+                logger.debug("[Telegram] No audio_file or screenshot_file; sending text-only response")
 
             self.telegram_manager.send_to_telegram(
                 text=text_to_send,

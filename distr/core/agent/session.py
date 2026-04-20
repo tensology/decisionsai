@@ -995,6 +995,26 @@ class AgentSession:
         # Get hot-swap config from the descriptor
         hot_swap_cfg = descriptor.get_hot_swap_config(voice_model, self.settings or {})
 
+        # No-op guard: if target TTS config already matches current runtime config,
+        # do not recreate/swap the service.
+        current_engine = self.config['tts'].get('engine')
+        current_voice_name = self.config['tts'].get('voice_name')
+        current_voice_id = self.config['tts'].get('voice_id')
+        target_engine = hot_swap_cfg.get('engine')
+        target_voice_name = hot_swap_cfg.get('voice_name')
+        target_voice_id = hot_swap_cfg.get('voice_id')
+        if (
+            old_service is not None
+            and current_engine == target_engine
+            and current_voice_name == target_voice_name
+            and current_voice_id == target_voice_id
+        ):
+            self.logger.debug(
+                "HOT-SWAP TTS: no-op (already at target config: engine=%s voice_name=%s voice_id=%s)",
+                target_engine, target_voice_name, target_voice_id,
+            )
+            return
+
         # Update self.config['tts'] with the hot-swap config
         self.config['tts']['engine'] = hot_swap_cfg['engine']
         if 'voice_name' in hot_swap_cfg:

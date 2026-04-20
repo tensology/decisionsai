@@ -1,6 +1,6 @@
 /**
  * Projects page: matches desktop Projects UI (distr/gui/projects.py).
- * Left: search + project list + Add. Right: empty state or detail form with tabs (Details, Settings, Board).
+ * Left: search + project list + Add. Right: empty state or detail form with tabs (Details, Startup, CLI, Terminal).
  */
 (function() {
     var currentProjectId = null;
@@ -245,11 +245,15 @@
                             .catch(function() {});
                     }
                 }
-                // If the pi-RPC terminal tab is active and project changed, reconnect
+                // If a terminal tab is active and project changed, reconnect
                 if (prevProjectId !== id) {
-                    var tabEl = document.getElementById("tab-terminal");
-                    if (tabEl && !tabEl.classList.contains("hidden")) {
+                    var cliTabEl = document.getElementById("tab-cli");
+                    var shellTabEl = document.getElementById("tab-terminal");
+                    if (cliTabEl && !cliTabEl.classList.contains("hidden")) {
                         initTerminal();
+                    }
+                    if (shellTabEl && !shellTabEl.classList.contains("hidden")) {
+                        initShellTerminal();
                     }
                 }
             })
@@ -273,15 +277,27 @@
         // Terminal tab lives outside projects-tab-content and needs
         // the full flex space; hide the content div when terminal is active
         var tabContent = document.getElementById("projects-tab-content");
-        if (tabName === "terminal") {
+        if (tabName === "cli" || tabName === "terminal") {
             tabContent.classList.add("hidden");
         } else {
             tabContent.classList.remove("hidden");
         }
-        if (tabName === "terminal") {
+        if (tabName === "cli") {
             initTerminal();
         } else {
             destroyTerminal();
+        }
+        if (tabName === "terminal") {
+            initShellTerminal();
+            // Hidden->visible transitions can need an extra resize pass.
+            setTimeout(function() { try { scheduleShellResize(); } catch (e) {} }, 60);
+            setTimeout(function() { try { scheduleShellResize(); } catch (e) {} }, 220);
+        } else {
+            destroyShellTerminal();
+        }
+        var sections = window.ProjectsTabSections || {};
+        if (sections[tabName] && typeof sections[tabName].onActivated === "function") {
+            sections[tabName].onActivated();
         }
     }
 
@@ -890,6 +906,64 @@
 
         // Load CLI models into dropdown
         loadCliModels();
+
+        // Shell terminal tab
+        var shellRestartBtn = document.getElementById("shell-terminal-restart");
+        if (shellRestartBtn) shellRestartBtn.addEventListener("click", function() { restartShellTerminal(); });
+        var shellCommandInput = document.getElementById("shell-terminal-command-input");
+        if (shellCommandInput) shellCommandInput.addEventListener("keydown", function(e) {
+            var filtered = getFilteredShellCommands();
+            var idx = filtered.indexOf(_shellBadgeSelectedCommand);
+            if (e.key === "ArrowDown") {
+                e.preventDefault();
+                if (!filtered.length) return;
+                if (idx < 0) _shellBadgeSelectedCommand = filtered[0];
+                else _shellBadgeSelectedCommand = filtered[Math.min(filtered.length - 1, idx + 1)];
+                renderShellCommandBadges();
+                return;
+            }
+            if (e.key === "ArrowUp") {
+                e.preventDefault();
+                if (!filtered.length) return;
+                if (idx < 0) _shellBadgeSelectedCommand = filtered[filtered.length - 1];
+                else _shellBadgeSelectedCommand = filtered[Math.max(0, idx - 1)];
+                renderShellCommandBadges();
+                return;
+            }
+            if (e.key === "Escape") {
+                e.preventDefault();
+                _shellBadgeSelectedCommand = "";
+                renderShellCommandBadges();
+                shellCommandInput.focus();
+                return;
+            }
+            if (e.key === "Enter") {
+                e.preventDefault();
+                var cmd = shellCommandInput.value.trim();
+                if (_shellBadgeSelectedCommand) {
+                    sendShellCommand(_shellBadgeSelectedCommand);
+                    return;
+                }
+                if (!cmd) return;
+                addShellCommandBadge(cmd);
+                sendShellCommand(cmd);
+                shellCommandInput.value = "";
+                _shellBadgeSearchQuery = "";
+                _shellBadgeSelectedCommand = "";
+                renderShellCommandBadges();
+                return;
+            }
+            setTimeout(function() {
+                _shellBadgeSearchQuery = (shellCommandInput.value || "").trim().toLowerCase();
+                _shellBadgeSelectedCommand = "";
+                renderShellCommandBadges();
+            }, 0);
+        });
+        renderShellCommandBadges();
+        window.addEventListener("resize", function() {
+            var tabEl = document.getElementById("tab-terminal");
+            if (tabEl && !tabEl.classList.contains("hidden")) scheduleShellResize();
+        });
     }
 
     // ?? Terminal Management (pi RPC mode) ???????????????????????????????
@@ -901,6 +975,59 @@
     var _currentAssistantEl = null;  // Current streaming assistant message element
     var _currentAssistantText = "";  // Current streaming text buffer
     var _termAgentRunning = false;   // Is pi currently processing?
+    var _termActivityHideTimer = null;
+
+    function setLastSubmittedQuestionDisplay(text) {
+        var el = document.getElementById("terminal-last-question-text");
+        var wrap = document.getElementById("terminal-last-question-wrap");
+        if (!el) return;
+        var s = (text || "").trim();
+        if (!s) {
+            el.textContent = "";
+            if (wrap) wrap.classList.add("hidden");
+            return;
+        }
+        el.textContent = s;
+        if (wrap) wrap.classList.remove("hidden");
+    }
+
+    function collapseOpenCalloutsInTranscript(transcript) {
+        if (!transcript) return;
+        transcript.querySelectorAll("details.transcript-callout").forEach(function(d) {
+            d.open = false;
+        });
+    }
+
+    /** Only the last completed assistant outcome is "Final outcome"; earlier ones are "Response". Streaming stays "Response". */
+    function syncOutcomeCalloutTitles(transcript) {
+        if (!transcript) return;
+        var list = Array.prototype.slice.call(transcript.querySelectorAll("details.transcript-callout.outcome"));
+        var completed = list.filter(function(d) {
+            var chip = d.querySelector(".transcript-chip");
+            return chip && !chip.classList.contains("transcript-chip-live");
+        });
+        var finalEl = completed.length ? completed[completed.length - 1] : null;
+        list.forEach(function(d) {
+            var title = d.querySelector(".transcript-callout-title");
+            var chip = d.querySelector(".transcript-chip");
+            if (!title || !chip) return;
+            if (chip.classList.contains("transcript-chip-live")) {
+                title.textContent = "Response";
+                return;
+            }
+            title.textContent = d === finalEl ? "Final outcome" : "Response";
+        });
+    }
+
+    function bufferEntryUserText(entry) {
+        if (!entry || (entry.role || "") !== "user" || !entry.content) return "";
+        var content = entry.content;
+        if (typeof content === "string") return content;
+        if (Array.isArray(content)) {
+            return content.filter(function(b) { return b.type === "text"; }).map(function(b) { return b.text; }).join("");
+        }
+        return "";
+    }
 
     function initTerminal() {
         if (!currentProjectId) return;
@@ -914,10 +1041,46 @@
         // Different project (or first connection) � destroy old and reconnect
         destroyTerminal();
         var transcript = document.getElementById("terminal-transcript");
-        if (transcript) transcript.innerHTML = '';
+        if (transcript) transcript.innerHTML = "";
         _clearTerminalState();
         _termTranscript = [];
+        setLastSubmittedQuestionDisplay("");
         connectTerminalWs();
+    }
+
+    function setTerminalActivity(state) {
+        var pill = document.getElementById("terminal-activity");
+        var spinner = document.getElementById("terminal-activity-spinner");
+        var text = document.getElementById("terminal-activity-text");
+        if (!pill || !spinner || !text) return;
+        if (_termActivityHideTimer) {
+            clearTimeout(_termActivityHideTimer);
+            _termActivityHideTimer = null;
+        }
+        if (state === "running") {
+            pill.classList.remove("hidden");
+            pill.classList.add("flex");
+            spinner.classList.remove("hidden");
+            text.textContent = "Working...";
+            pill.className = "flex w-full min-h-9 items-center justify-center gap-1.5 text-xs px-2.5 py-2 rounded-md border border-orange-400/45 text-orange-100 bg-orange-500/15 box-border leading-none";
+            return;
+        }
+        if (state === "done") {
+            pill.classList.remove("hidden");
+            pill.classList.add("flex");
+            spinner.classList.add("hidden");
+            text.textContent = "Work complete";
+            pill.className = "flex w-full min-h-9 items-center justify-center gap-1.5 text-xs px-2.5 py-2 rounded-md border border-white/25 text-[#0d1117] bg-white/95 font-medium box-border leading-none";
+            _termActivityHideTimer = setTimeout(function() {
+                pill.classList.add("hidden");
+                pill.classList.remove("flex");
+            }, 8000);
+            return;
+        }
+        pill.classList.add("hidden");
+        pill.classList.remove("flex");
+        spinner.classList.add("hidden");
+        text.textContent = "Idle";
     }
 
     function _killWs() {
@@ -954,7 +1117,7 @@
             // Clear placeholder / show connection message
             var transcript = document.getElementById("terminal-transcript");
             if (transcript && !transcript.querySelector(".transcript-msg")) {
-                transcript.innerHTML = '<div class="transcript-msg system">Connected</div>';
+                transcript.innerHTML = '<div class="transcript-msg system">Ready — type a prompt to start</div>';
             }
         };
 
@@ -971,7 +1134,7 @@
             updateTerminalStatus("disconnected");
             setTimeout(function() {
                 if (closedWs !== _termWs) return;  // replaced by new connection
-                var tabEl = document.getElementById("tab-terminal");
+                var tabEl = document.getElementById("tab-cli");
                 if (tabEl && !tabEl.classList.contains("hidden") && currentProjectId) {
                     connectTerminalWs();
                 }
@@ -1000,20 +1163,28 @@
             case "connected":
                 updateTerminalStatus("connected");
                 _clearTerminalState();
-                transcript.innerHTML = '';
+                transcript.innerHTML = "";
+                var lastReplayUser = "";
                 if (msg.buffer && msg.buffer.length) {
                     msg.buffer.forEach(function(entry) {
+                        var ut = bufferEntryUserText(entry);
+                        if (ut) lastReplayUser = ut;
                         _renderBufferMessage(transcript, entry);
                     });
                 }
+                setLastSubmittedQuestionDisplay(lastReplayUser);
+                syncOutcomeCalloutTitles(transcript);
                 break;
 
             // ?? Agent lifecycle ??
             case "agent_start":
                 _termAgentRunning = true;
+                setTerminalActivity("running");
+                collapseOpenCalloutsInTranscript(transcript);
                 break;
             case "agent_end":
                 _termAgentRunning = false;
+                setTerminalActivity("done");
                 _clearTerminalState();
                 var sep = document.createElement("div");
                 sep.className = "transcript-separator";
@@ -1023,7 +1194,10 @@
 
             // ?? Turn lifecycle � no visual output ??
             case "turn_start":
+                setTerminalActivity("running");
+                break;
             case "turn_end":
+                if (!_termAgentRunning) setTerminalActivity("done");
                 break;
 
             // ?? Message streaming (the main event) ??
@@ -1034,24 +1208,28 @@
                     case "start":
                         // New assistant message beginning
                         _currentAssistantText = "";
-                        _currentAssistantEl = null;
-                        startAssistantMessage(transcript);
+                        if (!_currentAssistantEl) startAssistantMessage(transcript);
                         break;
                     case "text_start":
                         // Text content block starting
+                        endThinkingCallout();
                         if (!_currentAssistantEl) startAssistantMessage(transcript);
                         break;
                     case "text_delta":
                         _currentAssistantText += (evt.delta || "");
-                        updateAssistantMessage(transcript, _currentAssistantText);
+                        scheduleAssistantRender(transcript);
                         break;
                     case "text_end":
                         // Text block complete � already shown
                         break;
                     case "thinking_start":
+                        startThinkingCallout(transcript);
+                        break;
                     case "thinking_delta":
+                        updateThinkingCallout(transcript, evt.delta || "");
+                        break;
                     case "thinking_end":
-                        // Thinking blocks � don't render
+                        endThinkingCallout();
                         break;
                     case "toolcall_start":
                         // LLM decided to call a tool � DON'T render here.
@@ -1066,6 +1244,7 @@
                         // Tool call object fully resolved � skip, tool_execution_start shows it
                         break;
                     case "done":
+                        endThinkingCallout();
                         if (_currentAssistantEl) finalizeAssistantMessage(transcript);
                         break;
                     case "error":
@@ -1079,10 +1258,7 @@
             case "message_start": {
                 var m = msg.message || {};
                 if (m.role === "assistant") {
-                    if (!_currentAssistantEl) {
-                        _currentAssistantText = "";
-                        startAssistantMessage(transcript);
-                    }
+                    // message_update:start handles assistant callout creation to avoid duplication
                 } else if (m.role === "user") {
                     // Show user messages that came from the backend (e.g., agent-sent prompts)
                     // Check if we already rendered this locally (from sendTerminalPrompt)
@@ -1102,6 +1278,7 @@
             }
             case "message_end": {
                 var m = msg.message || {};
+                endThinkingCallout();
                 if (m.role === "assistant" && _currentAssistantEl) {
                     finalizeAssistantMessage(transcript);
                 }
@@ -1111,11 +1288,12 @@
             // ?? Tool execution (the real tool call) ??
             case "tool_execution_start": {
                 if (_currentAssistantEl) finalizeAssistantMessage(transcript);
+                endThinkingCallout();
                 var tName = msg.toolName || "tool";
                 var tArgs = msg.args || {};
                 var argsStr = "";
                 try { argsStr = JSON.stringify(tArgs); } catch(e) { argsStr = String(tArgs); }
-                appendTranscriptLine(transcript, "tool-call", tName + " " + _truncateArgs(argsStr, 200));
+                startToolCallout(transcript, msg.toolCallId, tName + " " + _truncateArgs(argsStr, 200));
                 break;
             }
             case "tool_execution_update": {
@@ -1132,13 +1310,14 @@
             case "tool_execution_end": {
                 var result = msg.result || {};
                 var rText = "";
+                var isErr = msg.isError === true;
                 if (result.content && Array.isArray(result.content)) {
                     rText = result.content.filter(function(b){ return b.type === "text"; }).map(function(b){ return b.text; }).join("\n");
                 }
                 if (rText) {
-                    var isErr = msg.isError === true;
                     updateOrAppendToolResult(transcript, msg.toolCallId || "_", rText, isErr);
                 }
+                completeToolCallout(msg.toolCallId || "_", isErr);
                 break;
             }
 
@@ -1196,28 +1375,148 @@
     }
 
     var _toolResultEls = {};  // toolCallId -> DOM element for streaming tool output
+    var _toolCalloutEls = {}; // toolCallId -> <details> callout element
+    var _thinkingCallout = null; // <details> for current thinking stream
+
+    // ── Streaming performance: debounce rAF ──────────────────────────────
+    var _renderRafPending = false;   // rAF scheduled?
+    var _scrollRafPending = false;   // scroll rAF scheduled?
+
+    /** Schedule a scroll on next animation frame (deduplicates rapid calls). */
+    function scheduleScrollTranscript() {
+        if (_scrollRafPending) return;
+        _scrollRafPending = true;
+        requestAnimationFrame(function() {
+            _scrollRafPending = false;
+            var container = document.getElementById("terminal-container");
+            if (container) container.scrollTop = container.scrollHeight;
+        });
+    }
+
+    /**
+     * Re-render the streaming assistant message using requestAnimationFrame batching.
+     * Instead of innerHTML on every text_delta, we schedule at most one render per frame.
+     */
+    function scheduleAssistantRender(transcript) {
+        if (_renderRafPending) return;   // already scheduled — will use latest text
+        _renderRafPending = true;
+        requestAnimationFrame(function() {
+            _renderRafPending = false;
+            if (!_currentAssistantEl) return;
+            // Full markdown re-render only once per frame, with latest accumulated text
+            var text = _currentAssistantText;
+            _currentAssistantEl.innerHTML = renderMarkdownLite(text);
+        });
+        scheduleScrollTranscript();
+    }
 
     function _clearTerminalState() {
         _currentAssistantEl = null;
         _currentAssistantText = "";
         _toolResultEls = {};
+        _toolCalloutEls = {};
+        _thinkingCallout = null;
+        _renderRafPending = false;
+        _scrollRafPending = false;
+        _lastRenderedText = "";
+        _lastRenderedHtml = "";
+    }
+
+    function startThinkingCallout(transcript) {
+        if (_thinkingCallout) return _thinkingCallout;
+        var details = document.createElement("details");
+        details.className = "transcript-callout thinking";
+        details.open = true;
+        details.innerHTML = "<summary><span class=\"transcript-callout-title\">Thinking</span><span class=\"transcript-chip transcript-chip-live\">Running</span></summary><div class=\"transcript-callout-body\"></div>";
+        transcript.appendChild(details);
+        _thinkingCallout = details;
+        scheduleScrollTranscript();
+        return details;
+    }
+
+    var _thinkingRafPending = false;
+
+    function updateThinkingCallout(transcript, deltaText) {
+        if (!_thinkingCallout) startThinkingCallout(transcript);
+        var body = _thinkingCallout.querySelector(".transcript-callout-body");
+        if (!body) return;
+        body.textContent += (deltaText || "");
+        // Throttle scroll
+        if (!_thinkingRafPending) {
+            _thinkingRafPending = true;
+            requestAnimationFrame(function() {
+                _thinkingRafPending = false;
+                if (_thinkingCallout) _thinkingCallout.scrollTop = _thinkingCallout.scrollHeight;
+                scheduleScrollTranscript();
+            });
+        }
+    }
+
+    function endThinkingCallout() {
+        if (_thinkingCallout) {
+            var chip = _thinkingCallout.querySelector(".transcript-chip");
+            if (chip) {
+                chip.className = "transcript-chip transcript-chip-done";
+                chip.textContent = "Done";
+            }
+            _thinkingCallout.open = false;
+            _thinkingCallout = null;
+        }
+    }
+
+    function startToolCallout(transcript, toolCallId, titleText) {
+        var key = toolCallId || ("tool_" + Date.now() + "_" + Math.random());
+        var details = document.createElement("details");
+        details.className = "transcript-callout tooling";
+        details.open = true;
+        details.setAttribute("data-tool-call-id", key);
+        details.innerHTML = "<summary><span class=\"transcript-callout-title\">Tooling: " + escapeAttr(titleText || "tool") + "</span><span class=\"transcript-chip transcript-chip-live\">Running</span></summary><div class=\"transcript-callout-body\"></div>";
+        transcript.appendChild(details);
+        var body = details.querySelector(".transcript-callout-body");
+        _toolResultEls[key] = body || details;
+        _toolCalloutEls[key] = details;
+        scheduleScrollTranscript();
+        return key;
+    }
+
+    function completeToolCallout(toolCallId, isError) {
+        var key = toolCallId || "_";
+        var details = _toolCalloutEls[key];
+        if (!details) return;
+        var chip = details.querySelector(".transcript-chip");
+        if (chip) {
+            if (isError) {
+                chip.className = "transcript-chip transcript-chip-error";
+                chip.textContent = "Error";
+            } else {
+                chip.className = "transcript-chip transcript-chip-done";
+                chip.textContent = "Done";
+            }
+        }
+        details.open = false;
     }
 
     function startAssistantMessage(transcript) {
-        var el = document.createElement("div");
-        el.className = "transcript-msg assistant streaming";
-        el.innerHTML = "";
-        transcript.appendChild(el);
-        _currentAssistantEl = el;
-        scrollTranscript();
+        var details = document.createElement("details");
+        details.className = "transcript-callout outcome";
+        details.open = true;
+        details.innerHTML = "<summary><span class=\"transcript-callout-title\">Response</span><span class=\"transcript-chip transcript-chip-live\">Streaming</span></summary><div class=\"transcript-callout-body transcript-msg assistant streaming\"></div>";
+        transcript.appendChild(details);
+        var body = details.querySelector(".transcript-callout-body");
+        if (body) body.innerHTML = "";
+        _currentAssistantEl = body || details;
+        syncOutcomeCalloutTitles(transcript);
+        scheduleScrollTranscript();
     }
 
     function updateAssistantMessage(transcript, text) {
         if (!_currentAssistantEl) {
             startAssistantMessage(transcript);
         }
+        // Direct render — only called from finalize or low-frequency paths now.
+        // Streaming deltas use scheduleAssistantRender instead.
         _currentAssistantEl.innerHTML = renderMarkdownLite(text);
-        scrollTranscript();
+        scheduleScrollTranscript();
     }
 
     function finalizeAssistantMessage(transcript) {
@@ -1226,14 +1525,46 @@
             // Remove streaming cursor if present
             var cursor = _currentAssistantEl.querySelector(".streaming-cursor");
             if (cursor) cursor.remove();
+            var details = _currentAssistantEl.closest("details.transcript-callout.outcome");
+            if (details) {
+                var finalText = (_currentAssistantEl.textContent || "").trim();
+                if (!finalText) {
+                    details.remove();
+                    _currentAssistantText = "";
+                    _currentAssistantEl = null;
+                    syncOutcomeCalloutTitles(transcript);
+                    return;
+                }
+                var chip = details.querySelector(".transcript-chip");
+                if (chip) {
+                    chip.className = "transcript-chip transcript-chip-done";
+                    chip.textContent = "Done";
+                }
+                details.open = true;
+                syncOutcomeCalloutTitles(transcript);
+            }
         }
         _currentAssistantText = "";
         _currentAssistantEl = null;
     }
 
+    function appendAssistantOutcomeCallout(transcript, text) {
+        if (!text || !String(text).trim()) return;
+        var details = document.createElement("details");
+        details.className = "transcript-callout outcome";
+        details.open = true;
+        details.innerHTML = "<summary><span class=\"transcript-callout-title\">Response</span><span class=\"transcript-chip transcript-chip-done\">Done</span></summary><div class=\"transcript-callout-body transcript-msg assistant\"></div>";
+        var body = details.querySelector(".transcript-callout-body");
+        if (body) body.innerHTML = renderMarkdownLiteNoCursor(text || "");
+        transcript.appendChild(details);
+        syncOutcomeCalloutTitles(transcript);
+        scrollTranscript();
+    }
+
     function appendTranscriptLine(transcript, type, text) {
         var el = document.createElement("div");
         el.className = "transcript-msg " + escapeAttr(type);
+        if (type === "user") el.classList.add("transcript-msg-user-archived");
         // Tool calls and results may contain long text � preserve whitespace
         if (type === "tool-result" || type === "tool-error" || type === "assistant") {
             el.innerHTML = renderMarkdownLite(text);
@@ -1251,7 +1582,7 @@
         if (existing) {
             // Update existing (streaming)
             existing.innerHTML = renderMarkdownLiteNoCursor(text);
-            scrollTranscript();
+            scheduleScrollTranscript();
         } else {
             // New result element
             var el = appendTranscriptLine(transcript, cssClass, text);
@@ -1266,8 +1597,12 @@
         }
     }
 
+    var _lastRenderedText = "";
+    var _lastRenderedHtml = "";
+
     function renderMarkdownLite(text) {
         if (!text) return "";
+        if (text === _lastRenderedText) return _lastRenderedHtml;
         var s = text
             .replace(/&/g, "&amp;")
             .replace(/</g, "&lt;")
@@ -1282,6 +1617,8 @@
         s = s.replace(/\n/g, "<br>");
         // Streaming cursor
         s += "<span class=\"streaming-cursor\">?</span>";
+        _lastRenderedText = text;
+        _lastRenderedHtml = s;
         return s;
     }
 
@@ -1311,11 +1648,13 @@
         if (role === "user" && entry.content) {
             appendTranscriptLine(transcript, "user", entry.content);
         } else if (role === "assistant" && entry.content) {
-            appendTranscriptLine(transcript, "assistant", entry.content);
+            appendAssistantOutcomeCallout(transcript, entry.content);
         } else if (role === "tool_result") {
-            var cls = entry.is_error ? "tool-error" : "tool-result";
-            var label = entry.tool_name ? entry.tool_name + ": " : "";
-            appendTranscriptLine(transcript, cls, label + (entry.tool_result || ""));
+            var toolName = entry.tool_name || "tool";
+            var toolId = "replay_" + toolName + "_" + Date.now() + "_" + Math.floor(Math.random() * 100000);
+            startToolCallout(transcript, toolId, toolName);
+            updateOrAppendToolResult(transcript, toolId, entry.tool_result || "", !!entry.is_error);
+            completeToolCallout(toolId, !!entry.is_error);
         }
     }
 
@@ -1363,9 +1702,10 @@
                 if (data.success) {
                     // Clear transcript
                     var transcript = document.getElementById("terminal-transcript");
-                    if (transcript) transcript.innerHTML = '';
+                    if (transcript) transcript.innerHTML = "";
                     _clearTerminalState();
                     _termTranscript = [];
+                    setLastSubmittedQuestionDisplay("");
                     initTerminal();
                 } else {
                     showSnackbar(data.error || "Failed to restart terminal", "error");
@@ -1464,12 +1804,19 @@
             showSnackbar("Terminal not connected � try restarting", "error");
             return;
         }
+        setTerminalActivity("running");
+        setLastSubmittedQuestionDisplay(instruction);
         // Show the user message immediately (pi will also echo it via message_start,
         // but we mark it so we don't duplicate)
         var transcript = document.getElementById("terminal-transcript");
         if (transcript) {
+            collapseOpenCalloutsInTranscript(transcript);
             var el = appendTranscriptLine(transcript, "user", instruction);
             el.setAttribute("data-prompt-text", instruction.substring(0, 100));
+        }
+        // Show starting hint if pi process isn't running yet
+        if (!_termAgentRunning) {
+            appendTranscriptLine(transcript, "system", "Starting agent...");
         }
         _termWs.send(JSON.stringify({type: "prompt", message: instruction}));
     }
@@ -1529,6 +1876,252 @@
         _currentAssistantEl = null;
         _currentAssistantText = "";
         updateTerminalStatus("disconnected");
+    }
+
+    // ── Terminal tab (interactive shell PTY) ───────────────────────────────
+    var _shellWs = null;
+    var _shellWsProjectId = null;
+    var _shellProcessId = null;
+    var _shellXterm = null;
+    var _shellFitTimer = null;
+    var _shellTerminalStateByProject = {};
+    var _shellCommandsStorageKey = "projects_global_terminal_commands_v1";
+    var _shellBadgeSearchQuery = "";
+    var _shellBadgeSelectedCommand = "";
+    var _defaultShellCommands = ["ls", "pwd", "git status", "npm run dev", "python manage.py runserver 8080"];
+
+    function ensureShellXterm() {
+        if (_shellXterm) return true;
+        var TermCtor = typeof window.Terminal === "function" ? window.Terminal : (typeof window.XTerm === "function" ? window.XTerm : null);
+        var host = document.getElementById("shell-terminal-xterm");
+        if (!TermCtor || !host) return false;
+        _shellXterm = new TermCtor({
+            convertEol: true, cursorBlink: true, cursorStyle: "bar",
+            fontSize: 12, lineHeight: 1.25, scrollback: 8000,
+            fontFamily: "ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, Consolas, monospace",
+            theme: { background: "#0d1117", foreground: "#e6edf3", cursor: "#f97316", selection: "rgba(249, 115, 22, 0.25)" }
+        });
+        host.innerHTML = "";
+        _shellXterm.open(host);
+        _registerLinkProvider(_shellXterm);
+        _shellXterm.onData(function(data) {
+            if (_shellWs && _shellWs.readyState === WebSocket.OPEN) {
+                _shellWs.send(JSON.stringify({ type: "input", data: data }));
+            }
+        });
+        scheduleShellResize();
+        return true;
+    }
+
+    function scheduleShellResize() {
+        if (!_shellXterm) return;
+        if (_shellFitTimer) clearTimeout(_shellFitTimer);
+        _shellFitTimer = setTimeout(function() {
+            var host = document.getElementById("shell-terminal-xterm");
+            if (!host || !_shellXterm || !_shellXterm.element) return;
+            var cellW = _shellXterm._core && _shellXterm._core._renderService && _shellXterm._core._renderService.dimensions ? (_shellXterm._core._renderService.dimensions.actualCellWidth || 8) : 8;
+            var cellH = _shellXterm._core && _shellXterm._core._renderService && _shellXterm._core._renderService.dimensions ? (_shellXterm._core._renderService.dimensions.actualCellHeight || 17) : 17;
+            // Small safety margins prevent row clipping at the bottom edge.
+            var safeWidth = Math.max(0, host.clientWidth - 10);
+            var safeHeight = Math.max(0, host.clientHeight - 12);
+            var cols = Math.max(20, Math.floor(safeWidth / Math.max(1, cellW)));
+            var rows = Math.max(8, Math.floor(safeHeight / Math.max(1, cellH)));
+            try { _shellXterm.resize(cols, rows); } catch (e) {}
+            if (_shellWs && _shellWs.readyState === WebSocket.OPEN) {
+                _shellWs.send(JSON.stringify({ type: "resize", cols: cols, rows: rows }));
+            }
+        }, 80);
+    }
+
+    function updateShellStatus(status) {
+        var dot = document.getElementById("shell-terminal-status");
+        var text = document.getElementById("shell-terminal-status-text");
+        if (!dot || !text) return;
+        if (status === "connected") { dot.className = "w-2 h-2 rounded-full bg-green-500"; text.textContent = "Connected"; text.className = "text-xs text-green-400"; return; }
+        if (status === "connecting") { dot.className = "w-2 h-2 rounded-full bg-yellow-500"; text.textContent = "Connecting..."; text.className = "text-xs text-yellow-400"; return; }
+        if (status === "error") { dot.className = "w-2 h-2 rounded-full bg-red-500"; text.textContent = "Error"; text.className = "text-xs text-red-400"; return; }
+        dot.className = "w-2 h-2 rounded-full bg-gray-500"; text.textContent = "Disconnected"; text.className = "text-xs text-gray-400";
+    }
+
+    function killShellWs() {
+        if (_shellWs) {
+            _shellWs.onclose = null;
+            _shellWs.onerror = null;
+            try { _shellWs.close(); } catch (e) {}
+            _shellWs = null;
+            _shellWsProjectId = null;
+        }
+    }
+
+    function connectShellWs() {
+        if (!currentProjectId || !_shellProcessId) return;
+        killShellWs();
+        var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
+        var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+        var wsUrl = wsProtocol + "//" + window.location.host + "/api/projects/startup-terminal/" + encodeURIComponent(_shellProcessId) + "/ws";
+        if (token) wsUrl += "?internal_token=" + encodeURIComponent(token);
+
+        updateShellStatus("connecting");
+        _shellWs = new WebSocket(wsUrl);
+        _shellWsProjectId = currentProjectId;
+
+        _shellWs.onopen = function() {
+            updateShellStatus("connected");
+            scheduleShellResize();
+            var shellInput = document.getElementById("shell-terminal-command-input");
+            if (shellInput) shellInput.focus();
+        };
+        _shellWs.onmessage = function(event) {
+            try {
+                var msg = JSON.parse(event.data);
+                if (msg.type === "output" && _shellXterm) _shellXterm.write(msg.data || "");
+            } catch (e) {}
+        };
+        _shellWs.onclose = function() { updateShellStatus("disconnected"); };
+        _shellWs.onerror = function() { updateShellStatus("error"); };
+    }
+
+    function initShellTerminal() {
+        if (!currentProjectId) return;
+        if (!ensureShellXterm()) {
+            showSnackbar("xterm.js failed to load - refresh the page", "error");
+            return;
+        }
+        updateShellStatus("connecting");
+        _shellXterm.writeln("\x1b[90mConnecting to project shell...\x1b[0m");
+        apiFetch("/api/projects/" + currentProjectId + "/shell-terminal")
+            .then(function(data) {
+                var sessions = (data && data.sessions) || [];
+                if (sessions.length) {
+                    _shellProcessId = sessions[0].process_id;
+                    _shellTerminalStateByProject[currentProjectId] = _shellProcessId;
+                    connectShellWs();
+                    return;
+                }
+                return apiFetch("/api/projects/" + currentProjectId + "/shell-terminal/start", { method: "POST" }).then(function(resp) {
+                    if (!resp || !resp.success || !resp.process_id) throw new Error((resp && resp.error) || "Failed to start shell");
+                    _shellProcessId = resp.process_id;
+                    _shellTerminalStateByProject[currentProjectId] = _shellProcessId;
+                    connectShellWs();
+                });
+            })
+            .catch(function(err) {
+                updateShellStatus("error");
+                if (_shellXterm) _shellXterm.writeln("\x1b[31mFailed to start shell: " + (err && err.message ? err.message : String(err)) + "\x1b[0m");
+            });
+    }
+
+    function destroyShellTerminal() {
+        killShellWs();
+        updateShellStatus("disconnected");
+    }
+
+    function restartShellTerminal() {
+        if (!currentProjectId) return;
+        var oldProcessId = _shellProcessId || _shellTerminalStateByProject[currentProjectId] || "";
+        destroyShellTerminal();
+        var p = oldProcessId
+            ? apiFetch("/api/projects/kill-terminal", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ process_id: oldProcessId }) })
+            : Promise.resolve({ success: true });
+        p.then(function() {
+            _shellProcessId = null;
+            delete _shellTerminalStateByProject[currentProjectId];
+            if (_shellXterm) _shellXterm.clear();
+            initShellTerminal();
+        }).catch(function() { showSnackbar("Failed to restart terminal", "error"); });
+    }
+
+    function sendShellCommand(command) {
+        var cmd = String(command || "").trim();
+        if (!cmd) return;
+        if (!_shellWs || _shellWs.readyState !== WebSocket.OPEN) {
+            showSnackbar("Terminal not connected - try restarting", "error");
+            return;
+        }
+        _shellWs.send(JSON.stringify({ type: "input", data: cmd + "\n" }));
+    }
+
+    function getShellCommands() {
+        try {
+            var raw = localStorage.getItem(_shellCommandsStorageKey);
+            if (raw !== null) {
+                var parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    return parsed.map(function(s) { return String(s || "").trim(); }).filter(Boolean);
+                }
+            }
+        } catch (e) {}
+        return _defaultShellCommands.slice();
+    }
+
+    function saveShellCommands(commands) {
+        localStorage.setItem(_shellCommandsStorageKey, JSON.stringify(commands));
+    }
+
+    function addShellCommandBadge(command) {
+        var cmd = String(command || "").trim();
+        if (!cmd) return;
+        var commands = getShellCommands();
+        if (commands.indexOf(cmd) === -1) {
+            commands.push(cmd);
+            saveShellCommands(commands);
+        }
+        renderShellCommandBadges();
+    }
+
+    function removeShellCommandBadge(command) {
+        var commands = getShellCommands().filter(function(c) { return c !== command; });
+        saveShellCommands(commands);
+        renderShellCommandBadges();
+    }
+
+    function getFilteredShellCommands() {
+        var commands = getShellCommands();
+        if (!_shellBadgeSearchQuery) return commands;
+        return commands.filter(function(cmd) { return cmd.toLowerCase().indexOf(_shellBadgeSearchQuery) !== -1; });
+    }
+
+    function renderShellCommandBadges() {
+        var wrap = document.getElementById("shell-terminal-command-badges");
+        if (!wrap) return;
+        var commands = getFilteredShellCommands();
+        if (!commands.length) {
+            _shellBadgeSelectedCommand = "";
+            wrap.innerHTML = '<span class="text-xs text-gray-500">No matching badges</span>';
+            return;
+        }
+        if (commands.indexOf(_shellBadgeSelectedCommand) === -1) _shellBadgeSelectedCommand = "";
+        wrap.innerHTML = "";
+        commands.forEach(function(cmd) {
+            var item = document.createElement("div");
+            item.className = "inline-flex items-center gap-1";
+            var selected = cmd === _shellBadgeSelectedCommand;
+            var btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = selected ? "px-2.5 py-1 rounded-full border border-[#f97316] text-white bg-[#f97316] text-xs font-mono" : "px-2.5 py-1 rounded-full border border-[#f97316]/50 text-[#f97316] bg-[#f97316]/10 hover:bg-[#f97316]/20 text-xs font-mono";
+            btn.textContent = cmd;
+            btn.title = "Run in terminal";
+            btn.addEventListener("click", function() {
+                _shellBadgeSelectedCommand = cmd;
+                renderShellCommandBadges();
+                sendShellCommand(cmd);
+                var input = document.getElementById("shell-terminal-command-input");
+                if (input) input.focus();
+            });
+            var removeBtn = document.createElement("button");
+            removeBtn.type = "button";
+            removeBtn.className = "w-5 h-5 rounded-full border border-white/20 text-gray-400 hover:text-red-400 hover:border-red-500/50 text-[11px] leading-none";
+            removeBtn.textContent = "×";
+            removeBtn.title = "Remove badge";
+            removeBtn.addEventListener("click", function() {
+                removeShellCommandBadge(cmd);
+                var input = document.getElementById("shell-terminal-command-input");
+                if (input) input.focus();
+            });
+            item.appendChild(btn);
+            item.appendChild(removeBtn);
+            wrap.appendChild(item);
+        });
     }
 
     // ?????????????????????????????????????????????????????????????????????????

@@ -40,3 +40,238 @@ INFO:     Waiting for application startup.
 Ticket Board settings migration could not run: No module named 'PyQt6'
 INFO:     Application startup complete.
 INFO:     Uvicorn running on http://127.0.0.1:8765 (Press CTRL+C to quit)
+Serving at http://127.0.0.1:8765 (flow, board, settings, chat)
+INFO:     127.0.0.1:55840 - "GET /api/kanban/boards HTTP/1.1" 404 Not Found
+INFO:     127.0.0.1:55846 - "GET / HTTP/1.1" 302 Found
+INFO:     127.0.0.1:55849 - "GET / HTTP/1.1" 302 Found
+INFO:     127.0.0.1:55850 - "GET /kanban/ HTTP/1.1" 500 Internal Server Error
+ERROR:    Exception in ASGI application
+  + Exception Group Traceback (most recent call last):
+  |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_utils.py", line 81, in collapse_excgroups
+  |     yield
+  |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 192, in __call__
+  |     async with anyio.create_task_group() as task_group:
+  |                ~~~~~~~~~~~~~~~~~~~~~~~^^
+  |   File "/opt/homebrew/lib/python3.14/site-packages/anyio/_backends/_asyncio.py", line 799, in __aexit__
+  |     raise BaseExceptionGroup(
+  |         "unhandled errors in a TaskGroup", self._exceptions
+  |     ) from None
+  | ExceptionGroup: unhandled errors in a TaskGroup (1 sub-exception)
+  +-+---------------- 1 ----------------
+    | Traceback (most recent call last):
+    |   File "/opt/homebrew/lib/python3.14/site-packages/uvicorn/protocols/http/h11_impl.py", line 415, in run_asgi
+    |     result = await app(  # type: ignore[func-returns-value]
+    |              ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |         self.scope, self.receive, self.send
+    |         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     )
+    |     ^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    |     return await self.app(scope, receive, send)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/applications.py", line 1159, in __call__
+    |     await super().__call__(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/applications.py", line 90, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    |     raise exc
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    |     await self.app(scope, receive, _send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     with recv_stream, send_stream, collapse_excgroups():
+    |                                    ~~~~~~~~~~~~~~~~~~^^
+    |   File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 162, in __exit__
+    |     self.gen.throw(value)
+    |     ~~~~~~~~~~~~~~^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    |     raise exc
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 165, in add_security_headers
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 191, in __call__
+    |     with recv_stream, send_stream, collapse_excgroups():
+    |                                    ~~~~~~~~~~~~~~~~~~^^
+    |   File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 162, in __exit__
+    |     self.gen.throw(value)
+    |     ~~~~~~~~~~~~~~^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    |     raise exc
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 193, in __call__
+    |     response = await self.dispatch_func(request, call_next)
+    |                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 118, in dispatch
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 168, in call_next
+    |     raise app_exc from app_exc.__cause__ or app_exc.__context__
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 144, in coro
+    |     await self.app(scope, receive_or_disconnect, send_no_error)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/cors.py", line 88, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    |     await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    |     raise exc
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    |     await app(scope, receive, sender)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    |     await self.app(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 660, in __call__
+    |     await self.middleware_stack(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 680, in app
+    |     await route.handle(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 276, in handle
+    |     await self.app(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 134, in app
+    |     await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    |     raise exc
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    |     await app(scope, receive, sender)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 120, in app
+    |     response = await f(request)
+    |                ^^^^^^^^^^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 674, in app
+    |     raw_response = await run_endpoint_function(
+    |                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |     ...<3 lines>...
+    |     )
+    |     ^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 328, in run_endpoint_function
+    |     return await dependant.call(**values)
+    |            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    |   File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 411, in kanban_page
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/templating.py", line 148, in TemplateResponse
+    |     template = self.get_template(name)
+    |   File "/opt/homebrew/lib/python3.14/site-packages/starlette/templating.py", line 115, in get_template
+    |     return self.env.get_template(name)
+    |            ~~~~~~~~~~~~~~~~~~~~~^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/jinja2/environment.py", line 1016, in get_template
+    |     return self._load_template(name, globals)
+    |            ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/jinja2/environment.py", line 975, in _load_template
+    |     template = self.loader.load(self, name, self.make_globals(globals))
+    |   File "/opt/homebrew/lib/python3.14/site-packages/jinja2/loaders.py", line 126, in load
+    |     source, filename, uptodate = self.get_source(environment, name)
+    |                                  ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+    |   File "/opt/homebrew/lib/python3.14/site-packages/jinja2/loaders.py", line 209, in get_source
+    |     raise TemplateNotFound(
+    |     ...<2 lines>...
+    |     )
+    | jinja2.exceptions.TemplateNotFound: 'kanban/kanban.html' not found in search path: '/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/templates'
+    +------------------------------------
+
+The above exception was the direct cause of the following exception:
+
+Traceback (most recent call last):
+  File "/opt/homebrew/lib/python3.14/site-packages/uvicorn/protocols/http/h11_impl.py", line 415, in run_asgi
+    result = await app(  # type: ignore[func-returns-value]
+             ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        self.scope, self.receive, self.send
+        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    )
+    ^
+  File "/opt/homebrew/lib/python3.14/site-packages/uvicorn/middleware/proxy_headers.py", line 60, in __call__
+    return await self.app(scope, receive, send)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/applications.py", line 1159, in __call__
+    await super().__call__(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/applications.py", line 90, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/errors.py", line 186, in __call__
+    raise exc
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/errors.py", line 164, in __call__
+    await self.app(scope, receive, _send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 191, in __call__
+    with recv_stream, send_stream, collapse_excgroups():
+                                   ~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    raise exc
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 165, in add_security_headers
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 191, in __call__
+    with recv_stream, send_stream, collapse_excgroups():
+                                   ~~~~~~~~~~~~~~~~~~^^
+  File "/opt/homebrew/Cellar/python@3.14/3.14.3_1/Frameworks/Python.framework/Versions/3.14/lib/python3.14/contextlib.py", line 162, in __exit__
+    self.gen.throw(value)
+    ~~~~~~~~~~~~~~^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_utils.py", line 87, in collapse_excgroups
+    raise exc
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 193, in __call__
+    response = await self.dispatch_func(request, call_next)
+               ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 118, in dispatch
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 168, in call_next
+    raise app_exc from app_exc.__cause__ or app_exc.__context__
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/base.py", line 144, in coro
+    await self.app(scope, receive_or_disconnect, send_no_error)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/cors.py", line 88, in __call__
+    await self.app(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/middleware/exceptions.py", line 63, in __call__
+    await wrap_app_handling_exceptions(self.app, conn)(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/middleware/asyncexitstack.py", line 18, in __call__
+    await self.app(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 660, in __call__
+    await self.middleware_stack(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 680, in app
+    await route.handle(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/routing.py", line 276, in handle
+    await self.app(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 134, in app
+    await wrap_app_handling_exceptions(app, request)(scope, receive, send)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 53, in wrapped_app
+    raise exc
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/_exception_handler.py", line 42, in wrapped_app
+    await app(scope, receive, sender)
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 120, in app
+    response = await f(request)
+               ^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 674, in app
+    raw_response = await run_endpoint_function(
+                   ^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+    ...<3 lines>...
+    )
+    ^
+  File "/opt/homebrew/lib/python3.14/site-packages/fastapi/routing.py", line 328, in run_endpoint_function
+    return await dependant.call(**values)
+           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+  File "/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/server.py", line 411, in kanban_page
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/templating.py", line 148, in TemplateResponse
+    template = self.get_template(name)
+  File "/opt/homebrew/lib/python3.14/site-packages/starlette/templating.py", line 115, in get_template
+    return self.env.get_template(name)
+           ~~~~~~~~~~~~~~~~~~~~~^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/jinja2/environment.py", line 1016, in get_template
+    return self._load_template(name, globals)
+           ~~~~~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/jinja2/environment.py", line 975, in _load_template
+    template = self.loader.load(self, name, self.make_globals(globals))
+  File "/opt/homebrew/lib/python3.14/site-packages/jinja2/loaders.py", line 126, in load
+    source, filename, uptodate = self.get_source(environment, name)
+                                 ~~~~~~~~~~~~~~~^^^^^^^^^^^^^^^^^^^
+  File "/opt/homebrew/lib/python3.14/site-packages/jinja2/loaders.py", line 209, in get_source
+    raise TemplateNotFound(
+    ...<2 lines>...
+    )
+jinja2.exceptions.TemplateNotFound: 'kanban/kanban.html' not found in search path: '/Users/paul/development/TENSOLOGY/DecisionsAI/distr/gui/web/templates'
+INFO:     127.0.0.1:55856 - "DELETE /api/kanban/whatsapp/chat/27634103646%40s.whatsapp.net HTTP/1.1" 401 Unauthorized
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [34846]

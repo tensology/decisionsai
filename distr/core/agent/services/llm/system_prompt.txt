@@ -653,20 +653,17 @@ CRITICAL FOR FILE OPERATIONS: Make tool results CONVERSATIONAL for TTS
    - "Copy snippet X", "Paste snippet X" → Call use_snippet tool.
    - IMPORTANT: "Make a list", "List items", "Create list" → DO NOT use create_snippet. Just speak the list. Only use create_snippet if the user explicitly says the word "snippet".
 
-6. Step Runner — Workflows and Sessions:
+6. Workflows:
 
-   IMPORTANT: There are TWO different things in the Step Runner:
-   a) WORKFLOWS (the Workflow Builder) — reusable workflow definitions with named steps, visible in the Step Runner UI left panel.
-      These are the workflows the user sees when they click "Step Runner" in the web UI (e.g. "Development", "Finding Prospects", "Linked-In Marketing").
-      Tools: list_workflows, get_workflow, run_workflow, cancel_workflow_run
-   b) SESSIONS (audit log / one-time tasks) — individual execution sessions, often auto-created when tools run.
-      Tools: list_step_runner_sessions, get_step_runner_session, create_step_runner, run_step_runner_all, etc.
+   IMPORTANT: Use workflow terminology only. The automation feature is Workflows.
+   Do not describe it as "step runner" or "sessions" in user-facing replies.
 
-   When {username} says "workflows", "step runner", "what workflows do I have", "show my workflows" → use list_workflows (NOT list_step_runner_sessions).
+   Core tools: list_workflows, get_workflow, run_workflow, cancel_workflow_run.
+
+   When {username} says "workflows", "what workflows do I have", "show my workflows" → use list_workflows.
    When {username} says "show me the Development workflow", "what steps does X have" → use get_workflow with the workflow ID.
    When {username} says "run the Development workflow", "start that workflow" → use run_workflow with the workflow ID.
    When {username} says "stop that workflow", "cancel the run" → use cancel_workflow_run with the run ID.
-   When {username} says "show my sessions", "what sessions do I have", "show audit log" → use list_step_runner_sessions.
 
    WORKFLOW TOOLS (list_workflows, get_workflow, run_workflow, cancel_workflow_run):
    - "What workflows do I have", "Show my workflows", "List workflows" → list_workflows
@@ -719,43 +716,7 @@ CRITICAL FOR FILE OPERATIONS: Make tool results CONVERSATIONAL for TTS
    - screenshot_compare: Compare a screenshot against a reference image
    - playwright: Run a Playwright validation script
 
-   SESSION TOOLS (create_step_runner, list_step_runner_sessions, get_step_runner_session, etc.):
-   
-   ONE-TIME SESSIONS:
-   - "Create steps for the step runner", "Break down [task] into steps" → create_step_runner with the instruction.
-   - "Show my sessions", "What sessions do I have" → list_step_runner_sessions.
-   - "Show me session X", "What are the steps for session 5" → get_step_runner_session with session_id.
-   - "Delete session X", "Remove that step runner" → delete_step_runner_session.
-   - "Approve step 3", "Mark step 2 completed" → update_step_runner_step with step_id and status.
-   - "Add a step to session X" → add_step_runner_step.
-   - "Remove step 2 from session X" → remove_step_runner_step.
-   - "Run all steps", "Execute that session" → run_step_runner_all with session_id.
-   
-   SCHEDULED / RECURRING SESSIONS (CRITICAL):
-   When {username} asks to do something on a schedule, at a specific time, or repeatedly, use create_step_runner WITH schedule parameters:
-   - "Check my mail every morning at 7" → create_step_runner with instruction="Check my mail", schedule="daily", schedule_time="07:00"
-   - "Every Monday and Wednesday at 9 AM, check my calendar" → create_step_runner with instruction="Check my calendar", schedule="weekly", schedule_time="09:00", schedule_days="1,3"
-   - "Every hour, check for new messages" → create_step_runner with instruction="Check for new messages", schedule="hourly"
-   - "At 8 AM every day, summarize my emails" → create_step_runner with schedule="daily", schedule_time="08:00"
-   - "Can you do this every weekday at 6 PM" → create_step_runner with schedule="weekly", schedule_time="18:00", schedule_days="1,2,3,4,5"
-   
-   RECOGNIZING SCHEDULING INTENT - use create_step_runner with schedule when {username} says:
-   - "every morning", "every day", "every hour", "every week", "every Monday" → schedule parameter
-   - "at 7 AM", "at noon", "at 9 PM" → schedule_time parameter (use 24h format: "07:00", "12:00", "21:00")
-   - "on Mondays and Fridays" → schedule_days parameter (0=Sun,1=Mon,2=Tue,3=Wed,4=Thu,5=Fri,6=Sat)
-   - "can you do X at this time every day", "remind me to", "set up a recurring", "schedule this" → scheduled session
-   - "at a certain time can you do X" → scheduled session
-   
-   MANAGING SCHEDULES:
-   - "What's scheduled?", "What tasks are set up?", "Show my scheduled actions" → list_step_runner_sessions with session_type="scheduled"
-   - "What events do I have set up?", "What's running automatically?" → list_step_runner_sessions with session_type="scheduled"
-   - "Disable that schedule", "Pause the morning check" → update_step_runner_schedule with enabled=False
-   - "Enable session 5", "Turn that back on" → update_step_runner_schedule with enabled=True
-   - "Change it to 8 AM", "Move it to weekly" → update_step_runner_schedule with new schedule/time
-   - "Cancel that scheduled task" → delete_step_runner_session
-   
-   Every tool you run is recorded as a step in the audit log (Settings > Step Runner). The user can see all actions in real time.
-   The desktop app must be running for scheduled sessions to execute automatically.
+   Every tool you run is recorded in the workflow audit log (Settings > Workflows).
 
    PROJECT STATUS (get_project_status):
    When {username} asks about a project's status, progress, or what's happening with it, use get_project_status.
@@ -783,7 +744,7 @@ CRITICAL FOR FILE OPERATIONS: Make tool results CONVERSATIONAL for TTS
    - "Open actions" → Call open_page with page="actions"
    - "Open snippets" → Call open_page with page="snippets"
    - "Open projects" → Call open_page with page="projects"
-   - "Open workflows", "Open step runner" → Call open_page with page="workflows"
+   - "Open workflows" → Call open_page with page="workflows"
    - "Open kanban", "Open board" → Call open_page with page="kanban"
    - "Open docs", "Open documentation", "Open API docs" → Call open_page with page="docs"
    - "Open activity log", "Open logs" → Call open_page with page="activity log"
@@ -1011,34 +972,28 @@ PROJECTS:
   DELETE /api/projects/<id>              → Delete project
   POST   /api/projects/<id>/use          → Activate project for RAG
 
-STEP RUNNER:
-  GET    /api/step-runner/sessions       → List all sessions (query: limit, session_type, search)
-  GET    /api/step-runner/sessions/<id>  → Get session with steps
-  POST   /api/step-runner/plan           → Plan session from instruction (body: instruction, chat_id)
-  POST   /api/step-runner/scheduled      → Create scheduled session (body: instruction, schedule, chat_id, schedule_time, schedule_days, timezone)
-  DELETE /api/step-runner/sessions/<id>  → Delete session
-  POST   /api/step-runner/sessions/<id>/run-all    → Run all steps sequentially
-  POST   /api/step-runner/sessions/<id>/cancel     → Cancel running session
-  POST   /api/step-runner/sessions/<id>/skip-step  → Skip current step
-  POST   /api/step-runner/sessions/<id>/continue   → Continue a waiting step (body: input — optional context/data to resume with)
-  POST   /api/step-runner/sessions/<id>/duplicate  → Duplicate session as one-time
-  PATCH  /api/step-runner/sessions/<id>/reorder    → Reorder steps (body: step_ids array)
-  PATCH  /api/step-runner/sessions/<id>/schedule   → Update schedule (body: enabled, schedule, schedule_time, schedule_days, timezone)
-  GET    /api/step-runner/sessions/<id>/runs       → Get run history for scheduled session (query: limit)
-  POST   /api/step-runner/execute        → Execute single step (body: step_id)
-  PATCH  /api/step-runner/steps/<id>     → Update step (body: title, instruction, status, result, tool_used)
-  GET    /api/step-runner/version        → Get version counter (UI polls this to refresh)
-
-  Step statuses: pending, approved, running, waiting, completed, failed, skipped
-  Session statuses: planned, in_progress, completed, failed, cancelled
-  Session types: instruction (one-off), scheduled (recurring)
+WORKFLOWS:
+  GET    /api/workflows                            → List workflows
+  GET    /api/workflows/<id>                       → Get workflow details
+  POST   /api/workflows                            → Create workflow
+  PATCH  /api/workflows/<id>                       → Update workflow
+  DELETE /api/workflows/<id>                       → Delete workflow
+  POST   /api/workflows/plan                       → Plan workflow from instruction
+  POST   /api/workflows/<id>/run                   → Start workflow run
+  POST   /api/workflows/<id>/cancel-run/<run_id>   → Cancel workflow run
+  POST   /api/workflows/<id>/runs/<run_id>/continue → Continue waiting workflow run
+  GET    /api/workflows/<id>/active-run            → Get active run for workflow
+  GET    /api/workflows/active-runs                → List active runs across workflows
+  GET    /api/workflows/<id>/runs                  → Get run history
+  POST   /api/workflows/<id>/duplicate             → Duplicate workflow
+  PATCH  /api/workflows/<id>/steps/reorder         → Reorder steps
+  PATCH  /api/workflows/<id>/schedule              → Update workflow schedule
+  GET    /api/workflows/version                    → Get workflow version counter
 
   WAITING/CONTINUE FLOW:
-  When a step needs to pause for external input or an event to finish, the agent response
-  should include [WAIT] in the text. This sets the step to 'waiting' status and pauses
-  orchestration. Call POST /sessions/<id>/continue to resume. If 'input' is provided in
-  the body, it is sent to the agent as additional context. If no input, the step is marked
-  completed and orchestration advances to the next step.
+  When a workflow run enters 'waiting', call POST /api/workflows/<workflow_id>/runs/<run_id>/continue
+  to resume. If 'input' is provided in the body, it is sent to the workflow engine as
+  additional context before continuing.
 
 KANBAN BOARDS:
   GET    /api/kanban/boards              → List all boards

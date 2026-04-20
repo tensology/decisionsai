@@ -9,11 +9,8 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from distr.core.db import get_session
-from distr.core.db.workflow import (
-    AutoWorkflow, AutoWorkflowStep,
-    AutoWorkflowVariable, AutoWorkflowRun,
-    AutoWorkflowStepResult,
-)
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
+from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.gui.web.workflow_events import increment_workflow_updated
 
 logger = logging.getLogger(__name__)
@@ -115,7 +112,7 @@ def validate_step_config(step_type: str, config: dict) -> List[Dict[str, str]]:
 
     **Validates: Requirements 2.5**
     """
-    from distr.core.step_runner.validation import StepValidator
+    from distr.core.workflow_engine.validation import StepValidator
 
     errors = StepValidator().validate(step_type, config)
     return [{"field": e.field, "message": e.message} for e in errors]
@@ -382,9 +379,75 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "status": r.status,
                 "current_step_id": r.current_step_id,
+                "board_id": r.board_id,
+                "ticket_id": r.ticket_id,
+                "phase": (_safe_json_loads(r.run_data) or {}).get("phase"),
+                "source_type": (_safe_json_loads(r.run_data) or {}).get("source_type"),
             }
             for r in rows
         ]
+
+
+def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[Dict[str, Any]]:
+    """Return currently active workflow runs enriched with board/ticket/step context."""
+    with get_session() as db:
+        query = (
+            db.query(AutoWorkflowRun)
+            .filter(AutoWorkflowRun.status.in_(["running", "waiting"]))
+            .order_by(AutoWorkflowRun.started_at.desc())
+        )
+        if workflow_id is not None:
+            query = query.filter(AutoWorkflowRun.workflow_id == workflow_id)
+        rows = query.limit(limit).all()
+
+        workflow_ids = {r.workflow_id for r in rows if r.workflow_id is not None}
+        step_ids = {r.current_step_id for r in rows if r.current_step_id is not None}
+        board_ids = {r.board_id for r in rows if r.board_id is not None}
+        ticket_ids = {r.ticket_id for r in rows if r.ticket_id is not None}
+
+        workflow_name_by_id = {}
+        if workflow_ids:
+            workflow_rows = db.query(AutoWorkflow.id, AutoWorkflow.name).filter(AutoWorkflow.id.in_(workflow_ids)).all()
+            workflow_name_by_id = {wid: name for wid, name in workflow_rows}
+
+        step_name_by_id = {}
+        if step_ids:
+            step_rows = db.query(AutoWorkflowStep.id, AutoWorkflowStep.name).filter(AutoWorkflowStep.id.in_(step_ids)).all()
+            step_name_by_id = {sid: name for sid, name in step_rows}
+
+        board_name_by_id = {}
+        if board_ids:
+            board_rows = db.query(KanbanBoard.id, KanbanBoard.name).filter(KanbanBoard.id.in_(board_ids)).all()
+            board_name_by_id = {bid: name for bid, name in board_rows}
+
+        ticket_title_by_id = {}
+        if ticket_ids:
+            ticket_rows = db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all()
+            ticket_title_by_id = {tid: title for tid, title in ticket_rows}
+
+        now = datetime.utcnow()
+        results = []
+        for r in rows:
+            run_data = _safe_json_loads(r.run_data) or {}
+            started_at_iso = r.started_at.isoformat() if r.started_at else None
+            elapsed_seconds = int((now - r.started_at).total_seconds()) if r.started_at else 0
+            results.append({
+                "id": r.id,
+                "workflow_id": r.workflow_id,
+                "workflow_name": workflow_name_by_id.get(r.workflow_id),
+                "status": r.status,
+                "started_at": started_at_iso,
+                "elapsed_seconds": elapsed_seconds,
+                "current_step_id": r.current_step_id,
+                "current_step_name": step_name_by_id.get(r.current_step_id),
+                "board_id": r.board_id,
+                "board_name": run_data.get("board_name") or board_name_by_id.get(r.board_id),
+                "ticket_id": r.ticket_id,
+                "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
+                "source_type": run_data.get("source_type"),
+                "phase": run_data.get("phase"),
+            })
+        return results
 
 
 def get_step_results(step_id: int, limit: int = 20) -> List[Dict[str, Any]]:
@@ -523,6 +586,42 @@ def clear_workflow_history(workflow_id: int) -> Dict[str, Any]:
     }
 
 
+# ── Legacy execution compatibility ──
+
+def complete_step(step_id: int, result_text: str, passed: bool) -> Dict[str, Any]:
+    """Compatibility helper retained for legacy tests/callers."""
+    with get_session() as db:
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        if not step:
+            return {"done": True, "status": "missing"}
+        step.status = "passed" if passed else "failed"
+        step.result = result_text
+        db.commit()
+        return {"done": True, "status": step.status}
+
+
+def _dispatch_step(step_id: int, step_name: str, action_type: str, instruction: str, recording_filename: str = "", code: str = "") -> Dict[str, Any]:
+    """Compatibility wrapper for direct code/playwright step execution."""
+    from distr.core.workflow_engine.code_generator import CodeGeneratorService
+    from distr.core.workflow_engine.step_types import StepType
+    from distr.core.workflow_engine.test_loop import TestLoopService
+
+    normalized_action = (action_type or "").strip().lower()
+    step_type = StepType.PLAYWRIGHT if normalized_action == "playwright" else StepType.EXECUTE_CODE
+    executable_code = (code or "").strip()
+    if not executable_code:
+        executable_code = CodeGeneratorService().generate_code(instruction or "", step_type)
+
+    test_loop = TestLoopService()
+    exec_result = test_loop._execute_playwright(executable_code) if normalized_action == "playwright" else test_loop._execute_python(executable_code)
+    stdout = getattr(exec_result, "stdout", "") or ""
+    stderr = getattr(exec_result, "stderr", "") or ""
+    output_text = "\n".join([part for part in [stdout, stderr] if part]).strip() or "(no output)"
+    passed = int(getattr(exec_result, "exit_code", 1)) == 0
+    done = complete_step(step_id, output_text, passed)
+    return {"success": passed, "output": output_text, "status": done.get("status", "failed")}
+
+
 # ── Execution re-exports ──
 # These functions now live in dispatcher.py but are re-exported here
 # so existing callers don't break during the transition.
@@ -544,5 +643,5 @@ from distr.core.workflow.dispatcher import (  # noqa: F401, E402
 
 # Re-export WorkflowAgent and WorkflowAgentBridge for backward compatibility
 from distr.core.workflow_agent import WorkflowAgent  # noqa: F401, E402
-from distr.core.step_runner.agent_bridge import WorkflowAgentBridge  # noqa: F401, E402
+from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge  # noqa: F401, E402
 

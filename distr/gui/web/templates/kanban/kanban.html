@@ -71,6 +71,8 @@
 .wa-msg-bubble { max-width: 85%; border-radius: 8px; padding: 8px 12px; }
 .wa-msg-mine { background: #005c4b; }
 .wa-msg-theirs { background: #1f2c34; }
+.kb-card.kb-in-progress { border-color: #22c55e !important; box-shadow: 0 0 0 1px rgba(34,197,94,0.35) inset; }
+.kb-agent-pill { font-size: 11px; padding: 2px 8px; border-radius: 9999px; border: 1px solid rgba(34,197,94,0.6); color: #86efac; background: rgba(34,197,94,0.12); }
 </style>
 {% endblock %}
 
@@ -124,7 +126,7 @@
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Local Boards</span>
                             <div class="flex items-center gap-1">
-                                <button type="button" id="kb-checkin-btn" class="text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                                <button type="button" id="kb-checkin-btn" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
                                 <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
                             </div>
                         </div>
@@ -134,6 +136,7 @@
                     <div id="kb-trello-boards-container" class="hidden flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
+                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
                         </div>
                         <div id="kb-trello-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Trello account connected</p>
@@ -143,6 +146,7 @@
                     <div id="kb-jira-boards-container" class="hidden flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
+                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
                         </div>
                         <div id="kb-jira-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Jira account connected</p>
@@ -152,18 +156,54 @@
             </div>
 
             <!-- Messages panel -->
-            <div id="kb-panel-messages" class="flex-1 min-h-0 flex flex-col hidden">
+            <div id="kb-panel-messages" class="flex-1 min-h-0 flex flex-col gap-3 hidden">
                 <!-- Search messages -->
-                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 pb-2">
+                <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-3 shrink-0">
                     <div class="flex items-center gap-2">
                         <input type="text" id="kb-wa-search" placeholder="Search messages..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-sm">
                         <button type="button" id="kb-wa-refresh" class="text-xs px-2 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] hover:bg-[#25D366]/20" title="Sync messages from server">Sync</button>
                     </div>
                 </div>
                 <!-- Chat list (incoming messages only) -->
-                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-y-auto">
-                    <div id="kb-wa-status" class="text-xs text-gray-500 italic px-1 py-1"></div>
-                    <div id="kb-wa-chats" class="space-y-0.5 flex-1 overflow-y-auto"></div>
+                <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-3 min-h-0 flex flex-col overflow-hidden">
+                    <div id="kb-wa-status" class="text-xs text-gray-500 italic px-1 py-1 shrink-0"></div>
+                    <div id="kb-wa-chats" class="space-y-0.5 flex-1 overflow-y-auto min-h-0"></div>
+                </div>
+                <!-- Sidebar actions: export / delete / select chats -->
+                <div id="kb-wa-sidebar-footer" class="shrink-0 relative z-10 rounded-lg border border-white/20 bg-[#152054]/90 p-2.5">
+                    <div id="kb-wa-sidebar-footer-default" class="flex flex-col gap-2">
+                        <div class="flex flex-wrap items-center gap-1.5 justify-between">
+                            <button type="button" id="kb-wa-export-all" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10" title="Download all messages as JSON">
+                                <svg class="w-3.5 h-3.5 text-[#25D366] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                                Export all
+                            </button>
+                            <button type="button" id="kb-wa-delete-all" class="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded border border-red-500/40 text-red-300 text-xs hover:bg-red-500/15" title="Delete every chat locally">
+                                <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                Delete all
+                            </button>
+                        </div>
+                        <button type="button" id="kb-wa-sidebar-select-toggle" class="w-full inline-flex items-center justify-center gap-1.5 px-2.5 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] text-xs hover:bg-[#25D366]/15" title="Show checkboxes on each chat to export or delete several at once">
+                            <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4"/></svg>
+                            Select chats
+                        </button>
+                    </div>
+                    <div id="kb-wa-sidebar-footer-select" class="hidden flex flex-col gap-2">
+                        <div class="text-[11px] text-gray-400 px-0.5" id="kb-wa-sidebar-select-hint">Tick chats in the list above, then Export or Delete.</div>
+                        <div class="flex items-center justify-between gap-2">
+                            <span id="kb-wa-sidebar-select-count" class="text-xs text-[#25D366] font-medium tabular-nums">0 selected</span>
+                            <button type="button" id="kb-wa-sidebar-cancel-select" class="text-xs px-2 py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10">Cancel</button>
+                        </div>
+                        <div class="flex flex-wrap gap-1.5">
+                            <button type="button" id="kb-wa-export-selected" class="inline-flex flex-1 min-w-[100px] items-center justify-center gap-1.5 px-2 py-1.5 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10">
+                                <svg class="w-3.5 h-3.5 text-[#25D366] shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"/></svg>
+                                Export
+                            </button>
+                            <button type="button" id="kb-wa-delete-selected" class="inline-flex flex-1 min-w-[100px] items-center justify-center gap-1.5 px-2 py-1.5 rounded border border-red-500/40 text-red-300 text-xs hover:bg-red-500/15">
+                                <svg class="w-3.5 h-3.5 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                                Delete
+                            </button>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -186,6 +226,7 @@
                     <div class="flex items-center gap-3">
                         <h2 id="kb-board-title" class="text-lg font-semibold text-white"></h2>
                         <span id="kb-board-source-badge" class="text-xs px-2 py-0.5 rounded"></span>
+                        <span id="kb-agent-status-pill" class="kb-agent-pill hidden"></span>
                     </div>
                     <div class="flex items-center gap-2" id="kb-board-actions">
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
@@ -208,60 +249,67 @@
                 font-size: 8px; border: 1px solid #f97316/50;
             }</style>
             <div id="kb-wa-thread-view" class="hidden flex-1 flex flex-col min-h-0">
-                <!-- Thread header -->
-                <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between bg-[#152054]/50">
-                    <div class="flex items-center gap-3">
-                        <button type="button" id="kb-wa-thread-back" class="text-gray-400 hover:text-white mr-1" title="Back to board">
-                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M15 19l-7-7 7-7"/></svg>
-                        </button>
-                        <div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-sm font-bold" id="kb-wa-thread-avatar"></div>
-                        <div>
-                            <h2 id="kb-wa-thread-title" class="text-lg font-semibold text-white"></h2>
-                            <span id="kb-wa-thread-count" class="text-xs text-gray-500"></span>
+                <!-- No messages globally: single block (no header / composer) -->
+                <div id="kb-wa-thread-global-empty" class="hidden flex-1 flex flex-col items-center justify-center p-6 sm:p-10 min-h-[200px] bg-[#0f1525]">
+                    <div class="w-full max-w-sm rounded-xl border border-white/15 bg-[#152054]/70 px-8 py-12 text-center shadow-inner">
+                        <p class="text-gray-300 text-sm leading-relaxed">No messages arrived</p>
+                    </div>
+                </div>
+                <div id="kb-wa-thread-normal" class="flex flex-1 flex-col min-h-0">
+                    <!-- Thread header -->
+                    <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between bg-[#152054]/50 shrink-0">
+                        <div class="flex items-center gap-3">
+
+                            <div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-sm font-bold" id="kb-wa-thread-avatar"></div>
+                            <div>
+                                <h2 id="kb-wa-thread-title" class="text-lg font-semibold text-white"></h2>
+                                <span id="kb-wa-thread-chat-type" class="text-[10px] bg-[#25D366]/20 text-[#25D366] px-1.5 py-0.5 rounded hidden">Group</span>
+                                <span id="kb-wa-thread-count" class="text-xs text-gray-500"></span>
+                            </div>
+                        </div>
+                        <div class="flex items-center gap-2">
+                            <button type="button" id="kb-wa-thread-select-toggle" class="text-xs px-2.5 py-1.5 rounded border border-white/25 text-gray-200 hover:bg-white/10" title="Toggle message selection mode">
+                                Select Messages
+                            </button>
+                            <button type="button" id="kb-wa-thread-delete" class="text-red-400 hover:text-red-300 p-1.5 hover:bg-red-500/20 rounded" title="Delete chat">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+                            </button>
                         </div>
                     </div>
-                    <div class="flex items-center gap-2">
-                        <button type="button" id="kb-wa-thread-clear" class="text-gray-400 hover:text-orange-400 px-2 py-1 text-xs" title="Clear all messages">
-                            <svg class="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-8 8-8-8m16-4l-8 8-8-8"/></svg>
-                            Clear
-                        </button>
-                        <button type="button" id="kb-wa-thread-snapshot" class="px-3 py-1.5 rounded border border-[#25D366]/50 text-[#25D366] text-xs hover:bg-[#25D366]/20">Snapshot All</button>
-                        <button type="button" id="kb-wa-thread-delete" class="text-red-400 hover:text-red-300 px-2 py-1 text-xs hover:bg-red-500/20 rounded">
-                            <svg class="w-4 h-4 inline mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M19 7l-8 8-8-8m16-4l-8 8-8-8"/></svg>
-                            Delete
-                        </button>
+                    <!-- Thread messages - scrollable container -->
+                    <div id="kb-wa-thread-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-2 bg-[#0f1525] min-h-0">
+                        <div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>
+                    </div>
+                    <!-- Thread composer -->
+                    <div class="border-t border-white/10 px-4 py-3 bg-[#101830] shrink-0">
+                        <input type="file" id="kb-wa-thread-file" class="hidden" accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.txt,.csv,.zip,.rar">
+                        <div class="flex items-center gap-2">
+                            <input type="text" id="kb-wa-thread-input" placeholder="Reply on WhatsApp..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#25D366] focus:outline-none text-sm">
+                            <button type="button" id="kb-wa-thread-attach" class="px-3 py-2 rounded border border-white/25 text-gray-200 text-sm hover:bg-white/10" title="Attach image or file">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828L18 9.828a4 4 0 00-5.657-5.657L5.757 10.757a6 6 0 108.486 8.486L20 13.5"/>
+                                </svg>
+                            </button>
+                            <button type="button" id="kb-wa-thread-voice" class="px-3 py-2 rounded border border-[#25D366]/50 text-[#25D366] text-sm hover:bg-[#25D366]/20" title="Record voice note">
+                                <svg class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 1a3 3 0 00-3 3v6a3 3 0 106 0V4a3 3 0 00-3-3z"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M19 10v1a7 7 0 11-14 0v-1"/>
+                                    <path stroke-linecap="round" stroke-linejoin="round" d="M12 18v5"/>
+                                </svg>
+                            </button>
+                            <button type="button" id="kb-wa-thread-send" class="px-3 py-2 rounded bg-[#25D366] text-white text-sm hover:bg-[#1da851]">Send</button>
+                        </div>
+                        <div id="kb-wa-thread-send-status" class="text-[11px] text-gray-500 mt-1 hidden"></div>
                     </div>
                 </div>
-                <!-- Thread messages - scrollable container -->
-                <div id="kb-wa-thread-messages" class="flex-1 overflow-y-auto px-6 py-4 space-y-2 bg-[#0f1525]">
-                    <div class="text-sm text-gray-500 text-center py-8">Loading messages...</div>
-                </div>
-                <!-- Snapshot separator line -->
-                <div class="flex items-center justify-center px-6 py-3">
-                    <div class="flex-1 h-px bg-gradient-to-r from-[#f97316]/20 to-transparent"></div>
-                    <span class="text-[#f97316]/60 text-xs px-4 font-semibold uppercase tracking-widest">——— Snapshots ———</span>
-                    <div class="flex-1 h-px bg-gradient-to-l from-[#f97316]/20 to-transparent"></div>
-                </div>
-                <!-- Snapshot center button -->
-                <div class="border-t border-white/10 px-6 py-3 flex items-center justify-center">
-                    <button type="button" id="kb-wa-thread-snapshot-bottom" class="bg-[#f97316]/20 text-[#f97316] border border-[#f97316]/50 px-6 py-2 rounded-full font-semibold text-sm hover:bg-[#f97316]/30 transition-colors gap-2 inline-flex flex-col items-center min-w-[280px]">
-                        <span class="inline-flex items-center justify-center gap-2">
-                            <svg class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.414-1.414a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z"/></svg>
-                            Create Ticket from All Messages
-                        </span>
-                        <span id="kb-wa-thread-snapshot-count" class="text-[8px] text-[#f97316]/60">messages selected</span>
-                    </button>
-                </div>
             </div>
-        </div>
-    </div>
-</div>
 
 <!-- WhatsApp chat context menu (right-click on chat) -->
 <div id="kb-wa-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
     <button type="button" class="kb-wa-ctx-view w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>View Messages</button>
     <button type="button" class="kb-wa-ctx-link w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>Link to Board</button>
     <button type="button" class="kb-wa-ctx-snapshot w-full text-left px-4 py-2 text-sm text-[#25D366] hover:bg-[#25D366]/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Snapshot All to Board</button>
+    <button type="button" class="kb-wa-ctx-delete-chat w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete Chat</button>
 </div>
 
 <!-- Link to board dialog -->
@@ -293,6 +341,19 @@
 <div id="kb-wa-msg-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
     <button type="button" class="kb-wa-msgctx-ticket w-full text-left px-4 py-2 text-sm text-[#f97316] hover:bg-[#f97316]/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>Create Ticket</button>
     <button type="button" class="kb-wa-msgctx-mark-processed w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/></svg>Mark Processed</button>
+    <button type="button" class="kb-wa-msgctx-delete w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete</button>
+</div>
+
+<!-- WhatsApp sync context menu (right-click on Sync button) -->
+<div id="kb-wa-sync-ctx-menu" class="fixed hidden z-50 min-w-[220px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-wa-syncctx-sync w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582M20 20v-5h-.581M5 9a7 7 0 0111.95-2.05L20 9M19 15a7 7 0 01-11.95 2.05L4 15"/></svg>
+        Sync
+    </button>
+    <button type="button" class="kb-wa-syncctx-clear-server w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
+        Clear Server Messages
+    </button>
 </div>
 
 <!-- Board settings WhatsApp tab (added dynamically) -->
@@ -335,6 +396,17 @@
                         <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
                     </div>
                 </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Initial Estimate</label>
+                        <input type="text" id="kb-modal-ticket-estimate" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="e.g. 2h, 1d">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Actual Duration</label>
+                        <input type="text" id="kb-modal-ticket-duration" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="e.g. 45m, 3h">
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500">Format: Jira-style duration values like <code>30m</code>, <code>2h</code>, <code>1d 3h</code>, or <code>1w 2d 4h 30m</code>.</p>
             </div>
             <!-- Links tab -->
             <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-6 space-y-4">
@@ -377,12 +449,6 @@
                             <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
                                 <option value="">None</option>
                             </select>
-                        </div>
-                        <div class="flex items-end pb-1">
-                            <label class="flex items-center gap-2 cursor-pointer select-none">
-                                <input type="checkbox" id="kb-modal-send-to-cli" class="accent-[#f97316] w-4 h-4">
-                                <span class="text-xs text-gray-400">Push to CLI</span>
-                            </label>
                         </div>
                     </div>
                 </div>
@@ -452,39 +518,51 @@
 </div>
 
 <!-- External board context menu (right-click on Trello/Jira boards) -->
-<div id="kb-ext-board-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+<div id="kb-ext-board-ctx-menu" class="fixed hidden z-50 min-w-[160px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
     <button type="button" class="kb-ext-ctx-configure w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1-1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>
         Configure
-    </button>
-    <button type="button" class="kb-ext-ctx-create-ticket w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2">
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-        Create Ticket
     </button>
 </div>
 
 <!-- Create external ticket modal (Trello/Jira) -->
 <div id="kb-create-ext-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
-    <div class="kb-modal p-6" style="width: 520px;">
+    <div class="kb-modal p-6 relative" style="width: 560px;">
+        <div id="kb-cet-loading-overlay" class="hidden absolute inset-0 z-20 bg-[#0b1020]/95 rounded-lg flex items-center justify-center">
+            <div class="flex flex-col items-center gap-3 text-center px-6">
+                <svg class="animate-spin h-8 w-8 text-[#f97316]" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <div class="text-sm text-white font-medium">Collecting Messages and Creating a Ticket...</div>
+            </div>
+        </div>
         <div class="flex items-center justify-between mb-4">
             <h3 id="kb-cet-heading" class="text-lg font-semibold text-white">Create Ticket</h3>
             <button type="button" id="kb-cet-cancel" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
         </div>
-        <div class="space-y-4">
+        <div id="kb-cet-board-row" style="display:none" class="mb-4">
+            <label class="block text-sm text-gray-400 mb-1">Board</label>
+            <select id="kb-cet-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                <option value="">Select a board...</option>
+            </select>
+        </div>
+        <!-- Tabs -->
+        <div class="flex border-b border-white/10 mb-4">
+            <button type="button" id="kb-cet-tab-details" class="px-4 py-2 text-sm font-medium text-[#f97316] border-b-2 border-[#f97316] -mb-px">Details</button>
+            <button type="button" id="kb-cet-tab-attachments" class="px-4 py-2 text-sm font-medium text-gray-400 border-b-2 border-transparent -mb-px hover:text-white">Attachments <span id="kb-cet-attach-count" class="ml-1 text-xs bg-white/10 px-1.5 py-0.5 rounded-full hidden">0</span></button>
+        </div>
+        <!-- Details Tab -->
+        <div id="kb-cet-panel-details" class="space-y-4">
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Title <span class="text-red-400">*</span></label>
                 <input type="text" id="kb-cet-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Ticket title">
             </div>
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Description</label>
-                <textarea id="kb-cet-desc" rows="4" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Describe the ticket..."></textarea>
+                <textarea id="kb-cet-desc" rows="5" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Describe the ticket..."></textarea>
             </div>
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">List / Column</label>
-                <select id="kb-cet-lane" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
-                    <option value="">Select a list/column...</option>
-                </select>
-            </div>
+            <input type="hidden" id="kb-cet-lane" value="">
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Priority</label>
                 <div class="flex gap-2" id="kb-cet-priority-btns">
@@ -495,19 +573,24 @@
                 </div>
                 <input type="hidden" id="kb-cet-priority" value="medium">
             </div>
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">Attachments</label>
-                <input type="file" id="kb-cet-file-input" multiple class="hidden">
-                <button type="button" class="px-3 py-1.5 rounded bg-[#152054] border border-white/20 text-gray-300 text-xs hover:bg-white/10" onclick="document.getElementById('kb-cet-file-input').click()">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="inline -mt-0.5 mr-1"><path d="M21.44 11.05l-9.19 9.19a6 6 0 01-8.49-8.49l9.19-9.19a4 4 0 015.66 5.66l-9.2 9.19a2 2 0 01-2.83-2.83l8.49-8.48"/></svg>
-                    Add Files
-                </button>
+        </div>
+        <!-- Attachments Tab (hidden by default) -->
+        <div id="kb-cet-panel-attachments" class="space-y-3 hidden">
+            <div id="kb-cet-wa-media" class="space-y-2">
+                <!-- WhatsApp media previews populate here -->
+            </div>
+            <div id="kb-cet-files-area">
+                <label class="block text-sm text-gray-400 mb-1">Upload Files</label>
+                <input type="file" id="kb-cet-file-input" multiple class="w-full text-sm text-gray-400">
                 <div id="kb-cet-files-list" class="mt-2 space-y-1"></div>
             </div>
         </div>
-        <div class="flex justify-end gap-2 mt-5">
-            <button type="button" id="kb-cet-cancel-2" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
-            <button type="button" id="kb-cet-create" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Create Ticket</button>
+        <div class="flex justify-between items-center mt-4">
+            <div id="kb-cet-distill-status" class="text-xs text-gray-500"></div>
+            <div class="flex gap-2">
+                <button type="button" id="kb-cet-cancel-2" class="px-4 py-2 text-sm text-gray-400 hover:text-white">Cancel</button>
+                <button type="button" id="kb-cet-submit" class="px-4 py-2 bg-[#f97316] hover:bg-[#d4620e] text-white rounded text-sm font-medium">Create</button>
+            </div>
         </div>
     </div>
 </div>

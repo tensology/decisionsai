@@ -24,9 +24,9 @@ _mock_signal_manager = MagicMock()
 _mock_signals_module.signal_manager = _mock_signal_manager
 sys.modules.setdefault("distr.core.signals", _mock_signals_module)
 
-# distr.core.step_runner.test_loop requires pydantic which is not available in tests.
+# distr.core.workflow_engine.test_loop requires pydantic which is not available in tests.
 _mock_test_loop_module = MagicMock()
-sys.modules.setdefault("distr.core.step_runner.test_loop", _mock_test_loop_module)
+sys.modules.setdefault("distr.core.workflow_engine.test_loop", _mock_test_loop_module)
 
 import distr.core.workflow.service as service_mod
 import distr.core.workflow.dispatcher as dispatcher_mod
@@ -991,7 +991,7 @@ def test_non_agent_step_types_bypass_workflow_agent(data):
              patch.object(service_mod, "complete_step", return_value={"done": True, "status": "passed"}) as mock_complete_step, \
              patch.object(service_mod, "_check_and_enter_wait", return_value=None), \
              patch.object(service_mod, "update_step") as mock_update_step, \
-             patch("distr.core.step_runner.test_loop.TestLoopService", return_value=mock_test_loop), \
+             patch("distr.core.workflow_engine.test_loop.TestLoopService", return_value=mock_test_loop), \
              patch("distr.core.signals.signal_manager", mock_signal_manager):
 
             from distr.core.workflow.service import _dispatch_step
@@ -1166,7 +1166,7 @@ def test_terminal_status_triggers_bridge_notification(terminal_status, run_id, w
 
     try:
         with patch.object(dispatcher_mod, "get_session", return_value=mock_session_ctx), \
-             patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge", return_value=mock_bridge_instance) as mock_bridge_cls:
+             patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", return_value=mock_bridge_instance) as mock_bridge_cls:
 
             from distr.core.workflow.service import _finalize_terminal_run
             _finalize_terminal_run(run_id, workflow_id, terminal_status)
@@ -2913,7 +2913,7 @@ def test_cancel_during_execution():
 
     try:
         with patch.object(dispatcher_mod, "get_session", return_value=mock_session_ctx), \
-             patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge") as mock_bridge_cls:
+             patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge") as mock_bridge_cls:
 
             mock_bridge_cls.return_value = MagicMock()
 

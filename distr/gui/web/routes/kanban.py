@@ -1,7 +1,7 @@
 """
 API routes for Ticket Board management.
 """
-from fastapi import APIRouter, HTTPException, File, UploadFile, Form
+from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
 from typing import Optional, List
@@ -10,15 +10,25 @@ import json
 import logging
 import os
 import threading
+import asyncio
+import secrets
+import time
+import base64
+from pathlib import Path
+from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
+from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
 from distr.core.db import get_session
+from distr.core.db import WhatsAppMessage
 from distr.core.db.kanban import (
     KanbanBoard, KanbanLane, KanbanTicket,
     KanbanTicketFile, KanbanTicketLink, KanbanTicketTodo,
 )
-from distr.core.kanban.agent import _active_agents, KanbanAgentCheckIn
+from distr.core.kanban.agent import _active_agents, KanbanAgentCheckIn, start_agent_checkin
 from distr.core.settings import load_settings_from_db, save_settings_to_db
+from distr.gui.web.security import is_allowed_local_origin
+from distr.gui.web.routes.kanban_whatsapp import register_whatsapp_routes
 
 logger = logging.getLogger(__name__)
 
@@ -172,6 +182,105 @@ def esc_html(s):
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
 
 
+def _trello_with_time_block(description: str, time_estimate: Optional[str], time_spent: Optional[str]) -> str:
+    """Attach/update a structured time block in Trello description text."""
+    import re as _re
+
+    base = (description or "").strip()
+    base = _re.sub(r"\n?---\nEstimate:.*?\nDuration:.*?$", "", base, flags=_re.S).rstrip()
+    est = (time_estimate or "").strip() or "-"
+    spent = (time_spent or "").strip() or "-"
+    block = f"---\nEstimate: {est}\nDuration: {spent}"
+    return f"{base}\n\n{block}" if base else block
+
+
+def _sync_local_ticket_to_external(source: Optional[str], external_id: Optional[str], title: str, description: str, time_estimate: Optional[str], time_spent: Optional[str]) -> None:
+    """Push local ticket updates to external providers when the ticket is linked."""
+    src = (source or "").lower().strip()
+    ext_id = (external_id or "").strip()
+    if src not in ("trello", "jira") or not ext_id:
+        return
+
+    try:
+        from distr.core.settings import load_settings_from_db
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+    except Exception:
+        accounts = []
+
+    if src == "trello":
+        for acct in accounts:
+            if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
+                import requests as req_lib
+                card_desc = _trello_with_time_block(description or "", time_estimate, time_spent)
+                r = req_lib.put(
+                    f"https://api.trello.com/1/cards/{ext_id}",
+                    params={
+                        "key": acct["api_key"],
+                        "token": acct["api_token"],
+                        "name": title or "",
+                        "desc": card_desc,
+                    },
+                    timeout=15,
+                )
+                if r.status_code >= 300:
+                    raise HTTPException(502, f"Trello update failed: {r.text[:300]}")
+                return
+        raise HTTPException(400, "No valid Trello account connected for ticket sync")
+
+    # Jira
+    for acct in accounts:
+        if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
+            import requests as req_lib
+            from requests.auth import HTTPBasicAuth
+            domain = acct.get("domain") or ""
+            if not domain:
+                server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                if server_url:
+                    domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+            if not domain:
+                continue
+            auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+            base_url = f"https://{domain}" if not domain.startswith("http") else domain
+            fields = {
+                "summary": title or "",
+                "description": description or "",
+            }
+            timetracking = {}
+            if (time_estimate or "").strip():
+                timetracking["originalEstimate"] = (time_estimate or "").strip()
+            if (time_spent or "").strip():
+                timetracking["timeSpent"] = (time_spent or "").strip()
+            if timetracking:
+                fields["timetracking"] = timetracking
+            r = req_lib.put(
+                f"{base_url}/rest/api/2/issue/{ext_id}",
+                auth=auth,
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json={"fields": fields},
+                timeout=15,
+            )
+            if r.status_code >= 300:
+                raise HTTPException(502, f"Jira update failed: {r.text[:300]}")
+            return
+    raise HTTPException(400, "No valid Jira account connected for ticket sync")
+
+
+def _is_valid_time_tracking_value(value: Optional[str]) -> bool:
+    """Validate Jira-style duration values: 30m, 2h, 1d 3h, 1w 2d 4h 30m."""
+    import re as _re
+
+    if value is None:
+        return True
+    if not isinstance(value, str):
+        return False
+    v = value.strip()
+    if not v:
+        return True
+    return bool(_re.match(r"^\d+\s*[wdhm](\s+\d+\s*[wdhm])*$", v, _re.I))
+
+
 class BoardCreate(BaseModel):
     name: str
     description: Optional[str] = ""
@@ -183,7 +292,6 @@ class BoardUpdate(BaseModel):
     default_project_id: Optional[int] = None
     default_snippet_id: Optional[int] = None
     default_action_id: Optional[int] = None
-    send_to_cli: Optional[bool] = None
     color: Optional[str] = None
     position: Optional[int] = None
     agent_enabled: Optional[bool] = None
@@ -204,7 +312,8 @@ class TicketUpdate(BaseModel):
     linked_project_id: Optional[int] = None
     linked_snippet_id: Optional[int] = None
     linked_action_id: Optional[int] = None
-    send_to_cli: Optional[bool] = None
+    time_estimate: Optional[str] = None
+    time_spent: Optional[str] = None
 
 class TicketMove(BaseModel):
     lane_id: int
@@ -229,6 +338,8 @@ class CopyToBoard(BaseModel):
     external_source: Optional[str] = None
     external_id: Optional[str] = None
     external_url: Optional[str] = None
+    time_estimate: Optional[str] = None
+    time_spent: Optional[str] = None
 
 
 class ExternalBoardRegister(BaseModel):
@@ -247,6 +358,8 @@ class CopyExternalTicket(BaseModel):
     external_source: Optional[str] = None
     external_id: Optional[str] = None
     external_url: Optional[str] = None
+    time_estimate: Optional[str] = None
+    time_spent: Optional[str] = None
     auto_send_to_project: Optional[bool] = False
     auto_send_to_cli: Optional[bool] = False
 
@@ -282,6 +395,37 @@ class KanbanSettingsUpdate(BaseModel):
 
 def create_routes():
     router = APIRouter()
+
+    def _relay_auth_headers(payload: str = ""):
+        token = (os.environ.get("RELAY_INTERNAL_TOKEN", "") or "").strip()
+        if token:
+            return {"X-Relay-Internal-Token": token}
+        return {}
+
+    def _device_identity_path() -> Path:
+        return Path(DB_DIR) / "device_identity.json"
+
+    def _load_or_create_device_identity():
+        p = _device_identity_path()
+        if p.exists():
+            try:
+                obj = json.loads(p.read_text())
+                if obj.get("device_id") and obj.get("private_key"):
+                    return obj
+            except Exception:
+                pass
+        priv = Ed25519PrivateKey.generate()
+        priv_raw = priv.private_bytes(
+            encoding=serialization.Encoding.Raw,
+            format=serialization.PrivateFormat.Raw,
+            encryption_algorithm=serialization.NoEncryption(),
+        )
+        device = {
+            "device_id": f"dev-{int(time.time())}-{secrets.token_hex(8)}",
+            "private_key": base64.b64encode(priv_raw).decode(),
+        }
+        p.write_text(json.dumps(device))
+        return device
 
     # ── Global Ticket Board Settings ──
 
@@ -351,24 +495,37 @@ def create_routes():
 
     @router.post("/kanban/agent/checkin")
     async def manual_agent_checkin():
-        """Manually trigger an agent check-in on all boards with agent_enabled=true."""
-        import threading
+        """Manually trigger check-ins on all boards flagged with agent_enabled=true."""
         from distr.core.db.kanban import KanbanBoard
-        from distr.core.kanban.agent import KanbanAgentCheckIn
 
-        fired = 0
+        started = 0
+        already_running = 0
+        not_runnable = 0
         with get_session() as s:
             boards = s.query(KanbanBoard).filter(KanbanBoard.agent_enabled == True).all()
             board_ids = [b.id for b in boards]
 
         for bid in board_ids:
-            agent = KanbanAgentCheckIn(bid)
-            threading.Thread(target=agent.run, daemon=True).start()
-            fired += 1
+            result = start_agent_checkin(bid)
+            if result["status"] == "started":
+                started += 1
+            elif result["status"] == "already_running":
+                already_running += 1
+            else:
+                not_runnable += 1
 
-        if fired == 0:
+        if not board_ids:
             return JSONResponse({"message": "No boards have agent check-in enabled."})
-        return JSONResponse({"message": f"Agent check-in started for {fired} board(s)."})
+        return JSONResponse({
+            "message": (
+                f"Check-in dispatch complete: started={started}, "
+                f"already_running={already_running}, skipped={not_runnable}."
+            ),
+            "started": started,
+            "already_running": already_running,
+            "skipped": not_runnable,
+            "total_enabled": len(board_ids),
+        })
 
     @router.post("/kanban/boards/{board_id}/use")
     async def set_board_in_use(board_id: int):
@@ -447,8 +604,6 @@ def create_routes():
                 board.default_snippet_id = payload.default_snippet_id if payload.default_snippet_id else None
             if payload.default_action_id is not None:
                 board.default_action_id = payload.default_action_id if payload.default_action_id else None
-            if payload.send_to_cli is not None:
-                board.send_to_cli = payload.send_to_cli
             if payload.color is not None:
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
@@ -523,6 +678,8 @@ def create_routes():
                     tickets.append({
                         "id": t.id, "title": t.title, "description": t.description or "",
                         "priority": t.priority or "medium", "position": t.position,
+                        "time_estimate": t.time_estimate or "",
+                        "time_spent": t.time_spent or "",
                         "external_source": t.external_source, "external_id": t.external_id,
                         "external_url": t.external_url,
                         "linked_workflow_id": t.linked_workflow_id,
@@ -544,7 +701,6 @@ def create_routes():
                 "default_project_id": board.default_project_id,
                 "default_snippet_id": board.default_snippet_id,
                 "default_action_id": board.default_action_id,
-                "send_to_cli": getattr(board, 'send_to_cli', False) or False,
                 "color": board.color or "",
                 "agent_enabled": getattr(board, 'agent_enabled', False) or False,
                 "in_use": getattr(board, 'in_use', False) or False,
@@ -570,7 +726,6 @@ def create_routes():
                 linked_project_id=board.default_project_id if board else None,
                 linked_snippet_id=board.default_snippet_id if board else None,
                 linked_action_id=board.default_action_id if board else None,
-                send_to_cli=board.send_to_cli if board else False,
             )
             s.add(ticket)
             s.flush()
@@ -586,13 +741,14 @@ def create_routes():
                 "id": t.id, "lane_id": t.lane_id, "title": t.title,
                 "description": t.description or "", "priority": t.priority or "medium",
                 "position": t.position,
+                "time_estimate": t.time_estimate or "",
+                "time_spent": t.time_spent or "",
                 "external_source": t.external_source, "external_id": t.external_id,
                 "external_url": t.external_url,
                 "linked_workflow_id": t.linked_workflow_id,
                 "linked_project_id": t.linked_project_id,
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
-                "send_to_cli": t.send_to_cli or False,
                 "whatsapp_message_id": t.whatsapp_message_id,
                 "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
                 "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
@@ -602,6 +758,10 @@ def create_routes():
 
     @router.put("/kanban/tickets/{ticket_id}")
     async def update_ticket(ticket_id: int, payload: TicketUpdate):
+        if not _is_valid_time_tracking_value(payload.time_estimate):
+            raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
+        if not _is_valid_time_tracking_value(payload.time_spent):
+            raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
         with get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
@@ -620,14 +780,23 @@ def create_routes():
                 t.linked_snippet_id = payload.linked_snippet_id
             if payload.linked_action_id is not None:
                 t.linked_action_id = payload.linked_action_id
-            if payload.send_to_cli is not None:
-                t.send_to_cli = payload.send_to_cli
-                if payload.send_to_cli:
-                    t.linked_workflow_id = None  # CLI and workflow are mutually exclusive
+            if payload.time_estimate is not None:
+                t.time_estimate = payload.time_estimate.strip() if isinstance(payload.time_estimate, str) else payload.time_estimate
+            if payload.time_spent is not None:
+                t.time_spent = payload.time_spent.strip() if isinstance(payload.time_spent, str) else payload.time_spent
             if payload.lane_id is not None:
                 t.lane_id = payload.lane_id
             if payload.position is not None:
                 t.position = payload.position
+            # For local tickets linked to external providers, keep external card/issue in sync immediately on save.
+            _sync_local_ticket_to_external(
+                source=t.external_source,
+                external_id=t.external_id,
+                title=t.title or "",
+                description=t.description or "",
+                time_estimate=t.time_estimate,
+                time_spent=t.time_spent,
+            )
             return JSONResponse({"success": True})
 
     @router.put("/kanban/tickets/{ticket_id}/move")
@@ -657,6 +826,20 @@ def create_routes():
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
+
+            # Clear snapshot_group for ALL messages linked to this ticket
+            grouped = s.query(WhatsAppMessage).filter(
+                WhatsAppMessage.snapshot_group.like(f"{ticket_id}_%")
+            ).all()
+            for msg in grouped:
+                msg.snapshot_group = None
+
+            # Also clear the direct whatsapp_message_id link
+            if t.whatsapp_message_id:
+                wa_msg = s.query(WhatsAppMessage).get(t.whatsapp_message_id)
+                if wa_msg:
+                    wa_msg.snapshot_group = None
+
             s.delete(t)
             return JSONResponse({"success": True})
 
@@ -679,6 +862,76 @@ def create_routes():
             s.add(rec)
             s.flush()
             return JSONResponse({"success": True, "id": rec.id, "filename": safe_name})
+
+    @router.post("/kanban/tickets/{ticket_id}/attach-file")
+    async def attach_existing_file(ticket_id: int, payload: dict):
+        """Attach an existing file (e.g. WhatsApp media) to a ticket by path."""
+        with get_session() as s:
+            t = s.query(KanbanTicket).get(ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+            filename = payload.get("filename", "attachment")
+            file_path = payload.get("file_path", "")
+            description = payload.get("description", "")
+            if not file_path or not os.path.exists(file_path):
+                raise HTTPException(400, "File not found")
+            rec = KanbanTicketFile(
+                ticket_id=ticket_id,
+                filename=filename,
+                file_path=file_path,
+                description=description,
+            )
+            s.add(rec)
+            s.flush()
+            return JSONResponse({"success": True, "id": rec.id, "filename": filename})
+
+    @router.post("/kanban/tickets/{ticket_id}/attach-whatsapp-media")
+    async def attach_whatsapp_media(ticket_id: int, request: Request):
+        """Attach WhatsApp media from a message to a ticket."""
+        body = await request.json()
+        message_id = body.get("message_id")
+        if not message_id:
+            return JSONResponse({"error": "message_id required"}, status_code=400)
+
+        with get_session() as s:
+            ticket = s.query(KanbanTicket).get(ticket_id)
+            if not ticket:
+                raise HTTPException(404, "Ticket not found")
+
+            msg = s.query(WhatsAppMessage).get(message_id)
+            if not msg or not msg.media_local_path:
+                return JSONResponse({"success": True, "attached": False, "reason": "No media"})
+
+            # Check if file exists
+            if not os.path.exists(msg.media_local_path):
+                return JSONResponse({"success": True, "attached": False, "reason": "File not found"})
+
+            # Add attachment to ticket
+            from shutil import copy2
+            import uuid
+            ext = os.path.splitext(msg.media_local_path)[1] or ""
+            dest_name = f"wa_{msg.id}_{uuid.uuid4().hex[:8]}{ext}"
+            dest_dir = os.path.join(DB_DIR, "ticket_files", str(ticket_id))
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, dest_name)
+            copy2(msg.media_local_path, dest_path)
+
+            # Add to ticket files
+            tf = KanbanTicketFile(
+                ticket_id=ticket_id,
+                filename=msg.media_filename or dest_name,
+                file_path=dest_path,
+                description=f"WhatsApp {msg.media_type}" if msg.media_type else "WhatsApp media"
+            )
+            s.add(tf)
+            s.commit()
+
+            return JSONResponse({
+                "success": True,
+                "attached": True,
+                "filename": dest_name
+            })
+
 
     @router.delete("/kanban/tickets/{ticket_id}/files/{file_id}")
     async def delete_ticket_file(ticket_id: int, file_id: int):
@@ -755,6 +1008,10 @@ def create_routes():
 
     @router.post("/kanban/tickets/copy-to-board")
     async def copy_ticket_to_board(payload: CopyToBoard):
+        if not _is_valid_time_tracking_value(payload.time_estimate):
+            raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
+        if not _is_valid_time_tracking_value(payload.time_spent):
+            raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
         with get_session() as s:
             board = s.query(KanbanBoard).filter_by(id=payload.board_id, source="database").first()
             if not board:
@@ -766,6 +1023,8 @@ def create_routes():
             ticket = KanbanTicket(
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
+                time_estimate=(payload.time_estimate or ""),
+                time_spent=(payload.time_spent or ""),
                 position=max_pos + 1,
                 external_source=payload.external_source,
                 external_id=payload.external_id,
@@ -786,6 +1045,10 @@ def create_routes():
     @router.post("/kanban/tickets/copy-external-to-board")
     async def copy_external_ticket_to_board(payload: CopyExternalTicket):
         """Copy an external (Trello/Jira) ticket to a local board and optionally send to project/CLI."""
+        if not _is_valid_time_tracking_value(payload.time_estimate):
+            raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
+        if not _is_valid_time_tracking_value(payload.time_spent):
+            raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
         with get_session() as s:
             board = s.query(KanbanBoard).filter_by(id=payload.board_id, source="database").first()
             if not board:
@@ -797,6 +1060,8 @@ def create_routes():
             ticket = KanbanTicket(
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
+                time_estimate=(payload.time_estimate or ""),
+                time_spent=(payload.time_spent or ""),
                 position=max_pos + 1,
                 external_source=payload.external_source,
                 external_id=payload.external_id,
@@ -1111,10 +1376,10 @@ def create_routes():
             from distr.core.db.projects import Project
             from distr.core.db.workflow import AutoWorkflow
             workflows = [{"id": w.id, "title": w.title or f"Workflow #{w.id}"} for w in s.query(Workflow).all()]
-            step_runner_workflows = [{"id": w.id, "title": w.name or f"Workflow #{w.id}"} for w in s.query(AutoWorkflow).all()]
+            workflow_automations = [{"id": w.id, "title": w.name or f"Workflow #{w.id}"} for w in s.query(AutoWorkflow).all()]
             projects = [{"id": p.id, "name": p.name} for p in s.query(Project).all()]
             actions = [{"id": a.id, "title": a.title or f"Action #{a.id}"} for a in s.query(Action).all()]
-            return JSONResponse({"workflows": workflows + step_runner_workflows, "projects": projects, "actions": actions})
+            return JSONResponse({"workflows": workflows + workflow_automations, "projects": projects, "actions": actions})
 
     # ── External boards (Trello / Jira) ──
 
@@ -1149,6 +1414,7 @@ def create_routes():
                         "default_workflow_id": b.default_workflow_id,
                         "color": b.color,
                         "agent_enabled": b.agent_enabled or False,
+                        "can_create_ticket": True,
                     }
             logger.info("External boards: found %d connected accounts", len(accounts))
             for acct in accounts:
@@ -1165,7 +1431,7 @@ def create_routes():
                             for b in resp.json():
                                 if not b.get("closed", False):
                                     config = local_configs.get(f"trello:{b['id']}", {})
-                                    board_data = {"id": b["id"], "name": b["name"], "url": b.get("url", "")}
+                                    board_data = {"id": b["id"], "name": b["name"], "url": b.get("url", ""), "can_create_ticket": True}
                                     board_data.update(config)
                                     trello_boards.append(board_data)
                     except Exception as e:
@@ -1194,6 +1460,7 @@ def create_routes():
                                 board_data = {
                                     "id": str(b["id"]), "name": b["name"],
                                     "url": f"https://{domain}/jira/software/projects/{b.get('location', {}).get('projectKey', '')}/boards/{b['id']}",
+                                    "can_create_ticket": True,
                                 }
                                 board_data.update(config)
                                 jira_boards.append(board_data)
@@ -1223,6 +1490,7 @@ def create_routes():
                     "default_workflow_id": local_board.default_workflow_id,
                     "color": local_board.color,
                     "agent_enabled": local_board.agent_enabled or False,
+                    "can_create_ticket": True,
                 }
         try:
             from distr.core.settings import load_settings_from_db
@@ -1252,11 +1520,25 @@ def create_routes():
                             for lst in lr.json():
                                 cards = []
                                 for c in lst.get("cards", []):
+                                    desc_text = c.get("desc", "") or ""
+                                    est_match = None
+                                    spent_match = None
+                                    try:
+                                        import re as _re
+                                        est_match = _re.search(r"(?:^|\n)Estimate:\s*(.+)", desc_text)
+                                        spent_match = _re.search(r"(?:^|\n)Duration:\s*(.+)", desc_text)
+                                    except Exception:
+                                        est_match = None
+                                        spent_match = None
                                     card_data = {
                                         "id": c["id"], "title": c["name"],
-                                        "description": c.get("desc", "") or "",
+                                        "description": desc_text,
                                         "url": c.get("url", ""),
                                     }
+                                    if est_match:
+                                        card_data["time_estimate"] = (est_match.group(1) or "").strip()
+                                    if spent_match:
+                                        card_data["time_spent"] = (spent_match.group(1) or "").strip()
                                     # Fetch card details (labels, checklists, members)
                                     try:
                                         cd = requests.get(f"https://api.trello.com/1/cards/{c['id']}",
@@ -1323,9 +1605,34 @@ def create_routes():
                         if cr.status_code == 200:
                             cfg = cr.json()
                             board_name = cfg.get("name", "")
-                            board_url = f"https://{domain}/jira/software/projects/{cfg.get('location', {}).get('projectKey', '')}/boards/{board_id}"
+                            project_key = cfg.get("location", {}).get("projectKey", "")
+                            board_url = f"https://{domain}/jira/software/projects/{project_key}/boards/{board_id}"
                             for col in cfg.get("columnConfig", {}).get("columns", []):
                                 lanes.append({"id": col["name"], "name": col["name"], "tickets": []})
+                            # Determine per-board create permission for Jira (CREATE_ISSUES on board project).
+                            can_create = True
+                            if project_key:
+                                perm_params = {"projectKey": project_key, "permissions": "CREATE_ISSUES"}
+                                pr = requests.get(
+                                    f"{base_url}/rest/api/3/mypermissions",
+                                    auth=auth,
+                                    headers={"Accept": "application/json"},
+                                    params=perm_params,
+                                    timeout=10,
+                                )
+                                if pr.status_code != 200:
+                                    pr = requests.get(
+                                        f"{base_url}/rest/api/2/mypermissions",
+                                        auth=auth,
+                                        headers={"Accept": "application/json"},
+                                        params=perm_params,
+                                        timeout=10,
+                                    )
+                                if pr.status_code == 200:
+                                    perms = pr.json().get("permissions", {})
+                                    create_issue = perms.get("CREATE_ISSUES", {})
+                                    can_create = bool(create_issue.get("havePermission", True))
+                            local_config["can_create_ticket"] = can_create
                         ir = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
                                           auth=auth, headers={"Accept": "application/json"},
                                           params={"maxResults": 100}, timeout=10)
@@ -1386,7 +1693,7 @@ def create_routes():
                         break
         except Exception as e:
             logger.warning("External board detail fetch error: %s", e)
-        response_data = {"name": board_name, "url": board_url, "lanes": lanes}
+        response_data = {"name": board_name, "url": board_url, "lanes": lanes, "can_create_ticket": True}
         response_data.update(local_config)
         return JSONResponse(response_data)
 
@@ -1572,13 +1879,18 @@ source: kanban_ticket_{t.id}
                 raise HTTPException(404, "Board not found")
             if not board.agent_enabled:
                 raise HTTPException(400, "Agent not enabled on this board")
-        agent = KanbanAgentCheckIn(board_id)
-        threading.Thread(target=agent.run, daemon=True).start()
+        result = start_agent_checkin(board_id)
+        if result["status"] == "already_running":
+            raise HTTPException(409, "Agent check-in already running for this board")
+        if result["status"] != "started":
+            raise HTTPException(400, "Board is not runnable for check-in")
         return JSONResponse({"success": True})
 
     @router.post("/kanban/boards/{board_id}/cancel-agent")
     async def cancel_agent(board_id: int):
-        agent = _active_agents.get(board_id)
+        from distr.core.kanban.agent import _active_agents_lock
+        with _active_agents_lock:
+            agent = _active_agents.get(board_id)
         if not agent:
             raise HTTPException(404, "No active agent for this board")
         agent.cancel()
@@ -1586,19 +1898,55 @@ source: kanban_ticket_{t.id}
 
     @router.post("/kanban/boards/{board_id}/restart-agent")
     async def restart_agent(board_id: int):
-        agent = _active_agents.get(board_id)
+        from distr.core.kanban.agent import _active_agents_lock
+        with _active_agents_lock:
+            agent = _active_agents.get(board_id)
         if agent:
-            agent.restart()
-        else:
-            agent = KanbanAgentCheckIn(board_id)
-            threading.Thread(target=agent.run, daemon=True).start()
+            agent.cancel()
+        # Always restart in a new background worker to avoid blocking the request thread.
+        new_agent = KanbanAgentCheckIn(board_id)
+        threading.Thread(target=new_agent.run, daemon=True).start()
         return JSONResponse({"success": True})
 
     @router.get("/kanban/boards/{board_id}/agent-status")
     async def agent_status(board_id: int):
-        agent = _active_agents.get(board_id)
+        from distr.core.kanban.agent import _active_agents_lock
+        from distr.core.db.workflow import AutoWorkflowRun
+        with _active_agents_lock:
+            agent = _active_agents.get(board_id)
         if not agent:
-            return JSONResponse({"state": "idle"})
+            # Fallback to DB run state so status survives process restarts.
+            with get_session() as s:
+                run = (
+                    s.query(AutoWorkflowRun)
+                    .filter(
+                        AutoWorkflowRun.board_id == board_id,
+                        AutoWorkflowRun.status.in_(["running", "waiting"]),
+                    )
+                    .order_by(AutoWorkflowRun.started_at.desc())
+                    .first()
+                )
+                if not run:
+                    return JSONResponse({"state": "idle"})
+                ticket_title = ""
+                if run.ticket_id:
+                    tk = s.query(KanbanTicket).filter(KanbanTicket.id == run.ticket_id).first()
+                    ticket_title = tk.title if tk else ""
+                run_data = {}
+                try:
+                    run_data = json.loads(run.run_data or "{}")
+                except Exception:
+                    run_data = {}
+                return JSONResponse({
+                    "state": run.status,
+                    "current_ticket_id": run.ticket_id,
+                    "current_ticket_title": ticket_title,
+                    "total_tickets": None,
+                    "processed_count": None,
+                    "current_run_id": run.id,
+                    "phase": run_data.get("phase"),
+                    "source_type": run_data.get("source_type"),
+                })
         s = agent.status
         return JSONResponse({
             "state": s.state,
@@ -1607,6 +1955,67 @@ source: kanban_ticket_{t.id}
             "total_tickets": s.total_tickets,
             "processed_count": s.processed_count,
             "current_run_id": s.current_run_id,
+            "phase": s.current_phase,
+        })
+
+    @router.get("/kanban/checkin-overview")
+    async def checkin_overview():
+        """Unified overview for orchestrator updates across boards, tickets, and runs."""
+        from distr.core.kanban.agent import _active_agents_lock
+        from distr.core.workflow.service import get_active_runs
+        with _active_agents_lock:
+            active_agents = list(_active_agents.items())
+
+        board_ids = set()
+        board_status = []
+        for board_id, agent in active_agents:
+            st = agent.status
+            board_ids.add(board_id)
+            board_status.append({
+                "board_id": board_id,
+                "state": st.state,
+                "current_ticket_id": st.current_ticket_id,
+                "current_ticket_title": st.current_ticket_title,
+                "current_run_id": st.current_run_id,
+                "phase": st.current_phase,
+                "total_tickets": st.total_tickets,
+                "processed_count": st.processed_count,
+            })
+
+        runs = get_active_runs(limit=100)
+        ticket_ids = {r.get("ticket_id") for r in runs if r.get("ticket_id")}
+        board_ids.update({r.get("board_id") for r in runs if r.get("board_id")})
+        ticket_lane_by_id = {}
+        board_name_by_id = {}
+        with get_session() as s:
+            if board_ids:
+                boards = s.query(KanbanBoard).filter(KanbanBoard.id.in_(list(board_ids))).all()
+                board_name_by_id = {b.id: b.name for b in boards}
+            if ticket_ids:
+                ticket_rows = (
+                    s.query(KanbanTicket.id, KanbanLane.name)
+                    .join(KanbanLane, KanbanLane.id == KanbanTicket.lane_id)
+                    .filter(KanbanTicket.id.in_(list(ticket_ids)))
+                    .all()
+                )
+                ticket_lane_by_id = {tid: lane_name for tid, lane_name in ticket_rows}
+
+        for item in board_status:
+            item["board_name"] = board_name_by_id.get(item["board_id"], "")
+            if item.get("current_ticket_id"):
+                item["current_lane"] = ticket_lane_by_id.get(item["current_ticket_id"])
+
+        for r in runs:
+            tid = r.get("ticket_id")
+            if tid:
+                r["current_lane"] = ticket_lane_by_id.get(tid)
+            if r.get("board_id") and not r.get("board_name"):
+                r["board_name"] = board_name_by_id.get(r["board_id"], "")
+
+        return JSONResponse({
+            "active_boards": board_status,
+            "active_runs": runs,
+            "generated_at": datetime.utcnow().isoformat(),
         })
 
     # ── WhatsApp ↔ Board Integration ──
@@ -1694,278 +2103,208 @@ source: kanban_ticket_{t.id}
             logger.error(f"WhatsApp message query error: {e}")
             return JSONResponse({"messages": [], "total": 0, "error": str(e)})
 
-    @router.get("/kanban/whatsapp/relay/messages")
-    async def get_relay_whatsapp_messages(jid_phone: str = "", limit: int = 500, offset: int = 0, unprocessed_only: bool = False):
-        """Proxy: fetch messages from the relay server (avoids CORS in browser)."""
-        try:
-            import httpx
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
-            async with httpx.AsyncClient(timeout=10.0) as client:
-                resp = await client.get(f"{base_url}/messages", params={
-                    "jid_phone": jid_phone, "limit": limit, "offset": offset,
-                    "unprocessed_only": str(unprocessed_only).lower(),
-                })
-                return JSONResponse(content=resp.json(), status_code=resp.status_code)
-        except Exception as e:
-            logger.error(f"WhatsApp relay proxy error: {e}")
-            return JSONResponse({"messages": [], "total": 0, "error": str(e)}, status_code=500)
-
-    @router.post("/kanban/whatsapp/relay/mark-processed/{message_id}")
-    async def mark_relay_message_processed(message_id: int):
-        """Proxy: mark a message processed on the relay server."""
-        try:
-            import httpx
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
-            async with httpx.AsyncClient(timeout=5.0) as client:
-                resp = await client.post(f"{base_url}/messages/{message_id}/processed")
-                return JSONResponse(content=resp.json(), status_code=resp.status_code)
-        except Exception as e:
-            logger.error(f"WhatsApp relay mark-processed proxy error: {e}")
-            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
-
-    @router.post("/kanban/whatsapp/messages/{message_id}/processed")
-    async def mark_whatsapp_message_processed(message_id: int):
-        """Mark a WhatsApp message as processed."""
-        from distr.core.db import WhatsAppMessage
-        with get_session() as s:
-            msg = s.query(WhatsAppMessage).get(message_id)
-            if not msg:
-                raise HTTPException(404, "Message not found")
-            msg.processed = True
-            msg.processed_date = datetime.utcnow()
-            return JSONResponse({"success": True})
-
-    @router.post("/kanban/whatsapp/messages/mark-snapshot-group")
-    async def mark_whatsapp_messages_snapshot_group(payload: dict):
-        """Mark multiple WhatsApp messages with a snapshot group ID."""
-        from distr.core.db import WhatsAppMessage
-        jid_phone = payload.get("jid_phone", "")
-        snapshot_group = payload.get("snapshot_group", "")
-        if not jid_phone or not snapshot_group:
-            raise HTTPException(400, "jid_phone and snapshot_group required")
-        with get_session() as s:
-            # Get all messages for this phone
-            msgs = s.query(WhatsAppMessage).filter(WhatsAppMessage.jid_phone == jid_phone).all()
-            for msg in msgs:
-                msg.snapshot_group = snapshot_group
-            s.commit()
-            return JSONResponse({"success": True, "count": len(msgs)})
-
-    @router.get("/kanban/whatsapp/media")
-    async def get_whatsapp_media(path: str = ""):
-        """Serve a WhatsApp media file for display in the UI."""
-        import os as _os
-        from fastapi.responses import FileResponse
-        if not path:
-            raise HTTPException(400, "path parameter required")
-        # Security: only allow files under ~/Downloads/DecisionsAI/
-        home = _os.path.expanduser("~")
-        allowed_dir = _os.path.join(home, "Downloads", "DecisionsAI")
-        realpath = _os.path.realpath(path)
-        if not realpath.startswith(_os.path.realpath(allowed_dir)):
-            raise HTTPException(403, "Access denied")
-        if not _os.path.exists(realpath):
-            raise HTTPException(404, "File not found")
-        # Determine media type from extension
-        ext_media = {
-            ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp",
-            ".ogg": "audio/ogg", ".mp3": "audio/mpeg", ".m4a": "audio/mp4", ".opus": "audio/opus",
-            ".mp4": "video/mp4", ".3gp": "video/3gpp",
-            ".pdf": "application/pdf",
-        }
-        ext = _os.path.splitext(realpath)[1].lower()
-        media_type = ext_media.get(ext, "application/octet-stream")
-        return FileResponse(realpath, media_type=media_type)
-
-    @router.get("/kanban/whatsapp/chats")
-    async def get_whatsapp_chats(limit: int = 100, offset: int = 0, search: str = ""):
-        """Get the WhatsApp chat list from the Baileys service."""
+    @router.post("/kanban/whatsapp/sync")
+    async def sync_whatsapp_messages():
+        """Sync messages from the relay server into the local DB."""
         try:
             from PyQt6.QtWidgets import QApplication
-            _app = QApplication.instance()
-            whatsapp_manager = getattr(_app, 'whatsapp_manager', None) if _app else None
-            if not whatsapp_manager:
-                return JSONResponse({"chats": [], "total": 0, "error": "WhatsApp not connected"})
-            result = whatsapp_manager.get_chats(limit=limit, offset=offset, search=search)
+            app = QApplication.instance()
+            wa_manager = getattr(app, "whatsapp_manager", None) if app else None
+            if not wa_manager:
+                return JSONResponse({"synced": 0, "error": "WhatsApp not connected"})
+            result = wa_manager.sync_from_relay(mark_processed=False)
             return JSONResponse(result)
         except Exception as e:
-            logger.error(f"WhatsApp chats query error: {e}")
-            return JSONResponse({"chats": [], "total": 0, "error": str(e)})
-
-    @router.post("/kanban/tickets/from-whatsapp/{message_id}")
-    async def create_ticket_from_whatsapp(message_id: int, payload: dict):
-        """Create a Ticket Board ticket from a WhatsApp message."""
-        from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink
+            logger.error(f"WhatsApp sync error: {e}")
+            return JSONResponse({"synced": 0, "error": str(e)}, status_code=500)
+    @router.get("/kanban/whatsapp/linked-board")
+    async def get_whatsapp_linked_board(phone: str):
+        """Return the board linked to this WhatsApp phone number, if any."""
         with get_session() as s:
-            msg = s.query(WhatsAppMessage).get(message_id)
-            if not msg:
-                raise HTTPException(404, "WhatsApp message not found")
+            link = s.query(WhatsAppPhoneLink).filter(
+                WhatsAppPhoneLink.phone_number == phone
+            ).first()
+            if link:
+                board = s.query(KanbanBoard).filter(KanbanBoard.id == link.board_id).first()
+                board_name = board.name if board else None
+                return JSONResponse({"board_id": link.board_id, "board_name": board_name})
+            return JSONResponse({"board_id": None, "board_name": None})
 
-            board_id = payload.get("board_id")
-            if not board_id:
-                raise HTTPException(400, "board_id is required")
 
-            board = s.query(KanbanBoard).get(board_id)
-            if not board:
-                raise HTTPException(404, "Board not found")
 
-            # Find source lane (use board default or first lane)
-            source_lane_name = board.agent_source_lane or ""
-            lane = None
-            if source_lane_name:
-                lane = s.query(KanbanLane).filter_by(board_id=board_id, name=source_lane_name).first()
-            if not lane:
-                lane = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position).first()
-            if not lane:
-                raise HTTPException(400, "Board has no lanes")
+    @router.post("/kanban/whatsapp/compose-ticket")
+    async def compose_whatsapp_ticket(request: Request):
+        """Use the configured LLM to compose a detailed, actionable ticket from WhatsApp messages, voice transcriptions, and media."""
+        body = await request.json()
+        message_ids = body.get("message_ids", [])
+        if not message_ids:
+            return JSONResponse({"error": "No message IDs provided"}, status_code=400)
 
-            # Build ticket title from message
-            sender = msg.sender_push_name or msg.sender_phone or msg.jid_phone or "Unknown"
-            title = f"[WA] {sender}: {msg.text[:80]}" if msg.text else f"[WA] {sender}: {msg.media_type or 'message'}"
-            if msg.caption:
-                title = f"[WA] {sender}: {msg.caption[:80]}"
+        with get_session() as s:
+            messages = s.query(WhatsAppMessage).filter(
+                WhatsAppMessage.id.in_(message_ids)
+            ).order_by(WhatsAppMessage.whatsapp_timestamp.asc()).all()
 
-            # Build description
-            desc_parts = [f"WhatsApp message from {sender}"]
-            if msg.sender_phone:
-                desc_parts.append(f"Phone: {msg.sender_phone}")
-            if msg.text:
-                desc_parts.append(f"\n{msg.text}")
-            if msg.caption:
-                desc_parts.append(f"Caption: {msg.caption}")
-            if msg.media_type:
-                desc_parts.append(f"Media: {msg.media_type}")
-                if msg.media_filename:
-                    desc_parts.append(f"File: {msg.media_filename}")
-                if msg.media_local_path:
-                    desc_parts.append(f"Path: {msg.media_local_path}")
-            description = "\n".join(desc_parts)
+            if not messages:
+                return JSONResponse({"error": "No messages found"}, status_code=404)
 
-            # Check if ticket already exists for this message
-            existing = s.query(KanbanTicket).filter_by(whatsapp_message_id=message_id).first()
-            if existing:
-                return JSONResponse({"success": True, "id": existing.id, "message": "Ticket already exists"})
+            # Build the raw message text for the LLM
+            raw_text = ""
+            for m in messages:
+                sender = m.sender_push_name or m.sender_phone or "Unknown"
+                ts = ""
+                try:
+                    from datetime import datetime
+                    ts = datetime.fromtimestamp(m.whatsapp_timestamp).strftime("%H:%M") if m.whatsapp_timestamp else ""
+                except Exception:
+                    pass
+                prefix = f"[{ts}] {sender}"
+                if m.from_me:
+                    prefix = f"[{ts}] Me"
+                if m.text:
+                    raw_text += f"{prefix}: {m.text}\n"
+                if m.caption:
+                    raw_text += f"{prefix} [caption]: {m.caption}\n"
+                if m.media_type:
+                    raw_text += f"{prefix} [{m.media_type}"
+                    if m.media_filename:
+                        raw_text += f": {m.media_filename}"
+                    raw_text += "]\n"
 
-            max_pos = max([t.position for t in lane.tickets], default=-1)
-            ticket = KanbanTicket(
-                lane_id=lane.id,
-                title=title,
-                description=description,
-                priority="medium",
-                position=max_pos + 1,
-                whatsapp_message_id=message_id,
-                whatsapp_message_wa_id=msg.message_id,
-            )
-            s.add(ticket)
+            # Collect media info for the response
+            media_items = []
+            for m in messages:
+                if m.media_type and m.media_local_path:
+                    media_items.append({
+                        "message_id": m.id,
+                        "media_type": m.media_type,
+                        "media_filename": m.media_filename or f"{m.media_type}",
+                        "media_path": f"/api/kanban/whatsapp/media/{os.path.basename(m.media_local_path)}",
+                    })
 
-            # Mark message as processed
-            msg.processed = True
-            msg.processed_date = datetime.utcnow()
-
-            # If message has media, add as ticket file
-            if msg.media_local_path and os.path.exists(msg.media_local_path):
-                safe_name = os.path.basename(msg.media_local_path)
-                ticket_file = KanbanTicketFile(
-                    ticket_id=ticket.id if ticket.id else 0,  # Will be set after flush
-                    filename=safe_name,
-                    file_path=msg.media_local_path,
-                    description=f"WhatsApp {msg.media_type}: {safe_name}" if msg.media_type else safe_name,
-                )
-                # Need to flush ticket first to get ID
-                s.flush()
-                ticket_file.ticket_id = ticket.id
-                s.add(ticket_file)
-
-            s.flush()
-            return JSONResponse({"success": True, "id": ticket.id})
-
-    # ── SSE: real-time WhatsApp message updates ──
-
-    import asyncio as _asyncio
-    _wa_sse_queues: list = []  # list of asyncio.Queue objects
-    _wa_sse_hooked = False
-    _wa_sse_loop = None  # reference to the running asyncio event loop
-
-    def _hook_whatsapp_signal():
-        """Connect the WhatsApp manager's message_received signal to SSE queues."""
-        nonlocal _wa_sse_hooked, _wa_sse_loop
-        if _wa_sse_hooked:
-            return
+        # Call the LLM to distill the messages
         try:
-            from PyQt6.QtWidgets import QApplication
-            _app = QApplication.instance()
-            whatsapp_manager = getattr(_app, 'whatsapp_manager', None) if _app else None
-            if not whatsapp_manager:
-                return
+            from distr.core.utils import load_settings_from_db
+            from distr.core.llm_factory import resolve_settings_keys, create_stream, normalize_provider
 
-            # Store the running asyncio loop reference for thread-safe queueing
-            try:
-                _wa_sse_loop = _asyncio.get_running_loop()
-            except RuntimeError:
-                pass
+            settings = load_settings_from_db()
+            provider, model = resolve_settings_keys(settings)
 
-            def _on_message_received(data: dict):
-                """Called when a WhatsApp message arrives — push to all SSE clients."""
-                import json as _json
-                event_data = _json.dumps({
-                    "type": "whatsapp_message",
-                    "jid_phone": data.get("jid_phone", ""),
-                    "sender_phone": data.get("sender", {}).get("phone", ""),
-                    "sender_push_name": data.get("sender", {}).get("push_name", ""),
-                    "text": data.get("text", ""),
-                    "media_type": data.get("media", {}).get("type") if isinstance(data.get("media"), dict) else None,
-                })
-                for q in list(_wa_sse_queues):
-                    try:
-                        if _wa_sse_loop and not _wa_sse_loop.is_closed():
-                            _wa_sse_loop.call_soon_threadsafe(q.put_nowait, event_data)
-                        else:
-                            q.put_nowait(event_data)
-                    except Exception:
-                        if q in _wa_sse_queues:
-                            _wa_sse_queues.remove(q)
+            prompt = f"""You are a project manager writing a detailed, actionable ticket from WhatsApp messages, voice notes, and media.
 
-            whatsapp_manager.message_received.connect(_on_message_received)
-            _wa_sse_hooked = True
-            logger.info("WhatsApp SSE signal hook connected")
+Here are the messages and transcriptions:
+---
+{raw_text}
+---
+
+Write a thorough ticket with:
+1. TITLE: A clear, specific title (max 80 chars) that captures exactly what needs to happen
+2. DESCRIPTION: A comprehensive, detailed description that:
+   - States exactly what the user needs done — be explicit and specific
+   - Weaves in every detail from voice transcriptions ([Transcription] sections) as if the user said it directly
+   - Includes all names, dates, numbers, places, and specifics mentioned
+   - Breaks down complex requests into numbered steps or bullet points
+   - Notes any media attachments and what they show (photos, documents, voice notes)
+   - Flags any ambiguity or missing info that should be clarified
+   - Is written so someone who has NEVER seen these messages can pick up the work immediately
+   - Do NOT just paraphrase — write full, complete sentences that explain the what, why, and how
+   - Include context: who sent it, what they were responding to, what outcome they expect
+
+The description should be long enough that a developer or team member can start working without needing to read the original messages.
+
+Respond in this exact format:
+TITLE: [your title here]
+DESCRIPTION: [your full description here]"""
+
+            # Collect the full response from the stream
+            full_response = ""
+            for token in create_stream(provider, model, [
+                {"role": "system", "content": "You are a project manager who writes thorough, actionable tickets from messages and voice notes. Be detailed and specific."},
+                {"role": "user", "content": prompt}
+            ], settings):
+                full_response += token
+
+            # Parse title and description from the response
+            title = ""
+            description = ""
+            lines = full_response.strip().split("\n")
+            in_desc = False
+            for line in lines:
+                if line.startswith("TITLE:"):
+                    title = line[6:].strip()
+                elif line.startswith("DESCRIPTION:"):
+                    in_desc = True
+                    description = line[12:].strip()
+                elif in_desc:
+                    description += "\n" + line
+
+            if not title:
+                # Fallback: use first line as title
+                title = lines[0].strip() if lines else "WhatsApp Ticket"
+                description = "\n".join(lines[1:]) if len(lines) > 1 else full_response
+
+            return JSONResponse({
+                "title": title,
+                "description": description,
+                "media": media_items,
+                "raw_text": raw_text,
+                "success": True
+            })
         except Exception as e:
-            logger.debug(f"WhatsApp SSE hook failed: {e}")
+            logger.error(f"LLM distill error: {e}", exc_info=True)
+            # Fallback: return raw messages as description
+            from datetime import datetime
+            title = f"WhatsApp - {len(messages)} message{'s' if len(messages) != 1 else ''}"
+            fallback_desc = ""
+            for m in messages:
+                sender = m.sender_push_name or m.sender_phone or "Unknown"
+                if m.from_me:
+                    sender = "Me"
+                content = m.text or ""
+                if m.caption:
+                    content += (" " if content else "") + m.caption
+                if not content and m.media_type:
+                    content = f"[{m.media_type}]"
+                fallback_desc += f"{sender}: {content}\n"
+            return JSONResponse({
+                "title": title,
+                "description": fallback_desc.strip(),
+                "media": media_items,
+                "raw_text": raw_text,
+                "success": True,
+                "fallback": True,
+                "error": str(e)
+            })
 
-    @router.get("/kanban/whatsapp/stream")
-    async def stream_whatsapp_messages():
-        """SSE endpoint — pushes an event whenever a WhatsApp message arrives in real-time."""
-        import asyncio
-        from fastapi.responses import StreamingResponse
 
-        # Try to hook the signal on first SSE connection
-        _hook_whatsapp_signal()
+    register_whatsapp_routes(
+        router=router,
+        relay_auth_headers=_relay_auth_headers,
+        load_or_create_device_identity=_load_or_create_device_identity,
+    )
 
-        async def event_generator():
-            q = asyncio.Queue()
-            _wa_sse_queues.append(q)
-            try:
-                # Send initial keepalive
-                yield ": keepalive\n\n"
-                while True:
-                    try:
-                        data = await asyncio.wait_for(q.get(), timeout=30.0)
-                        yield f"event: whatsapp_message\ndata: {data}\n\n"
-                    except asyncio.TimeoutError:
-                        yield ": keepalive\n\n"
-            except asyncio.CancelledError:
-                pass
-            finally:
-                if q in _wa_sse_queues:
-                    _wa_sse_queues.remove(q)
-
-        return StreamingResponse(
-            event_generator(),
-            media_type="text/event-stream",
-            headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-        )
+    @router.websocket("/kanban/ws/boards")
+    async def kanban_boards_websocket(websocket: WebSocket):
+        """WebSocket stream for realtime board/ticket/workflow check-in updates."""
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        await websocket.accept()
+        loop = asyncio.get_event_loop()
+        from distr.gui.web.kanban_events import register_kb_websocket, unregister_kb_websocket
+        register_kb_websocket(websocket, loop)
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"type":"ping"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            unregister_kb_websocket(websocket)
 
     return router

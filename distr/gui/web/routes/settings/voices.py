@@ -490,7 +490,7 @@ def register_routes(router, templates):
     async def _transcribe_audio(file_path: str) -> str:
         """Delegate to voice_cloning service."""
         from distr.core.audio.voice_cloning import transcribe_audio_file
-        return await transcribe_audio_file(file_path)
+        return transcribe_audio_file(file_path)
 
     def _process_voice_bg(voice_id: int):
         """Delegate to voice_cloning service."""

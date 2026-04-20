@@ -137,7 +137,7 @@ class TestLLMOverrideResolution:
                 "distr.core.settings.load_settings_from_db",
                 return_value=mock_settings,
             ):
-                from distr.core.step_runner.code_generator import CodeGeneratorService
+                from distr.core.workflow_engine.code_generator import CodeGeneratorService
 
                 svc = CodeGeneratorService()
                 provider, model, _ = svc._get_coding_llm()

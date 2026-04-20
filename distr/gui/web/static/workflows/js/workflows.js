@@ -14,6 +14,9 @@
     var versionPollTimer = null;
     var ws = null;
     var wsReconnectTimer = null;
+    var activeRunsScope = "all";
+    var wfContextMenuEl = null;
+    var wfContextMenuId = null;
 
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -49,6 +52,99 @@
         });
     }
 
+    function closeWorkflowContextMenu() {
+        if (wfContextMenuEl) wfContextMenuEl.classList.add("hidden");
+        wfContextMenuId = null;
+    }
+
+    function ensureWorkflowContextMenu() {
+        if (wfContextMenuEl) return wfContextMenuEl;
+        var html = '' +
+            '<div id="wf-context-menu" class="hidden fixed z-[9999] min-w-[180px] bg-[#1a1f3a] border border-white/20 rounded-lg shadow-2xl py-1">' +
+                '<button type="button" data-action="open" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Open</button>' +
+                '<button type="button" data-action="run" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Run now</button>' +
+                '<button type="button" data-action="set-active" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Set status: Active</button>' +
+                '<button type="button" data-action="duplicate" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Duplicate</button>' +
+                '<button type="button" data-action="export" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Export preset</button>' +
+                '<button type="button" data-action="download" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Download bundle</button>' +
+                '<div class="my-1 border-t border-white/10"></div>' +
+                '<button type="button" data-action="delete" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/20">Delete</button>' +
+            '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        wfContextMenuEl = document.getElementById("wf-context-menu");
+        wfContextMenuEl.querySelectorAll(".wf-cm-action").forEach(function (btn) {
+            btn.addEventListener("click", function (evt) {
+                evt.stopPropagation();
+                var action = btn.dataset.action;
+                var workflowId = wfContextMenuId;
+                closeWorkflowContextMenu();
+                if (!workflowId) return;
+                if (action === "open") {
+                    selectWorkflow(workflowId);
+                    return;
+                }
+                if (action === "run") {
+                    api("POST", "/workflows/" + workflowId + "/run")
+                        .then(function () { snack("Workflow started"); if (currentWorkflowId === workflowId) startPolling(); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
+                        .catch(function (e) { snack(e.message || "Run failed", "error"); });
+                    return;
+                }
+                if (action === "set-active") {
+                    api("PATCH", "/workflows/" + workflowId, { status: "active" })
+                        .then(function () { snack("Workflow set to active"); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
+                        .catch(function () { snack("Failed to update status", "error"); });
+                    return;
+                }
+                if (action === "duplicate") {
+                    api("POST", "/workflows/" + workflowId + "/duplicate")
+                        .then(function (data) { snack("Workflow duplicated"); selectWorkflow(data.id); })
+                        .catch(function () { snack("Failed to duplicate", "error"); });
+                    return;
+                }
+                if (action === "export") {
+                    api("POST", "/workflows/" + workflowId + "/export-preset")
+                        .then(function (data) { snack("Exported as " + (data.filename || "preset")); checkPresetsExist(); })
+                        .catch(function () { snack("Failed to export", "error"); });
+                    return;
+                }
+                if (action === "download") {
+                    window.location.href = API + "/workflows/" + workflowId + "/export";
+                    return;
+                }
+                if (action === "delete") {
+                    if (!confirm("Delete this workflow? This cannot be undone.")) return;
+                    api("DELETE", "/workflows/" + workflowId)
+                        .then(function () {
+                            snack("Workflow deleted");
+                            if (currentWorkflowId === workflowId) {
+                                currentWorkflowId = null;
+                                currentWorkflow = null;
+                                expandedStepId = null;
+                                document.getElementById("wf-detail").classList.add("hidden");
+                                document.getElementById("wf-empty").classList.remove("hidden");
+                            }
+                            loadList();
+                        })
+                        .catch(function () { snack("Failed to delete workflow", "error"); });
+                }
+            });
+        });
+        return wfContextMenuEl;
+    }
+
+    function openWorkflowContextMenu(evt, workflowId) {
+        evt.preventDefault();
+        evt.stopPropagation();
+        var menu = ensureWorkflowContextMenu();
+        wfContextMenuId = workflowId;
+        menu.classList.remove("hidden");
+        menu.style.left = evt.clientX + "px";
+        menu.style.top = evt.clientY + "px";
+        var rect = menu.getBoundingClientRect();
+        if (rect.right > window.innerWidth - 8) menu.style.left = Math.max(8, window.innerWidth - rect.width - 8) + "px";
+        if (rect.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, window.innerHeight - rect.height - 8) + "px";
+    }
+
     // ── Workflow list ──
     function loadList() {
         var search = (document.getElementById("wf-search") || {}).value || "";
@@ -68,6 +164,9 @@
                 }).join("");
                 el.querySelectorAll("[data-id]").forEach(function (row) {
                     row.addEventListener("click", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
+                    row.addEventListener("contextmenu", function (evt) {
+                        openWorkflowContextMenu(evt, parseInt(row.dataset.id, 10));
+                    });
                 });
 
                 // Auto-select last workflow or first in list if nothing selected yet
@@ -100,6 +199,7 @@
             renderSchedule(data);
             renderVariables(data.variables || []);
             renderRuns(data.runs || []);
+            loadActiveRuns();
             renderContextRules(data);
             checkActiveRun();
         }).catch(function () { snack("Failed to load workflow", "error"); });
@@ -151,7 +251,60 @@
                     }
                 }
             });
+            loadActiveRuns();
             checkActiveRun();
+        }).catch(function () {});
+    }
+
+    function formatElapsed(seconds) {
+        var total = parseInt(seconds, 10) || 0;
+        var h = Math.floor(total / 3600);
+        var m = Math.floor((total % 3600) / 60);
+        var s = total % 60;
+        if (h > 0) return h + "h " + String(m).padStart(2, "0") + "m";
+        if (m > 0) return m + "m " + String(s).padStart(2, "0") + "s";
+        return s + "s";
+    }
+
+    function loadActiveRuns() {
+        var listEl = document.getElementById("wf-active-runs-list");
+        var emptyEl = document.getElementById("wf-active-runs-empty");
+        if (!listEl || !emptyEl) return;
+        var query = "/workflows/active-runs?limit=50";
+        if (activeRunsScope === "current" && currentWorkflowId) {
+            query += "&workflow_id=" + encodeURIComponent(currentWorkflowId);
+        }
+        api("GET", query).then(function (runs) {
+            if (!runs.length) {
+                listEl.innerHTML = "";
+                emptyEl.classList.remove("hidden");
+                return;
+            }
+            emptyEl.classList.add("hidden");
+            listEl.innerHTML = runs.map(function (r) {
+                var isCurrentWorkflow = currentWorkflowId && String(currentWorkflowId) === String(r.workflow_id);
+                var statusColor = r.status === "waiting" ? "text-amber-300 bg-amber-600/20" : "text-blue-300 bg-blue-600/20";
+                var phase = r.phase ? String(r.phase) : "planning";
+                var boardText = r.board_name || (r.board_id ? ("Board #" + r.board_id) : "No board");
+                var ticketText = r.ticket_title || (r.ticket_id ? ("Ticket #" + r.ticket_id) : "No ticket");
+                var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
+                var workflowText = r.workflow_name || ("Workflow #" + r.workflow_id);
+                var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
+                return '<div class="' + rowCls + '">' +
+                    '<div class="flex items-center gap-2 mb-1">' +
+                        '<span class="text-xs text-gray-400">Run #' + r.id + '</span>' +
+                        '<span class="text-xs px-1.5 py-0.5 rounded ' + statusColor + '">' + esc(r.status) + '</span>' +
+                        '<span class="text-xs px-1.5 py-0.5 rounded bg-green-600/20 text-green-300">' + esc(phase) + '</span>' +
+                        '<span class="text-xs text-gray-500 ml-auto">Elapsed ' + esc(formatElapsed(r.elapsed_seconds)) + '</span>' +
+                    '</div>' +
+                    '<div class="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">' +
+                        '<div><span class="text-gray-500">Board:</span> <span class="text-gray-200">' + esc(boardText) + '</span></div>' +
+                        '<div><span class="text-gray-500">Ticket:</span> <span class="text-gray-200">' + esc(ticketText) + '</span></div>' +
+                        '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
+                        '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                    '</div>' +
+                '</div>';
+            }).join("");
         }).catch(function () {});
     }
 
@@ -1220,6 +1373,11 @@
 
     // ── Event bindings ──
     function init() {
+        document.addEventListener("click", function () { closeWorkflowContextMenu(); });
+        document.addEventListener("keydown", function (evt) {
+            if (evt.key === "Escape") closeWorkflowContextMenu();
+        });
+
         // Create workflow
         var createBtn = document.getElementById("wf-create-btn");
         if (createBtn) {
@@ -1241,8 +1399,26 @@
 
         // Tabs
         document.querySelectorAll(".wf-tab").forEach(function (btn) {
-            btn.addEventListener("click", function () { switchTab(btn.dataset.tab); });
+            btn.addEventListener("click", function () {
+                switchTab(btn.dataset.tab);
+                if (btn.dataset.tab === "runs") loadActiveRuns();
+            });
         });
+
+        var refreshActiveRuns = document.getElementById("wf-refresh-active-runs");
+        if (refreshActiveRuns) {
+            refreshActiveRuns.addEventListener("click", function () {
+                loadActiveRuns();
+            });
+        }
+
+        var activeRunsScopeEl = document.getElementById("wf-active-runs-scope");
+        if (activeRunsScopeEl) {
+            activeRunsScopeEl.addEventListener("change", function () {
+                activeRunsScope = activeRunsScopeEl.value === "current" ? "current" : "all";
+                loadActiveRuns();
+            });
+        }
 
         // Name edit
         var nameEl = document.getElementById("wf-detail-name");

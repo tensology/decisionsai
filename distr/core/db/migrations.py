@@ -533,8 +533,13 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add coding_llm_model column: {e}")
 
-    # Handle database migration for step_runner_llm_provider/model columns
-    for _col, _default in [("step_runner_llm_provider", "''"), ("step_runner_llm_model", "''")]:
+    # Handle database migration for workflow/legacy workflow LLM columns
+    for _col, _default in [
+        ("workflow_llm_provider", "''"),
+        ("workflow_llm_model", "''"),
+        ("step_runner_llm_provider", "''"),
+        ("step_runner_llm_model", "''"),
+    ]:
         try:
             with Session() as session:
                 session.execute(text(f"SELECT {_col} FROM settings LIMIT 1"))
@@ -975,7 +980,7 @@ def run_migrations():
         except Exception as e:
             logger.warning(f"Could not add voice_model column: {e}")
 
-    # Step Runner scheduled sessions (add columns if table exists and columns missing)
+    # Legacy workflow scheduled sessions (add columns if table exists and columns missing)
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='step_runner_sessions'"))
@@ -995,9 +1000,9 @@ def run_migrations():
                         if "duplicate column" not in str(e).lower():
                             logger.warning(f"Could not add {col} column: {e}")
     except Exception as e:
-        logger.debug(f"Step Runner migration: {e}")
+        logger.debug(f"Legacy workflow migration: {e}")
 
-    # Step Runner: timezone, schedule_time, step_runner_runs table
+    # Legacy workflow schema: timezone, schedule_time, step_runner_runs table
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='step_runner_sessions'"))
@@ -1030,9 +1035,9 @@ def run_migrations():
                 conn.commit()
                 logger.info("Created step_runner_runs table")
     except Exception as e:
-        logger.debug(f"Step Runner migration 2: {e}")
+        logger.debug(f"Legacy workflow migration 2: {e}")
 
-    # Step Runner: add verification column to steps
+    # Legacy workflow schema: add verification column to steps
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='step_runner_steps'"))
@@ -1045,9 +1050,9 @@ def run_migrations():
                     if "duplicate column" not in str(e).lower():
                         logger.warning(f"Could not add verification column: {e}")
     except Exception as e:
-        logger.debug(f"Step Runner migration 3: {e}")
+        logger.debug(f"Legacy workflow migration 3: {e}")
 
-    # Step Runner: add step_type, config, code columns to step_runner_steps
+    # Legacy workflow schema: add step_type, config, code columns to step_runner_steps
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='step_runner_steps'"))
@@ -1065,9 +1070,9 @@ def run_migrations():
                         if "duplicate column" not in str(e).lower():
                             logger.warning(f"Could not add {col} column to step_runner_steps: {e}")
     except Exception as e:
-        logger.debug(f"Step Runner migration 4 (step_type/config/code): {e}")
+        logger.debug(f"Legacy workflow migration 4 (step_type/config/code): {e}")
 
-    # Step Runner: add context_rules and workflow_input columns to step_runner_sessions
+    # Legacy workflow schema: add context_rules and workflow_input columns to step_runner_sessions
     try:
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='step_runner_sessions'"))
@@ -1084,7 +1089,7 @@ def run_migrations():
                         if "duplicate column" not in str(e).lower():
                             logger.warning(f"Could not add {col} column to step_runner_sessions: {e}")
     except Exception as e:
-        logger.debug(f"Step Runner migration 5 (context_rules/workflow_input): {e}")
+        logger.debug(f"Legacy workflow migration 5 (context_rules/workflow_input): {e}")
 
     # Custom Voices: add personality column
     try:
@@ -1439,6 +1444,24 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"Ticket Board send_to_cli migration: {e}")
 
+    # ── Ticket Board time tracking fields on local tickets ──
+    for _tcol, _ttype, _tdef in [
+        ("time_estimate", "VARCHAR", "NULL"),
+        ("time_spent", "VARCHAR", "NULL"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_tcol} FROM kanban_tickets LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE kanban_tickets ADD COLUMN {_tcol} {_ttype} DEFAULT {_tdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_tcol} column to kanban_tickets table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_tcol} to kanban_tickets: {e}")
+
     # ── skin_sizes table ──
     try:
         with engine.connect() as conn:
@@ -1539,6 +1562,7 @@ def run_migrations():
                         media_filename VARCHAR,
                         media_local_path VARCHAR,
                         media_file_length INTEGER,
+                        media_duration INTEGER,
                         whatsapp_timestamp INTEGER,
                         from_me BOOLEAN DEFAULT 0,
                         raw_data TEXT,
@@ -1598,6 +1622,7 @@ def run_migrations():
     for _wcol, _wtype, _wdef in [
         ("snapshot_group", "VARCHAR", "NULL"),
         ("agent_chat_id", "INTEGER", "NULL"),
+        ("media_duration", "INTEGER", "NULL"),
     ]:
         try:
             with Session() as s:
@@ -1629,3 +1654,21 @@ def run_migrations():
             except Exception as e:
                 if "duplicate column" not in str(e).lower():
                     logger.warning(f"Could not add {_wcol} column to settings: {e}")
+
+    # ── BUG-4: Add board_id and ticket_id to AutoWorkflowRun for concurrency ──
+    for _wcol, _wtype, _wdef in [
+        ("board_id", "INTEGER", "NULL"),
+        ("ticket_id", "INTEGER", "NULL"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_wcol} FROM auto_workflow_runs LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE auto_workflow_runs ADD COLUMN {_wcol} {_wtype} DEFAULT {_wdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_wcol} column to auto_workflow_runs table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_wcol} to auto_workflow_runs: {e}")

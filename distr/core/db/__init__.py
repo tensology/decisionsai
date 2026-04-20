@@ -84,6 +84,8 @@ class Settings(Base):
     conversational_llm_model = Column(String, default='minimax-m2.5:cloud')
     coding_llm_provider = Column(String, default='Ollama')
     coding_llm_model = Column(String, default='glm-5.1:cloud')
+    workflow_llm_provider = Column(String, default='')
+    workflow_llm_model = Column(String, default='')
     step_runner_llm_provider = Column(String, default='')
     step_runner_llm_model = Column(String, default='')
     vision_llm_provider = Column(String, default='Ollama')
@@ -450,6 +452,7 @@ class WhatsAppMessage(Base):
     media_filename = Column(String)  # Original filename (for documents)
     media_local_path = Column(String)  # Local path where media was saved
     media_file_length = Column(Integer)  # File size in bytes
+    media_duration = Column(Integer)  # Duration in seconds (voice/audio/video)
 
     # Metadata
     whatsapp_timestamp = Column(Integer)  # Unix timestamp from WhatsApp
@@ -499,10 +502,14 @@ from sqlalchemy import event
 
 @event.listens_for(engine, "connect")
 def on_connect(dbapi_conn, connection_record):
-    """Log when a new connection is created"""
+    """Enable WAL mode on every connection and set busy timeout."""
+    cursor = dbapi_conn.cursor()
+    cursor.execute("PRAGMA journal_mode=WAL")
+    cursor.execute("PRAGMA busy_timeout=5000")
+    cursor.close()
     logger = logging.getLogger(__name__)
     pool = engine.pool
-    logger.debug(f"Database connection created. Pool size: {pool.size()}, checked out: {pool.checkedout()}")
+    logger.debug(f"Database connection created (WAL). Pool size: {pool.size()}, checked out: {pool.checkedout()}")
 
 @event.listens_for(engine, "checkout")
 def on_checkout(dbapi_conn, connection_record, connection_proxy):
@@ -619,7 +626,17 @@ class SessionContext:
     """Context manager for database sessions to ensure proper cleanup.
     Also supports direct usage for backward compatibility."""
     def __init__(self):
-        self.session = Session()
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                self.session = Session()
+                break
+            except Exception as e:
+                if "database is locked" in str(e).lower() and attempt < max_retries - 1:
+                    import time
+                    time.sleep(0.1 * (2 ** attempt))
+                    continue
+                raise
         self._in_context = False
     
     def __enter__(self):

@@ -105,7 +105,7 @@ class TestPlaywrightValidationExitCodeMapping:
                 mock_tls_instance._execute_playwright.return_value = mock_result
 
                 with patch(
-                    "distr.core.step_runner.test_loop.TestLoopService",
+                    "distr.core.workflow_engine.test_loop.TestLoopService",
                     return_value=mock_tls_instance,
                 ):
                     result = _run_verification(step, "some result", True)
@@ -179,7 +179,7 @@ class TestCodeStepDispatchViaTestLoopService:
             mock_tls_instance._execute_playwright.return_value = mock_result
 
             with patch(
-                "distr.core.step_runner.test_loop.TestLoopService",
+                "distr.core.workflow_engine.test_loop.TestLoopService",
                 return_value=mock_tls_instance,
             ):
                 # Also mock complete_step to avoid side effects
@@ -233,7 +233,7 @@ class TestCodeGenerationFallback:
     def test_code_generation_fallback(self, action_type, instruction):
         """When code is empty but instruction exists, CodeGeneratorService is called."""
         from distr.core.workflow.service import _dispatch_step
-        from distr.core.step_runner.step_types import StepType
+        from distr.core.workflow_engine.step_types import StepType
 
         factory = _make_session_factory()
 
@@ -274,11 +274,11 @@ class TestCodeGenerationFallback:
             mock_tls_instance._execute_playwright.return_value = mock_exec
 
             with patch(
-                "distr.core.step_runner.code_generator.CodeGeneratorService",
+                "distr.core.workflow_engine.code_generator.CodeGeneratorService",
                 return_value=mock_cgs_instance,
             ):
                 with patch(
-                    "distr.core.step_runner.test_loop.TestLoopService",
+                    "distr.core.workflow_engine.test_loop.TestLoopService",
                     return_value=mock_tls_instance,
                 ):
                     with patch(

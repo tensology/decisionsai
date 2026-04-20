@@ -171,7 +171,7 @@ def _verify_playwright(step: AutoWorkflowStep, caller_passed: bool) -> bool:
         return caller_passed
 
     try:
-        from distr.core.step_runner.test_loop import TestLoopService
+        from distr.core.workflow_engine.test_loop import TestLoopService
         result = TestLoopService()._execute_playwright(validation_code)
         exit_code = result.get("exit_code", 1) if isinstance(result, dict) else getattr(result, "exit_code", 1)
         output = result.get("output", "") if isinstance(result, dict) else getattr(result, "output", "")

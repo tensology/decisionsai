@@ -1,0 +1,19 @@
+<div id="tab-terminal" class="project-tab-pane hidden flex flex-col gap-3 p-3 flex-1 min-h-0 relative">
+    <div class="flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <span id="shell-terminal-status" class="w-2 h-2 rounded-full bg-gray-500"></span>
+            <span id="shell-terminal-status-text" class="text-xs text-gray-400">Disconnected</span>
+        </div>
+        <button type="button" id="shell-terminal-restart" class="text-xs px-2 py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10 hover:text-white" title="Restart terminal session">
+            Restart
+        </button>
+    </div>
+    <div id="shell-terminal-container" class="flex-1 min-h-0 rounded border border-white/10 bg-[#0d1117] p-2 overflow-hidden">
+        <div id="shell-terminal-xterm" class="w-full h-full"></div>
+    </div>
+    <div class="border border-white/10 rounded-lg p-3 bg-[#11182d]">
+        <div class="text-xs text-gray-400 mb-2">Command badges (global)</div>
+        <div id="shell-terminal-command-badges" class="flex flex-wrap gap-2 mb-3"></div>
+        <input type="text" id="shell-terminal-command-input" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm" placeholder="Type command and press Enter (get/create badge + run)">
+    </div>
+</div>

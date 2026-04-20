@@ -1,11 +1,11 @@
-"""Unit tests for distr.core.step_runner.context_assembly."""
+"""Unit tests for distr.core.workflow_engine.context_assembly."""
 
 import json
 from types import SimpleNamespace
 
 import pytest
 
-from distr.core.step_runner.context_assembly import (
+from distr.core.workflow_engine.context_assembly import (
     StepInputContext,
     WorkflowInput,
     _load_workflow_input,

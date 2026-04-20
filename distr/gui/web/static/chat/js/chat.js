@@ -455,12 +455,33 @@ function startChatWebSocket(force) {
     }
 }
 
+/** Track user message content already rendered optimistically by sendMessage()
+    so handleChatEventMessageAdded can skip duplicates but render voice/PTT messages. */
+let _optimisticUserMessages = new Set();  // first-100-chars of user messages we already rendered
+
 function handleChatEventMessageAdded(msg) {
     if (msg.chat_id !== currentChatId) return;
     const role = msg.role || 'user';
     const content = msg.content || '';
-    // User messages are added optimistically in sendMessage() — skip to avoid duplicates
-    if (role === 'user') return;
+    if (role === 'user') {
+        // Voice/PTT messages come via WS without sendMessage() — render them.
+        // Skip only if sendMessage() already rendered this exact text optimistically.
+        const key = content.substring(0, 100);
+        if (_optimisticUserMessages.has(key)) return;
+        const div = createMessageElement({ role, content });
+        // Insert BEFORE the streaming assistant message or typing indicator
+        // so the user message appears chronologically first.
+        const streamingMsg = document.getElementById('streamingAssistantMessage');
+        const typingInd = document.getElementById('typingIndicator');
+        const insertBefore = streamingMsg || typingInd;
+        if (insertBefore) {
+            chatMessages.insertBefore(div, insertBefore);
+        } else {
+            chatMessages.appendChild(div);
+        }
+        scrollToBottom();
+        return;
+    }
     if (role === 'assistant' && streamingChatId === currentChatId) return;
     const div = createMessageElement({ role, content });
     chatMessages.appendChild(div);
@@ -470,6 +491,8 @@ function handleChatEventMessageAdded(msg) {
 function handleChatEventStreamStarted(msg) {
     if (msg.chat_id !== currentChatId) return;
     streamingChatId = msg.chat_id;
+    _streamTextBuffer = '';
+    _streamRafPending = false;
     removeTypingIndicator();
     const existing = document.getElementById('streamingAssistantMessage');
     if (existing) existing.remove();
@@ -492,19 +515,36 @@ function handleChatEventStreamStarted(msg) {
     scrollToBottom();
 }
 
+/** rAF-debounced stream token renderer: bundles rapid token events into one DOM update per frame. */
+let _streamTextBuffer = '';
+let _streamRafPending = false;
+
 function handleChatEventStreamToken(msg) {
     if (msg.chat_id !== currentChatId) return;
-    const el = document.getElementById('streamingAssistantText');
-    if (el && msg.token) {
-        el.textContent += msg.token;
-        const typingEl = document.getElementById('streamingTypingIndicator');
-        if (typingEl) typingEl.style.display = 'none';
-        scrollToBottom();
+    if (msg.token) {
+        _streamTextBuffer += msg.token;
+        if (!_streamRafPending) {
+            _streamRafPending = true;
+            requestAnimationFrame(() => {
+                _streamRafPending = false;
+                const el = document.getElementById('streamingAssistantText');
+                if (el) {
+                    el.textContent += _streamTextBuffer;
+                    const typingEl = document.getElementById('streamingTypingIndicator');
+                    if (typingEl) typingEl.style.display = 'none';
+                }
+                _streamTextBuffer = '';
+                scrollToBottom();
+            });
+        }
     }
 }
 
 function handleChatEventStreamFinished(msg) {
     if (msg.chat_id !== currentChatId) return;
+    // Flush any buffered stream tokens before finalizing
+    _streamTextBuffer = '';
+    _streamRafPending = false;
     removeTypingIndicator();
     const wrap = document.getElementById('streamingAssistantMessage');
     if (wrap) {
@@ -549,6 +589,7 @@ function handleChatEventStreamFinished(msg) {
         window._agentStreamResolve = null;
     }
     streamingChatId = null;
+    _optimisticUserMessages.clear();
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
     isStreaming = false;
     messageInput.disabled = false;
@@ -559,6 +600,8 @@ function handleChatEventStreamFinished(msg) {
 
 function handleChatEventStreamError(msg) {
     if (msg.chat_id != null && msg.chat_id !== currentChatId) return;
+    _streamTextBuffer = '';
+    _streamRafPending = false;
     removeTypingIndicator();
     // Remove any in-progress streaming bubble
     const wrap = document.getElementById('streamingAssistantMessage');
@@ -1232,18 +1275,49 @@ async function loadEmptyStateVoiceModels(provider) {
 }
 
 // Render Messages. When preserveOnEmpty is true, don't replace with empty (avoids clearing during send flow).
+/** Track how many child message elements are currently rendered to enable incremental append. */
+let _renderedMessageCount = 0;
+
 function renderMessages(messages, preserveOnEmpty) {
+    // Always clean up streaming/typing state when rendering messages
+    removeTypingIndicator();
+    const streamingEl = document.getElementById('streamingAssistantMessage');
+    if (streamingEl) streamingEl.remove();
+
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
         chatMessages.innerHTML = '';
+        _renderedMessageCount = 0;
+        _optimisticUserMessages.clear();
         return;
     }
+    // Incremental render: only append new messages instead of wiping the whole DOM.
+    // When messages.length < _renderedMessageCount, the chat was reloaded (e.g. switching chats),
+    // so we do a full rebuild.
+    if (messages.length > _renderedMessageCount && messages.length - _renderedMessageCount <= 10) {
+        // Fast path: append only new messages, skipping ones already rendered optimistically
+        for (let i = _renderedMessageCount; i < messages.length; i++) {
+            const msg = messages[i];
+            // Skip user messages we already rendered via sendMessage()
+            if (msg.role === 'user' && msg.content && _optimisticUserMessages.has(msg.content.substring(0, 100))) {
+                continue;
+            }
+            const messageDiv = createMessageElement(msg);
+            chatMessages.appendChild(messageDiv);
+        }
+        _renderedMessageCount = messages.length;
+        scrollToBottom();
+        return;
+    }
+    // Full rebuild (chat switch, refresh, etc.)
     chatMessages.innerHTML = '';
+    _optimisticUserMessages.clear();
     messages.forEach(message => {
         const messageDiv = createMessageElement(message);
         chatMessages.appendChild(messageDiv);
     });
-    scrollToBottom();
+    _renderedMessageCount = messages.length;
+    scrollToBottomImmediate();
 }
 
 function formatTime(seconds) {
@@ -1564,6 +1638,7 @@ async function sendMessage() {
             // Add user message to UI while waiting for agent
             const userMsg = createMessageElement({ role: 'user', content: message });
             chatMessages.appendChild(userMsg);
+            _optimisticUserMessages.add(message.substring(0, 100));
             const typing = createTypingIndicator();
             chatMessages.appendChild(typing);
             scrollToBottom();
@@ -1604,12 +1679,12 @@ async function sendMessage() {
     }
     // Ensure WebSocket is connected and subscribed BEFORE sending (bypass isStreaming guard)
     startChatWebSocket(true);
-    await new Promise(resolve => setTimeout(resolve, 50));
     // Clear input immediately on send (Enter or button) so user sees it cleared
     messageInput.value = '';
     messageInput.style.height = 'auto';
     handleInputChange();
     chatMessages.appendChild(createMessageElement({ role: 'user', content: message }));
+    _optimisticUserMessages.add(message.substring(0, 100));
     chatMessages.appendChild(createTypingIndicator());
     scrollToBottom();
     setSendButtonStreaming(true);
@@ -1688,17 +1763,14 @@ async function sendToAgentWhenReady(message, abortSignal) {
 // Wait for agent response: WebSocket stream_finished OR polling. Always polls in parallel.
 async function pollUntilAgentResponse(abortSignal) {
     if (!loadedChatId) throw new Error('No chat loaded');
-    // Capture token at start — if _streamToken changes (chat switch/delete) this poll self-cancels
     const myToken = _streamToken;
     const myChatId = loadedChatId;
-    // Small yield so any in-flight DB commit (e.g. starting_question child row) lands before we snapshot initialCount
-    await new Promise(r => setTimeout(r, 50));
-    if (_streamToken !== myToken) throw new DOMException('Aborted', 'AbortError');
-    const initial = await fetch(`${API_BASE}/chats/${myChatId}`, abortSignal ? { signal: abortSignal } : {});
-    if (!initial.ok) throw new Error('Failed to load chat');
-    const initialData = await initial.json();
-    const initialCount = (initialData.messages || []).length;
-    const pollMs = 600;
+    // Use client-side count instead of fetching the entire chat just to snapshot initialCount.
+    // This removes a ~100-200ms HTTP roundtrip + full JSON serialization before we even poll.
+    const adjustedInitialCount = _renderedMessageCount + 1; // +1 for the user message just appended
+    // Poll at a slower rate since WebSocket is our primary delivery path.
+    // Polling is purely a fallback for when WebSocket events are lost.
+    const pollMs = 3000;   // was 600ms — WebSocket handles real-time; poll is just insurance
     const timeoutMs = 120000;
 
     let pollDone = false;
@@ -1729,7 +1801,7 @@ async function pollUntilAgentResponse(abortSignal) {
             if (!r || !r.ok) return;
             const data = await r.json();
             const messages = (data.messages || []);
-            const has_new = messages.length > initialCount;
+            const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
                 finish();
@@ -1773,14 +1845,16 @@ async function pollUntilAgentResponse(abortSignal) {
 async function sendToAgentAndPoll(message, abortSignal) {
     const myToken = _streamToken;
     const myChatId = loadedChatId;
-    // Capture initialCount BEFORE send so we detect new assistant message even if agent is fast
-    const initial = await fetch(`${API_BASE}/chats/${myChatId}`, abortSignal ? { signal: abortSignal } : {});
-    if (!initial.ok) throw new Error('Failed to load chat');
-    const initialData = await initial.json();
-    const initialCount = (initialData.messages || []).length;
+    // Use client-side rendered count instead of fetching the entire chat via HTTP.
+    // This removes a full HTTP roundtrip + JSON serialization + DB query before every send.
+    const initialCount = _renderedMessageCount;
+    // Account for the user message + typing indicator we just appended
+    const adjustedInitialCount = initialCount + 1; // +1 for the user message just appended
     await sendToAgentWhenReady(message, abortSignal);
     if (_streamToken !== myToken) throw new DOMException('Aborted', 'AbortError');
-    const pollMs = 600;
+    // Poll at a slower rate since WebSocket is our primary delivery path.
+    // Polling is purely a fallback for when WebSocket events are lost.
+    const pollMs = 3000;  // was 600ms — WebSocket handles real-time; poll is just insurance
     const timeoutMs = 120000;
 
     let pollDone = false;
@@ -1810,7 +1884,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
             if (!r || !r.ok) return;
             const data = await r.json();
             const messages = (data.messages || []);
-            const has_new = messages.length > initialCount;
+            const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
                 finish();
@@ -1926,7 +2000,8 @@ async function deleteChat(chatId) {
         currentChatId = null;
         loadedChatId = null;
         chatMessages.innerHTML = '';
-        // Preserve agentCurrentChatId unless it was the deleted chat
+        _renderedMessageCount = 0;
+        _optimisticUserMessages.clear();
         if (agentCurrentChatId === chatId) agentCurrentChatId = null;
         const data = await loadChats();
         if (data.chats && data.chats.length > 0) {
@@ -1986,8 +2061,18 @@ function copyMessage(button) {
     });
 }
 
-// Scroll to Bottom
+// Scroll to Bottom — rAF-throttled to avoid forced layout reflows on every event
+let _scrollRafPending = false;
 function scrollToBottom() {
+    if (_scrollRafPending) return;
+    _scrollRafPending = true;
+    requestAnimationFrame(() => {
+        _scrollRafPending = false;
+        chatMessages.scrollTop = chatMessages.scrollHeight;
+    });
+}
+/** Immediate scroll (not throttled) — only for one-shot events like initial load. */
+function scrollToBottomImmediate() {
     chatMessages.scrollTop = chatMessages.scrollHeight;
 }
 

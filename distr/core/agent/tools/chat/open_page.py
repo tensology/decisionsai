@@ -1,7 +1,7 @@
 """
 Tool for opening DecisionsAI web UI pages by name.
 
-Maps natural-language page names ("chat", "preferences", "step runner", etc.)
+Maps natural-language page names ("chat", "preferences", "workflows", etc.)
 to the correct web URL and opens it in the default browser — exactly like the
 tray context-menu items do.
 """
@@ -54,12 +54,9 @@ _PAGE_MAP = {
     "snippets":       "/skills/",
     # Projects
     "projects":       "/projects/",
-    # Workflows / Step Runner
+    # Workflows
     "workflows":      "/workflows/",
     "workflow":       "/workflows/",
-    "step runner":    "/workflows/",
-    "step-runner":    "/workflows/",
-    "steprunner":     "/workflows/",
     # Ticket Board / Board
     "kanban":         "/kanban/",
     "board":          "/kanban/",
@@ -82,7 +79,7 @@ _KNOWN_PAGES = ", ".join(sorted({
     "chat", "settings/preferences", "general", "initiative", "audio",
     "third party/providers/api keys", "llms/models", "skins/avatar",
     "advanced", "actions", "skills", "projects",
-    "workflows/step runner", "ticket board", "docs/api docs",
+    "workflows", "ticket board", "docs/api docs",
     "activity log", "about",
 }))
 

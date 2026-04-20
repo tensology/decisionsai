@@ -9,12 +9,12 @@ import logging
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, List
+import threading
 
 from distr.core.db import get_session
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
 from distr.core.db.workflow import AutoWorkflowRun
 from distr.core.llm_override import LLMOverride, set_llm_override, clear_llm_override
-from distr.core.settings import load_settings_from_db
 from distr.core.workflow.service import start_workflow_run, cancel_run
 
 logger = logging.getLogger(__name__)
@@ -35,10 +35,27 @@ class AgentStatus:
     total_tickets: int = 0
     processed_count: int = 0
     current_run_id: Optional[int] = None
+    current_phase: Optional[str] = None
 
 
 # Module-level registry of active agents keyed by board_id
 _active_agents: Dict[int, "KanbanAgentCheckIn"] = {}
+_active_agents_lock = threading.Lock()
+
+
+def load_settings_from_db():
+    """Lazy settings loader for runtime and test patchability."""
+    from distr.core.settings import load_settings_from_db as _loader
+    return _loader()
+
+
+def _emit_board_update(board_id: int, event_type: str, payload: Optional[dict] = None) -> None:
+    """Push realtime board update notifications to WebUI clients."""
+    try:
+        from distr.gui.web.kanban_events import increment_kanban_updated
+        increment_kanban_updated(board_id=board_id, event_type=event_type, payload=payload or {})
+    except Exception:
+        logger.debug("Could not emit kanban board update", exc_info=True)
 
 
 def _resolve_lane(board_id: int, lane_name: str) -> Optional[KanbanLane]:
@@ -78,11 +95,11 @@ class _LaneInfo:
 class _BoardInfo:
     """Lightweight detached board info for use outside session scope."""
     id: int
+    name: str
     agent_enabled: bool
     agent_source_lane: str
     agent_done_lane: str
     default_workflow_id: Optional[int]
-    send_to_cli: bool = False
     default_project_id: Optional[int] = None
     agent_orchestrator_provider: str = ""
     agent_orchestrator_model: str = ""
@@ -125,35 +142,39 @@ class KanbanAgentCheckIn:
                 logger.error("Agent check-in: board %s not found", self.board_id)
                 return None
 
-            # Per-board settings take priority, fall back to global
-            agent_enabled = settings.get('kanban_agent_enabled', False)
+            # Board-level agent_enabled takes precedence over global
+            agent_enabled = board.agent_enabled
+            if agent_enabled is None:
+                agent_enabled = settings.get('kanban_agent_enabled', False)
             agent_source_lane = board.agent_source_lane or settings.get('kanban_agent_source_lane', '')
             agent_done_lane = board.agent_done_lane or settings.get('kanban_agent_done_lane', '')
-            send_to_cli = getattr(board, 'send_to_cli', False) or False
             default_workflow_id = board.default_workflow_id
             default_project_id = board.default_project_id
             board_id = board.id
+            board_name = board.name
+            board_agent_enabled = board.agent_enabled
 
         if not agent_enabled:
-            logger.info("Agent check-in: agent not enabled in global settings")
+            logger.info("Agent check-in: agent not enabled (board=%s, global=%s)",
+                        board_agent_enabled, settings.get('kanban_agent_enabled', False))
             return None
 
         if not agent_source_lane:
             logger.error("Agent check-in: no source lane configured for board %s", self.board_id)
             return None
 
-        # Require either a workflow or send_to_cli
-        if not send_to_cli and not default_workflow_id:
-            logger.error("Agent check-in: board %s has no workflow and send_to_cli is off", self.board_id)
+        # Workflow is the only automation path.
+        if not default_workflow_id:
+            logger.error("Agent check-in: board %s has no default workflow configured", self.board_id)
             return None
 
         info = _BoardInfo(
             id=board_id,
+            name=board_name,
             agent_enabled=True,
             agent_source_lane=agent_source_lane,
             agent_done_lane=agent_done_lane or "Done",
             default_workflow_id=default_workflow_id,
-            send_to_cli=send_to_cli,
             default_project_id=default_project_id,
             agent_orchestrator_provider=settings.get('kanban_agent_orchestrator_provider', ''),
             agent_orchestrator_model=settings.get('kanban_agent_orchestrator_model', ''),
@@ -190,39 +211,93 @@ class KanbanAgentCheckIn:
             ]
         return result
 
+    def _resolve_project_context(self, board, ticket_id: int) -> Dict[str, Optional[str]]:
+        """Resolve project context from ticket link first, then board default."""
+        project_id: Optional[int] = None
+        with get_session() as db:
+            tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket_id).first()
+            if tk:
+                project_id = tk.linked_project_id or board.default_project_id
+
+        if not project_id:
+            return {"project_id": None, "project_name": None, "project_folder": None}
+
+        try:
+            from distr.core.db.projects import Project
+            with get_session() as db:
+                project = db.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    return {"project_id": str(project_id), "project_name": None, "project_folder": None}
+                return {
+                    "project_id": str(project_id),
+                    "project_name": project.name or None,
+                    "project_folder": project.folder_location or None,
+                }
+        except Exception:
+            return {"project_id": str(project_id), "project_name": None, "project_folder": None}
+
     def _process_ticket(self, board, ticket: dict) -> str:
-        """Process a ticket — via pi coding agent if board.send_to_cli, otherwise via workflow.
+        """Process a ticket via workflow execution.
 
         On completion, moves the ticket to the NEXT lane (e.g. Current → QA/Assess).
         Returns the terminal status ('completed', 'failed', 'cancelled').
         """
         self._status.current_ticket_id = ticket["id"]
         self._status.current_ticket_title = ticket.get("title", "")
+        _emit_board_update(board.id, "ticket_started", {
+            "ticket_id": ticket["id"],
+            "ticket_title": ticket.get("title", ""),
+        })
 
-        if board.send_to_cli:
-            result = self._try_pi_agent(ticket, board)
-            if result == "completed":
-                self._move_ticket_to_next_lane(board, ticket)
-            else:
-                logger.info("Agent check-in: pi agent ended with '%s' for ticket %s", result, ticket["id"])
-            return result
-
-        # Workflow path
-        if not board.default_workflow_id:
-            logger.error("Agent check-in: no workflow and send_to_cli is off for ticket %s", ticket["id"])
-            return "failed"
-
+        # Workflow path: prefer ticket-linked workflow, fall back to board default.
+        workflow_id = None
         # Build context from ticket title and description
         context = f"Ticket: {ticket['title']}"
         try:
             with get_session() as db:
                 tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
-                if tk and tk.description:
-                    context += f"\n\nDescription: {tk.description}"
+                if tk:
+                    workflow_id = tk.linked_workflow_id or board.default_workflow_id
+                    if tk.description:
+                        context += f"\n\nDescription: {tk.description}"
         except Exception:
             pass
 
-        run_result = start_workflow_run(board.default_workflow_id, context=context)
+        if not workflow_id:
+            logger.error(
+                "Agent check-in: no linked workflow on ticket %s and no board default workflow",
+                ticket["id"],
+            )
+            return "failed"
+
+        project_ctx = self._resolve_project_context(board, ticket["id"])
+        if project_ctx.get("project_name"):
+            context += f"\n\nProject: {project_ctx['project_name']}"
+        if project_ctx.get("project_folder"):
+            context += f"\nProject folder: {project_ctx['project_folder']}"
+
+        run_metadata = {
+            "source_type": "board_checkin",
+            "board_id": board.id,
+            "board_name": board.name,
+            "ticket_id": ticket["id"],
+            "ticket_title": ticket.get("title", ""),
+            "project_id": project_ctx.get("project_id"),
+            "project_name": project_ctx.get("project_name"),
+            "project_folder": project_ctx.get("project_folder"),
+            "phase": "planning",
+        }
+        try:
+            run_result = start_workflow_run(
+                workflow_id,
+                context=context,
+                board_id=board.id,
+                ticket_id=ticket["id"],
+                run_metadata=run_metadata,
+            )
+        except TypeError:
+            # Backward-compatible fallback for tests/mocks that still use legacy signature.
+            run_result = start_workflow_run(workflow_id)
         if "error" in run_result:
             logger.error("Agent check-in: failed to start workflow for ticket %s: %s", ticket["id"], run_result["error"])
             return "failed"
@@ -230,6 +305,7 @@ class KanbanAgentCheckIn:
         run_id = run_result.get("run_id")
         self._current_run_id = run_id
         self._status.current_run_id = run_id
+        self._status.current_phase = "planning"
 
         terminal_status = self._wait_for_run(run_id)
 
@@ -240,6 +316,12 @@ class KanbanAgentCheckIn:
 
         self._current_run_id = None
         self._status.current_run_id = None
+        self._status.current_phase = None
+        _emit_board_update(board.id, "ticket_finished", {
+            "ticket_id": ticket["id"],
+            "ticket_title": ticket.get("title", ""),
+            "status": terminal_status,
+        })
         return terminal_status
 
     def _try_pi_agent(self, ticket: dict, board) -> str:
@@ -406,9 +488,14 @@ class KanbanAgentCheckIn:
             )
             tk.lane_id = next_lane.id
             tk.position = 0 if max_pos is None else max_pos + 1
+            next_lane_name = next_lane.name
             db.commit()
 
-        logger.info("Agent check-in: moved ticket %s to lane '%s'", ticket["id"], next_lane.name)
+        logger.info("Agent check-in: moved ticket %s to lane '%s'", ticket["id"], next_lane_name)
+        _emit_board_update(board.id, "ticket_moved", {
+            "ticket_id": ticket["id"],
+            "to_lane": next_lane_name,
+        })
 
     def _wait_for_run(self, run_id: int) -> str:
         """Poll until the workflow run reaches a terminal status."""
@@ -417,8 +504,24 @@ class KanbanAgentCheckIn:
                 return "cancelled"
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-                if run and run.status in _TERMINAL_STATUSES:
-                    return run.status
+                if run:
+                    try:
+                        import json
+                        run_data = json.loads(run.run_data or "{}")
+                        new_phase = run_data.get("phase") or self._status.current_phase
+                        if new_phase != self._status.current_phase:
+                            self._status.current_phase = new_phase
+                            _emit_board_update(self.board_id, "phase_changed", {
+                                "run_id": run_id,
+                                "phase": new_phase,
+                                "ticket_id": self._status.current_ticket_id,
+                            })
+                        else:
+                            self._status.current_phase = new_phase
+                    except Exception:
+                        pass
+                    if run.status in _TERMINAL_STATUSES:
+                        return run.status
             time.sleep(_POLL_INTERVAL)
 
     def _move_ticket_to_done(self, board, ticket: dict):
@@ -456,22 +559,27 @@ class KanbanAgentCheckIn:
         """Main entry point — process all tickets from the source lane."""
         self._cancelled = False
         self._status = AgentStatus(state="running")
-        _active_agents[self.board_id] = self
+        with _active_agents_lock:
+            _active_agents[self.board_id] = self
+        _emit_board_update(self.board_id, "agent_started", {})
 
         board = self._load_board()
         if board is None:
             self._status.state = "idle"
-            _active_agents.pop(self.board_id, None)
+            with _active_agents_lock:
+                _active_agents.pop(self.board_id, None)
             return
 
         tickets = self._collect_tickets(board)
         if not tickets:
             logger.info("Agent check-in: no tickets in source lane for board %s", self.board_id)
             self._status.state = "idle"
-            _active_agents.pop(self.board_id, None)
+            with _active_agents_lock:
+                _active_agents.pop(self.board_id, None)
             return
 
         self._status.total_tickets = len(tickets)
+        _emit_board_update(self.board_id, "queue_loaded", {"total_tickets": len(tickets)})
 
         # Set LLM override from board settings
         token = set_llm_override(LLMOverride(
@@ -491,7 +599,12 @@ class KanbanAgentCheckIn:
         finally:
             clear_llm_override(token)
             self._status.state = "idle"
-            _active_agents.pop(self.board_id, None)
+            with _active_agents_lock:
+                _active_agents.pop(self.board_id, None)
+            _emit_board_update(self.board_id, "agent_idle", {
+                "processed_count": self._status.processed_count,
+                "total_tickets": self._status.total_tickets,
+            })
 
     def cancel(self):
         """Cancel the current agent check-in."""
@@ -504,3 +617,26 @@ class KanbanAgentCheckIn:
         self.cancel()
         self._cancelled = False
         self.run()
+
+
+def start_agent_checkin(board_id: int) -> dict:
+    """Start a board check-in in a background thread using shared runtime checks.
+
+    Returns:
+        dict with keys:
+        - status: "started" | "already_running" | "not_runnable"
+        - board_id: int
+        - reason: optional string
+    """
+    with _active_agents_lock:
+        existing = _active_agents.get(board_id)
+    if existing and existing.status.state == "running":
+        return {"status": "already_running", "board_id": board_id, "reason": "already_running"}
+
+    agent = KanbanAgentCheckIn(board_id)
+    board = agent._load_board()
+    if board is None:
+        return {"status": "not_runnable", "board_id": board_id, "reason": "board_not_runnable"}
+
+    threading.Thread(target=agent.run, daemon=True).start()
+    return {"status": "started", "board_id": board_id}

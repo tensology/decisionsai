@@ -16,34 +16,39 @@ logger = logging.getLogger(__name__)
 DEVELOPMENT_STEPS = [
     {
         "position": 0,
-        "name": "Plan",
+        "name": "Planning",
         "action_type": "agent_instruction",
         "instruction": (
-            "Review the ticket context and create a detailed implementation plan. "
-            "Consider the project structure, dependencies, and acceptance criteria. "
-            "Output a step-by-step plan."
+            "Review the ticket context and produce a concrete plan before changing code. "
+            "Call out assumptions, implementation steps, and explicit success criteria."
         ),
+        "validation_type": "text_match",
+        "validation_prompt": "success criteria",
         "wait_for_continue": False,
     },
     {
         "position": 1,
-        "name": "Build",
+        "name": "Execution",
         "action_type": "agent_instruction",
         "instruction": (
-            "Using the plan from the previous step, use CreateCursorTicketTool to create "
-            "a .ticket file in the project's .tickets/ folder with the implementation "
-            "instructions. Include all relevant context from the plan."
+            "Implement the plan and apply code changes. Keep updates scoped to the ticket, "
+            "and report what was changed and why."
         ),
-        "wait_for_continue": True,
+        "validation_type": "rule_based",
+        "validation_prompt": "contains: changed\ncontains: implemented\nmin_length: 20",
+        "wait_for_continue": False,
     },
     {
         "position": 2,
-        "name": "Validate",
-        "action_type": "playwright",
+        "name": "Validation",
+        "action_type": "agent_instruction",
         "instruction": (
-            "Run validation scripts to verify the build output meets the acceptance "
-            "criteria from the ticket."
+            "Validate the implementation against the success criteria. Run unit tests and "
+            "Playwright checks when applicable. Report which checks passed, and clearly list "
+            "any failing requirements."
         ),
+        "validation_type": "rule_based",
+        "validation_prompt": "contains: pass\ncontains: requirement\nmin_length: 20",
         "wait_for_continue": False,
     },
 ]
@@ -196,6 +201,13 @@ def _seed_steps_for_workflow(db, workflow_id: int, steps_data: list):
             name=s_data.get("name", "Step"),
             action_type=s_data.get("action_type", "agent_instruction"),
             instruction=s_data.get("instruction", ""),
+            validation_type=s_data.get("validation_type", "none"),
+            validation_prompt=s_data.get("validation_prompt", ""),
+            routing_mode=s_data.get("routing_mode", "static"),
+            wait_before_next=s_data.get("wait_before_next", 0),
+            timeout_seconds=s_data.get("timeout_seconds", 300),
+            max_retries=s_data.get("max_retries", 0),
+            require_approval=s_data.get("require_approval", False),
             wait_for_continue=s_data.get("wait_for_continue", False),
         )
         db.add(step)
@@ -210,12 +222,47 @@ def _seed_steps_for_workflow(db, workflow_id: int, steps_data: list):
             step.on_pass_goto = position_to_id[next_pos]
 
 
-def seed_workflows():
-    """Populate empty draft workflows with default steps. Idempotent."""
+def seed_workflows(force_reset: bool = False, workflow_names=None):
+    """Populate seeded workflows with default steps.
+
+    Args:
+        force_reset: If True, replace existing steps for matching seeded workflows.
+        workflow_names: Optional iterable of workflow names to seed. Defaults to all seeded names.
+
+    Returns:
+        Summary dict with counts and seeded workflow names.
+    """
+    target_names = set(workflow_names) if workflow_names else set(WORKFLOW_SEEDS.keys())
+    seeded_names = []
+    skipped_names = []
+
     with get_session() as db:
         workflows = db.query(AutoWorkflow).all()
         for wf in workflows:
-            if wf.name in WORKFLOW_SEEDS and len(wf.steps) == 0:
-                logger.info("Seeding workflow '%s' (id=%d) with default steps", wf.name, wf.id)
-                _seed_steps_for_workflow(db, wf.id, WORKFLOW_SEEDS[wf.name])
+            if wf.name not in WORKFLOW_SEEDS or wf.name not in target_names:
+                continue
+
+            has_steps = len(wf.steps) > 0
+            if has_steps and not force_reset:
+                skipped_names.append(wf.name)
+                continue
+
+            if has_steps and force_reset:
+                logger.info("Resetting workflow '%s' (id=%d) steps before reseed", wf.name, wf.id)
+                for step in list(wf.steps):
+                    db.delete(step)
+                db.flush()
+
+            logger.info("Seeding workflow '%s' (id=%d) with default steps", wf.name, wf.id)
+            _seed_steps_for_workflow(db, wf.id, WORKFLOW_SEEDS[wf.name])
+            seeded_names.append(wf.name)
+
         db.commit()
+
+    return {
+        "seeded_count": len(seeded_names),
+        "skipped_count": len(skipped_names),
+        "seeded_names": seeded_names,
+        "skipped_names": skipped_names,
+        "force_reset": force_reset,
+    }

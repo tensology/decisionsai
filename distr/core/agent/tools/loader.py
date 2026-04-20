@@ -314,7 +314,7 @@ TOOL_REGISTRY = {
     "WebFetchTool":            ("web.web_fetch", "WebFetchTool"),
     # actions/
     "CreateActionTool":        ("actions.create_action", "CreateActionTool"),
-    # workflow builder (AutoWorkflow) tools
+    # workflow automation tools
     "ListWorkflowsTool":          ("step_runner.workflow_tools", "ListWorkflowsTool"),
     "GetWorkflowTool":            ("step_runner.workflow_tools", "GetWorkflowTool"),
     "RunWorkflowTool":            ("step_runner.workflow_tools", "RunWorkflowTool"),
@@ -447,7 +447,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "NewChatTool": "Start a new conversation, new chat, or fresh chat session.",
     "ClearChatTool": "Clear, wipe, or delete all messages from the current chat conversation.",
     "OracleGlobeTool": "Control the Oracle globe overlay appearance, animations, and visual state on the desktop.",
-    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, step runner, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
+    "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "ExitAppTool": "Quit and close the DecisionsAI desktop application.",

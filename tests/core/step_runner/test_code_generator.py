@@ -1,15 +1,15 @@
-"""Unit tests for distr.core.step_runner.code_generator."""
+"""Unit tests for distr.core.workflow_engine.code_generator."""
 
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-from distr.core.step_runner.code_generator import (
+from distr.core.workflow_engine.code_generator import (
     CodeGeneratorService,
     _strip_code_fences,
     _litellm_model,
 )
-from distr.core.step_runner.step_types import StepType
+from distr.core.workflow_engine.step_types import StepType
 
 
 # ---------------------------------------------------------------------------

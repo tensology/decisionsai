@@ -3,7 +3,6 @@ Workflow routes — /workflows/*
 """
 from fastapi import Request, HTTPException, File, UploadFile
 from fastapi.responses import JSONResponse
-from starlette.responses import RedirectResponse
 from pydantic import BaseModel
 from typing import Optional, List
 import json
@@ -94,6 +93,11 @@ class WorkflowScheduleUpdate(BaseModel):
     timezone: Optional[str] = None
 
 
+class WorkflowSeedFixturesRequest(BaseModel):
+    force_reset: bool = False
+    workflow_names: Optional[List[str]] = None
+
+
 def register_routes(router, templates):
 
     def _is_audit_workflow(workflow_id: int) -> bool:
@@ -157,8 +161,8 @@ def register_routes(router, templates):
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
         return JSONResponse({
-            "provider": settings.get("step_runner_llm_provider") or "",
-            "model": settings.get("step_runner_llm_model") or "",
+            "provider": settings.get("workflow_llm_provider") or "",
+            "model": settings.get("workflow_llm_model") or "",
         })
 
     @router.post("/workflows/llm-settings")
@@ -167,10 +171,23 @@ def register_routes(router, templates):
         from distr.core.settings import load_settings_from_db, save_settings_to_db
         data = await request.json()
         settings = load_settings_from_db()
-        settings["step_runner_llm_provider"] = (data.get("provider") or "").strip()
-        settings["step_runner_llm_model"] = (data.get("model") or "").strip()
+        provider = (data.get("provider") or "").strip()
+        model = (data.get("model") or "").strip()
+        settings["workflow_llm_provider"] = provider
+        settings["workflow_llm_model"] = model
         save_settings_to_db(settings)
         return JSONResponse({"success": True})
+
+    @router.post("/workflows/seed-fixtures")
+    async def seed_workflow_fixtures(data: WorkflowSeedFixturesRequest):
+        """Seed workflow fixtures. Optional force reset for dynamic template updates."""
+        try:
+            from distr.core.db.seed_workflows import seed_workflows
+            result = seed_workflows(force_reset=data.force_reset, workflow_names=data.workflow_names)
+            return JSONResponse({"success": True, **result})
+        except Exception as e:
+            logger.error("Workflow fixture seed failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/steps/{step_id}/generate-code")
     async def workflow_generate_step_code(step_id: int, data: WorkflowGenerateCodeRequest):
@@ -260,7 +277,7 @@ def register_routes(router, templates):
     async def workflow_generate(data: WorkflowGenerateRequest):
         """Generate a workflow from a natural-language description using the coding LLM."""
         try:
-            from distr.core.step_runner.code_generator import CodeGeneratorService
+            from distr.core.workflow_engine.code_generator import CodeGeneratorService
             from distr.core.workflow.service import import_workflow
 
             prompt = (
@@ -421,6 +438,15 @@ def register_routes(router, templates):
             return JSONResponse(get_run_history(workflow_id, limit=limit))
         except Exception as e:
             logger.error("Workflow runs failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/active-runs")
+    async def workflow_active_runs(limit: int = 50, workflow_id: Optional[int] = None):
+        try:
+            from distr.core.workflow.service import get_active_runs
+            return JSONResponse(get_active_runs(limit=limit, workflow_id=workflow_id))
+        except Exception as e:
+            logger.error("Workflow active runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # Execution
@@ -796,15 +822,3 @@ def register_routes(router, templates):
             logger.error("Workflow export preset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    # ── Legacy redirect: /step-runner/* → /workflows/* (HTTP 301) ──
-
-    @router.api_route("/step-runner/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    async def legacy_step_runner_redirect(request: Request, path: str):
-        """Redirect legacy /api/step-runner/* requests to /api/workflows/* with HTTP 301."""
-        new_path = f"/api/workflows/{path}" if path else "/api/workflows"
-        return RedirectResponse(url=new_path, status_code=301)
-
-    @router.api_route("/step-runner", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
-    async def legacy_step_runner_redirect_root(request: Request):
-        """Redirect legacy /api/step-runner root to /api/workflows with HTTP 301."""
-        return RedirectResponse(url="/api/workflows", status_code=301)

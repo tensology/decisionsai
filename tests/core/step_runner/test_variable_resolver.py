@@ -1,8 +1,8 @@
-"""Unit tests for distr.core.step_runner.variable_resolver."""
+"""Unit tests for distr.core.workflow_engine.variable_resolver."""
 
 import logging
 
-from distr.core.step_runner.variable_resolver import resolve_http_variables
+from distr.core.workflow_engine.variable_resolver import resolve_http_variables
 
 
 class TestResolveStepN:

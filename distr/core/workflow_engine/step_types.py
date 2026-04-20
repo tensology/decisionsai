@@ -1,4 +1,4 @@
-"""Step type definitions and Pydantic configuration models for the Step Runner.
+"""Step type definitions and Pydantic configuration models for workflows.
 
 Defines the five supported step types (Run Command, Play Recording, HTTP Request,
 Execute Code, Playwright) and their typed configuration schemas. The 'Set Variable'
@@ -12,7 +12,7 @@ from pydantic import BaseModel
 
 
 class StepType(str, Enum):
-    """Supported step types for the Step Runner."""
+    """Supported step types for workflows."""
     RUN_COMMAND = "run_command"
     PLAY_RECORDING = "play_recording"
     HTTP_REQUEST = "http_request"

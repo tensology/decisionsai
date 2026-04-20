@@ -13,7 +13,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from distr.core.step_runner.agent_bridge import (
+from distr.core.workflow_engine.agent_bridge import (
     WorkflowAgentBridge,
     _agent_report_queue,
 )
@@ -67,7 +67,7 @@ def _build_handler(self_mock):
 
     def on_workflow_finished(session_id, summary):
         try:
-            from distr.core.step_runner.agent_bridge import WorkflowAgentBridge
+            from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
             reports = WorkflowAgentBridge.get_pending_reports()
             report_text = summary
             for r in reports:
@@ -245,7 +245,7 @@ class TestWorkflowReportErrorHandling:
         handler = _build_handler(app)
 
         with patch(
-            "distr.core.step_runner.agent_bridge.WorkflowAgentBridge.get_pending_reports",
+            "distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge.get_pending_reports",
             side_effect=RuntimeError("queue corrupted"),
         ):
             # Should not raise

@@ -743,7 +743,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if not self._cancelled:
                 await self.push_frame(LLMFullResponseEndFrame())
                 # Safety net: emit chat_stream_finished only if not already emitted
-                # so the Step Runner (and other listeners) never gets stuck waiting.
+                # so workflow listeners (and other subscribers) never get stuck waiting.
                 if current_chat_id and not _signals_emitted:
                     try:
                         signal_manager.typing_indicator_changed.emit(False)

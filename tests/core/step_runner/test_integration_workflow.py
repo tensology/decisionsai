@@ -34,7 +34,7 @@ sys.modules.setdefault("distr.core.db", _mock_db_pkg)
 sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
 sys.modules.setdefault("distr.core.db.workflow", MagicMock())
 
-sys.modules.setdefault("distr.core.step_runner.context_assembly", MagicMock())
+sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
 sys.modules.setdefault("distr.core.workflow.service", MagicMock())
 sys.modules.setdefault("distr.core.workflow.scheduler", MagicMock())
 sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())
@@ -43,10 +43,10 @@ sys.modules.setdefault("distr.gui.web", MagicMock())
 
 # agent_bridge must NOT be mocked — we need the real WorkflowAgentBridge
 # to verify report delivery.  Remove any stale mock.
-sys.modules.pop("distr.core.step_runner.agent_bridge", None)
+sys.modules.pop("distr.core.workflow_engine.agent_bridge", None)
 
 from distr.app.workflow import WorkflowOrchestrationMixin  # noqa: E402
-from distr.core.step_runner.agent_bridge import (  # noqa: E402
+from distr.core.workflow_engine.agent_bridge import (  # noqa: E402
     WorkflowAgentBridge,
     _agent_report_queue,
 )

@@ -422,15 +422,6 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to load Ticket Board routes: %s", e, exc_info=True)
 
-    # Legacy: redirect old step-runner URLs to workflows
-    @app.get("/step-runner/", response_class=HTMLResponse)
-    async def step_runner_redirect_to_workflows():
-        return RedirectResponse(url="/workflows/", status_code=302)
-
-    @app.get("/step-runner", response_class=HTMLResponse)
-    async def step_runner_redirect():
-        return RedirectResponse(url="/workflows/", status_code=302)
-
     @app.get("/docs/", response_class=HTMLResponse)
     async def docs_page(request: Request):
         return page_templates.TemplateResponse(request, "docs/docs.html", _template_context(request, "/docs"))

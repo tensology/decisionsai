@@ -78,12 +78,12 @@ def _patch_db(mock_get_session, db_session, db_step):
 class TestValidationBeforeExecution:
     """Verify that validation is called before step execution and failures are handled."""
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_invalid_run_command_dispatched_to_step_dispatcher(self, mock_get_session, mock_assemble):
         """A run_command step with empty command is dispatched to StepDispatcher
         which handles validation internally."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="run_command", config={})
         mock_db = MagicMock()
@@ -110,12 +110,12 @@ class TestValidationBeforeExecution:
             # Should start a thread for StepDispatcher
             mock_thread.assert_called_once()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_invalid_http_request_dispatched_to_step_dispatcher(self, mock_get_session, mock_assemble):
         """An http_request step with empty URL is dispatched to StepDispatcher
         which handles validation internally."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=20, step_type="http_request", config={"url": ""})
         mock_db = MagicMock()
@@ -141,12 +141,12 @@ class TestValidationBeforeExecution:
             mixin._send_workflow_instruction(orch, 0)
             mock_thread.assert_called_once()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="prompt")
     @patch("distr.core.db.get_session")
     def test_valid_run_command_proceeds(self, mock_get_session, mock_build, mock_assemble):
         """A run_command step with valid config proceeds to StepDispatcher execution."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="run_command", config={"command": "echo hello"})
         mock_db = MagicMock()
@@ -176,12 +176,12 @@ class TestValidationBeforeExecution:
         fail_calls = [c for c in mixin._set_workflow_step_status.call_args_list if c[0][1] == "failed"]
         assert len(fail_calls) == 0
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.workflow.service.build_step_context_prompt", return_value="prompt")
     @patch("distr.core.db.get_session")
     def test_agent_instruction_skips_validation(self, mock_get_session, mock_build, mock_assemble):
         """Agent instruction steps are not validated (they go to WorkflowAgent)."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
         from unittest.mock import AsyncMock
         import asyncio
 
@@ -219,11 +219,11 @@ class TestValidationBeforeExecution:
         # Should NOT call _execute_step_directly
         assert not hasattr(mixin, '_execute_step_directly') or True  # just ensure no crash
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_validation_failure_handled_by_dispatcher(self, mock_get_session, mock_assemble):
         """When a direct step type has invalid config, StepDispatcher handles the failure."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="run_command", config={})
         mock_db = MagicMock()
@@ -267,11 +267,11 @@ class TestValidationBeforeExecution:
 class TestTypeSpecificRouting:
     """Verify that non-agent step types are routed to StepDispatcher."""
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_run_command_routes_to_dispatcher(self, mock_get_session, mock_assemble):
         """run_command steps are routed to StepDispatcher.run_in_workflow()."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="run_command", config={"command": "echo hi"})
         mock_db = MagicMock()
@@ -300,11 +300,11 @@ class TestTypeSpecificRouting:
             # Signal should NOT be emitted (not going to agent)
             orch["signal_send_text_input"].emit.assert_not_called()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_http_request_routes_to_dispatcher(self, mock_get_session, mock_assemble):
         """http_request steps are routed to StepDispatcher.run_in_workflow()."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="http_request", config={"url": "https://example.com"})
         mock_db = MagicMock()
@@ -329,11 +329,11 @@ class TestTypeSpecificRouting:
             mixin._send_workflow_instruction(orch, 0)
             mock_thread.assert_called_once()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_execute_code_routes_to_dispatcher(self, mock_get_session, mock_assemble):
         """execute_code steps are routed to StepDispatcher.run_in_workflow()."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="execute_code", config={"code": "print('hi')"})
         mock_db = MagicMock()
@@ -358,11 +358,11 @@ class TestTypeSpecificRouting:
             mixin._send_workflow_instruction(orch, 0)
             mock_thread.assert_called_once()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_playwright_routes_to_dispatcher(self, mock_get_session, mock_assemble):
         """playwright steps are routed to StepDispatcher.run_in_workflow()."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="playwright", config={"code": "print('pw')"})
         mock_db = MagicMock()
@@ -387,11 +387,11 @@ class TestTypeSpecificRouting:
             mixin._send_workflow_instruction(orch, 0)
             mock_thread.assert_called_once()
 
-    @patch("distr.core.step_runner.context_assembly.assemble_step_context")
+    @patch("distr.core.workflow_engine.context_assembly.assemble_step_context")
     @patch("distr.core.db.get_session")
     def test_play_recording_routes_to_dispatcher(self, mock_get_session, mock_assemble):
         """play_recording steps are routed to StepDispatcher.run_in_workflow()."""
-        from distr.core.step_runner.context_assembly import StepInputContext
+        from distr.core.workflow_engine.context_assembly import StepInputContext
 
         db_step = _make_db_step(step_id=10, step_type="play_recording", config={"recording_name": "my_rec"})
         mock_db = MagicMock()

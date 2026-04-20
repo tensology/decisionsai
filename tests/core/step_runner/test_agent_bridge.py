@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from distr.core.step_runner.agent_bridge import (
+from distr.core.workflow_engine.agent_bridge import (
     WorkflowAgentBridge,
     _agent_report_queue,
 )
@@ -213,7 +213,7 @@ class TestFinishOrchestrationBridgeIntegration:
         """If the bridge itself raises, _finish_workflow_orchestration still completes."""
         mixin, workflow_id = self._make_mixin()
         with patch("distr.app.workflow.WorkflowOrchestrationMixin._finish_workflow_run"), \
-             patch("distr.core.step_runner.agent_bridge.WorkflowAgentBridge.on_workflow_completed",
+             patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge.on_workflow_completed",
                    side_effect=RuntimeError("bridge exploded")):
             # Should not raise
             mixin._finish_workflow_orchestration(workflow_id=workflow_id, success=True)

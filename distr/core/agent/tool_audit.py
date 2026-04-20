@@ -1,8 +1,8 @@
 """
 Tool execution audit logging.
 
-Records every tool execution as a step in the Step Runner audit session for the current chat.
-This provides a visible audit log in Settings > Step Runner.
+Records every tool execution as a step in the workflow audit session for the current chat.
+This provides a visible audit log in Settings > Workflows.
 """
 
 import logging
@@ -22,8 +22,8 @@ def record_tool_execution(
     routing_path: Optional[str] = None,
     routing_hint: Optional[str] = None,
 ) -> None:
-    """Record a tool execution to the Step Runner audit log for the chat.
-    If event_queue is provided, puts ('step_runner_updated', {}) so main app can refresh UI."""
+    """Record a tool execution to the workflow audit log for the chat.
+    If event_queue is provided, puts an update event so the app can refresh the UI."""
     if not chat_id:
         return
     try:

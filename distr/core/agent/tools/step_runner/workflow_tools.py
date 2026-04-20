@@ -21,9 +21,9 @@ class ListWorkflowsInput(BaseModel):
 class ListWorkflowsTool(BaseTool):
     name: str = "list_workflows"
     description: str = (
-        "List all workflows from the Step Runner / Workflow Builder. "
+        "List all workflows from the workflow automation engine. "
         "Use when user asks 'what workflows do I have', 'show my workflows', "
-        "'list workflows', 'what's in the step runner', 'show step runner workflows'. "
+        "'list workflows', 'what workflows are available'. "
         "Returns workflow definitions (templates with steps), NOT run history."
     )
     args_schema: Type[BaseModel] = ListWorkflowsInput
@@ -389,7 +389,7 @@ class AddWorkflowStepInput(BaseModel):
 class AddWorkflowStepTool(BaseTool):
     name: str = "add_workflow_step"
     description: str = (
-        "Add a step to a workflow in the Step Runner. Supports all step types: "
+        "Add a step to a workflow. Supports all step types: "
         "agent_instruction (LLM does a task), execute_code (run Python), "
         "playwright (browser automation with screenshots), play_recording (replay recorded actions), "
         "set_variable. For playwright steps, write the code with screenshots baked in — "
@@ -508,7 +508,7 @@ class GenerateWorkflowTool(BaseTool):
         try:
             import json
             import re
-            from distr.core.step_runner.code_generator import CodeGeneratorService
+            from distr.core.workflow_engine.code_generator import CodeGeneratorService
             from distr.core.workflow.service import import_workflow, get_workflow
 
             prompt = (

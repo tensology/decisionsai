@@ -20,8 +20,6 @@ from typing import Dict, Any
 
 # Import database utilities
 from distr.core.db import get_session, Settings
-from distr.core.utils import load_settings_from_db as core_load_settings
-from distr.core.utils import save_settings_to_db as core_save_settings
 
 # Default settings
 DEFAULT_SETTINGS = {
@@ -88,6 +86,7 @@ def load_settings_from_db() -> Dict[str, Any]:
         Dict[str, Any]: Loaded settings dictionary
     """
     try:
+        from distr.core.utils import load_settings_from_db as core_load_settings
         # Use the core utility to load settings
         settings = core_load_settings()
         
@@ -127,6 +126,7 @@ def save_settings_to_db(settings: Dict[str, Any]) -> None:
         settings (Dict[str, Any]): Settings to save
     """
     try:
+        from distr.core.utils import save_settings_to_db as core_save_settings
         # Use the core utility to save settings
         core_save_settings(settings)
         logging.debug("Settings saved successfully to database")

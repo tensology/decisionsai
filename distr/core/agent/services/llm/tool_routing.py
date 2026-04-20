@@ -44,7 +44,7 @@ def _build_tool_triggers() -> frozenset:
         'new chat', 'clear chat', 'save as audio',
         'convert to pdf', 'convert to docx', 'make a pdf', 'export as pdf',
         'git commit', 'git push', 'git pull', 'git status',
-        'step runner', 'run steps', 'automate',
+        'workflow', 'run steps', 'automate',
         'send to telegram', 'execute code', 'run code',
         'start recording', 'stop recording', 'run action',
     }

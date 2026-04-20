@@ -285,7 +285,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                 ],
             },
-            # ── Workflows (unified, replaces Step Runner) ─────────────
+            # ── Workflows (unified automation engine) ─────────────
             {
                 "section": "Workflows",
                 "endpoints": [
@@ -328,24 +328,6 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "response_example": '{"id": 3, "name": "Deploy the app to production", "status": "draft", "steps": [...]}',
                     },
                     {
-                        "method": "POST",
-                        "path": "/api/workflows/scheduled",
-                        "summary": "Create a scheduled workflow",
-                        "description": "Creates a recurring workflow (e.g. daily calendar check). Schedule can be a preset (daily, hourly, weekly) or cron expression.",
-                        "curl": f"""curl -s -X POST {base}/api/workflows/scheduled \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"instruction": "Check my calendar", "schedule": "daily", "schedule_time": "09:00"}}'""",
-                        "body": {
-                            "instruction": {"type": "string", "required": True, "description": "What to do"},
-                            "schedule": {"type": "string", "required": True, "description": "daily, hourly, weekly, or cron expression"},
-                            "chat_id": {"type": "int", "required": False, "description": "Optional chat ID"},
-                            "schedule_time": {"type": "string", "required": False, "description": "Time for daily/weekly (e.g. 08:00)"},
-                            "schedule_days": {"type": "string", "required": False, "description": "For weekly: comma-separated days (1=Mon, 5=Fri)"},
-                            "timezone": {"type": "string", "required": False, "description": "Timezone (e.g. America/New_York)"},
-                        },
-                        "response_example": '{"id": 4, "name": "Check my calendar", "workflow_type": "scheduled", "schedule_preset": "daily"}',
-                    },
-                    {
                         "method": "DELETE",
                         "path": "/api/workflows/{workflow_id}",
                         "summary": "Delete a workflow",
@@ -369,37 +351,43 @@ def create_routes(base_path: str = "") -> APIRouter:
                     },
                     {
                         "method": "POST",
-                        "path": "/api/workflows/{workflow_id}/cancel",
-                        "summary": "Cancel a running workflow",
-                        "description": "Cancels the currently running workflow orchestration.",
-                        "curl": f'curl -s -X POST {base}/api/workflows/1/cancel',
-                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
-                        "body": None,
-                        "response_example": '{"success": true}',
-                    },
-                    {
-                        "method": "POST",
-                        "path": "/api/workflows/{workflow_id}/skip-step",
-                        "summary": "Skip current step",
-                        "description": "Skips the currently running step and advances to the next one.",
-                        "curl": f'curl -s -X POST {base}/api/workflows/1/skip-step',
-                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
-                        "body": None,
-                        "response_example": '{"success": true}',
-                    },
-                    {
-                        "method": "POST",
-                        "path": "/api/workflows/runs/{run_id}/continue",
+                        "path": "/api/workflows/{workflow_id}/runs/{run_id}/continue",
                         "summary": "Continue a waiting step",
                         "description": "Resumes a step that is in 'waiting' status. Optionally pass 'input' to provide additional context.",
-                        "curl": f"""curl -s -X POST {base}/api/workflows/runs/1/continue \\
+                        "curl": f"""curl -s -X POST {base}/api/workflows/1/runs/1/continue \\
   -H 'Content-Type: application/json' \\
   -d '{{"input": "The deployment finished successfully"}}'""",
-                        "params": [{"name": "run_id", "type": "int", "required": True, "description": "Run ID"}],
+                        "params": [
+                            {"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"},
+                            {"name": "run_id", "type": "int", "required": True, "description": "Run ID"},
+                        ],
                         "body": {
                             "input": {"type": "string", "required": False, "description": "Optional context/data to resume with"},
                         },
                         "response_example": '{"success": true, "message": "Continue signal sent"}',
+                    },
+                    {
+                        "method": "GET",
+                        "path": "/api/workflows/{workflow_id}/active-run",
+                        "summary": "Get active run for a workflow",
+                        "description": "Returns the active run for a workflow if one is running or waiting.",
+                        "curl": f'curl -s {base}/api/workflows/1/active-run',
+                        "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
+                        "body": None,
+                        "response_example": '{"id": 17, "current_step_id": 4, "started_at": "2026-04-20T10:00:00"}',
+                    },
+                    {
+                        "method": "GET",
+                        "path": "/api/workflows/active-runs",
+                        "summary": "List active runs across workflows",
+                        "description": "Returns active workflow runs enriched with board, ticket, phase, step, and elapsed metadata.",
+                        "curl": f'curl -s "{base}/api/workflows/active-runs?limit=50"',
+                        "params": [
+                            {"name": "limit", "type": "int", "required": False, "description": "Max results (default 50)"},
+                            {"name": "workflow_id", "type": "int", "required": False, "description": "Filter to a single workflow"},
+                        ],
+                        "body": None,
+                        "response_example": '[{"id": 99, "workflow_id": 1, "workflow_name": "Development", "status": "running", "phase": "execution"}]',
                     },
                     {
                         "method": "POST",
@@ -455,37 +443,6 @@ def create_routes(base_path: str = "") -> APIRouter:
                         ],
                         "body": None,
                         "response_example": '[{"id": 1, "workflow_id": 1, "status": "completed", "started_at": "...", "completed_at": "..."}]',
-                    },
-                    {
-                        "method": "POST",
-                        "path": "/api/workflows/execute",
-                        "summary": "Execute a single step",
-                        "description": "Execute a single step via the agent. The step is sent to the agent for processing.",
-                        "curl": f"""curl -s -X POST {base}/api/workflows/execute \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"step_id": 1}}'""",
-                        "body": {
-                            "step_id": {"type": "int", "required": True, "description": "Step ID to execute"},
-                        },
-                        "response_example": '{"success": true, "result": "Step sent to agent."}',
-                    },
-                    {
-                        "method": "PATCH",
-                        "path": "/api/workflows/steps/{step_id}",
-                        "summary": "Update a step",
-                        "description": "Update a step's name, instruction, status, result, or tool_used.",
-                        "curl": f"""curl -s -X PATCH {base}/api/workflows/steps/1 \\
-  -H 'Content-Type: application/json' \\
-  -d '{{"name": "Updated Step", "instruction": "New instruction"}}'""",
-                        "params": [{"name": "step_id", "type": "int", "required": True, "description": "Step ID"}],
-                        "body": {
-                            "name": {"type": "string", "required": False, "description": "New name"},
-                            "instruction": {"type": "string", "required": False, "description": "New instruction"},
-                            "status": {"type": "string", "required": False, "description": "Status: pending, approved, running, waiting, completed, failed, skipped"},
-                            "result": {"type": "string", "required": False, "description": "Step result text"},
-                            "tool_used": {"type": "string", "required": False, "description": "Tool name used"},
-                        },
-                        "response_example": '{"success": true}',
                     },
                     {
                         "method": "GET",
@@ -783,26 +740,6 @@ def create_routes(base_path: str = "") -> APIRouter:
                     {"method": "GET", "path": "/api/skills", "summary": "List all skills", "description": "Returns the skills registry.", "curl": f'curl -s {base}/api/skills', "body": None, "response_example": '[{"id": "brainstorming", "name": "brainstorming", "description": "..."}]'},
                     {"method": "GET", "path": "/api/skills/{{skill_id}}", "summary": "Get skill detail", "description": "Returns the full SKILL.md content for a skill.", "curl": f'curl -s {base}/api/skills/brainstorming', "params": [{"name": "skill_id", "type": "str", "required": True, "description": "Skill ID"}], "body": None, "response_example": '{"id": "brainstorming", "content": "..."}'},
                     {"method": "POST", "path": "/api/skills/{{skill_id}}/push", "summary": "Push skill to project", "description": "Push a skill to a project CLI directory (.pi/skills/, .claude/commands/, etc).", "curl": f"curl -s -X POST {base}/api/skills/brainstorming/push -H 'Content-Type: application/json' -d '{{\"target\": \"pi\", \"project_path\": \".\"}}'", "body": {"project_path": {"type": "str", "required": False, "description": "Path to project"}, "target": {"type": "str", "required": False, "description": "CLI target: pi, claude, cursor, gemini, codex"}}, "response_example": '{"success": true, "message": "Pushed brainstorming to pi!"}'},
-                ],
-            },
-            # ── Workflows ──────────────────────────────────────
-            {
-                "section": "Workflows",
-                "endpoints": [
-                    {"method": "GET", "path": "/api/workflows", "summary": "List all workflows", "description": "Returns all workflows with their steps and metadata.", "curl": f'curl -s {base}/api/workflows', "body": None, "response_example": '[{"id": 1, "name": "Deploy Pipeline", "steps": [...]}]'},
-                    {"method": "POST", "path": "/api/workflows", "summary": "Create a workflow", "description": "Creates a new empty workflow.", "curl": f"curl -s -X POST {base}/api/workflows -H 'Content-Type: application/json' -d '{{\"name\": \"My Workflow\"}}'", "body": {"name": {"type": "string", "required": True, "description": "Workflow name"}, "description": {"type": "string", "required": False, "description": "Description"}}, "response_example": '{"id": 3, "name": "My Workflow"}'},
-                    {"method": "GET", "path": "/api/workflows/{workflow_id}", "summary": "Get workflow details", "description": "Returns a workflow with all its steps, variables, and run history.", "curl": f'curl -s {base}/api/workflows/1', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": None, "response_example": '{"id": 1, "name": "Deploy Pipeline", "steps": [...], "variables": [...]}'},
-                    {"method": "PATCH", "path": "/api/workflows/{workflow_id}", "summary": "Update a workflow", "description": "Update workflow name or description.", "curl": f"curl -s -X PATCH {base}/api/workflows/1 -H 'Content-Type: application/json' -d '{{\"name\": \"Renamed\"}}'", "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": {"name": {"type": "string", "required": False, "description": "New name"}}, "response_example": '{"success": true}'},
-                    {"method": "DELETE", "path": "/api/workflows/{workflow_id}", "summary": "Delete a workflow", "description": "Permanently deletes a workflow and all its steps.", "curl": f'curl -s -X DELETE {base}/api/workflows/1', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": None, "response_example": '{"success": true}'},
-                    {"method": "POST", "path": "/api/workflows/{workflow_id}/run", "summary": "Run a workflow", "description": "Starts executing all steps in the workflow sequentially.", "curl": f'curl -s -X POST {base}/api/workflows/1/run', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": None, "response_example": '{"success": true, "run_id": "abc123"}'},
-                    {"method": "POST", "path": "/api/workflows/{workflow_id}/cancel-run/{run_id}", "summary": "Cancel a workflow run", "description": "Cancels a running workflow execution.", "curl": f'curl -s -X POST {base}/api/workflows/1/cancel-run/abc123', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}, {"name": "run_id", "type": "string", "required": True, "description": "Run ID"}], "body": None, "response_example": '{"success": true}'},
-                    {"method": "POST", "path": "/api/workflows/{workflow_id}/duplicate", "summary": "Duplicate a workflow", "description": "Creates a copy of the workflow with all its steps.", "curl": f'curl -s -X POST {base}/api/workflows/1/duplicate', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": None, "response_example": '{"id": 4, "name": "Deploy Pipeline (copy)"}'},
-                    {"method": "POST", "path": "/api/workflows/generate", "summary": "Generate workflow from instruction", "description": "Uses the LLM to generate a workflow with steps from a natural language instruction.", "curl": f"curl -s -X POST {base}/api/workflows/generate -H 'Content-Type: application/json' -d '{{\"instruction\": \"Set up CI/CD\"}}'", "body": {"instruction": {"type": "string", "required": True, "description": "Natural language instruction"}}, "response_example": '{"id": 5, "name": "CI/CD Pipeline", "steps": [...]}'},
-                    {"method": "GET", "path": "/api/workflows/{workflow_id}/export", "summary": "Export workflow as JSON", "description": "Returns the workflow as a portable JSON file.", "curl": f'curl -s {base}/api/workflows/1/export', "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": None, "response_example": '{"name": "Deploy Pipeline", "steps": [...]}'},
-                    {"method": "POST", "path": "/api/workflows/import", "summary": "Import workflow from JSON", "description": "Creates a new workflow from an exported JSON file.", "curl": f'curl -s -X POST {base}/api/workflows/import -F "file=@workflow.json"', "body": None, "response_example": '{"id": 6, "name": "Imported Workflow"}'},
-                    {"method": "GET", "path": "/api/workflows/presets", "summary": "List workflow presets", "description": "Returns available workflow preset templates.", "curl": f'curl -s {base}/api/workflows/presets', "body": None, "response_example": '[{"filename": "daily-standup.json", "name": "Daily Standup"}]'},
-                    {"method": "POST", "path": "/api/workflows/{workflow_id}/steps", "summary": "Add a step", "description": "Creates a new step in the workflow.", "curl": f"curl -s -X POST {base}/api/workflows/1/steps -H 'Content-Type: application/json' -d '{{\"title\": \"Run tests\", \"instruction\": \"Execute test suite\"}}'", "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": {"title": {"type": "string", "required": True, "description": "Step title"}, "instruction": {"type": "string", "required": True, "description": "Step instruction"}}, "response_example": '{"id": 10, "title": "Run tests", "status": "pending"}'},
-                    {"method": "POST", "path": "/api/workflows/{workflow_id}/variables", "summary": "Add a variable", "description": "Creates a workflow variable that can be referenced in step instructions.", "curl": f"curl -s -X POST {base}/api/workflows/1/variables -H 'Content-Type: application/json' -d '{{\"name\": \"DEPLOY_ENV\", \"value\": \"production\"}}'", "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}], "body": {"name": {"type": "string", "required": True, "description": "Variable name"}, "value": {"type": "string", "required": True, "description": "Variable value"}}, "response_example": '{"id": 1, "name": "DEPLOY_ENV", "value": "production"}'},
                 ],
             },
             # ── Settings ───────────────────────────────────────

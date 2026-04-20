@@ -82,8 +82,8 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     those take precedence over global settings.
 
     Fallback order:
-      provider: step_runner_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
-      model:    step_runner_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
+      provider: workflow_llm_provider -> conversational_llm_provider -> agent_provider -> llm_provider -> "Ollama"
+      model:    workflow_llm_model   -> conversational_llm_model   -> agent_model   -> llm_model   -> ""
     """
     from distr.core.llm_override import get_llm_override
 
@@ -92,11 +92,15 @@ def resolve_settings_keys(settings: Dict[str, Any]) -> Tuple[str, str]:
     if override and override.orchestrator_provider:
         return normalize_provider(override.orchestrator_provider), (override.orchestrator_model or "")
 
-    # Step Runner dedicated LLM (if configured)
-    sr_provider = (settings.get("step_runner_llm_provider") or "").strip()
-    sr_model = (settings.get("step_runner_llm_model") or "").strip()
-    if sr_provider:
-        return normalize_provider(sr_provider), sr_model
+    # Workflow dedicated LLM
+    workflow_provider = (
+        (settings.get("workflow_llm_provider") or "").strip()
+    )
+    workflow_model = (
+        (settings.get("workflow_llm_model") or "").strip()
+    )
+    if workflow_provider:
+        return normalize_provider(workflow_provider), workflow_model
 
     provider = (
         (settings.get("conversational_llm_provider") or "").strip()

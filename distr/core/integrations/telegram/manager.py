@@ -406,7 +406,7 @@ class TelegramWebSocketManager(
         # Qt6 QWebSocket on macOS may reject valid Let's Encrypt E8 intermediates
         # that the system trust store hasn't learned yet.  The sslErrors signal
         # arrives too late — the handshake is already aborted.  Disabling peer
-        # verify lets TLS complete; HMAC-signed message frames provide auth.
+        # verify lets TLS complete; auth is handled at websocket/session layer.
         try:
             from PyQt6.QtNetwork import QSslConfiguration
 
@@ -485,7 +485,7 @@ class TelegramWebSocketManager(
                         "No destination (chat_id/user_id) for shutdown message"
                     )
 
-                # Send message directly via WebSocket (with HMAC envelope)
+                # Send message directly via WebSocket
                 if self.socket and self.socket.isValid():
                     self._send_websocket_message(msg)
                     logger.info("Shutdown message sent to Telegram")
@@ -746,7 +746,7 @@ class TelegramWebSocketManager(
         # Allow the connection despite SSL errors — our server uses a valid
         # Let's Encrypt cert, but Qt's SSL backend on macOS may not yet trust
         # new intermediates (E8).  Ignoring is safe here because we verify
-        # the host and use HMAC-signed messages.
+        # the host and rely on websocket/session auth.
         self.socket.ignoreSslErrors()
 
     # ── Sleep prevention ──
@@ -989,34 +989,16 @@ class TelegramWebSocketManager(
         })
 
     def _send_websocket_message(self, message: dict):
-        """Send a message via WebSocket (thread-safe), wrapped in HMAC envelope."""
+        """Send a message via WebSocket (thread-safe)."""
         if self.socket and self.is_connected():
-            import hashlib
-            import hmac as _hmac
-            import secrets
             import threading
 
-            # Wrap in signed envelope if shared secret is available
-            hmac_secret = os.environ.get("DECISIONSAI_HMAC_SECRET", "")
-            body_str = json.dumps(message, separators=(",", ":"), sort_keys=True)
-            nonce = secrets.token_hex(16)
-            ts = str(time.time())
-
-            if hmac_secret:
-                sig = _hmac.new(
-                    hmac_secret.encode(),
-                    f"{body_str}|{nonce}|{ts}".encode(),
-                    hashlib.sha256,
-                ).hexdigest()
-            else:
-                sig = ""
-
-            envelope = json.dumps({"sig": sig, "nonce": nonce, "ts": ts, "body": message})
+            payload = json.dumps(message)
 
             if threading.current_thread() is threading.main_thread():
-                self.socket.sendTextMessage(envelope)
+                self.socket.sendTextMessage(payload)
             else:
-                self._send_ws_text_signal.emit(envelope)
+                self._send_ws_text_signal.emit(payload)
             return True
         return False
 
