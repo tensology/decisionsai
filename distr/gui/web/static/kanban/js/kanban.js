@@ -2700,6 +2700,16 @@ function closeCreateExtTicketModal() {
             tabMessages.classList.remove("active");
             // Close thread view if open — restore board view
             closeWhatsAppThread();
+            // Restore board view visibility (was hidden when switching to messages)
+            if (!currentBoard) {
+                document.getElementById("kb-loading").classList.remove("hidden");
+                document.getElementById("kb-board-view").classList.add("hidden");
+                document.getElementById("kb-empty").classList.remove("hidden");
+            } else {
+                document.getElementById("kb-loading").classList.add("hidden");
+                document.getElementById("kb-board-view").classList.remove("hidden");
+                document.getElementById("kb-empty").classList.add("hidden");
+            }
         }
     }
 
@@ -4488,7 +4498,9 @@ function closeCreateExtTicketModal() {
 
         // Apply sidebar tab from URL before any initial board rendering to avoid tab flicker.
         var initialSidebarTab = getSidebarTabFromUrl();
-        if (initialSidebarTab === "messages") {
+        // Don't auto-switch to messages on init — WhatsApp may not be available,
+        // and hiding the board view causes a blank screen. Only auto-switch if WA is already known connected.
+        if (initialSidebarTab === "messages" && waConnected) {
             switchSidebarTab("messages");
         }
 
