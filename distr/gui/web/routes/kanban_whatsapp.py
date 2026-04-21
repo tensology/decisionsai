@@ -6,8 +6,9 @@ import base64
 import json
 import logging
 import os
+from urllib.parse import quote
 
-from fastapi import HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response, StreamingResponse
 from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
@@ -138,11 +139,17 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 for method, url, payload in candidates:
                     payload_str = json.dumps(payload, separators=(",", ":"), sort_keys=True) if payload else ""
                     headers = relay_auth_headers(payload_str)
+                    params = {}
+                    if not headers:
+                        _h, _p = await _get_media_auth(base_url)
+                        if _h:
+                            headers = _h
+                        params = _p or {}
                     try:
                         if method == "post":
-                            resp = await client.post(url, json=payload, headers=headers)
+                            resp = await client.post(url, json=payload, headers=headers, params=params)
                         else:
-                            resp = await client.delete(url, headers=headers)
+                            resp = await client.delete(url, headers=headers, params=params)
                         entry = {"method": method.upper(), "url": url, "status": resp.status_code}
                         attempted.append(entry)
                         if 200 <= resp.status_code < 300:
@@ -303,6 +310,23 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 s.delete(msg)
             return JSONResponse({"success": True, "deleted": count})
 
+    @router.delete("/kanban/whatsapp/chats")
+    async def delete_all_whatsapp_chats():
+        """Delete all stored WhatsApp messages across all chats."""
+        with get_session() as s:
+            msgs = s.query(WhatsAppMessage).all()
+            chat_ids = {m.jid_phone for m in msgs if m.jid_phone}
+            for msg in msgs:
+                if msg.media_local_path and os.path.exists(msg.media_local_path):
+                    try:
+                        os.remove(msg.media_local_path)
+                    except Exception:
+                        pass
+            deleted = len(msgs)
+            for msg in msgs:
+                s.delete(msg)
+            return JSONResponse({"success": True, "deleted": deleted, "deleted_chats": len(chat_ids)})
+
     @router.post("/kanban/whatsapp/messages/mark-snapshot-group")
     async def mark_whatsapp_messages_snapshot_group(payload: dict):
         """Mark WhatsApp messages with a snapshot group ID."""
@@ -369,13 +393,22 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             return JSONResponse({"chats": [], "total": 0, "error": str(e)})
 
     @router.get("/kanban/whatsapp/relay-media/{message_id}")
-    async def relay_whatsapp_media(message_id: int, format: str = ""):
+    async def relay_whatsapp_media(
+        message_id: int,
+        format: str = "",
+        wa_key: str = Query("", description="Optional WhatsApp message key if the DB column is empty/stale"),
+    ):
         """Proxy media from relay server and cache locally.
 
         Query params:
           format: "m4a" — return M4A transcode for Safari/iOS audio playback
+          wa_key: optional WhatsApp message_id string (same as Baileys key id) for relay fetch
         """
         import requests as req_lib
+
+        relay_base = "https://www.decisionsai.net/api/whatsapp"
+        if os.environ.get("DEBUG", "").upper() == "TRUE":
+            relay_base = "http://localhost:8090/api/whatsapp"
 
         def _resolve_local_media_path(raw_path: str) -> str:
             media_dir = os.path.realpath(os.path.join(DB_DIR, "whatsapp_media"))
@@ -384,16 +417,46 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 return ""
             return os.path.realpath(os.path.join(media_dir, basename))
 
+        def _hints_from_raw(msg_row: WhatsAppMessage) -> tuple[str, str]:
+            """Return (whatsapp_message_id, relay_media_path) from row + raw_data JSON."""
+            wa = (msg_row.message_id or "").strip()
+            path_hint = ""
+            raw = (msg_row.raw_data or "").strip()
+            if not raw:
+                return wa, path_hint
+            try:
+                o = json.loads(raw)
+            except Exception:
+                return wa, path_hint
+            if not wa:
+                wa = str(o.get("message_id") or "").strip()
+            if not wa:
+                key = o.get("key")
+                if isinstance(key, dict):
+                    wa = str(key.get("id") or "").strip()
+            for k in ("media_local_path",):
+                v = o.get(k)
+                if isinstance(v, str) and v.strip():
+                    path_hint = v.strip()
+                    break
+            if not path_hint:
+                media = o.get("media")
+                if isinstance(media, dict):
+                    p = media.get("local_path") or media.get("path")
+                    if isinstance(p, str) and p.strip():
+                        path_hint = p.strip()
+            return wa, path_hint
+
         with get_session() as s:
             msg = s.query(WhatsAppMessage).get(message_id)
             if not msg:
-                # Bug 4 fix: Try looking up by WhatsApp message_id string
-                # (when messages come from relay, the ID is the relay's row ID, not local)
-                msg = s.query(WhatsAppMessage).filter(WhatsAppMessage.id == message_id).first()
-            msg_media_local_path = msg.media_local_path if msg else None
-            msg_media_mime_type = msg.media_mime_type if msg else None
-            msg_message_id = msg.message_id if msg else None
-            msg_media_type = msg.media_type if msg else None
+                raise HTTPException(404, "WhatsApp message not found")
+            msg_media_local_path = msg.media_local_path
+            msg_media_mime_type = msg.media_mime_type
+            msg_message_id = (msg.message_id or "").strip()
+            msg_media_type = msg.media_type
+            raw_wa_id, relay_path_hint = _hints_from_raw(msg)
+            effective_wa_id = (wa_key or "").strip() or msg_message_id or raw_wa_id
 
         # ── M4A format request (Safari/iOS) ──────────────────────────────
         if format == "m4a" and msg_media_local_path:
@@ -403,11 +466,11 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             if os.path.exists(m4a_path):
                 return FileResponse(m4a_path, media_type="audio/mp4")
             # Try relay server for M4A
-            if msg_message_id:
+            if effective_wa_id:
                 try:
-                    media_headers, media_params = await _get_media_auth("https://www.decisionsai.net/api/whatsapp")
+                    media_headers, media_params = await _get_media_auth(relay_base)
                     media_resp = req_lib.get(
-                        f"https://www.decisionsai.net/api/whatsapp/media/{msg_message_id}/m4a",
+                        f"{relay_base}/media/{quote(str(effective_wa_id), safe='')}/m4a",
                         headers=media_headers,
                         params=media_params,
                         timeout=10,
@@ -430,93 +493,121 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 return FileResponse(full_path, media_type=mime)
 
         # ── Fallback: try relay server ────────────────────────────────────
-        # Use msg_message_id (WhatsApp message ID string) which works even
-        # when the local DB row ID doesn't match the relay's row ID.
-        relay_wa_id = msg_message_id or str(message_id)
-        if relay_wa_id:
-            try:
-                media_headers, media_params = await _get_media_auth("https://www.decisionsai.net/api/whatsapp")
-                # Try relay with the WhatsApp message_id string
-                media_resp = req_lib.get(
-                    f"https://www.decisionsai.net/api/whatsapp/media/{relay_wa_id}",
-                    headers=media_headers,
-                    params=media_params,
-                    timeout=10,
-                )
-                if media_resp.status_code == 200:
-                    content_type = media_resp.headers.get("Content-Type", msg_media_mime_type or "application/octet-stream")
-                    media_bytes = media_resp.content
+        # Never use local numeric PK as relay key — relay indexes by WhatsApp message_id string.
+        async def _fetch_relay_media() -> tuple[bytes, str, str]:
+            media_headers, media_params = await _get_media_auth(relay_base)
+            if not media_headers and not media_params:
+                logger.warning("relay-media: no relay auth (internal token or ws_token); inbound fetch may 401")
+
+            candidates: list[tuple[str, str]] = []
+            if effective_wa_id:
+                candidates.append((f"{relay_base}/media/{quote(str(effective_wa_id), safe='')}", "by_wa_id"))
+            if relay_path_hint:
+                candidates.append((f"{relay_base}/media", "by_path"))
+            seen_urls: set[str] = set()
+            for url, mode in candidates:
+                if mode == "by_path":
+                    params = dict(media_params or {})
+                    params["path"] = relay_path_hint.lstrip("/")
+                    key = f"path:{params.get('path')}"
+                else:
+                    params = media_params or {}
+                    key = url
+                if key in seen_urls:
+                    continue
+                seen_urls.add(key)
+                try:
+                    media_resp = req_lib.get(url, headers=media_headers, params=params, timeout=15)
+                    if media_resp.status_code == 200:
+                        ct = media_resp.headers.get("Content-Type", msg_media_mime_type or "application/octet-stream")
+                        return media_resp.content, ct, effective_wa_id or ""
+                    logger.warning(
+                        "relay-media: relay GET %s returned %s (wa_id=%r path_hint=%r)",
+                        url,
+                        media_resp.status_code,
+                        effective_wa_id,
+                        relay_path_hint[:80] if relay_path_hint else "",
+                    )
+                except Exception as ex:
+                    logger.warning("relay-media: relay GET %s failed: %s", url, ex)
+
+            raise HTTPException(404, "Media not available — reconnect WhatsApp to download")
+
+        try:
+            media_bytes, content_type, ack_wa_id = await _fetch_relay_media()
+        except HTTPException:
+            raise
+
+        try:
+            media_dir_path = os.path.join(DB_DIR, "whatsapp_media")
+            os.makedirs(media_dir_path, exist_ok=True)
+            ext_map = {
+                "image/jpeg": ".jpg",
+                "image/png": ".png",
+                "image/webp": ".webp",
+                "audio/ogg": ".ogg",
+                "audio/mpeg": ".mp3",
+                "audio/mp4": ".m4a",
+                "audio/webm": ".webm",
+                "audio/opus": ".opus",
+                "video/mp4": ".mp4",
+                "video/webm": ".webm",
+                "application/pdf": ".pdf",
+            }
+            ext = ext_map.get(content_type.split(";")[0], ".bin")
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            filename = f"whatsapp_{msg_media_type or 'media'}_{ts}{ext}"
+            dest = os.path.join(media_dir_path, filename)
+            with open(dest, "wb") as f:
+                f.write(media_bytes)
+            media_headers, media_params = await _get_media_auth(relay_base)
+            with get_session() as upd_s:
+                db_msg = upd_s.query(WhatsAppMessage).get(message_id)
+                if db_msg:
+                    db_msg.media_local_path = dest
+                    db_msg.media_file_length = len(media_bytes)
+                    if not db_msg.media_filename:
+                        db_msg.media_filename = filename
+                    if not (db_msg.message_id or "").strip() and ack_wa_id:
+                        db_msg.message_id = ack_wa_id
+                    if db_msg.media_type in ("voice", "audio", "ptt"):
+                        try:
+                            from distr.core.audio.voice_cloning import transcribe_audio_file
+
+                            transcription = transcribe_audio_file(dest)
+                            if transcription:
+                                prefix = "[Transcription] "
+                                existing_caption = db_msg.caption or ""
+                                if prefix not in existing_caption:
+                                    db_msg.caption = f"{prefix}{transcription}\n\n{existing_caption}".strip()
+                        except Exception as tr_err:
+                            logger.warning(f"Voice transcription failed for relay media {message_id}: {tr_err}")
+                    upd_s.commit()
+            logger.info(f"Cached relay media for msg {message_id}")
+            ack_ok = False
+            if ack_wa_id:
+                for _ in range(3):
                     try:
-                        media_dir_path = os.path.join(DB_DIR, "whatsapp_media")
-                        os.makedirs(media_dir_path, exist_ok=True)
-                        ext_map = {
-                            "image/jpeg": ".jpg",
-                            "image/png": ".png",
-                            "image/webp": ".webp",
-                            "audio/ogg": ".ogg",
-                            "audio/mpeg": ".mp3",
-                            "audio/mp4": ".m4a",
-                            "audio/webm": ".webm",
-                            "audio/opus": ".opus",
-                            "video/mp4": ".mp4",
-                            "video/webm": ".webm",
-                            "application/pdf": ".pdf",
-                        }
-                        ext = ext_map.get(content_type.split(";")[0], ".bin")
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        filename = f"whatsapp_{msg_media_type or 'media'}_{ts}{ext}"
-                        dest = os.path.join(media_dir_path, filename)
-                        with open(dest, "wb") as f:
-                            f.write(media_bytes)
-                        with get_session() as upd_s:
-                            db_msg = upd_s.query(WhatsAppMessage).get(message_id)
-                            if db_msg:
-                                db_msg.media_local_path = dest
-                                db_msg.media_file_length = len(media_bytes)
-                                if not db_msg.media_filename:
-                                    db_msg.media_filename = filename
-                                if db_msg.media_type in ("voice", "audio", "ptt"):
-                                    try:
-                                        from distr.core.audio.voice_cloning import transcribe_audio_file
-
-                                        transcription = transcribe_audio_file(dest)
-                                        if transcription:
-                                            prefix = "[Transcription] "
-                                            existing_caption = db_msg.caption or ""
-                                            if prefix not in existing_caption:
-                                                db_msg.caption = f"{prefix}{transcription}\n\n{existing_caption}".strip()
-                                    except Exception as tr_err:
-                                        logger.warning(f"Voice transcription failed for relay media {message_id}: {tr_err}")
-                                upd_s.commit()
-                        logger.info(f"Cached relay media for msg {message_id}")
-                        # Mark processed on relay — DON'T purge (web UI may need it later)
-                        ack_ok = False
-                        for _ in range(3):
-                            try:
-                                ack_resp = req_lib.post(
-                                    f"https://www.decisionsai.net/api/whatsapp/messages/by-wa-id/{msg_message_id}/processed",
-                                    headers=media_headers,
-                                    params={
-                                        **media_params,
-                                        "purge_media": "false",
-                                        "client_media_local_path": dest,
-                                    },
-                                    timeout=10,
-                                )
-                                if 200 <= int(ack_resp.status_code) < 300:
-                                    ack_ok = True
-                                    break
-                            except Exception:
-                                pass
-                        if not ack_ok:
-                            logger.warning(f"Relay processed/purge ack failed for {msg_message_id} after retries")
-                    except Exception as e:
-                        logger.warning(f"Could not cache relay media: {e}")
-                    return Response(content=media_bytes, media_type=content_type)
-            except Exception:
-                pass
-
-        raise HTTPException(404, "Media not available — reconnect WhatsApp to download")
+                        ack_resp = req_lib.post(
+                            f"{relay_base}/messages/by-wa-id/{ack_wa_id}/processed",
+                            headers=media_headers,
+                            params={
+                                **(media_params or {}),
+                                "purge_media": "false",
+                                "client_media_local_path": dest,
+                            },
+                            timeout=10,
+                        )
+                        if 200 <= int(ack_resp.status_code) < 300:
+                            ack_ok = True
+                            break
+                    except Exception:
+                        pass
+                if not ack_ok:
+                    logger.warning("Relay processed/purge ack failed for %s after retries", ack_wa_id)
+        except Exception as e:
+            logger.warning(f"Could not cache relay media: {e}")
+        return Response(content=media_bytes, media_type=content_type)
 
     @router.post("/kanban/tickets/from-whatsapp/{message_id}")
     async def create_ticket_from_whatsapp(message_id: int, payload: dict):

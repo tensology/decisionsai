@@ -6,7 +6,7 @@
 {{ super() }}
 <style>
 /* Ticket Board lanes */
-.kb-lane { min-width: 260px; max-width: 300px; flex: 1 1 260px; }
+.kb-lane { min-width: 260px; max-width: none; flex: 1 1 320px; }
 .kb-lane-body { min-height: 80px; }
 /* Drag states */
 .kb-card.dragging { opacity: 0.4; }
@@ -17,7 +17,8 @@
 .kb-pri-medium { background: #ca8a04; }
 .kb-pri-low { background: #16a34a; }
 /* Modal overlay */
-.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; display: flex; align-items: center; justify-content: center; }
+.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+.kb-modal-overlay:not(.hidden) { display: flex; }
 .kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
 /* Source icons in sidebar */
 .kb-src-icon { width: 16px; height: 16px; display: inline-block; border-radius: 3px; margin-right: 6px; flex-shrink: 0; }
@@ -36,10 +37,59 @@
 /* Disabled copy button */
 .kb-copy-btn.disabled { opacity: 0.3 !important; cursor: not-allowed; }
 /* Card action buttons row */
-.kb-card-actions { opacity: 0; transition: opacity 0.15s; }
-.kb-card:hover .kb-card-actions { opacity: 1; }
+.kb-card-actions {
+    opacity: 1;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    align-items: center;
+    gap: 6px;
+    overflow-x: hidden;
+    padding-top: 4px;
+    padding-bottom: 2px;
+}
+/* Card action buttons + immediate tooltips */
+.kb-card-action-btn {
+    position: relative;
+    color: #ffffff;
+    opacity: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    border-radius: 8px;
+    border: 1px solid rgba(255,255,255,0.22);
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+}
+.kb-card-action-btn:hover { color: #ffffff; filter: brightness(1.08); }
+.kb-card-action-btn .kb-act-label { display: inline; }
+.kb-act-copy { background: rgba(59,130,246,0.28); }
+.kb-act-cli { background: rgba(249,115,22,0.30); }
+.kb-act-project { background: rgba(168,85,247,0.32); }
+.kb-act-transfer { background: rgba(34,197,94,0.28); }
+.kb-act-delete { background: rgba(239,68,68,0.28); }
+.kb-card-action-btn[data-tooltip]:hover::after {
+    content: attr(data-tooltip);
+    position: absolute;
+    left: 50%;
+    transform: translateX(-50%);
+    bottom: calc(100% + 6px);
+    padding: 3px 6px;
+    border-radius: 4px;
+    font-size: 10px;
+    line-height: 1.2;
+    white-space: nowrap;
+    color: #ffffff;
+    background: rgba(15, 23, 42, 0.95);
+    border: 1px solid rgba(255,255,255,0.2);
+    pointer-events: none;
+    z-index: 20;
+}
 /* Disabled card action buttons */
-.kb-card-actions button:disabled { opacity: 0.35 !important; }
+.kb-card-actions button:disabled { opacity: 0.45 !important; filter: grayscale(0.2); }
 /* Scrollbar for lanes container */
 .kb-lanes-wrap::-webkit-scrollbar { height: 8px; }
 .kb-lanes-wrap::-webkit-scrollbar-track { background: transparent; }
@@ -64,7 +114,7 @@
 .kb-sidebar-tab:hover { color: #d1d5db; }
 .kb-sidebar-tab.active { color: #f97316; border-bottom-color: #f97316; }
 /* Source tabs */
-.kb-src-tab { cursor: pointer; padding: 4px 12px; border-radius: 6px; font-size: 0.75rem; font-weight: 600; color: #9ca3af; border: 1px solid transparent; transition: color 0.15s, background-color 0.15s, border-color 0.15s; user-select: none; display: inline-flex; align-items: center; gap: 4px; }
+.kb-src-tab { cursor: pointer; padding: 4px 10px; flex: 1 1 0; border-radius: 6px; font-size: 0.75rem; font-weight: 600; color: #9ca3af; border: 1px solid transparent; transition: color 0.15s, background-color 0.15s, border-color 0.15s; user-select: none; display: inline-flex; align-items: center; justify-content: center; text-align: center; gap: 4px; }
 .kb-src-tab:hover { color: #d1d5db; background: rgba(255,255,255,0.05); }
 .kb-src-tab.active { color: #fff; background: rgba(249,115,22,0.15); border-color: #f97316; }
 /* WhatsApp message bubbles */
@@ -87,7 +137,7 @@
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2"><path stroke-linecap="round" stroke-linejoin="round" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                     Boards
                 </button>
-                <button type="button" id="kb-tab-messages" class="kb-sidebar-tab hidden" data-tab="messages">
+                <button type="button" id="kb-tab-messages" class="kb-sidebar-tab" data-tab="messages">
                     <svg class="w-3.5 h-3.5 inline -mt-0.5 mr-1 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
                     Messages
                 </button>
@@ -108,15 +158,15 @@
                     </div>
                 </div>
                 <!-- Source tabs (hidden when only Local is available) -->
-                <div id="kb-src-tabs-row" class="flex gap-1 hidden py-2">
+                <div id="kb-src-tabs-row" class="flex gap-1 hidden py-2 w-full justify-center">
                     <button type="button" id="kb-src-local" class="kb-src-tab active" data-src="local">
-                        <span class="kb-src-icon kb-src-db" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Local
+                        <span class="kb-src-icon kb-src-db" style="width:10px;height:10px;display:inline-block;border-radius:2px"></span>Local
                     </button>
                     <button type="button" id="kb-src-trello" class="kb-src-tab hidden" data-src="trello">
-                        <span class="kb-src-icon kb-src-trello" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Trello
+                        <span class="kb-src-icon kb-src-trello" style="width:10px;height:10px;display:inline-block;border-radius:2px"></span>Trello
                     </button>
                     <button type="button" id="kb-src-jira" class="kb-src-tab hidden" data-src="jira">
-                        <span class="kb-src-icon kb-src-jira" style="width:10px;height:10px;display:inline-block;border-radius:2px;margin-right:2px"></span>Jira
+                        <span class="kb-src-icon kb-src-jira" style="width:10px;height:10px;display:inline-block;border-radius:2px"></span>Jira
                     </button>
                 </div>
                 <!-- Board list -->
@@ -232,6 +282,12 @@
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
                         <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
                         <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 flex items-center gap-1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span id="kb-edit-board-label">Configure</span></button>
+                        <button type="button" id="kb-refresh-boards" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 flex items-center gap-1" title="Re-sync external boards">
+                            <svg class="kb-refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5 9a7 7 0 0111.95-2.05L20 9M19 15a7 7 0 01-11.95 2.05L4 15" />
+                            </svg>
+                            <span>Re-sync</span>
+                        </button>
                         <button type="button" id="kb-delete-board" class="hidden"></button>
                     </div>
                 </div>
@@ -842,6 +898,9 @@
 
 {% block extra_scripts %}
 <script src="/static/shared/js/api.js"></script>
+<script src="/kanban/static/js/kanban_board.js"></script>
+<script src="/kanban/static/js/kanban_ticket.js"></script>
+<script src="/kanban/static/js/kanban_whatsapp.js"></script>
 <script src="/kanban/static/js/kanban.js"></script>
 <script src="/static/shared/js/provider_model_info.js"></script>
 {% endblock %}
