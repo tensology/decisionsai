@@ -4490,12 +4490,6 @@ function closeCreateExtTicketModal() {
     // End WhatsApp Integration
     // ═══════════════════════════════════════════════════════════════════
     function init() {
-        // Ensure modals are hidden on init (safety net)
-        var confirmModal = document.getElementById("kb-confirm-modal");
-        if (confirmModal) confirmModal.classList.add("hidden");
-        var settingsModal = document.getElementById("kb-global-settings-modal");
-        if (settingsModal) settingsModal.classList.add("hidden");
-
         // Apply sidebar tab from URL before any initial board rendering to avoid tab flicker.
         var initialSidebarTab = getSidebarTabFromUrl();
         // Don't auto-switch to messages on init — WhatsApp may not be available,
@@ -4776,6 +4770,12 @@ function closeCreateExtTicketModal() {
         
         // Initially hide the tab bar since Messages is hidden by default
         updateTabBarVisibility();
+
+        // ── Final safety: ensure no modal overlays are visible on init ──
+        // (protects against cached page state or prior JS errors)
+        document.querySelectorAll('.kb-modal-overlay').forEach(function(overlay) {
+            overlay.classList.add('hidden');
+        });
     }
 
     // Auto-refresh provider dropdowns when third-party keys are saved (same page)
