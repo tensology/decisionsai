@@ -837,6 +837,11 @@ class StepDispatcher:
                 if wf:
                     workflow_description = wf.description or ""
                     context_rules = getattr(wf, 'context_rules', None) or ""
+                    try:
+                        from distr.core.workflow.service import build_combined_context_rules
+                        context_rules = build_combined_context_rules(workflow_id, context_rules)
+                    except Exception as ce:
+                        logger.debug("_build_agent_prompt: failed to combine context items: %s", ce)
                     all_steps = sorted(wf.steps, key=lambda s: s.position)
                     total_steps = len(all_steps)
                     for i, s in enumerate(all_steps):

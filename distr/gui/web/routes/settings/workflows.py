@@ -85,6 +85,18 @@ class WorkflowSeedFixturesRequest(BaseModel):
     workflow_names: Optional[List[str]] = None
 
 
+class ContextItemCreateRequest(BaseModel):
+    title: str
+    content: str = ""
+    notes: str = ""
+
+
+class ContextItemUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    content: Optional[str] = None
+    notes: Optional[str] = None
+
+
 def register_routes(router, templates):
 
     def _is_audit_workflow(workflow_id: int) -> bool:
@@ -512,6 +524,57 @@ def register_routes(router, templates):
             return JSONResponse(run or {"active": False})
         except Exception as e:
             logger.error("Workflow active run failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    # Context items (structured agent context snippets)
+    @router.get("/workflows/{workflow_id}/context-items")
+    async def workflow_context_items(workflow_id: int):
+        try:
+            from distr.core.workflow.service import get_context_items
+            return JSONResponse(get_context_items(workflow_id))
+        except Exception as e:
+            logger.error("Workflow context items failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/context-items")
+    async def workflow_add_context_item(workflow_id: int, data: ContextItemCreateRequest):
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import add_context_item
+            item_id = add_context_item(workflow_id, title=data.title, content=data.content, notes=data.notes)
+            if not item_id:
+                return JSONResponse({"detail": "Workflow not found"}, status_code=404)
+            return JSONResponse({"id": item_id, "success": True})
+        except Exception as e:
+            logger.error("Workflow add context item failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.patch("/workflows/{workflow_id}/context-items/{context_item_id}")
+    async def workflow_update_context_item(workflow_id: int, context_item_id: int, data: ContextItemUpdateRequest):
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import update_context_item
+            updates = {k: v for k, v in data.dict().items() if v is not None}
+            if not update_context_item(context_item_id, workflow_id=workflow_id, **updates):
+                return JSONResponse({"detail": "Context item not found"}, status_code=404)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error("Workflow update context item failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.delete("/workflows/{workflow_id}/context-items/{context_item_id}")
+    async def workflow_delete_context_item(workflow_id: int, context_item_id: int):
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import delete_context_item
+            if not delete_context_item(context_item_id, workflow_id=workflow_id):
+                return JSONResponse({"detail": "Context item not found"}, status_code=404)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error("Workflow delete context item failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # Steps

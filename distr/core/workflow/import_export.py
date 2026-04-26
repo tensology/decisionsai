@@ -53,6 +53,15 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
         "created_date": wf.created_date.isoformat() if wf.created_date else None,
         "modified_date": wf.modified_date.isoformat() if wf.modified_date else None,
         "steps": [_serialize_step(s) for s in steps],
+        "context_items": [
+            {
+                "id": v.id,
+                "title": v.name or "",
+                "content": v.default_value or "",
+                "notes": v.description or "",
+            }
+            for v in wf.variables
+        ],
         "runs": [
             {
                 "id": r.id,

@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from distr.core.db import get_session
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.gui.web.workflow_events import increment_workflow_updated
 
@@ -194,6 +194,99 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
                 setattr(wf, k, v)
         db.commit()
         return True
+
+
+def get_context_items(workflow_id: int) -> List[Dict[str, Any]]:
+    """Return ordered context items for a workflow."""
+    with get_session() as db:
+        rows = (
+            db.query(AutoWorkflowVariable)
+            .filter(AutoWorkflowVariable.workflow_id == workflow_id)
+            .order_by(AutoWorkflowVariable.id.asc())
+            .all()
+        )
+        return [
+            {
+                "id": r.id,
+                "title": r.name or "",
+                "content": r.default_value or "",
+                "notes": r.description or "",
+            }
+            for r in rows
+        ]
+
+
+def add_context_item(workflow_id: int, title: str, content: str = "", notes: str = "") -> Optional[int]:
+    with get_session() as db:
+        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+        if not wf:
+            return None
+        row = AutoWorkflowVariable(
+            workflow_id=workflow_id,
+            name=(title or "Context Item").strip() or "Context Item",
+            default_value=content or "",
+            description=notes or "",
+        )
+        db.add(row)
+        db.commit()
+        db.refresh(row)
+        return row.id
+
+
+def update_context_item(context_item_id: int, workflow_id: Optional[int] = None, **kwargs) -> bool:
+    with get_session() as db:
+        query = db.query(AutoWorkflowVariable).filter(AutoWorkflowVariable.id == context_item_id)
+        if workflow_id is not None:
+            query = query.filter(AutoWorkflowVariable.workflow_id == workflow_id)
+        row = query.first()
+        if not row:
+            return False
+        if "title" in kwargs:
+            row.name = (kwargs.get("title") or "").strip() or row.name or "Context Item"
+        if "content" in kwargs:
+            row.default_value = kwargs.get("content") or ""
+        if "notes" in kwargs:
+            row.description = kwargs.get("notes") or ""
+        db.commit()
+        return True
+
+
+def delete_context_item(context_item_id: int, workflow_id: Optional[int] = None) -> bool:
+    with get_session() as db:
+        query = db.query(AutoWorkflowVariable).filter(AutoWorkflowVariable.id == context_item_id)
+        if workflow_id is not None:
+            query = query.filter(AutoWorkflowVariable.workflow_id == workflow_id)
+        row = query.first()
+        if not row:
+            return False
+        db.delete(row)
+        db.commit()
+        return True
+
+
+def build_combined_context_rules(workflow_id: int, base_context_rules: Optional[str] = None) -> str:
+    """Build a single prompt context block from freeform rules + CRUD context items."""
+    base = (base_context_rules or "").strip()
+    items = get_context_items(workflow_id)
+    item_blocks: List[str] = []
+    for idx, item in enumerate(items, start=1):
+        title = (item.get("title") or f"Item {idx}").strip()
+        content = (item.get("content") or "").strip()
+        notes = (item.get("notes") or "").strip()
+        if not content and not notes:
+            continue
+        block = [f"{idx}. {title}"]
+        if content:
+            block.append(content)
+        if notes:
+            block.append(f"Notes: {notes}")
+        item_blocks.append("\n".join(block))
+    if not item_blocks:
+        return base
+    merged_items = "[CONTEXT ITEMS]\n" + "\n\n".join(item_blocks)
+    if not base:
+        return merged_items
+    return base + "\n\n" + merged_items
 
 
 def delete_workflow(workflow_id: int) -> bool:

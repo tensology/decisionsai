@@ -23,6 +23,7 @@
     var SVG_FORWARD = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="13 19 22 12 13 5 13 19"/><polygon points="2 19 11 12 2 5 2 19"/></svg>';
     var SVG_CANCEL = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="4.5" stroke-linecap="round" stroke-linejoin="round"><path d="M6 6l12 12M18 6L6 18"/></svg>';
        var SVG_STOP = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="currentColor" stroke-width="2"><rect x="6" y="6" width="12" height="12" rx="2"/></svg>';
+    var SVG_TRASH = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>';
     var SVG_PLAY_REC = '<svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M8 5v14l11-7z"/></svg>';
 
     function esc(s) {
@@ -41,6 +42,41 @@
         el.textContent = msg;
         document.body.appendChild(el);
         setTimeout(function () { el.style.opacity = "0"; setTimeout(function () { el.remove(); }, 300); }, 3000);
+    }
+
+    function showConfirmModal(opts) {
+        opts = opts || {};
+        var title = opts.title || "Confirm";
+        var message = opts.message || "Are you sure?";
+        var confirmLabel = opts.confirmLabel || "Confirm";
+        var onConfirm = opts.onConfirm || function () {};
+        var existing = document.getElementById("wf-confirm-modal");
+        if (existing) existing.remove();
+        var html = '' +
+            '<div id="wf-confirm-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">' +
+                '<div class="w-full max-w-md mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl p-4 shadow-2xl">' +
+                    '<h3 class="text-white text-sm font-semibold mb-2">' + esc(title) + '</h3>' +
+                    '<p class="text-sm text-gray-300 mb-4">' + esc(message) + '</p>' +
+                    '<div class="flex items-center justify-end gap-2">' +
+                        '<button type="button" class="wf-confirm-cancel px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
+                        '<button type="button" class="wf-confirm-ok px-3 py-1.5 rounded border border-red-500/50 text-red-300 text-xs hover:bg-red-500/20">' + esc(confirmLabel) + '</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        var modal = document.getElementById("wf-confirm-modal");
+        if (!modal) return;
+        function closeModal() { modal.remove(); }
+        modal.addEventListener("click", function (evt) {
+            if (evt.target === modal) closeModal();
+        });
+        var cancelBtn = modal.querySelector(".wf-confirm-cancel");
+        var okBtn = modal.querySelector(".wf-confirm-ok");
+        if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+        if (okBtn) okBtn.addEventListener("click", function () {
+            closeModal();
+            onConfirm();
+        });
     }
 
     function api(method, path, body) {
@@ -403,7 +439,7 @@
                         '<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>' +
                         '<span class="text-xs text-amber-300">Waiting for continue...</span>' +
                         '<button type="button" class="wf-continue-run px-2 py-1 rounded border border-amber-500/50 text-amber-400 text-xs hover:bg-amber-500/20" data-run-id="' + data.id + '">Continue</button>' +
-                        '<button type="button" class="wf-cancel-run ml-auto px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">Cancel Run</button>' +
+                        '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
                     '</div>';
                     runBar.querySelector(".wf-continue-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
@@ -420,7 +456,7 @@
                     runBar.innerHTML = '<div class="flex items-center gap-3 px-4 py-2 bg-blue-900/30 border-b border-blue-500/30">' +
                         '<span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>' +
                         '<span class="text-xs text-blue-300">Workflow running...</span>' +
-                        '<button type="button" class="wf-cancel-run ml-auto px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">Cancel Run</button>' +
+                        '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
                     '</div>';
                     runBar.querySelector(".wf-cancel-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/cancel-run/" + data.id)
@@ -452,13 +488,16 @@
             var headerBtns = '';
             if (s.status === "waiting") {
                 headerBtns = '<button type="button" class="sh-continue-waiting inline-flex items-center justify-center w-6 h-6 rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/20" data-step-id="' + s.id + '" title="Continue">' + SVG_FORWARD + '</button>' +
-                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel">' + SVG_CANCEL + '</button>';
+                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel">' + SVG_CANCEL + '</button>' +
+                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
             } else if (s.status === "running") {
                 headerBtns = '<button type="button" class="sh-stop inline-flex items-center justify-center w-6 h-6 rounded border border-orange-500/50 text-orange-400 hover:bg-orange-500/20" data-step-id="' + s.id + '" title="Stop">' + SVG_STOP + '</button>' +
-                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel run">' + SVG_CANCEL + '</button>';
+                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel run">' + SVG_STOP + '</button>' +
+                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
             } else {
                 headerBtns = '<button type="button" class="sh-run-isolated inline-flex items-center justify-center w-6 h-6 rounded border border-blue-500/50 text-blue-400 hover:bg-blue-500/20" data-step-id="' + s.id + '" title="Run Isolated">' + SVG_PLAY + '</button>' +
-                    '<button type="button" class="sh-run-continue inline-flex items-center justify-center w-6 h-6 rounded border border-green-500/50 text-green-400 hover:bg-green-500/20" data-step-id="' + s.id + '" title="Continue From Here">' + SVG_FORWARD + '</button>';
+                    '<button type="button" class="sh-run-continue inline-flex items-center justify-center w-6 h-6 rounded border border-green-500/50 text-green-400 hover:bg-green-500/20" data-step-id="' + s.id + '" title="Continue From Here">' + SVG_FORWARD + '</button>' +
+                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
             }
             return '<div class="step-card border border-white/20 rounded-lg' + (isOpen ? " expanded" : "") + '" data-step-id="' + s.id + '">' +
                 '<div class="step-header flex items-center gap-3 px-4 py-3" data-step-id="' + s.id + '">' +
@@ -496,6 +535,13 @@
             btn.addEventListener("click", function (e) {
                 e.stopPropagation();
                 continueWaitingRun();
+            });
+        });
+        el.querySelectorAll(".sh-delete").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                var stepId = parseInt(btn.dataset.stepId, 10);
+                confirmDeleteStep(stepId);
             });
         });
 
@@ -984,9 +1030,7 @@
         // Save
         container.querySelector(".sf-save").addEventListener("click", function () { saveStep(step.id, container); });
         // Delete
-        container.querySelector(".sf-delete").addEventListener("click", function () {
-            if (confirm("Delete this step?")) deleteStep(step.id);
-        });
+        container.querySelector(".sf-delete").addEventListener("click", function () { confirmDeleteStep(step.id); });
         // Result indicator click -> jump to History tab
         var gotoHist = container.querySelector(".sf-goto-history");
         if (gotoHist) {
@@ -1106,6 +1150,15 @@
         api("DELETE", "/workflows/" + currentWorkflowId + "/steps/" + stepId)
             .then(function () { expandedStepId = null; snack("Step deleted"); loadDetail(currentWorkflowId); })
             .catch(function () { snack("Failed to delete step", "error"); });
+    }
+
+    function confirmDeleteStep(stepId) {
+        showConfirmModal({
+            title: "Delete step",
+            message: "Delete this step? This cannot be undone.",
+            confirmLabel: "Delete",
+            onConfirm: function () { deleteStep(stepId); }
+        });
     }
 
     function executeStep(stepId) {
@@ -1285,30 +1338,70 @@
         }).join('');
     }
 
-    // ── Context Rules tab ──
-    var _contextRulesDebounceTimer = null;
+    // ── Agent Context tab (multi-item CRUD) ──
     function renderContextRules(data) {
-        var textarea = document.getElementById("wf-context-rules");
+        var listEl = document.getElementById("wf-context-items-list");
         var statusEl = document.getElementById("wf-context-save-status");
-        if (!textarea) return;
-        textarea.value = data.context_rules || "";
+        if (!listEl) return;
+        var items = Array.isArray(data.context_items) ? data.context_items : [];
+        if (!items.length) {
+            listEl.innerHTML = '<p class="text-sm text-gray-500 py-2">No context items yet. Add one to guide the workflow agent.</p>';
+            if (statusEl) statusEl.textContent = "";
+            return;
+        }
+        listEl.innerHTML = items.map(function (item) {
+            return '' +
+                '<div class="bg-[#152054]/50 rounded px-3 py-2 border border-white/10" data-context-item-id="' + item.id + '">' +
+                    '<div class="flex items-center gap-2 mb-2">' +
+                        '<input type="text" class="wf-ci-title flex-1 px-2 py-1 bg-transparent border-b border-white/20 text-white text-sm focus:border-[#f97316] focus:outline-none" value="' + esc(item.title || "") + '" placeholder="Title (e.g., SSH Access)">' +
+                        '<button type="button" class="wf-ci-save text-green-400 text-xs hover:text-green-300 px-1" title="Save">✓</button>' +
+                        '<button type="button" class="wf-ci-delete text-red-400 text-xs hover:text-red-300 px-1" title="Delete">✕</button>' +
+                    '</div>' +
+                    '<textarea class="wf-ci-content w-full px-2 py-1.5 bg-[#0d1333] border border-white/10 rounded text-white text-sm font-mono resize-y mb-2" rows="4" placeholder="Content (rules, credentials, conventions, reusable guidance)...">' + esc(item.content || "") + '</textarea>' +
+                    '<input type="text" class="wf-ci-notes w-full px-2 py-1 bg-transparent border-b border-white/10 text-gray-400 text-xs focus:border-[#f97316] focus:outline-none" value="' + esc(item.notes || "") + '" placeholder="Optional notes">' +
+                '</div>';
+        }).join("");
         if (statusEl) statusEl.textContent = "";
-        // Remove old listener by cloning
-        var newTextarea = textarea.cloneNode(true);
-        textarea.parentNode.replaceChild(newTextarea, textarea);
-        newTextarea.addEventListener("input", function () {
-            if (_contextRulesDebounceTimer) clearTimeout(_contextRulesDebounceTimer);
-            if (statusEl) statusEl.textContent = "Saving...";
-            _contextRulesDebounceTimer = setTimeout(function () {
-                var text = newTextarea.value;
-                api("PATCH", "/workflows/" + currentWorkflowId, { context_rules: text })
-                    .then(function () {
-                        if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 2000); }
-                    })
-                    .catch(function () {
+
+        listEl.querySelectorAll("[data-context-item-id]").forEach(function (row) {
+            var contextItemId = parseInt(row.dataset.contextItemId, 10);
+            var saveBtn = row.querySelector(".wf-ci-save");
+            var deleteBtn = row.querySelector(".wf-ci-delete");
+            var titleEl = row.querySelector(".wf-ci-title");
+            var contentEl = row.querySelector(".wf-ci-content");
+            var notesEl = row.querySelector(".wf-ci-notes");
+
+            if (saveBtn) {
+                saveBtn.addEventListener("click", function () {
+                    if (!currentWorkflowId) return;
+                    if (statusEl) statusEl.textContent = "Saving...";
+                    api("PATCH", "/workflows/" + currentWorkflowId + "/context-items/" + contextItemId, {
+                        title: titleEl ? titleEl.value.trim() : "",
+                        content: contentEl ? contentEl.value : "",
+                        notes: notesEl ? notesEl.value.trim() : ""
+                    }).then(function () {
+                        if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
+                        loadDetail(currentWorkflowId);
+                    }).catch(function () {
                         if (statusEl) statusEl.textContent = "Save failed";
                     });
-            }, 1000);
+                });
+            }
+
+            if (deleteBtn) {
+                deleteBtn.addEventListener("click", function () {
+                    if (!currentWorkflowId) return;
+                    if (!confirm("Delete this context item?")) return;
+                    api("DELETE", "/workflows/" + currentWorkflowId + "/context-items/" + contextItemId)
+                        .then(function () {
+                            if (statusEl) { statusEl.textContent = "Deleted"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
+                            loadDetail(currentWorkflowId);
+                        })
+                        .catch(function () {
+                            if (statusEl) statusEl.textContent = "Delete failed";
+                        });
+                });
+            }
         });
     }
 
@@ -1446,6 +1539,25 @@
             activeRunsScopeEl.addEventListener("change", function () {
                 activeRunsScope = activeRunsScopeEl.value === "current" ? "current" : "all";
                 loadActiveRuns();
+            });
+        }
+
+        var addContextItemBtn = document.getElementById("wf-add-context-item-btn");
+        if (addContextItemBtn) {
+            addContextItemBtn.addEventListener("click", function () {
+                if (!currentWorkflowId) return;
+                var statusEl = document.getElementById("wf-context-save-status");
+                if (statusEl) statusEl.textContent = "Saving...";
+                api("POST", "/workflows/" + currentWorkflowId + "/context-items", {
+                    title: "New Context Item",
+                    content: "",
+                    notes: ""
+                }).then(function () {
+                    if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
+                    loadDetail(currentWorkflowId);
+                }).catch(function () {
+                    if (statusEl) statusEl.textContent = "Save failed";
+                });
             });
         }
 
