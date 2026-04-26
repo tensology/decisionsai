@@ -67,7 +67,8 @@ Also use when the user asks: "what skills do we have?", "find a skill for X", "s
 If query is empty, lists all skills (optionally filtered by tag).
 If query is provided, returns relevance-scored matches.
 
-After finding a skill, read it directly from skills/<id>/SKILL.md, or use push_skill to install it.
+After finding a skill, read bundled content under skills/<id>/, or use push_skill(skill_id, project_path, instructions=...)
+to install into Pi — include how the user wants to use it in instructions (ask once if unclear).
 """
     args_schema: Type[BaseModel] = FindSkillInput
 
@@ -102,7 +103,10 @@ After finding a skill, read it directly from skills/<id>/SKILL.md, or use push_s
                     lines.append("")
                 if len(registry) > limit:
                     lines.append(f"... and {len(registry) - limit} more. Pass a query to search.")
-                lines.append("Read a skill at skills/<id>/SKILL.md, or use push_skill to install it.")
+                lines.append(
+                    "Read bundled skill files under skills/<id>/. To install into a project's Pi CLI, use push_skill(skill_id, project_path, instructions=...) "
+                    "with the user's stated goals in instructions (or ask briefly how they want to use it before pushing)."
+                )
                 return "\n".join(lines)
 
             # Query → search mode with scoring
@@ -149,7 +153,10 @@ After finding a skill, read it directly from skills/<id>/SKILL.md, or use push_s
                 lines.append(f"  ID: {skill['id']}")
                 lines.append("")
 
-            lines.append("Read a skill at skills/<id>/SKILL.md, or use push_skill to install it.")
+            lines.append(
+                "Read bundled skill files under skills/<id>/. To install into a project's Pi CLI, use push_skill(skill_id, project_path, instructions=...) "
+                "with the user's stated goals in instructions (or ask briefly how they want to use it before pushing)."
+            )
             return "\n".join(lines)
 
         except Exception as e:

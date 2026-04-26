@@ -28,6 +28,7 @@ from distr.core.agent.libs import (
     ErrorFrame,
 )
 from distr.core.agent.services.llm.tool_format import convert_tools_to_openai_format
+from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
 from .base_service import BaseLLMService
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
     """
 
     _MAX_GENERATION_TIME_WITHOUT_TOOL = 15.0
+    _tool_execution_in_progress = False
 
     async def _generate_response(self):
         """Orchestrator: stream → tool calls → feed results back → repeat until done.
@@ -132,10 +134,14 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 })
 
                 # Execute all tool calls from this round
-                if round_num == 1:
-                    await self._execute_tool_calls_with_chaining(tool_calls)
-                else:
-                    await self._execute_chained_tools(tool_calls, full_content)
+                self._tool_execution_in_progress = True
+                try:
+                    if round_num == 1:
+                        await self._execute_tool_calls_with_chaining(tool_calls)
+                    else:
+                        await self._execute_chained_tools(tool_calls, full_content)
+                finally:
+                    self._tool_execution_in_progress = False
 
                 # Auto-send file to Telegram if applicable
                 auto_sent = await self._auto_send_file_to_telegram()
@@ -428,8 +434,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 last_user_message = content if isinstance(content, str) else str(content)
                 break
 
-        for tc in tool_calls:
+        decisions = build_computer_use_execution_decisions(tool_calls)
+        for idx, tc in enumerate(tool_calls):
             func_name = tc["function"]["name"]
+            decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             try:
                 func_args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, TypeError):
@@ -438,6 +446,43 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.info("🔧 Tool: %s", func_name)
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
+
+            # Hard guard: prevent generic mouse fallback when a recent visual-target
+            # flow already reported target-not-found / unresolved coordinates.
+            if func_name == "mouse_movement":
+                recent_tool_msgs = [
+                    m for m in reversed(self._messages[-12:])
+                    if m.get("role") == "tool"
+                ]
+                blocked = False
+                for m in recent_tool_msgs:
+                    name = str(m.get("name", ""))
+                    content = str(m.get("content", ""))
+                    if name == "screenshot_analyzer" and (
+                        "TARGET NOT FOUND" in content
+                        or "No action executed because execute_action is false." in content
+                        or "[ACTION REQUIRED] Do NOT call mouse_movement" in content
+                    ):
+                        blocked = True
+                        break
+                if blocked:
+                    result_str = (
+                        "Blocked unsafe fallback: visual target was not resolved yet. "
+                        "Do NOT use mouse_movement for this step; retry with "
+                        "accessibility tree or screenshot_analyzer."
+                    )
+                    resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str}
+                    self._messages.append(resp)
+                    continue
+
+            if not decision.get("allow", True):
+                result_str = (
+                    "Skipped by computer-use guard: only one actioning computer-use step "
+                    "is executed per round. Re-run next step after observing updated context."
+                )
+                resp = {"tool_call_id": tc["id"], "role": "tool", "name": func_name, "content": result_str}
+                self._messages.append(resp)
+                continue
 
             if func_name in self._tools_dict:
                 tool = self._tools_dict[func_name]
@@ -529,9 +574,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     content += c
                     if not tool_call_detected and '<tool_call>' in content:
                         tool_call_detected = True
-                    should_suppress = getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False)
-                    if not should_suppress and not tool_call_detected and not getattr(self, '_is_telegram_request', False):
-                        await self.push_frame(TextFrame(text=c))
+                    # Do not stream follow-up content directly to TTS here.
+                    # Final TTS is handled once in _handle_follow_up_content()
+                    # to avoid duplicate speech for tool follow-ups.
                     if self.event_queue and not tool_call_detected:
                         self.event_queue.put(('chat_stream_token', {'token': c}), block=False)
 
@@ -568,8 +613,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 last_user_message = msg.get("content", "")
                 break
 
-        for tc in tool_calls:
+        decisions = build_computer_use_execution_decisions(tool_calls)
+        for idx, tc in enumerate(tool_calls):
             func_name = tc["function"]["name"]
+            decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             try:
                 func_args = json.loads(tc["function"]["arguments"])
             except (json.JSONDecodeError, TypeError):
@@ -577,6 +624,18 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
+
+            if not decision.get("allow", True):
+                self._messages.append({
+                    "tool_call_id": tc["id"],
+                    "role": "tool",
+                    "name": func_name,
+                    "content": (
+                        "Skipped by computer-use guard: only one actioning computer-use step "
+                        "is executed per round. Re-run next step after observing updated context."
+                    ),
+                })
+                continue
 
             if func_name in self._tools_dict:
                 tool = self._tools_dict[func_name]
@@ -781,8 +840,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
         # Check if the last tool result requested silence (e.g. open_page returns {"silent": True})
         is_silent = False
         tool_result_text = None
+        action_tool_spoke_directly = False
+        action_ack_prefixes = ("running action ", "action stopped", "paused", "resumed", "done")
+        action_tool_names = {"play_action", "stop_action", "pause_action", "resume_action"}
         for msg in reversed(self._messages):
             if msg.get("role") == "tool":
+                tool_name = (msg.get("name") or "").strip()
                 content = msg.get("content", "")
                 if content:
                     try:
@@ -791,6 +854,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
                             is_silent = True
                     except (ValueError, TypeError):
                         pass
+                # Some action tools already announce status via speak_text_directly_event_queue.
+                # Suppress LLM fallback speech for those acknowledgements to avoid repeats.
+                if tool_name in action_tool_names and isinstance(content, str):
+                    lowered = content.strip().lower()
+                    if lowered.startswith(action_ack_prefixes):
+                        action_tool_spoke_directly = True
                 # Collect the last meaningful tool result for TTS/history
                 if content and len(content) > 5 and "[ACTION REQUIRED" not in content:
                     tool_result_text = content[:2000]  # Cap at 2000 chars
@@ -800,6 +869,17 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # For Telegram, include the tool result as context
             fallback = tool_result_text or "Done"
             self._telegram_fallback_text = fallback
+        elif action_tool_spoke_directly:
+            # Tool already spoke via speak_text_directly_event_queue -> command handler
+            # and pushed its own Start/Text/End TTS frames. Do not emit extra frames
+            # from the LLM fallback path, or we can suppress/close the player UI.
+            fallback = tool_result_text or "Done"
+            if self.chat_manager:
+                chat = self.chat_manager.get_current_chat()
+                if chat:
+                    self.chat_manager.add_assistant_message(chat, fallback)
+            self._messages.append({"role": "assistant", "content": fallback})
+            return True
         elif is_silent:
             fallback = "Done"
         elif tool_result_text:

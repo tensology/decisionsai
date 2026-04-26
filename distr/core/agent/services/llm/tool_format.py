@@ -294,12 +294,16 @@ def get_tool_parameters(tool_name: str) -> dict:
                 },
                 "project_path": {
                     "type": "string",
-                    "description": "Path to the project directory."
+                    "description": "Project root. Use '.' or omit when the user means the currently active project — resolves to its folder_location when set."
                 },
                 "target": {
                     "type": "string",
                     "description": "CLI target: 'pi' (default), 'claude', 'cursor', 'gemini', 'codex'."
-                }
+                },
+                "instructions": {
+                    "type": "string",
+                    "description": "For pi: how the user will apply this skill in this project — text from the conversation. Saved as USER_INTENT.md beside SKILL.md. If they want a push but have not described usage yet, ask briefly, then include their reply here.",
+                },
             },
             "required": []
         },

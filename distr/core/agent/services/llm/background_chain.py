@@ -343,14 +343,16 @@ class BackgroundChainRunner:
         - Multiple tool calls that suggest a sequence
         """
         chain_tool_names = {
-            'screenshot_analyzer', 'execute_code', 'pi_agent',
-            'file_converter', 'kanban_ticket',
+            'execute_code', 'pi_agent', 'file_converter', 'kanban_ticket',
         }
         for tc in tool_calls:
             func_name = tc.get("function", {}).get("name", "")
             if func_name in chain_tool_names:
                 return True
-            # Check if capture_only is set on screenshot_analyzer
+            # screenshot_analyzer is chain-prone ONLY in capture_only mode
+            # (screenshot artifact needs routing to follow-up tools). Normal
+            # vision interactions should stay inline so users get precise
+            # action feedback instead of generic background "Done."
             if func_name == 'screenshot_analyzer':
                 try:
                     args = json.loads(tc.get("function", {}).get("arguments", "{}"))

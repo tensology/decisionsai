@@ -6,7 +6,7 @@
     "border": false,
     "shadow": false,
     "glow_on_hold": false,
-    "image_scale": 1.0,
+    "image_scale": 1,
     "image_offset_x": 0,
     "image_offset_y": 0,
     "chroma_key": [
@@ -14,7 +14,9 @@
       218,
       222
     ],
-    "chroma_threshold": 35
+    "chroma_threshold": 35,
+    "unfocused_opacity_enabled": false,
+    "unfocused_opacity": 0.5
   },
   "events": {
     "idle": {
@@ -48,7 +50,7 @@
       "playback": "pingpong"
     },
     "ptt_active": {
-      "animation": "needs-attention.webm",
+      "animation": "idle-needs-attention.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -63,7 +65,7 @@
       "playback": "pingpong"
     },
     "dictation": {
-      "animation": "working.webm",
+      "animation": "thinking-idle.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -78,7 +80,7 @@
       "playback": "pingpong"
     },
     "recording_action": {
-      "animation": "working.webm",
+      "animation": "needs-attention-idle.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -108,7 +110,7 @@
       "playback": "pingpong"
     },
     "tts_response": {
-      "animation": "thinking.webm",
+      "animation": "needs-attention.webm",
       "show_player": false,
       "show_chat_bubble": true,
       "glow": false,

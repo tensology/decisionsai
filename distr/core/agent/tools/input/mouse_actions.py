@@ -9,6 +9,7 @@ from langchain.tools import BaseTool
 from pydantic import Field
 import logging
 import pyautogui
+from distr.core.agent.services.computer_use_context import record_action
 # Disable pyautogui FAILSAFE to prevent mouse operations from being blocked
 pyautogui.FAILSAFE = False
 
@@ -82,14 +83,17 @@ class MouseActionsTool(BaseTool):
                 try:
                     if action == "click":
                         pyautogui.click(button='left')
+                        record_action("click", "success", {"source": "mouse_actions"})
                         logger.info("Performed left click")
                         return "Performed left click"
                     elif action == "double_click":
                         pyautogui.doubleClick(button='left')
+                        record_action("double_click", "success", {"source": "mouse_actions"})
                         logger.info("Performed double click")
                         return "Performed double click"
                     elif action == "right_click":
                         pyautogui.click(button='right')
+                        record_action("right_click", "success", {"source": "mouse_actions"})
                         logger.info("Performed right click")
                         return "Performed right click"
                 except Exception as e:
@@ -102,6 +106,7 @@ class MouseActionsTool(BaseTool):
                     amount = 100 if action == "scroll_up" else -100
                     pyautogui.scroll(amount)
                     direction = action.split('_')[1]
+                    record_action(action, "success", {"source": "mouse_actions", "amount": amount})
                     logger.info(f"Scrolled {direction} by {amount}")
                     return f"Scrolled {direction}"
                 except Exception as e:

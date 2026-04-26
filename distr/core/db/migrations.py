@@ -55,6 +55,91 @@ def run_migrations():
                 logger.info("Added hands_free_mode column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add hands_free_mode column: {e}")
+
+    # Handle database migration for global PTT hotkey columns
+    try:
+        with Session() as session:
+            session.execute(text("SELECT global_ptt_hotkey_enabled FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN global_ptt_hotkey_enabled BOOLEAN DEFAULT 1"))
+                conn.commit()
+                logger.info("Added global_ptt_hotkey_enabled column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add global_ptt_hotkey_enabled column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT global_ptt_hotkey_primary FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN global_ptt_hotkey_primary VARCHAR DEFAULT 'option'"))
+                conn.commit()
+                logger.info("Added global_ptt_hotkey_primary column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add global_ptt_hotkey_primary column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT global_ptt_hotkey_secondary FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN global_ptt_hotkey_secondary VARCHAR DEFAULT 'command'"))
+                conn.commit()
+                logger.info("Added global_ptt_hotkey_secondary column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add global_ptt_hotkey_secondary column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT oracle_size_hotkey_decrease_modifier FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_modifier VARCHAR DEFAULT 'option_command'"))
+                conn.commit()
+                logger.info("Added oracle_size_hotkey_decrease_modifier column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add oracle_size_hotkey_decrease_modifier column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT oracle_size_hotkey_decrease_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_key VARCHAR DEFAULT 'left_bracket'"))
+                conn.commit()
+                logger.info("Added oracle_size_hotkey_decrease_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add oracle_size_hotkey_decrease_key column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT oracle_size_hotkey_increase_modifier FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_modifier VARCHAR DEFAULT 'option_command'"))
+                conn.commit()
+                logger.info("Added oracle_size_hotkey_increase_modifier column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add oracle_size_hotkey_increase_modifier column: {e}")
+
+    try:
+        with Session() as session:
+            session.execute(text("SELECT oracle_size_hotkey_increase_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_key VARCHAR DEFAULT 'right_bracket'"))
+                conn.commit()
+                logger.info("Added oracle_size_hotkey_increase_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add oracle_size_hotkey_increase_key column: {e}")
     
     # Handle database migration for accepted_eula column
     try:
@@ -438,6 +523,19 @@ def run_migrations():
                 logger.info("Added voxcpm_voice column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add voxcpm_voice column: {e}")
+
+    # Handle database migration for coqui_voice column (Coqui TTS offline voices)
+    try:
+        with Session() as session:
+            session.execute(text("SELECT coqui_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN coqui_voice VARCHAR DEFAULT 'p225'"))
+                conn.commit()
+                logger.info("Added coqui_voice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add coqui_voice column: {e}")
 
     # Handle database migration for qwen3_voice/replicate settings columns (Qwen3-TTS)
     for col, dtype, default in [
@@ -1672,3 +1770,79 @@ def run_migrations():
             except Exception as e:
                 if "duplicate column" not in str(e).lower():
                     logger.warning(f"Could not add {_wcol} to auto_workflow_runs: {e}")
+
+    # ── Drop legacy template/job-card Workflow tables (superseded by auto_workflows) ──
+    try:
+        with engine.connect() as conn:
+            inspector = inspect(engine)
+            if inspector.has_table("trello_tickets"):
+                cols = [c["name"] for c in inspector.get_columns("trello_tickets")]
+                if "workflow_id" in cols:
+                    dropped = False
+                    for pragmas in (
+                        (),
+                        ("PRAGMA legacy_alter_table=ON",),
+                    ):
+                        try:
+                            for p in pragmas:
+                                conn.execute(text(p))
+                            conn.execute(text("ALTER TABLE trello_tickets DROP COLUMN workflow_id"))
+                            conn.commit()
+                            dropped = True
+                            logger.info("Dropped legacy trello_tickets.workflow_id column")
+                            break
+                        except Exception:
+                            conn.rollback()
+                            continue
+                    if not dropped:
+                        # SQLite FK metadata can block DROP COLUMN; rebuild without workflow_id
+                        try:
+                            conn.execute(text("PRAGMA foreign_keys=OFF"))
+                            conn.execute(text("""
+                                CREATE TABLE trello_tickets__wf_drop (
+                                    id INTEGER NOT NULL PRIMARY KEY AUTOINCREMENT,
+                                    trello_card_id VARCHAR NOT NULL UNIQUE,
+                                    title VARCHAR,
+                                    description TEXT,
+                                    chat_id INTEGER REFERENCES chats(id),
+                                    members TEXT,
+                                    attachments TEXT,
+                                    status VARCHAR,
+                                    created_date DATETIME,
+                                    modified_date DATETIME
+                                )
+                            """))
+                            conn.execute(text("""
+                                INSERT INTO trello_tickets__wf_drop (
+                                    id, trello_card_id, title, description, chat_id,
+                                    members, attachments, status, created_date, modified_date
+                                )
+                                SELECT id, trello_card_id, title, description, chat_id,
+                                       members, attachments, status, created_date, modified_date
+                                FROM trello_tickets
+                            """))
+                            conn.execute(text("DROP TABLE trello_tickets"))
+                            conn.execute(text(
+                                "ALTER TABLE trello_tickets__wf_drop RENAME TO trello_tickets"
+                            ))
+                            conn.commit()
+                            conn.execute(text("PRAGMA foreign_keys=ON"))
+                            logger.info(
+                                "Rebuilt trello_tickets without workflow_id (SQLite fallback)"
+                            )
+                        except Exception as e2:
+                            try:
+                                conn.execute(text("PRAGMA foreign_keys=ON"))
+                            except Exception:
+                                pass
+                            logger.warning(
+                                "Could not remove trello_tickets.workflow_id: %s",
+                                e2,
+                            )
+            conn.execute(text("DROP TABLE IF EXISTS workflows"))
+            conn.commit()
+            conn.execute(text("DROP TABLE IF EXISTS workflow_projects"))
+            conn.commit()
+            logger.info("Dropped legacy workflows / workflow_projects tables if present")
+    except Exception as e:
+        logger.warning("Legacy Workflow table cleanup failed: %s", e)

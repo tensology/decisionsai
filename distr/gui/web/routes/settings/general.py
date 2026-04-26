@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from ._shared import (
     logger,
     GeneralSettings,
+    VoiceSelectionUpdate,
     PlayVoiceRequest,
     PlaybackSpeedUpdate,
     SpeechVolumeUpdate,
@@ -31,8 +32,14 @@ def register_routes(router, templates):
     @route_handler("load general settings")
     async def get_general_settings():
         """Get current general settings"""
+        from distr.core.agent.constants import normalize_voice_provider
         from distr.core.settings import load_settings_from_db
+
         settings = load_settings_from_db()
+
+        # Prefer tts_provider (canonical id from chat create / agent) then voice_provider (may be display text)
+        _raw_vp = settings.get("tts_provider") or settings.get("voice_provider") or "kokoro"
+        _voice_provider_id = normalize_voice_provider(str(_raw_vp))
 
         return JSONResponse({
             "load_splash_sound": settings.get("load_splash_sound", False),
@@ -40,11 +47,16 @@ def register_routes(router, templates):
             "welcome_greet_me": settings.get("welcome_greet_me", False),
             "load_on_startup": settings.get("load_on_startup", True),
             "listening_state": settings.get("listening_state", "remember"),
-            "voice_provider": settings.get("voice_provider", "kokoro"),
+            # Canonical id for UI selects (normalized). DB may store descriptor display name in tts_provider.
+            "tts_provider": _voice_provider_id,
+            "voice_provider": _voice_provider_id,
+            # Legacy single column: active voice model id for the current provider path (see also per-provider *_voice).
+            "tts_voice": settings.get("tts_voice", ""),
             "kokoro_voice": settings.get("kokoro_voice", "af_heart"),
             "elevenlabs_voice": settings.get("elevenlabs_voice", "default"),
             "openai_voice": settings.get("openai_voice", "alloy"),
             "coqui_voice": settings.get("coqui_voice", "p225"),
+            "qwen3_voice": settings.get("qwen3_voice", "aiden"),
             "f5tts_voice": settings.get("f5tts_voice", "default"),
             "voxcpm_voice": settings.get("voxcpm_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),
@@ -56,6 +68,9 @@ def register_routes(router, templates):
             "elevenlabs_use_speaker_boost": settings.get("elevenlabs_use_speaker_boost", True),
             "restore_position": settings.get("restore_position", True),
             "oracle_position": settings.get("oracle_position", "custom"),
+            "global_ptt_hotkey_enabled": settings.get("global_ptt_hotkey_enabled", True),
+            "global_ptt_hotkey_primary": settings.get("global_ptt_hotkey_primary", "option"),
+            "global_ptt_hotkey_secondary": settings.get("global_ptt_hotkey_secondary", "command"),
         })
 
     @router.post("/general")
@@ -65,6 +80,15 @@ def register_routes(router, templates):
         from distr.core.services.settings_service import save_general_settings
         save_general_settings(settings_data)
         return JSONResponse({"success": True, "message": "Settings saved and oracle updated"})
+
+    @router.post("/general/voice-selection")
+    @route_handler("save voice selection from chat UI")
+    async def save_voice_selection_route(body: VoiceSelectionUpdate):
+        """Persist TTS provider and voice model to global settings (same as General tab)."""
+        from distr.core.services.settings_service import save_voice_selection
+
+        save_voice_selection(body.voice_provider, body.voice_model)
+        return JSONResponse({"success": True, "message": "Voice selection saved"})
 
     @router.post("/about/show")
     @route_handler("show about window")

@@ -8,7 +8,64 @@ class PolicyDecision(Enum):
     SKIP = "skip"
 
 
-def evaluate(action, level: str, boundaries: dict) -> PolicyDecision:
+RISK_ORDER = {
+    "low": 0,
+    "medium": 1,
+    "high": 2,
+    "critical": 3,
+}
+
+
+def _normalize_risk(value) -> str:
+    raw = str(value or "medium").strip().lower()
+    return raw if raw in RISK_ORDER else "medium"
+
+
+def _risk_at_least(current: str, minimum: str) -> bool:
+    return RISK_ORDER[_normalize_risk(current)] >= RISK_ORDER[_normalize_risk(minimum)]
+
+
+def _read_policy_context(action, boundaries: dict, policy_context: dict | None = None) -> dict:
+    payload = getattr(action, "payload", None)
+    action_payload = payload if isinstance(payload, dict) else {}
+    scope_policy = action_payload.get("scope_policy") or {}
+    if not isinstance(scope_policy, dict):
+        scope_policy = {}
+    merged = {}
+    if isinstance(policy_context, dict):
+        merged.update(policy_context)
+    if scope_policy:
+        merged.update(scope_policy)
+
+    # Optional policy-level flags; defaults preserve current behavior.
+    merged.setdefault("cooldown_active", False)
+    merged.setdefault("duplicate_recent", False)
+    merged.setdefault("minimum_confidence_to_execute", 0.0)
+    merged.setdefault("minimum_risk_to_require_ask", "critical")
+    merged.setdefault("always_require_ask_for", [])
+    merged.setdefault("always_block_action_types", [])
+
+    return {
+        "cooldown_active": bool(merged.get("cooldown_active", False)),
+        "duplicate_recent": bool(merged.get("duplicate_recent", False)),
+        "minimum_confidence_to_execute": float(merged.get("minimum_confidence_to_execute", 0.0)),
+        "minimum_risk_to_require_ask": _normalize_risk(merged.get("minimum_risk_to_require_ask", "critical")),
+        "always_require_ask_for": {
+            str(v).strip().lower()
+            for v in (merged.get("always_require_ask_for") or [])
+            if str(v).strip()
+        },
+        "always_block_action_types": {
+            str(v).strip().lower()
+            for v in (merged.get("always_block_action_types") or [])
+            if str(v).strip()
+        },
+        "risk_level": _normalize_risk(action_payload.get("risk_level", "medium")),
+        "confidence": float(action_payload.get("confidence", 1.0)),
+    }
+
+
+def evaluate(action, level: str, boundaries: dict, policy_context: dict | None = None) -> PolicyDecision:
     """
     Map (action, level, boundaries) to a PolicyDecision.
 
@@ -22,6 +79,22 @@ def evaluate(action, level: str, boundaries: dict) -> PolicyDecision:
                     initiative_ask_sensitive
     """
     action_type = action.action_type
+    policy = _read_policy_context(action, boundaries, policy_context)
+
+    # Guard rails applied before level-specific logic.
+    if action_type in policy["always_block_action_types"]:
+        return PolicyDecision.SKIP
+    if policy["cooldown_active"] or policy["duplicate_recent"]:
+        return PolicyDecision.SKIP
+    if action_type in policy["always_require_ask_for"]:
+        return PolicyDecision.DRAFT_AND_ASK
+    if policy["confidence"] < policy["minimum_confidence_to_execute"]:
+        return PolicyDecision.SUGGEST_ONLY
+    if (
+        action_type in ("external_comms", "file_change", "sensitive")
+        and _risk_at_least(policy["risk_level"], policy["minimum_risk_to_require_ask"])
+    ):
+        return PolicyDecision.DRAFT_AND_ASK
 
     if level == "observe":
         return PolicyDecision.SKIP

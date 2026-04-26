@@ -132,6 +132,13 @@ class OllamaPullRequest(BaseModel):
 # Pydantic models — General / Audio / Oracle / Voice
 # ---------------------------------------------------------------------------
 
+class VoiceSelectionUpdate(BaseModel):
+    """Persist only TTS provider + voice from chat configure UI (mirrors General voice fields)."""
+
+    voice_provider: str = Field(min_length=1)
+    voice_model: str = Field(min_length=1)
+
+
 class GeneralSettings(BaseModel):
     load_splash_sound: bool = False
     show_about: bool = False
@@ -143,6 +150,7 @@ class GeneralSettings(BaseModel):
     elevenlabs_voice: str = "default"
     openai_voice: str = "alloy"
     coqui_voice: str = "p225"
+    qwen3_voice: str = "aiden"
     f5tts_voice: str = "default"
     voxcpm_voice: str = "default"
     playback_speed: float = 1.0
@@ -154,6 +162,19 @@ class GeneralSettings(BaseModel):
     elevenlabs_use_speaker_boost: bool = True
     restore_position: bool = True
     oracle_position: str = "custom"
+    global_ptt_hotkey_enabled: bool = True
+    global_ptt_hotkey_primary: str = "option"
+    global_ptt_hotkey_secondary: str = "command"
+
+
+class ShortcutSettings(BaseModel):
+    global_ptt_hotkey_enabled: bool = True
+    global_ptt_hotkey_primary: str = "option"
+    global_ptt_hotkey_secondary: str = "command"
+    oracle_size_hotkey_decrease_modifier: str = "option_command"
+    oracle_size_hotkey_decrease_key: str = "left_bracket"
+    oracle_size_hotkey_increase_modifier: str = "option_command"
+    oracle_size_hotkey_increase_key: str = "right_bracket"
 
 
 class AudioSettings(BaseModel):

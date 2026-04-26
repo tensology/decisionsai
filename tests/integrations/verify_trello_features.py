@@ -7,7 +7,7 @@ from PyQt6.QtWidgets import QApplication
 _project_root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, _project_root)
 
-from distr.core.db import engine, TrelloTicket, init_db
+from distr.core.db import engine, init_db
 from distr.gui.trello_ticket_dialog import TrelloTicketDialog
 
 def verify_db():
@@ -19,7 +19,7 @@ def verify_db():
     if 'trello_tickets' in tables:
         print("[PASS] Table 'trello_tickets' exists.")
         columns = [c['name'] for c in inspector.get_columns('trello_tickets')]
-        expected_columns = ['id', 'trello_card_id', 'title', 'description', 'chat_id', 'workflow_id', 'members', 'attachments', 'status']
+        expected_columns = ['id', 'trello_card_id', 'title', 'description', 'chat_id', 'members', 'attachments', 'status']
         missing = [c for c in expected_columns if c not in columns]
         if not missing:
             print("[PASS] All expected columns exist.")

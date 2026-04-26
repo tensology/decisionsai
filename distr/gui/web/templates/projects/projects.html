@@ -203,6 +203,16 @@
 }
 @keyframes blink { 50% { opacity: 0; } }
 
+/*
+ * Startup tab: right gutter vs scrollbar. Plain CSS — arbitrary Tailwind (e.g. pr-[20px])
+ * is not in pre-built tailwind-prod.css until build-tailwind.sh is run.
+ */
+#tab-startup-inner-scroll {
+    padding-right: 20px;
+    box-sizing: border-box;
+    scrollbar-gutter: stable;
+}
+
 /* Startup Terminal Grid */
 #startup-terminal-grid {
     display: grid;
@@ -237,7 +247,8 @@
     white-space: nowrap;
 }
 .startup-terminal-close,
-.startup-terminal-expand {
+.startup-terminal-expand,
+.startup-terminal-copy {
     background: #21262d;
     color: #e6edf3;
     border: none;
@@ -253,6 +264,7 @@
     flex-shrink: 0;
 }
 .startup-terminal-expand:hover { background: #1f6feb; color: white; }
+.startup-terminal-copy:hover   { background: #0e7490; color: white; }
 .startup-terminal-close:hover  { background: #da3633; color: white; }
 .startup-terminal-btns { display: flex; gap: 3px; }
 
@@ -387,7 +399,7 @@
                     <button type="button" class="project-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="terminal">
                             <svg class="inline w-4 h-4 mr-1 -mt-0.5" viewBox="0 0 20 20" fill="currentColor"><path fill-rule="evenodd" d="M2 5a2 2 0 012-2h12a2 2 0 012 2v10a2 2 0 01-2 2H4a2 2 0 01-2-2V5zm3.293 1.293a1 1 0 111.414 1.414L5.414 9l1.293 1.293a1 1 0 11-1.414 1.414l-2-2a1 1 0 010-1.414l2-2z" clip-rule="evenodd"/></svg>Terminal</button>
                 </div>
-                <div class="flex-1 overflow-y-auto p-6" id="projects-tab-content">
+                <div class="flex flex-1 min-h-0 flex-col overflow-hidden p-6" id="projects-tab-content">
                     {% include "projects/tabs/details.html" %}
                     {% include "projects/tabs/startup.html" %}
                 </div>
@@ -457,6 +469,10 @@
                 <button type="button" id="terminal-expand-stop" class="terminal-expand-btn" title="Terminate this terminal">
                     <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="2" y="2" width="8" height="8" rx="1"/></svg>
                     Stop
+                </button>
+                <button type="button" id="terminal-expand-copy" class="terminal-expand-btn" title="Copy terminal output">
+                    <svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="6" height="7" rx="1"/><path d="M2.5 8.5V2.8a.8.8 0 0 1 .8-.8h4.9"/></svg>
+                    Copy
                 </button>
             </div>
         </div>

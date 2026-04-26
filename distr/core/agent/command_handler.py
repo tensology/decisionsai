@@ -11,6 +11,8 @@ import os
 
 import requests
 
+from distr.core.util.speak_flag import coerce_speak_enabled
+
 from .constants import (
     SPEED_BOUNDS, ENGINE_TO_PROVIDER, DEFAULT_MODELS,
     VAD_CONFIDENCE_MIN, VAD_CONFIDENCE_MAX,
@@ -274,13 +276,26 @@ def _cmd_update_audio_devices(session, params):
     output_device = params.get('output_device')
     session.logger.debug(f"Received command: update_audio_devices (Input: {input_device}, Output: {output_device})")
 
+    # Keep canonical session-level overrides in sync. _load_config() prefers
+    # session.input_device/output_device over persisted settings, so if these
+    # are not updated a later hot-swap/reload can silently revert devices.
+    if input_device is not None:
+        session.input_device = input_device
+    if output_device is not None:
+        session.output_device = output_device
+
+    # Prefer the pipeline/runner loop; fall back to main loop.
+    target_loop = getattr(getattr(session, 'runner', None), '_loop', None)
+    if target_loop is None:
+        target_loop = getattr(session, '_main_loop', None)
+
     if input_device:
         session.config['audio']['input_device'] = input_device
         input_idx = session._get_device_index(input_device, is_input=True)
         if hasattr(session, 'transport'):
             session.logger.debug(f"Hot-swapping input device to index {input_idx} (None=Default)")
-            if hasattr(session, '_main_loop') and session._main_loop.is_running():
-                session._main_loop.call_soon_threadsafe(session.transport.input().set_device, input_idx)
+            if target_loop and target_loop.is_running():
+                target_loop.call_soon_threadsafe(session.transport.input().set_device, input_idx)
             else:
                 session.transport.input().set_device(input_idx)
 
@@ -288,9 +303,15 @@ def _cmd_update_audio_devices(session, params):
         session.config['audio']['output_device'] = output_device
         output_idx = session._get_device_index(output_device, is_input=False)
         if hasattr(session, 'transport'):
+            # Force a clean output cutover so TTS doesn't continue draining on
+            # the old device while the new stream comes up.
+            try:
+                _cmd_interrupt_tts(session, {})
+            except Exception:
+                session.logger.debug("Audio update: interrupt_tts pre-cutover failed", exc_info=True)
             session.logger.debug(f"Hot-swapping output device to index {output_idx} (None=Default)")
-            if hasattr(session, '_main_loop') and session._main_loop.is_running():
-                session._main_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx)
+            if target_loop and target_loop.is_running():
+                target_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx)
             else:
                 session.transport.output().set_device(output_idx)
 
@@ -452,6 +473,14 @@ def _cmd_process_text_input(session, params):
         if hasattr(session, 'tts_service') and session.tts_service:
             session.tts_service._cancelled = True
         session._welcome_task.cancel()
+        # Welcome task may have been sleeping (WELCOME_DELAY) — CancelledError path that
+        # clears _cancelled might not run. LLMFullResponseStartFrame also clears this, but
+        # reset now so no stray TextFrames are dropped before StartFrame arrives.
+        if hasattr(session, 'tts_service') and session.tts_service:
+            session.tts_service._cancelled = False
+            session.logger.info(
+                "process_text_input: cleared TTS _cancelled after welcome interrupt (next reply can speak)",
+            )
 
     is_telegram = _parse_bool(params.get('is_telegram'), default=False) if isinstance(params, dict) else False
     uploaded_image_path = params.get('uploaded_image_path', None)
@@ -652,12 +681,31 @@ def _cmd_interrupt_tts(session, params):
 def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
     from .libs import StartFrame, TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
-    text = params.get('text', '')
+    import time
+    from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+
+    raw_text = params.get('text', '')
+    text = clean_text_for_tts(raw_text)
     has_llm = hasattr(session, 'llm_service') and session.llm_service is not None
     has_loop = hasattr(session, 'runner') and session.runner is not None and hasattr(session.runner, '_loop') and session.runner._loop is not None
     session.logger.info(f"_cmd_speak_text_directly called: text_len={len(text)}, has_llm_service={has_llm}, has_event_loop={has_loop}")
     if text and has_llm:
-        session.logger.debug(f"Speaking text directly via TTS: '{text[:50]}...'")
+        # De-duplicate repeated direct TTS within a short time window.
+        # This prevents subagent->orchestrator double announcements.
+        now = time.time()
+        last_text = getattr(session, '_last_direct_tts_text', '')
+        last_ts = float(getattr(session, '_last_direct_tts_ts', 0.0) or 0.0)
+        if text.strip() and text.strip() == str(last_text).strip() and (now - last_ts) < 4.0:
+            session.logger.info("_cmd_speak_text_directly dedup: skipped duplicate direct TTS")
+            return
+        session._last_direct_tts_text = text
+        session._last_direct_tts_ts = now
+
+        direct_tts_id = f"direct_tts_{int(now * 1000)}"
+        session.logger.info(
+            "_cmd_speak_text_directly start id=%s text_len=%d preview=%r",
+            direct_tts_id, len(text), text[:80],
+        )
         if session.runner and session.runner._loop:
             async def speak_directly():
                 # Clear ONLY thread-level telegram flags so TTS speaks on desktop.
@@ -666,10 +714,20 @@ def _cmd_speak_text_directly(session, params):
                 import threading
 
                 saved_flags = {}
+                current_thread = threading.current_thread()
+                prev_force_desktop = bool(getattr(current_thread, 'force_desktop_tts', False))
+                current_thread.force_desktop_tts = True
+                prev_tts_force = bool(getattr(getattr(session, 'tts_service', None), '_force_desktop_tts', False))
+                if hasattr(session, 'tts_service') and session.tts_service is not None:
+                    session.tts_service._force_desktop_tts = True
                 for t in threading.enumerate():
                     if hasattr(t, 'telegram_request') and t.telegram_request:
                         saved_flags[t] = True
                         t.telegram_request = False
+                session.logger.info(
+                    "_cmd_speak_text_directly id=%s forcing desktop_tts telegram_threads_cleared=%d",
+                    direct_tts_id, len(saved_flags),
+                )
 
                 pipeline_dir = session.llm_service._pipeline_direction
 
@@ -682,6 +740,7 @@ def _cmd_speak_text_directly(session, params):
                 await session.llm_service.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
                 await session.llm_service.push_frame(TextFrame(text=text), pipeline_dir)
                 await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
+                session.logger.info("_cmd_speak_text_directly id=%s frames queued to pipeline", direct_tts_id)
 
                 # Wait for TTS to process, then restore thread flags
                 await asyncio.sleep(0.5)
@@ -690,8 +749,11 @@ def _cmd_speak_text_directly(session, params):
                         t.telegram_request = val
                     except Exception:
                         pass
+                current_thread.force_desktop_tts = prev_force_desktop
+                if hasattr(session, 'tts_service') and session.tts_service is not None:
+                    session.tts_service._force_desktop_tts = prev_tts_force
 
-                session.logger.debug("Direct TTS speech completed, thread flags restored")
+                session.logger.info("_cmd_speak_text_directly done id=%s", direct_tts_id)
 
             asyncio.run_coroutine_threadsafe(speak_directly(), session.runner._loop)
         else:
@@ -744,6 +806,10 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
         return vp  # ElevenLabs voices are dynamic (API IDs or names), trust the provider
 
     # Voice doesn't match claimed provider — try to detect the correct one
+    # Keep claimed Coqui when the stored id is Kokoro-shaped (legacy rows); Coqui TTS remaps invalid speakers.
+    if 'coqui' in vp and is_kokoro:
+        return vp
+
     if is_kokoro:
         return 'kokoro'
     if is_openai:
@@ -899,15 +965,29 @@ def _cmd_current_chat_changed(session, params):
                 if not chat_voice_provider:
                     chat_voice_provider = _nvp(getattr(settings_row, 'tts_provider', None) or "kokoro")
                 if not chat_voice_model:
-                    vp = chat_voice_provider or ""
-                    if "kokoro" in vp:
-                        chat_voice_model = (getattr(settings_row, 'kokoro_voice', None) or "").strip() or "af_heart"
-                    elif "openai" in vp:
-                        chat_voice_model = (getattr(settings_row, 'openai_voice', None) or "").strip() or "alloy"
-                    elif "elevenlabs" in vp:
-                        chat_voice_model = (getattr(settings_row, 'elevenlabs_voice', None) or "").strip() or ""
-                    else:
-                        chat_voice_model = "af_heart"
+                    from distr.core.chat import resolve_voice_model_from_global_settings
+
+                    chat_voice_model = resolve_voice_model_from_global_settings(
+                        chat_voice_provider or "", settings_row
+                    )
+                    if not chat_voice_model:
+                        vp = chat_voice_provider or ""
+                        if "kokoro" in vp:
+                            chat_voice_model = (
+                                getattr(settings_row, "kokoro_voice", None) or ""
+                            ).strip() or "af_heart"
+                        elif "openai" in vp:
+                            chat_voice_model = (
+                                getattr(settings_row, "openai_voice", None) or ""
+                            ).strip() or "alloy"
+                        elif "elevenlabs" in vp:
+                            chat_voice_model = (
+                                getattr(settings_row, "elevenlabs_voice", None) or ""
+                            ).strip() or ""
+                        else:
+                            chat_voice_model = (
+                                getattr(settings_row, "coqui_voice", None) or ""
+                            ).strip() or "p225"
     except Exception as e:
         session.logger.warning("Load chat %s: DB read failed: %s", chat_id, e)
 
@@ -1003,6 +1083,22 @@ def _cmd_current_chat_changed(session, params):
                 pass
 
         threading.Thread(target=_warm_model, daemon=True, name="ollama-warmup").start()
+
+    # ---------------------------------------------------------------
+    # 11. Optional initial message for create-chat flow (deterministic order)
+    # ---------------------------------------------------------------
+    initial_message = params.get('initial_message') if isinstance(params, dict) else None
+    if initial_message:
+        raw_speak = params.get('initial_speak') if isinstance(params, dict) else None
+        initial_speak = coerce_speak_enabled(raw_speak, default=True)
+        session.logger.info(
+            "Load chat %s: process_text_input for new-chat initial_message (len=%s, speak_raw=%r speak=%s)",
+            chat_id,
+            len((initial_message or "")),
+            raw_speak,
+            initial_speak,
+        )
+        _cmd_process_text_input(session, {'text': initial_message, 'speak': initial_speak})
 
 
 # ---------------------------------------------------------------------------

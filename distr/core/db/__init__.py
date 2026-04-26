@@ -127,6 +127,13 @@ class Settings(Base):
 
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)
+    global_ptt_hotkey_enabled = Column(Boolean, default=True)
+    global_ptt_hotkey_primary = Column(String, default='option')
+    global_ptt_hotkey_secondary = Column(String, default='command')
+    oracle_size_hotkey_decrease_modifier = Column(String, default='option_command')
+    oracle_size_hotkey_decrease_key = Column(String, default='left_bracket')
+    oracle_size_hotkey_increase_modifier = Column(String, default='option_command')
+    oracle_size_hotkey_increase_key = Column(String, default='right_bracket')
 
     voice_provider = Column(String, default='kokoro')
     kokoro_voice = Column(String, default='af_heart')
@@ -137,6 +144,7 @@ class Settings(Base):
     elevenlabs_style = Column(Float, default=0.25)
     elevenlabs_use_speaker_boost = Column(Boolean, default=True)
     openai_voice = Column(String, default='alloy')
+    coqui_voice = Column(String, default='p225')
     qwen3_voice = Column(String, default='aiden')
     f5tts_voice = Column(String, default='default')
     voxcpm_voice = Column(String, default='default')
@@ -277,58 +285,6 @@ class CustomVoice(Base):
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
 
-class WorkflowProject(Base):
-    __tablename__ = 'workflow_projects'
-
-    id = Column(Integer, primary_key=True)
-    name = Column(String, nullable=False)
-    description = Column(Text)
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Relationship to workflows (job cards)
-    workflows = relationship("Workflow", back_populates="project")
-
-
-class Workflow(Base):
-    __tablename__ = 'workflows'
-
-    id = Column(Integer, primary_key=True)
-
-    title = Column(String)  # also a trigger word
-    description = Column(String)
-    desired_outcome = Column(Text)  # What the workflow is intended to achieve
-    
-    # Template/Job Card support
-    workflow_type = Column(String, default='template')  # 'template' or 'job_card'
-    template_id = Column(Integer, ForeignKey('workflows.id'), nullable=True)  # For job cards: link to template
-    version = Column(String, default='1.0.0')  # Version for templates
-    is_template = Column(Boolean, default=True)  # True for templates, False for job cards
-    
-    # Project relationship (for job cards)
-    project_id = Column(Integer, ForeignKey('workflow_projects.id'), nullable=True)
-    
-    # Job Card specific fields
-    ticket_id = Column(String)  # External ticket/spec identifier
-    ticket_text = Column(Text)  # Ticket/spec content
-    repo_workspace = Column(String)  # Repository/workspace path
-    constraints = Column(Text)  # JSON string: time, environment, forbidden actions
-    definition_of_done = Column(Text)  # Done criteria
-    qa_policy = Column(Text)  # JSON string: approval gates, QA requirements
-    overrides = Column(Text)  # JSON string: node/edge overrides from template
-
-    additional_trigger_words = Column(Text)  # Store as JSON string
-    workflow_instructions = Column(Text)  # Store as JSON string - list of instruction dicts
-
-    created_date = Column(DateTime, default=datetime.utcnow)
-    modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-    
-    # Self-referential relationship for template -> job cards
-    job_cards = relationship("Workflow", backref=backref("template", remote_side=[id]))
-    # Project relationship
-    project = relationship("WorkflowProject", back_populates="workflows")
-
-
 class TrelloTicket(Base):
     __tablename__ = 'trello_tickets'
 
@@ -339,8 +295,7 @@ class TrelloTicket(Base):
     
     # Local allocations
     chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
-    workflow_id = Column(Integer, ForeignKey('workflows.id'), nullable=True)
-    
+
     # Cached Trello Data
     members = Column(Text)  # JSON string of member names/IDs
     attachments = Column(Text)  # JSON string of attachment URLs/names
@@ -351,7 +306,6 @@ class TrelloTicket(Base):
 
     # Relationships
     chat = relationship("Chat")
-    workflow = relationship("Workflow")
 
 
 class SkinSize(Base):
@@ -751,6 +705,13 @@ def init_db():
                 connected_accounts='[]',
                 last_listening_state=True,
                 hands_free_mode=False,  # Default to push-to-talk mode
+                global_ptt_hotkey_enabled=True,
+                global_ptt_hotkey_primary='option',
+                global_ptt_hotkey_secondary='command',
+                oracle_size_hotkey_decrease_modifier='option_command',
+                oracle_size_hotkey_decrease_key='left_bracket',
+                oracle_size_hotkey_increase_modifier='option_command',
+                oracle_size_hotkey_increase_key='right_bracket',
                 accepted_eula=False,
                 elevenlabs_enabled=False,
                 elevenlabs_key='',

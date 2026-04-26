@@ -11,6 +11,11 @@
   var PAGE_SIZE = 24;
   var currentPage = 0;
   var currentSkillId = null;
+  var skillsOverviewAudio = null;
+  var skillsOverviewObjectUrl = null;
+  var skillsOverviewLoading = false;
+  var skillOverviewAbort = null;
+  var skillsOverviewTriggerBtn = null;
 
   // ── Tag inference ────────────────────────────────────────────────
   var TAG_RULES = {
@@ -216,12 +221,20 @@
       html += '  <button type="button" class="copy-btn absolute top-3 right-3 p-1 text-gray-400 hover:text-[#fb923c] transition-colors" title="Copy skill markdown">' +
               '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>' +
               '</button>';
-      html += '  <button type="button" class="push-btn absolute top-3 right-10 p-1 text-gray-400 hover:text-[#fb923c] transition-colors" title="Push skill to project">' +
-              '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>' +
-              '</button>';
       html += '  <div class="flex flex-wrap gap-1 mb-2">' + tagBadges + "</div>";
       html += '  <h4 class="text-sm font-semibold text-white mb-1.5 leading-tight">' + esc(skill.name || skill.id) + "</h4>";
       html += '  <p class="text-xs text-gray-400 leading-relaxed">' + esc(shortDesc) + "</p>";
+      html +=
+        '  <div class="flex gap-2 mt-3">' +
+        '    <button type="button" class="push-project-btn flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Push skill to project">' +
+        '      <svg class="w-4 h-4 shrink-0 text-[#fb923c]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>' +
+        '      <span class="truncate leading-tight">Push to project</span>' +
+        "    </button>" +
+        '    <button type="button" class="overview-read-btn flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Read this Overview">' +
+        '      <svg class="w-4 h-4 shrink-0 text-[#fb923c]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.536 8.464a5 5 0 010 7.072m2.828-9.9a9 9 0 010 12.728M5.586 15H4a1 1 0 01-1-1v-4a1 1 0 011-1h1l4.707-4.707A1 1 0 0112 5.586v12.828a1 1 0 01-1.707.707L6 15h-.586z"/></svg>' +
+        '      <span class="truncate leading-tight">Read this Overview</span>' +
+        "    </button>" +
+        "  </div>";
       html += "</div>";
     });
     grid.innerHTML = html;
@@ -235,12 +248,19 @@
           copySkillToClipboard(skillId);
         });
       }
-      var pushBtn = card.querySelector(".push-btn");
+      var pushBtn = card.querySelector(".push-project-btn");
       if (pushBtn) {
         pushBtn.addEventListener("click", function (e) {
           e.stopPropagation();
           var skillId = card.getAttribute("data-id");
           openSkillPushModal(skillId);
+        });
+      }
+      var overviewBtn = card.querySelector(".overview-read-btn");
+      if (overviewBtn) {
+        overviewBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          tellMeAboutSkill(card.getAttribute("data-id"), overviewBtn);
         });
       }
       card.addEventListener("click", function () {
@@ -270,6 +290,7 @@
 
   // ── Skill detail modal ──────────────────────────────────────────
   function openSkillDetail(skillId) {
+    stopSkillsOverviewPlayback();
     currentSkillId = skillId;
     var skill = allSkills.find(function (s) { return s.id === skillId; });
     if (!skill) return;
@@ -291,8 +312,12 @@
       projSel.selectedIndex = 1;
     }
 
-    // Clear status
+    // Clear status & AI overview block
     document.getElementById("skill-modal-push-status").textContent = "";
+    var ovWrap = document.getElementById("skill-modal-overview-wrap");
+    var ovEl = document.getElementById("skill-modal-overview");
+    if (ovWrap) ovWrap.classList.add("hidden");
+    if (ovEl) ovEl.textContent = "";
 
     // Loading state
     document.getElementById("skill-modal-content").innerHTML = '<p class="text-gray-500">Loading…</p>';
@@ -312,7 +337,156 @@
       });
   }
 
+  function hideSkillsTtsChrome() {
+    var spin = document.getElementById("skills-tts-spinner");
+    var stopBtn = document.getElementById("skills-tts-stop");
+    var playBtn = document.getElementById("skills-tts-play");
+    if (spin) spin.classList.add("hidden");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (playBtn) playBtn.classList.add("hidden");
+  }
+
+  /** After overview audio finishes naturally — keep MP3 blob for replay (Play button). */
+  function onOverviewPlaybackEnded() {
+    skillsOverviewLoading = false;
+    skillsOverviewAudio = null;
+    var stopBtn = document.getElementById("skills-tts-stop");
+    var playBtn = document.getElementById("skills-tts-play");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (playBtn && skillsOverviewObjectUrl) playBtn.classList.remove("hidden");
+  }
+
+  function attachOverviewEndedListener() {
+    if (!skillsOverviewAudio) return;
+    skillsOverviewAudio.addEventListener("ended", function onEnded() {
+      skillsOverviewAudio.removeEventListener("ended", onEnded);
+      onOverviewPlaybackEnded();
+    });
+  }
+
+  function replaySkillsOverview() {
+    if (!skillsOverviewObjectUrl) return;
+    skillsOverviewAudio = new Audio(skillsOverviewObjectUrl);
+    attachOverviewEndedListener();
+    var playBtn = document.getElementById("skills-tts-play");
+    var stopBtn = document.getElementById("skills-tts-stop");
+    if (playBtn) playBtn.classList.add("hidden");
+    if (stopBtn) stopBtn.classList.remove("hidden");
+    skillsOverviewAudio.play().catch(function () {});
+  }
+
+  function stopSkillsOverviewPlayback() {
+    if (skillOverviewAbort) {
+      try {
+        skillOverviewAbort.abort();
+      } catch (_) {}
+      skillOverviewAbort = null;
+    }
+    if (skillsOverviewAudio) {
+      skillsOverviewAudio.pause();
+      skillsOverviewAudio.currentTime = 0;
+      skillsOverviewAudio = null;
+    }
+    if (skillsOverviewObjectUrl) {
+      URL.revokeObjectURL(skillsOverviewObjectUrl);
+      skillsOverviewObjectUrl = null;
+    }
+    if (skillsOverviewTriggerBtn) {
+      skillsOverviewTriggerBtn.disabled = false;
+      skillsOverviewTriggerBtn.classList.remove("opacity-50", "cursor-wait");
+      skillsOverviewTriggerBtn = null;
+    }
+    skillsOverviewLoading = false;
+    hideSkillsTtsChrome();
+  }
+
+  /** LLM spoken overview + TTS; spinner next to search until audio ready, then stop control. */
+  function tellMeAboutSkill(skillId, triggerBtn) {
+    if (!skillId || skillsOverviewLoading) return;
+    stopSkillsOverviewPlayback();
+    skillsOverviewLoading = true;
+    skillsOverviewTriggerBtn = triggerBtn || null;
+    skillOverviewAbort = new AbortController();
+
+    var spinner = document.getElementById("skills-tts-spinner");
+    var stopBtn = document.getElementById("skills-tts-stop");
+    var playBtn = document.getElementById("skills-tts-play");
+    if (spinner) spinner.classList.remove("hidden");
+    if (stopBtn) stopBtn.classList.add("hidden");
+    if (playBtn) playBtn.classList.add("hidden");
+
+    if (skillsOverviewTriggerBtn) {
+      skillsOverviewTriggerBtn.disabled = true;
+      skillsOverviewTriggerBtn.classList.add("opacity-50", "cursor-wait");
+    }
+
+    fetch("/api/skills/" + encodeURIComponent(skillId) + "/spoken-overview", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{}",
+      signal: skillOverviewAbort.signal,
+    })
+      .then(function (r) {
+        if (!r.ok) {
+          return r
+            .json()
+            .catch(function () {
+              return {};
+            })
+            .then(function (j) {
+              var d = j.detail;
+              var msg =
+                typeof d === "string"
+                  ? d
+                  : Array.isArray(d) && d[0] && d[0].msg
+                    ? d[0].msg
+                    : r.statusText || "Request failed";
+              throw new Error(msg);
+            });
+        }
+        return r.json();
+      })
+      .then(function (data) {
+        if (spinner) spinner.classList.add("hidden");
+
+        var modalEl = document.getElementById("skill-modal");
+        var modalOpen = modalEl && !modalEl.classList.contains("hidden");
+        if (modalOpen && currentSkillId === skillId) {
+          var overviewEl = document.getElementById("skill-modal-overview");
+          var wrap = document.getElementById("skill-modal-overview-wrap");
+          if (overviewEl && data.overview) {
+            overviewEl.textContent = data.overview;
+            if (wrap) wrap.classList.remove("hidden");
+          }
+        }
+
+        var b64 = data.audio_mp3_base64;
+        if (!b64) throw new Error("No audio in response");
+
+        var binStr = atob(b64);
+        var bytes = new Uint8Array(binStr.length);
+        for (var i = 0; i < binStr.length; i++) bytes[i] = binStr.charCodeAt(i);
+        var blob = new Blob([bytes], { type: "audio/mpeg" });
+        skillsOverviewObjectUrl = URL.createObjectURL(blob);
+        skillsOverviewAudio = new Audio(skillsOverviewObjectUrl);
+        attachOverviewEndedListener();
+
+        if (stopBtn) stopBtn.classList.remove("hidden");
+
+        return skillsOverviewAudio.play().catch(function () {});
+      })
+      .catch(function (err) {
+        if (err && err.name === "AbortError") return;
+        stopSkillsOverviewPlayback();
+        showSnackbar((err && err.message) || "Could not generate overview", "error");
+      })
+      .then(function () {
+        skillOverviewAbort = null;
+      });
+  }
+
   function closeSkillModal() {
+    stopSkillsOverviewPlayback();
     document.getElementById("skill-modal").classList.add("hidden");
     currentSkillId = null;
   }
@@ -322,7 +496,6 @@
     if (!currentSkillId) return;
 
     var projectEl = document.getElementById("skill-modal-project");
-    var target = document.getElementById("skill-modal-target").value;
     var instructions = document.getElementById("skill-modal-instructions").value.trim();
     var statusEl = document.getElementById("skill-modal-push-status");
 
@@ -346,7 +519,7 @@
     fetch("/api/skills/" + currentSkillId + "/push", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ project_path: projectPath, target: target, instructions: instructions })
+      body: JSON.stringify({ project_path: projectPath, instructions: instructions })
     })
     .then(function (r) { return r.json(); })
     .then(function (data) {
@@ -400,6 +573,19 @@
 
     // Push button
     document.getElementById("skill-modal-push").addEventListener("click", pushSkill);
+
+    var stopOverview = document.getElementById("skills-tts-stop");
+    if (stopOverview) {
+      stopOverview.addEventListener("click", function () {
+        stopSkillsOverviewPlayback();
+      });
+    }
+    var playOverview = document.getElementById("skills-tts-play");
+    if (playOverview) {
+      playOverview.addEventListener("click", function () {
+        replaySkillsOverview();
+      });
+    }
 
     // Enter key in instructions field
     document.getElementById("skill-modal-instructions").addEventListener("keydown", function (e) {

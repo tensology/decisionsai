@@ -138,6 +138,7 @@
         document.getElementById("projects-empty").classList.remove("hidden");
         document.getElementById("projects-detail").classList.add("hidden");
         currentProjectId = null;
+        destroyShellTerminal();
         renderList(projectsData);
     }
 
@@ -204,6 +205,11 @@
     function selectProject(id) {
         var prevProjectId = currentProjectId;
         currentProjectId = id;
+
+        // Tear down interactive shell WS when switching projects (different PTY / folder).
+        if (prevProjectId && prevProjectId !== id) {
+            destroyShellTerminal();
+        }
 
         // Save running terminals for the project we're leaving
         if (prevProjectId && prevProjectId !== id && Object.keys(_startupTerminals).length > 0) {
@@ -292,9 +298,9 @@
             // Hidden->visible transitions can need an extra resize pass.
             setTimeout(function() { try { scheduleShellResize(); } catch (e) {} }, 60);
             setTimeout(function() { try { scheduleShellResize(); } catch (e) {} }, 220);
-        } else {
-            destroyShellTerminal();
         }
+        // Do not close the shell WebSocket when leaving the Terminal tab — switching CLI ↔ Terminal
+        // would reconnect and the server replays the PTY buffer, duplicating the whole scrollback.
         var sections = window.ProjectsTabSections || {};
         if (sections[tabName] && typeof sections[tabName].onActivated === "function") {
             sections[tabName].onActivated();
@@ -1885,6 +1891,8 @@
     var _shellXterm = null;
     var _shellFitTimer = null;
     var _shellTerminalStateByProject = {};
+    /** Prevents overlapping /api/projects/.../shell-terminal bootstrap calls. */
+    var _shellBootstrapping = false;
     var _shellCommandsStorageKey = "projects_global_terminal_commands_v1";
     var _shellBadgeSearchQuery = "";
     var _shellBadgeSelectedCommand = "";
@@ -1956,6 +1964,10 @@
     function connectShellWs() {
         if (!currentProjectId || !_shellProcessId) return;
         killShellWs();
+        // Server replays sess._raw_buffer on every WebSocket attach; clear first so reconnects do not duplicate scrollback.
+        if (_shellXterm) {
+            try { _shellXterm.clear(); } catch (e) {}
+        }
         var token = (window.DECISIONSAI_INTERNAL_API_TOKEN || "").trim();
         var wsProtocol = window.location.protocol === "https:" ? "wss:" : "ws:";
         var wsUrl = wsProtocol + "//" + window.location.host + "/api/projects/startup-terminal/" + encodeURIComponent(_shellProcessId) + "/ws";
@@ -1987,8 +1999,17 @@
             showSnackbar("xterm.js failed to load - refresh the page", "error");
             return;
         }
+        // Already connected for this project — tab switches only need a resize/focus pass.
+        if (_shellWs && _shellWs.readyState === WebSocket.OPEN && _shellWsProjectId === currentProjectId && _shellProcessId) {
+            updateShellStatus("connected");
+            scheduleShellResize();
+            var shellInput = document.getElementById("shell-terminal-command-input");
+            if (shellInput) shellInput.focus();
+            return;
+        }
+        if (_shellBootstrapping) return;
+        _shellBootstrapping = true;
         updateShellStatus("connecting");
-        _shellXterm.writeln("\x1b[90mConnecting to project shell...\x1b[0m");
         apiFetch("/api/projects/" + currentProjectId + "/shell-terminal")
             .then(function(data) {
                 var sessions = (data && data.sessions) || [];
@@ -2008,11 +2029,19 @@
             .catch(function(err) {
                 updateShellStatus("error");
                 if (_shellXterm) _shellXterm.writeln("\x1b[31mFailed to start shell: " + (err && err.message ? err.message : String(err)) + "\x1b[0m");
+            })
+            .finally(function() {
+                _shellBootstrapping = false;
             });
     }
 
     function destroyShellTerminal() {
         killShellWs();
+        _shellProcessId = null;
+        _shellBootstrapping = false;
+        if (_shellXterm) {
+            try { _shellXterm.clear(); } catch (e) {}
+        }
         updateShellStatus("disconnected");
     }
 
@@ -2128,6 +2157,7 @@
     // ?? Startup Terminals (xterm.js grid) ?????????????????????????????????????
     var _startupTerminals = {};  // Map of terminalId -> { term, closeBtn, processId }
     var _nextTerminalId = 0;
+    var _maxStartupTerminalOutputChars = 250000;
     // Per-project terminal persistence: projectId -> [{termId, processId, command}]
     var _projectTerminalState = {};
 
@@ -2157,6 +2187,54 @@
                 }
                 callback(links);
             }
+        });
+    }
+
+    function _appendStartupTerminalOutput(termId, chunk) {
+        var td = _startupTerminals[termId];
+        if (!td || !chunk) return;
+        td.outputBuffer = (td.outputBuffer || "") + String(chunk);
+        if (td.outputBuffer.length > _maxStartupTerminalOutputChars) {
+            td.outputBuffer = td.outputBuffer.slice(td.outputBuffer.length - _maxStartupTerminalOutputChars);
+        }
+    }
+
+    function _copyTextToClipboard(text) {
+        if (navigator.clipboard && typeof navigator.clipboard.writeText === "function") {
+            return navigator.clipboard.writeText(text);
+        }
+        return new Promise(function(resolve, reject) {
+            try {
+                var ta = document.createElement("textarea");
+                ta.value = text;
+                ta.setAttribute("readonly", "");
+                ta.style.position = "fixed";
+                ta.style.left = "-9999px";
+                document.body.appendChild(ta);
+                ta.select();
+                var ok = document.execCommand("copy");
+                document.body.removeChild(ta);
+                if (ok) resolve();
+                else reject(new Error("copy command failed"));
+            } catch (err) {
+                reject(err);
+            }
+        });
+    }
+
+    function copyStartupTerminalOutput(termId) {
+        var td = _startupTerminals[termId];
+        if (!td) return;
+        var text = td.outputBuffer || "";
+        if (!text.trim()) {
+            showSnackbar("No terminal output to copy yet", "info");
+            return;
+        }
+        _copyTextToClipboard(text).then(function() {
+            showSnackbar("Copied terminal output", "success");
+        }).catch(function(err) {
+            console.error("Failed to copy terminal output:", err);
+            showSnackbar("Failed to copy terminal output", "error");
         });
     }
 
@@ -2212,6 +2290,9 @@
         card.innerHTML = '<div class="startup-terminal-header">' +
             '<span class="startup-terminal-title" title="' + escapeAttr(command) + '">PID: —</span>' +
             '<div class="startup-terminal-btns">' +
+            '<button type="button" class="startup-terminal-copy" title="Copy output">' +
+            '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="6" height="7" rx="1"/><path d="M2.5 8.5V2.8a.8.8 0 0 1 .8-.8h4.9"/></svg>' +
+            '</button>' +
             '<button type="button" class="startup-terminal-expand" title="Expand">' +
             '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M11 7v4H7M1 5l4-4M11 7l-4 4"/></svg>' +
             '</button>' +
@@ -2243,6 +2324,9 @@
         var closeBtn = card.querySelector(".startup-terminal-close");
         closeBtn.addEventListener("click", function() { closeStartupTerminal(termId); });
 
+        var copyBtn = card.querySelector(".startup-terminal-copy");
+        if (copyBtn) copyBtn.addEventListener("click", function() { copyStartupTerminalOutput(termId); });
+
         var expandBtn = card.querySelector(".startup-terminal-expand");
         expandBtn.addEventListener("click", function() { expandTerminal(termId); });
 
@@ -2252,6 +2336,7 @@
             command: command,
             processId: null,
             ws: null,
+            outputBuffer: "",
             _roTarget: xtermContainer
         };
 
@@ -2268,6 +2353,7 @@
             measureAndResize();
             term.reset();
             term.writeln("\x1b[33mStarting\x1b[0m " + command + " ...");
+            _appendStartupTerminalOutput(termId, "Starting " + command + " ...\n");
         }, 50);
 
         var ro = typeof ResizeObserver !== "undefined" ? new ResizeObserver(function() {
@@ -2352,23 +2438,28 @@
                 var msg = JSON.parse(ev.data);
                 if (msg.type === "output" && msg.data) {
                     term.write(msg.data);
+                    _appendStartupTerminalOutput(termId, msg.data);
                 } else if (msg.type === "exit") {
                     term.writeln("");
                     term.writeln("\x1b[90m[Process ended]\x1b[0m");
+                    _appendStartupTerminalOutput(termId, "\n[Process ended]\n");
                 }
             } catch (e3) {}
         };
 
         ws.onerror = function() {
             term.writeln("\r\n\x1b[31m[WebSocket error]\x1b[0m");
+            _appendStartupTerminalOutput(termId, "\n[WebSocket error]\n");
         };
 
         ws.onclose = function(ev) {
             termData.ws = null;
             if (ev.code === 1008) {
                 term.writeln("\r\n\x1b[31m[Session not found — process may have exited before connecting]\x1b[0m");
+                _appendStartupTerminalOutput(termId, "\n[Session not found — process may have exited before connecting]\n");
             } else if (ev.code !== 1000) {
                 term.writeln("\r\n\x1b[90m[Disconnected]\x1b[0m");
+                _appendStartupTerminalOutput(termId, "\n[Disconnected]\n");
             }
         };
     }
@@ -2441,6 +2532,9 @@
         card.innerHTML = '<div class="startup-terminal-header">' +
             '<span class="startup-terminal-title" title="' + escapeAttr(command) + '">' + escapeAttr(titleText) + '</span>' +
             '<div class="startup-terminal-btns">' +
+            '<button type="button" class="startup-terminal-copy" title="Copy output">' +
+            '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="4" y="3" width="6" height="7" rx="1"/><path d="M2.5 8.5V2.8a.8.8 0 0 1 .8-.8h4.9"/></svg>' +
+            '</button>' +
             '<button type="button" class="startup-terminal-expand" title="Expand">' +
             '<svg width="11" height="11" viewBox="0 0 12 12" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M1 5V1h4M11 7v4H7M1 5l4-4M11 7l-4 4"/></svg>' +
             '</button>' +
@@ -2463,10 +2557,13 @@
         var closeBtn = card.querySelector(".startup-terminal-close");
         closeBtn.addEventListener("click", function() { closeStartupTerminal(termId); });
 
+        var copyBtn2 = card.querySelector(".startup-terminal-copy");
+        if (copyBtn2) copyBtn2.addEventListener("click", function() { copyStartupTerminalOutput(termId); });
+
         var expandBtn2 = card.querySelector(".startup-terminal-expand");
         if (expandBtn2) expandBtn2.addEventListener("click", function() { expandTerminal(termId); });
 
-        _startupTerminals[termId] = { term: term, command: command, processId: processId, ws: null, _roTarget: xtermContainer };
+        _startupTerminals[termId] = { term: term, command: command, processId: processId, ws: null, outputBuffer: "", _roTarget: xtermContainer };
 
         function measureAndResize() {
             if (!xtermContainer || !term.element) return;
@@ -2620,6 +2717,11 @@
             var termId = _expandedTermId;
             collapseTerminal();          // restore card first
             if (termId) closeStartupTerminal(termId);  // then kill process
+        });
+
+        var copyBtn = document.getElementById("terminal-expand-copy");
+        if (copyBtn) copyBtn.addEventListener("click", function() {
+            if (_expandedTermId) copyStartupTerminalOutput(_expandedTermId);
         });
 
         // Click backdrop to collapse (not stop)

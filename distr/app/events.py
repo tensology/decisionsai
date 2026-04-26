@@ -7,6 +7,7 @@ handler stays readable.
 
 import logging
 import os
+import base64
 import tempfile
 import threading
 import time
@@ -102,7 +103,8 @@ class EventHandlerMixin:
         # --- Chat stream ---
         elif event in ('chat_stream_started', 'chat_stream_token',
                         'chat_stream_finished', 'chat_stream_error',
-                        'typing_indicator_changed', 'chat_message_added'):
+                        'typing_indicator_changed', 'chat_message_added',
+                        'transcription_progress'):
             self._evt_chat_stream(event, data)
 
         # --- Actions ---
@@ -178,8 +180,34 @@ class EventHandlerMixin:
     # ------------------------------------------------------------------
 
     def _evt_tts_player(self, event, data):
+        # Lazy-init TTS UI lifecycle state
+        if not hasattr(self, '_tts_active_sessions'):
+            self._tts_active_sessions = 0
+        if not hasattr(self, '_tts_non_interrupt_fallback_timer'):
+            self._tts_non_interrupt_fallback_timer = QTimer(self)
+            self._tts_non_interrupt_fallback_timer.setSingleShot(True)
+            self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
+
         if event == 'tts_started':
+            # Dedup bursty duplicate starts (e.g., direct speak + provider start),
+            # but never suppress opening the player if it is currently hidden.
+            dedup_key = ('tts_started',)
+            now = time.time()
+            last_time = self._event_dedup_cache.get(dedup_key, 0)
+            player_visible = bool(
+                hasattr(self, 'player_window') and self.player_window and self.player_window.isVisible()
+            )
+            if now - last_time < 0.5 and player_visible and self._tts_active_sessions > 0:
+                logger.debug("[EVENT QUEUE] Dedup: skipping duplicate tts_started (player already visible)")
+                return
+            self._event_dedup_cache[dedup_key] = now
+            self._tts_active_sessions += 1
             self.last_tts_start_time = time.time()
+            logger.info(
+                "[EVENT QUEUE] tts_started: active_sessions=%d player_visible=%s",
+                self._tts_active_sessions,
+                player_visible,
+            )
             if not hasattr(self, '_player_safety_timer'):
                 self._player_safety_timer = QTimer(self)
                 self._player_safety_timer.setSingleShot(True)
@@ -195,22 +223,37 @@ class EventHandlerMixin:
 
         elif event == 'playback_finished':
             logger.info("[EVENT QUEUE] Playback finished event received - closing player immediately")
+            # playback_finished is authoritative end-of-utterance for normal paths
+            self._tts_active_sessions = max(0, self._tts_active_sessions - 1)
+            logger.info(
+                "[EVENT QUEUE] playback_finished: active_sessions=%d",
+                self._tts_active_sessions,
+            )
             if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                 self._player_safety_timer.stop()
-            signal_manager.player_stop.emit()
-            player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
-            if player_already_hidden:
-                logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden")
-            else:
-                signal_manager.emit_hide_player_window()
-                logger.info("[EVENT QUEUE] Emitted hide_player_window signal (playback_finished)")
+            if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
+                self._tts_non_interrupt_fallback_timer.stop()
+            if self._tts_active_sessions == 0:
+                signal_manager.player_stop.emit()
+                player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
+                if player_already_hidden:
+                    logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden")
+                else:
+                    signal_manager.emit_hide_player_window()
+                    logger.info("[EVENT QUEUE] Emitted hide_player_window signal (playback_finished)")
 
         elif event == 'tts_stopped':
             duration = data.get('duration', 0.0)
             logger.info(f"[EVENT QUEUE] TTS stopped event received, duration: {duration}")
+            interrupted = bool(data.get('interrupted', False))
+            logger.info(
+                "[EVENT QUEUE] tts_stopped details: interrupted=%s active_sessions=%d",
+                interrupted,
+                self._tts_active_sessions,
+            )
             # Dedup: skip duplicate tts_stopped with duration <= 0 within 0.5s
             # These arrive in bursts during PTT activation and cause redundant stop/animation resets
-            if duration <= 0.0:
+            if interrupted or duration <= 0.0:
                 dedup_key = ('tts_stopped_interrupt',)
                 now = time.time()
                 last_time = self._event_dedup_cache.get(dedup_key, 0)
@@ -219,8 +262,11 @@ class EventHandlerMixin:
                     return
                 self._event_dedup_cache[dedup_key] = now
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
+                self._tts_active_sessions = 0
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
+                if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
+                    self._tts_non_interrupt_fallback_timer.stop()
                 QtWidgets.QApplication.processEvents()
                 signal_manager.player_stop.emit()
                 QtWidgets.QApplication.processEvents()
@@ -231,6 +277,15 @@ class EventHandlerMixin:
                     signal_manager.emit_hide_player_window()
                     logger.info("[EVENT QUEUE] Emitted hide_player_window signal (tts_stopped interrupt)")
                 QtWidgets.QApplication.processEvents()
+            else:
+                # Do NOT close on normal tts_stopped: TTS generation can finish before
+                # transport playback is complete. Wait for playback_finished only.
+                # Safety close remains the long player_safety_timer (5 minutes).
+                if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
+                    self._tts_non_interrupt_fallback_timer.stop()
+                logger.info(
+                    "[EVENT QUEUE] Non-interrupt tts_stopped received; waiting for playback_finished (no short fallback close)",
+                )
 
         elif event == 'tts_error':
             provider = data.get('provider', 'TTS')
@@ -259,10 +314,18 @@ class EventHandlerMixin:
 
     def _on_player_safety_timeout(self):
         """Fallback: hide player if playback_finished was never received (e.g. agent crash)."""
+        self._tts_active_sessions = 0
         if hasattr(self, 'player_window') and self.player_window and self.player_window.isVisible():
             logger.warning("[EVENT QUEUE] Player safety timeout (5 min) - hiding player (playback_finished never received)")
             signal_manager.player_stop.emit()
             signal_manager.emit_hide_player_window()
+
+    def _on_tts_non_interrupt_fallback_timeout(self):
+        """Legacy short fallback timer callback (kept for compatibility, no forced close)."""
+        if self._tts_active_sessions > 0:
+            logger.warning(
+                "[EVENT QUEUE] Missing playback_finished after non-interrupt tts_stopped - keeping player open and waiting",
+            )
 
     # ------------------------------------------------------------------
     # Voice listening state
@@ -346,15 +409,19 @@ class EventHandlerMixin:
             chat_id = data.get('chat_id')
             response_text = data.get('response_text')
             self._last_stream_response_text = response_text
-            # Dedup: skip duplicate chat_stream_finished for the same chat_id within 2s
-            dedup_key = ('chat_stream_finished', chat_id)
-            now = time.time()
-            last_time = self._event_dedup_cache.get(dedup_key, 0)
-            if now - last_time < 2.0:
-                logger.debug("[EVENT QUEUE] Dedup: skipping duplicate chat_stream_finished for chat_id=%s", chat_id)
-                return
-            self._event_dedup_cache[dedup_key] = now
+            # Do not time-dedupe stream_finished: interrupt cleanup often fires within 2s of
+            # normal completion; dropping it leaves the web UI stuck on the streaming bubble.
             signal_manager.chat_stream_finished.emit(chat_id)
+        elif event == 'transcription_progress':
+            _tcid = data.get('chat_id')
+            if _tcid is None:
+                return
+            signal_manager.transcription_progress.emit(
+                int(_tcid),
+                data.get('status_text') or '',
+                bool(data.get('done')),
+                bool(data.get('clear_live_preview')),
+            )
         elif event == 'chat_stream_error':
             error = data.get('error')
             chat_id = data.get('chat_id')
@@ -484,6 +551,7 @@ class EventHandlerMixin:
         transcript = data.get('transcript')
         error = data.get('error')
         input_type = data.get('input_type', 'voice')
+        request_id_str = str(request_id or "")
 
         # Generic in-app STT callbacks (e.g., WhatsApp/media transcription via agent STT service).
         if hasattr(self, '_pending_stt_callbacks'):
@@ -505,6 +573,18 @@ class EventHandlerMixin:
                     result_holder['error'] = error
                     result_event.set()
                     return  # Don't process as normal Telegram transcription
+
+        # Non-Telegram STT flows (e.g., WhatsApp/media helper transcription) use
+        # file_stt_* request IDs. If their callback already timed out/cleared,
+        # the late result must not be routed into Telegram agent input.
+        if request_id_str.startswith("file_stt_"):
+            logger.info(
+                "[EVENT QUEUE] ⏭️ Ignoring stale non-Telegram transcription result "
+                "(request_id: %s, success=%s)",
+                request_id,
+                success,
+            )
+            return
 
         if success and transcript:
             logger.info("[EVENT QUEUE] ✅ Telegram voice transcription successful (request_id: %s): '%s'", request_id, transcript[:200])
@@ -543,7 +623,21 @@ class EventHandlerMixin:
         has_telegram_manager = hasattr(self, 'telegram_manager')
         telegram_connected = has_telegram_manager and self.telegram_manager.is_connected() if has_telegram_manager else False
 
-        if (provider == 'kokoro' or provider == 'tool') and has_telegram_manager and telegram_connected:
+        remote_ctx = None
+        if has_telegram_manager and self.telegram_manager:
+            remote_ctx = self._consume_remote_response_context()
+
+        if remote_ctx and provider in ('kokoro', 'tool') and has_telegram_manager and telegram_connected:
+            app_ref = self
+
+            def send_to_remote_thread():
+                try:
+                    app_ref._send_to_remote_worker(data, remote_ctx)
+                except Exception as e:
+                    logger.error(f"Error in send_to_remote thread: {e}", exc_info=True)
+
+            threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
+        elif (provider == 'kokoro' or provider == 'tool') and has_telegram_manager and telegram_connected:
             # Capture self reference for thread
             app_ref = self
 
@@ -561,6 +655,110 @@ class EventHandlerMixin:
                 logger.warning("[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram manager not available)")
             elif not telegram_connected:
                 logger.warning(f"[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram not connected. Manager exists: {has_telegram_manager})")
+
+    def _consume_remote_response_context(self):
+        """Get and clear one pending remote-app response context, if present."""
+        try:
+            if not hasattr(self, 'telegram_manager') or not self.telegram_manager:
+                return None
+
+            ctx = getattr(self.telegram_manager, '_pending_remote_agent_response', None)
+            if not ctx:
+                return None
+
+            created_at = float(ctx.get("created_at", 0) or 0)
+            age_s = time.time() - created_at if created_at else 0
+            if created_at and age_s > 180:
+                logger.warning(
+                    "[REMOTE TTS] Dropping stale remote context: request_id=%s age=%.1fs",
+                    ctx.get("request_id"),
+                    age_s,
+                )
+                setattr(self.telegram_manager, '_pending_remote_agent_response', None)
+                return None
+
+            setattr(self.telegram_manager, '_pending_remote_agent_response', None)
+            logger.info(
+                "[REMOTE TTS] Consumed remote context: request_id=%s source=%s mode=%s",
+                ctx.get("request_id"),
+                ctx.get("source_command"),
+                ctx.get("mode"),
+            )
+            return ctx
+        except Exception:
+            logger.exception("[REMOTE TTS] Failed consuming remote context")
+            return None
+
+    def _send_to_remote_worker(self, data, remote_ctx):
+        """Build and send a remote-app assistant response payload (text + audio)."""
+        text = (data.get('text') or '').strip()
+        if not text:
+            logger.warning(
+                "[REMOTE TTS] Empty assistant text for remote response (request_id=%s)",
+                remote_ctx.get("request_id"),
+            )
+            return
+
+        logger.info(
+            "[REMOTE TTS] Preparing response for remote-app: request_id=%s chars=%d",
+            remote_ctx.get("request_id"),
+            len(text),
+        )
+
+        audio_file = self._telegram_generate_tts(text)
+        if audio_file and audio_file.exists() and str(audio_file).endswith('.wav'):
+            audio_file = self._convert_wav_to_ogg(audio_file)
+
+        audio_payload = None
+        if audio_file and audio_file.exists():
+            try:
+                with open(audio_file, "rb") as f:
+                    audio_bytes = f.read()
+                audio_payload = {
+                    "data": base64.b64encode(audio_bytes).decode("ascii"),
+                    "mime_type": "audio/ogg" if str(audio_file).endswith(".ogg") else "audio/wav",
+                    "filename": os.path.basename(str(audio_file)),
+                    "size_bytes": len(audio_bytes),
+                }
+                logger.info(
+                    "[REMOTE TTS] Encoded audio payload: request_id=%s bytes=%d file=%s",
+                    remote_ctx.get("request_id"),
+                    len(audio_bytes),
+                    audio_payload["filename"],
+                )
+            except Exception:
+                logger.exception(
+                    "[REMOTE TTS] Failed encoding audio payload (request_id=%s)",
+                    remote_ctx.get("request_id"),
+                )
+
+        payload = {
+            "type": "remote_agent_response",
+            "request_id": remote_ctx.get("request_id"),
+            "data": {
+                "text": text,
+                "mode": remote_ctx.get("mode") or "command",
+                "source_command": remote_ctx.get("source_command"),
+                "audio": audio_payload,
+            },
+        }
+
+        try:
+            self.telegram_manager._send_websocket_message(payload)
+            logger.info(
+                "[REMOTE TTS] Sent remote_agent_response: request_id=%s has_audio=%s",
+                remote_ctx.get("request_id"),
+                bool(audio_payload),
+            )
+        except Exception:
+            logger.exception(
+                "[REMOTE TTS] Failed sending remote_agent_response: request_id=%s",
+                remote_ctx.get("request_id"),
+            )
+        finally:
+            # Keep the same cleanup timing/behavior as Telegram worker path.
+            time.sleep(2)
+            self._telegram_cleanup_temp_files(audio_file, None, None)
 
     # ---- worker (runs in thread) ----
 

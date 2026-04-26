@@ -15,6 +15,8 @@ from typing import Any, Optional, Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.pi_skill_push_files import USER_INTENT_FILENAME, write_pi_skill_user_intent
+
 logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent.parent
@@ -32,27 +34,65 @@ CLI_TARGETS = {
 
 class PushSkillInput(BaseModel):
     skill_id: str = Field(description="The skill ID to push. Use the ID from find_skill or list_skills. Examples: 'brainstorming', 'ln-621-security-auditor', 'pdf'.")
-    project_path: str = Field(default=".", description="Path to the project directory. Defaults to current directory.")
+    project_path: str = Field(
+        default=".",
+        description=(
+            "Project root directory. If '.' or omitted, uses the **active project's folder** when one is set and has a folder path; "
+            "otherwise the process working directory."
+        ),
+    )
     target: str = Field(default="pi", description="CLI target to push to: 'pi', 'claude', 'cursor', 'gemini', or 'codex'. Defaults to 'pi'.")
+    instructions: Optional[str] = Field(
+        default="",
+        description=(
+            "For pi: how the user wants to use this skill in this project — quote or summarize what they said in chat. "
+            "Saved as USER_INTENT.md next to SKILL.md (CLI reads it on cold start). "
+            "If they asked you to push/install but have not described usage yet, ask one brief question first, then pass their answer here."
+        ),
+    )
 
 
 class PushSkillTool(BaseTool):
     """Tool for pushing a skill to a project's CLI."""
 
     name: str = "push_skill"
-    description: str = """Push a skill to a project's CLI so it becomes available to the agent.
+    description: str = """Push a skill into a project's CLI so Pi or other targets can load it.
 
-For pi: copies into .pi/skills/<skill_id>/SKILL.md — pi auto-discovers and loads it.
-For claude/cursor/gemini/codex: copies as a flat .md command file.
+Typical conversation: user asks for a skill like X → use find_skill → user says push it to project Y → call push_skill.
 
-Use when the user wants to:
-- "push the brainstorming skill to my project"
-- "install the security auditor skill for pi"
-- "add this skill to my project"
+For **pi** (default): copies `.pi/skills/<skill_id>/SKILL.md`. Pass **instructions** with what the user wants Pi to do with this skill — same idea as the Skills UI "Use this skill to:" box. That text is stored as USER_INTENT.md beside SKILL.md so it is on disk even when the CLI was not running.
 
-Supported targets: pi, claude, cursor, gemini, codex. Default: pi.
+If the user already explained how they want to use it (same turn or earlier), put that into **instructions**. If they said "push it" but never described usage, ask one short clarifying question, wait for their reply, then call push_skill including **instructions** with their wording.
+
+Other targets (claude, cursor, gemini, codex): flat command file; **instructions** only applies to pi.
+
+Examples: "push brainstorming to ~/myapp", "install the security auditor here".
 """
     args_schema: Type[BaseModel] = PushSkillInput
+
+    def _resolve_project_directory(self, project_path: str) -> tuple[Path, str]:
+        """
+        Resolve where to push. Empty or '.' prefers the DB active project's folder_location
+        so pushes match "this project" without relying on CWD (often wrong for GUI apps).
+        """
+        raw = (project_path or "").strip()
+        if raw not in ("", "."):
+            return Path(raw).expanduser().resolve(), ""
+
+        try:
+            from distr.core.agent.services.rag.project import get_active_project
+
+            ap = get_active_project()
+            if ap and ap.get("folder_location"):
+                loc = Path(ap["folder_location"]).expanduser().resolve()
+                if loc.exists() and loc.is_dir():
+                    name = ap.get("name") or ""
+                    hint = f" (resolved from active project: {name})" if name else " (resolved from active project folder)"
+                    return loc, hint
+        except Exception:
+            logger.debug("push_skill: could not resolve active project folder", exc_info=True)
+
+        return Path(".").resolve(), ""
 
     def _resolve_skill(self, skill_id: str) -> Optional[Path]:
         """Resolve a skill ID to its directory, with fuzzy matching."""
@@ -119,13 +159,20 @@ Supported targets: pi, claude, cursor, gemini, codex. Default: pi.
 
         return str(dest_file)
 
-    def _run(self, skill_id: str = "", project_path: str = ".", target: str = "pi", **kwargs) -> str:
+    def _run(
+        self,
+        skill_id: str = "",
+        project_path: str = ".",
+        target: str = "pi",
+        instructions: Optional[str] = None,
+        **kwargs,
+    ) -> str:
         try:
             skill_id = skill_id.strip()
             if not skill_id:
                 return "Please provide a skill ID. Use find_skill or list_skills to discover available skills."
 
-            project = Path(project_path).resolve()
+            project, project_resolve_hint = self._resolve_project_directory(project_path)
             if not project.exists():
                 return f"Project path '{project_path}' does not exist."
             if not project.is_dir():
@@ -137,6 +184,13 @@ Supported targets: pi, claude, cursor, gemini, codex. Default: pi.
 
             actual_id = skill_dir.name
             dest_file = self._push_to_target(skill_dir, actual_id, project, target)
+
+            intent_note = ""
+            if target.lower() == "pi":
+                dest_skill_dir = project / CLI_TARGETS["pi"] / actual_id
+                intent_path = write_pi_skill_user_intent(dest_skill_dir, actual_id, instructions or "")
+                if intent_path:
+                    intent_note = f"\n\nAlso wrote `{USER_INTENT_FILENAME}` with your usage notes for cold CLI starts."
 
             target_dir_name = CLI_TARGETS.get(target.lower(), target)
             skill_md = skill_dir / "SKILL.md"
@@ -160,14 +214,27 @@ Supported targets: pi, claude, cursor, gemini, codex. Default: pi.
             return (
                 f"✅ Pushed skill '{skill_name}' ({actual_id}) to {target}!\n\n"
                 f"Destination: {dest_file}\n"
-                f"Project: {project}\n"
+                f"Project: {project}{project_resolve_hint}\n"
                 f"Target: {target} ({target_dir_name}/)\n\n"
                 f"Use as command: {slash_hint}"
+                f"{intent_note}"
             )
 
         except Exception as e:
             logger.error("Error in push_skill: %s", e, exc_info=True)
             return f"Error pushing skill: {str(e)}"
 
-    async def _arun(self, skill_id: str = "", project_path: str = ".", target: str = "pi", **kwargs) -> str:
-        return self._run(skill_id=skill_id, project_path=project_path, target=target)
+    async def _arun(
+        self,
+        skill_id: str = "",
+        project_path: str = ".",
+        target: str = "pi",
+        instructions: Optional[str] = None,
+        **kwargs,
+    ) -> str:
+        return self._run(
+            skill_id=skill_id,
+            project_path=project_path,
+            target=target,
+            instructions=instructions,
+        )

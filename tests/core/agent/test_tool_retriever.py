@@ -18,15 +18,7 @@ import pytest
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-# ---------------------------------------------------------------------------
-# Stub out PyQt6-dependent modules so tests can run without the GUI stack.
-# distr.core.settings imports distr.core.utils which imports PyQt6.
-# We register a lightweight stub in sys.modules before any production imports.
-# ---------------------------------------------------------------------------
-if "distr.core.settings" not in sys.modules:
-    _settings_stub = MagicMock()
-    _settings_stub.load_settings_from_db = MagicMock(return_value={})
-    sys.modules["distr.core.settings"] = _settings_stub
+# Headless stubs: ``tests/conftest.py`` (PyQt6, settings) load before production imports.
 
 from distr.core.agent.tool_retriever import ALWAYS_ON_NAMES, ToolRetriever
 
@@ -496,9 +488,9 @@ def test_request_tool_injection_round_trip(tool_name: str) -> None:
     # Feature: semantic-tool-retrieval, Property 10
     invocations: list[str] = []
 
-    def mock_callback(query: str) -> tuple[bool, str]:
+    def mock_callback(query: str) -> tuple[bool, str, bool]:
         invocations.append(query)
-        return (True, f"Tool '{query}' injected. Please retry your task.")
+        return (True, f"Tool '{query}' injected. Please retry your task.", True)
 
     rtt = RequestToolTool(on_tool_requested=mock_callback)
     result = rtt._run(text=tool_name)

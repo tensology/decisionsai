@@ -1,0 +1,111 @@
+<div class="mb-6 pb-4 border-b border-[#565869]">
+    <h2 class="text-xl font-semibold text-white mb-1">Shortcut Keys</h2>
+    <p class="text-sm text-gray-400">Edit global keyboard shortcuts for push-to-talk and oracle size</p>
+</div>
+
+<div class="space-y-6">
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Global Push-to-Talk</h3>
+        <div class="space-y-4">
+            <label class="flex items-center cursor-pointer group">
+                <input type="checkbox" id="shortcuts_global_ptt_hotkey_enabled" name="shortcuts_global_ptt_hotkey_enabled"
+                        class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer">
+                <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                    Enable global hold-to-talk hotkey
+                </span>
+            </label>
+            <div class="grid grid-cols-2 gap-4 max-w-xl">
+                <div>
+                    <label for="shortcuts_global_ptt_hotkey_primary" class="block text-sm font-medium text-[#ececf1] mb-2">Primary Key</label>
+                    <select id="shortcuts_global_ptt_hotkey_primary" name="shortcuts_global_ptt_hotkey_primary"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="option">Option (Alt)</option>
+                        <option value="command">Command</option>
+                        <option value="control">Control</option>
+                        <option value="shift">Shift</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="shortcuts_global_ptt_hotkey_secondary" class="block text-sm font-medium text-[#ececf1] mb-2">Secondary Key</label>
+                    <select id="shortcuts_global_ptt_hotkey_secondary" name="shortcuts_global_ptt_hotkey_secondary"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="option">Option (Alt)</option>
+                        <option value="command">Command</option>
+                        <option value="control">Control</option>
+                        <option value="shift">Shift</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Oracle Size Hotkeys</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="space-y-3">
+                <p class="text-sm text-[#ececf1] font-medium">Decrease Size</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="shortcuts_oracle_size_hotkey_decrease_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
+                        <select id="shortcuts_oracle_size_hotkey_decrease_modifier" name="shortcuts_oracle_size_hotkey_decrease_modifier"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="option_command">Option + Command</option>
+                            <option value="option">Option (Alt)</option>
+                            <option value="command">Command</option>
+                            <option value="control">Control</option>
+                            <option value="shift">Shift</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="shortcuts_oracle_size_hotkey_decrease_key" class="block text-xs text-gray-400 mb-1">Key</label>
+                        <select id="shortcuts_oracle_size_hotkey_decrease_key" name="shortcuts_oracle_size_hotkey_decrease_key"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="left_bracket">[</option>
+                            <option value="right_bracket">]</option>
+                            <option value="minus">-</option>
+                            <option value="equal">=</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="space-y-3">
+                <p class="text-sm text-[#ececf1] font-medium">Increase Size</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="shortcuts_oracle_size_hotkey_increase_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
+                        <select id="shortcuts_oracle_size_hotkey_increase_modifier" name="shortcuts_oracle_size_hotkey_increase_modifier"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="option_command">Option + Command</option>
+                            <option value="option">Option (Alt)</option>
+                            <option value="command">Command</option>
+                            <option value="control">Control</option>
+                            <option value="shift">Shift</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="shortcuts_oracle_size_hotkey_increase_key" class="block text-xs text-gray-400 mb-1">Key</label>
+                        <select id="shortcuts_oracle_size_hotkey_increase_key" name="shortcuts_oracle_size_hotkey_increase_key"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="right_bracket">]</option>
+                            <option value="left_bracket">[</option>
+                            <option value="equal">=</option>
+                            <option value="minus">-</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <p class="text-xs text-gray-400 mt-3">
+            Size hotkeys adjust the same slider used in Skins.
+        </p>
+    </div>
+</div>

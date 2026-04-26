@@ -89,6 +89,77 @@
     }
 
     function create(deps) {
+        var waBoardLinkCandidatesByJid = {};
+
+        function resetWaPersonSelect() {
+            var personSelect = document.getElementById("kb-bm-wa-person-select");
+            if (!personSelect) return;
+            personSelect.innerHTML = '<option value="">Link full chat / group</option>';
+        }
+
+        function populateWaChatSelect(chats) {
+            var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+            if (!chatSelect) return;
+            waBoardLinkCandidatesByJid = {};
+            chatSelect.innerHTML = '<option value="">Select chat...</option>';
+            (chats || []).forEach(function(chat) {
+                var jid = String(chat.id || "").trim();
+                var name = String(chat.name || "").trim();
+                if (!jid || !name) return;
+                var phone = jid.split("@")[0].split(":")[0];
+                var isGroup = jid.indexOf("@g.us") >= 0;
+                waBoardLinkCandidatesByJid[jid] = {
+                    jid: jid,
+                    phone: phone,
+                    name: name,
+                    chat_type: isGroup ? "group" : "private",
+                };
+                var opt = document.createElement("option");
+                opt.value = jid;
+                opt.textContent = isGroup ? (name + " (group)") : name;
+                chatSelect.appendChild(opt);
+            });
+        }
+
+        function loadWaGroupPeopleCandidates(selectedChat) {
+            var personSelect = document.getElementById("kb-bm-wa-person-select");
+            if (!personSelect) return Promise.resolve();
+            resetWaPersonSelect();
+            if (!selectedChat || selectedChat.chat_type !== "group" || !selectedChat.phone) {
+                return Promise.resolve();
+            }
+
+            return deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(selectedChat.phone) + "&limit=500").then(function(data) {
+                var members = {};
+                (data.messages || []).forEach(function(msg) {
+                    var phone = String(msg.sender_phone || "").trim();
+                    if (!phone) return;
+                    var name = String(msg.sender_push_name || "").trim() || phone;
+                    members[phone] = name;
+                });
+                Object.keys(members).sort(function(a, b) {
+                    return String(members[a]).localeCompare(String(members[b]));
+                }).forEach(function(phone) {
+                    var opt = document.createElement("option");
+                    opt.value = phone + "@s.whatsapp.net";
+                    opt.textContent = members[phone] + " (" + phone + ")";
+                    personSelect.appendChild(opt);
+                });
+            }).catch(function() {
+                // Keep group-level link option only on error.
+            });
+        }
+
+        function loadWaLinkCandidates(silent) {
+            return deps.apiFetch("/api/kanban/whatsapp/chats?limit=500&offset=0&search=").then(function(chatsData) {
+                populateWaChatSelect((chatsData && chatsData.chats) || []);
+                resetWaPersonSelect();
+            }).catch(function(err) {
+                resetWaPersonSelect();
+                if (!silent) deps.showSnackbar("Failed to load WhatsApp chat list: " + err.message, "error");
+            });
+        }
+
         function confirmWaLink() {
             var boardId = parseInt(document.getElementById("kb-wa-link-board").value);
             if (!boardId) { deps.showSnackbar("Select a board"); return; }
@@ -105,7 +176,7 @@
                 })
             }).then(function(r) {
                 if (r.success) {
-                    deps.showSnackbar("Linked " + waCtxMenuData.name + " to board");
+                    deps.showSnackbar("Linked " + waCtxMenuData.name + " to project board");
                     document.getElementById("kb-wa-link-modal").classList.add("hidden");
                 }
             }).catch(function(err) {
@@ -181,7 +252,7 @@
             linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Loading...</div>';
             deps.apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links").then(function(links) {
                 if (!links.length) {
-                    linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">No WhatsApp numbers linked</div>';
+                    linksEl.innerHTML = '<div class="text-xs text-gray-500 italic">No WhatsApp chats linked</div>';
                     return;
                 }
                 var html = "";
@@ -226,21 +297,38 @@
         }
 
         function addWaLinkFromBoardModal() {
-            var phone = document.getElementById("kb-bm-wa-add-phone").value.trim();
-            var name = document.getElementById("kb-bm-wa-add-name").value.trim();
-            if (!phone) { deps.showSnackbar("Enter a phone number"); return; }
+            var chatSelect = document.getElementById("kb-bm-wa-chat-select");
+            var personSelect = document.getElementById("kb-bm-wa-person-select");
+            var selectedJid = chatSelect ? String(chatSelect.value || "").trim() : "";
+            if (!selectedJid) { deps.showSnackbar("Select a chat or group"); return; }
+            var selectedChat = waBoardLinkCandidatesByJid[selectedJid] || null;
+            if (!selectedChat) { deps.showSnackbar("Invalid chat selection"); return; }
+
+            var personJid = personSelect ? String(personSelect.value || "").trim() : "";
+            var linkJid = personJid || selectedChat.jid;
+            var linkPhone = linkJid.split("@")[0].split(":")[0];
+            var linkName = selectedChat.name;
+            if (personJid && personSelect && personSelect.selectedIndex >= 0) {
+                var pTxt = String(personSelect.options[personSelect.selectedIndex].textContent || "").trim();
+                if (pTxt) linkName = pTxt;
+            }
+
             var boardId = deps.getEditingBoardId();
             if (!boardId) { deps.showSnackbar("Save the board first"); return; }
-            var jid = phone + "@s.whatsapp.net";
+
             deps.apiFetch("/api/kanban/boards/" + boardId + "/whatsapp-links", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({ phone_jid: jid, phone_number: phone, contact_name: name })
+                body: JSON.stringify({
+                    phone_jid: linkJid,
+                    phone_number: linkPhone,
+                    contact_name: linkName,
+                })
             }).then(function(r) {
                 if (r.success) {
-                    deps.showSnackbar("Linked " + (name || phone) + " to board");
-                    document.getElementById("kb-bm-wa-add-phone").value = "";
-                    document.getElementById("kb-bm-wa-add-name").value = "";
+                    deps.showSnackbar("Linked " + linkName + " to board");
+                    if (chatSelect) chatSelect.value = "";
+                    resetWaPersonSelect();
                     loadBoardWaLinks(boardId);
                 }
             });
@@ -556,6 +644,8 @@
             waCtxSnapshotToBoard: waCtxSnapshotToBoard,
             waCtxSnapshotToBoardBottom: waCtxSnapshotToBoardBottom,
             initWhatsApp: initWhatsApp,
+            loadWaLinkCandidates: loadWaLinkCandidates,
+            loadWaGroupPeopleCandidates: loadWaGroupPeopleCandidates,
         };
     }
 
@@ -996,11 +1086,16 @@
                     html += '<div class="wa-msg-bubble ' + bg + ' px-3 py-2" style="max-width:75%;border-radius:8px;">';
                     if (deps.getState().waSelectedChatType === "group" && !isMine && msg.sender_push_name) html += '<div class="text-[10px] text-[#25D366] font-medium mb-0.5">' + deps.esc(msg.sender_push_name) + "</div>";
                     if (msg.text) html += '<div class="wa-msg-text text-sm text-white whitespace-pre-wrap">' + deps.esc(msg.text) + "</div>";
-                    if (msg.caption && msg.caption !== msg.text) html += '<div class="wa-msg-text text-sm text-gray-200 whitespace-pre-wrap mt-1">' + deps.esc(msg.caption) + "</div>";
+                    if (msg.caption && msg.caption !== msg.text) html += '<div class="wa-msg-caption text-sm text-gray-200 whitespace-pre-wrap mt-1">' + deps.esc(msg.caption) + "</div>";
                     html += renderWaMediaHtml(msg);
-                    html += '<div class="flex items-center justify-end gap-1 mt-0.5"><span class="text-[10px] text-gray-500">' + timeStr + "</span>";
+                    if (msg._analysis_pending) {
+                        html += '<div class="wa-msg-analysis-status mt-1 text-[11px] text-gray-300 flex items-center gap-1.5"><svg class="animate-spin h-3.5 w-3.5 text-[#25D366]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path></svg><span>' + deps.esc(msg._analysis_pending) + "...</span></div>";
+                    } else if (msg._analysis_error) {
+                        html += '<div class="wa-msg-analysis-status mt-1 text-[11px] text-red-300">' + deps.esc(msg._analysis_error) + "</div>";
+                    }
+                    html += '<div class="wa-msg-meta-row flex items-center justify-end gap-1 mt-0.5"><span class="text-[10px] text-gray-500">' + timeStr + "</span>";
                     if (isMine) html += '<span class="text-[10px] text-blue-400">✓✓</span>';
-                    if (msg.processed) html += '<span class="text-[10px] text-green-400" title="Processed">✓</span>';
+                    html += '<button type="button" class="kb-wa-msg-more ml-0.5 shrink-0 rounded p-0.5 text-gray-400 hover:bg-white/10 hover:text-white" title="More" aria-label="Message actions" data-wa-msg-id="' + msg.id + '"><svg class="h-3.5 w-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>';
                     if (msg.snapshot_group) {
                         if (msg.ticket_id) html += '<button type="button" class="text-[10px] text-[#f97316] hover:text-[#fb923c] underline-offset-2 hover:underline" title="Open snapshot ticket #' + msg.ticket_id + '" data-wa-ticket-id="' + msg.ticket_id + '">📷</button>';
                         else html += '<span class="text-[10px] text-[#f97316]" title="Snapshot: ' + deps.esc(msg.snapshot_group) + '">📷</span>';
@@ -1267,6 +1362,358 @@
             }
         }
 
+        var waActionsCurrentMsg = null;
+
+        function hideWaMsgActionsMenu() {
+            var m = document.getElementById("kb-wa-msg-actions-menu");
+            if (m) m.classList.add("hidden");
+            waActionsCurrentMsg = null;
+        }
+
+        function hideWaMediaLightbox() {
+            var overlay = document.getElementById("kb-wa-media-lightbox");
+            var inner = document.getElementById("kb-wa-media-lightbox-inner");
+            if (inner) inner.innerHTML = "";
+            if (overlay) {
+                overlay.classList.add("hidden");
+                overlay.classList.remove("flex");
+            }
+        }
+
+        function openWaMediaLightbox(msg) {
+            var overlay = document.getElementById("kb-wa-media-lightbox");
+            var inner = document.getElementById("kb-wa-media-lightbox-inner");
+            if (!overlay || !inner) return;
+            inner.innerHTML = "";
+            var url = buildWaMediaUrl(msg, "");
+            if (isWaImageType(msg)) {
+                var img = document.createElement("img");
+                img.src = url;
+                img.className = "max-h-[90vh] max-w-[95vw] rounded object-contain shadow-lg";
+                img.alt = "";
+                inner.appendChild(img);
+            } else if (isWaVideoType(msg)) {
+                var v = document.createElement("video");
+                v.controls = true;
+                v.className = "max-h-[90vh] max-w-[95vw]";
+                v.src = url;
+                inner.appendChild(v);
+            } else {
+                return;
+            }
+            overlay.classList.remove("hidden");
+            overlay.classList.add("flex");
+        }
+
+        function showWaMsgActionsMenu(anchorBtn, msg) {
+            waActionsCurrentMsg = msg;
+            var menu = document.getElementById("kb-wa-msg-actions-menu");
+            if (!menu) return;
+            var openBtn = menu.querySelector(".kb-wa-act-open");
+            var analyzeBtn = menu.querySelector(".kb-wa-act-analyze");
+            var copyBtn = menu.querySelector(".kb-wa-act-copy");
+            var canOpen = isWaImageType(msg) || isWaVideoType(msg);
+            var canAnalyze = isWaVoiceType(msg) || isWaVideoType(msg) || isWaImageType(msg);
+            var textJoined = [msg.text, msg.caption].filter(Boolean).join("\n\n").trim();
+            var canCopy = !!(textJoined || isWaImageType(msg));
+            openBtn.classList.toggle("hidden", !canOpen);
+            if (analyzeBtn) {
+                analyzeBtn.classList.toggle("hidden", !canAnalyze);
+                if (isWaImageType(msg)) analyzeBtn.textContent = "OCR image";
+                else if (isWaVoiceType(msg) || isWaVideoType(msg)) analyzeBtn.textContent = "Transcribe";
+                else analyzeBtn.textContent = "Analyze";
+            }
+            copyBtn.classList.toggle("hidden", !canCopy);
+            var rect = anchorBtn.getBoundingClientRect();
+            menu.style.left = Math.min(rect.left, window.innerWidth - 180) + "px";
+            menu.style.top = (rect.bottom + 4) + "px";
+            menu.classList.remove("hidden");
+            setTimeout(function() {
+                var r = menu.getBoundingClientRect();
+                if (r.bottom > window.innerHeight - 8) menu.style.top = Math.max(8, rect.top - r.height - 4) + "px";
+                if (r.right > window.innerWidth - 8) menu.style.left = Math.max(8, window.innerWidth - r.width - 8) + "px";
+            }, 0);
+        }
+
+        function waCopyMessageContent(msg) {
+            if (isWaImageType(msg)) {
+                var url = buildWaMediaUrl(msg, "");
+                fetch(url, { credentials: "same-origin" }).then(function(r) {
+                    if (!r.ok) throw new Error("Could not load image");
+                    return r.blob();
+                }).then(function(blob) {
+                    var t = blob.type || "image/png";
+                    return navigator.clipboard.write([new ClipboardItem({ [t]: blob })]);
+                }).then(function() {
+                    deps.showSnackbar("Image copied to clipboard", "success");
+                }).catch(function(err) {
+                    deps.showSnackbar("Copy failed: " + (err && err.message ? err.message : String(err)), "error");
+                });
+                return;
+            }
+            var t = [msg.text, msg.caption].filter(Boolean).join("\n\n").trim();
+            if (!t) {
+                deps.showSnackbar("Nothing to copy", "warning");
+                return;
+            }
+            navigator.clipboard.writeText(t).then(function() {
+                deps.showSnackbar("Copied to clipboard", "success");
+            }).catch(function(err) {
+                deps.showSnackbar("Copy failed: " + (err && err.message ? err.message : String(err)), "error");
+            });
+        }
+
+        function waSanitizeFilename(name, fallback) {
+            var s = String(name || fallback || "download").replace(/[^a-zA-Z0-9._-]+/g, "_");
+            return s || "download";
+        }
+
+        function waTriggerDownload(url, filename) {
+            var a = document.createElement("a");
+            a.href = url;
+            a.setAttribute("download", filename);
+            a.rel = "noopener";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+
+        function waDownloadMessageMedia(msg) {
+            var safeBase = waSanitizeFilename(msg.media_filename, "whatsapp-" + msg.id);
+            if (isWaVoiceType(msg)) {
+                var mp3Url = buildWaMediaUrl(msg, "mp3");
+                fetch(mp3Url, { credentials: "same-origin" }).then(function(r) {
+                    if (!r.ok) throw new Error("HTTP " + r.status);
+                    return r.blob();
+                }).then(function(blob) {
+                    var u = URL.createObjectURL(blob);
+                    var name = waSanitizeFilename(safeBase.replace(/\.[^.]+$/, "") + ".mp3", "voice-" + msg.id + ".mp3");
+                    waTriggerDownload(u, name);
+                    setTimeout(function() { URL.revokeObjectURL(u); }, 2000);
+                    deps.showSnackbar("Download started", "success");
+                }).catch(function() {
+                    deps.showSnackbar("MP3 unavailable — downloading original audio", "warning");
+                    waTriggerDownload(buildWaMediaUrl(msg, ""), waSanitizeFilename(safeBase, "voice-" + msg.id));
+                });
+                return;
+            }
+            if (msg.media_type) {
+                waTriggerDownload(buildWaMediaUrl(msg, ""), safeBase);
+                deps.showSnackbar("Download started", "success");
+                return;
+            }
+            var textOnly = [msg.text, msg.caption].filter(Boolean).join("\n\n");
+            if (!textOnly.trim()) {
+                deps.showSnackbar("Nothing to download", "warning");
+                return;
+            }
+            var blob = new Blob([textOnly], { type: "text/plain;charset=utf-8" });
+            var u = URL.createObjectURL(blob);
+            waTriggerDownload(u, "message-" + msg.id + ".txt");
+            setTimeout(function() { URL.revokeObjectURL(u); }, 2000);
+            deps.showSnackbar("Download started", "success");
+        }
+
+        function waAnalyzeMessageMedia(msg) {
+            function analysisLabelFromResponse(resp, fallbackMsg) {
+                var t = String((resp && resp.analysis_type) || "").toLowerCase();
+                if (t === "ocr") return "OCR";
+                if (t === "transcription") return "Transcription";
+                return isWaImageType(fallbackMsg) ? "OCR" : "Transcription";
+            }
+
+            function upsertExtractedBlock(existingCaption, label, extractedText) {
+                var text = String(extractedText || "").trim();
+                if (!text) return String(existingCaption || "");
+                var existing = String(existingCaption || "").trim();
+                var header = "[" + label + "]";
+                var newBlock = header + "\n" + text;
+                if (!existing) return newBlock;
+                var start = existing.indexOf(header);
+                if (start === -1) return existing + "\n\n" + newBlock;
+                var before = existing.slice(0, start).trimEnd();
+                var rest = existing.slice(start);
+                var nextHeader = rest.indexOf("\n[", header.length);
+                var after = nextHeader >= 0 ? rest.slice(nextHeader + 1).trimStart() : "";
+                if (before && after) return before + "\n\n" + newBlock + "\n\n" + after;
+                if (before) return before + "\n\n" + newBlock;
+                if (after) return newBlock + "\n\n" + after;
+                return newBlock;
+            }
+
+            function getThreadMessageById(messageId) {
+                var st = deps.getState();
+                var arr = (st && st.waThreadMessages) || [];
+                for (var i = 0; i < arr.length; i++) {
+                    if (String(arr[i].id) === String(messageId)) return arr[i];
+                }
+                return null;
+            }
+
+            function updateThreadMessageById(messageId, updater) {
+                var st = deps.getState();
+                if (!st || !st.waThreadMessages || !st.waThreadMessages.length) return null;
+                var updated = null;
+                st.waThreadMessages = st.waThreadMessages.map(function(item) {
+                    if (String(item.id) !== String(messageId)) return item;
+                    updated = updater(item || {});
+                    return updated || item;
+                });
+                deps.setState(st);
+                return updated;
+            }
+
+            function ensureAnalysisStatusEl(row, bubble, beforeEl) {
+                var statusEl = row.querySelector(".wa-msg-analysis-status");
+                if (statusEl) return statusEl;
+                statusEl = document.createElement("div");
+                statusEl.className = "wa-msg-analysis-status mt-1 text-[11px]";
+                if (beforeEl) bubble.insertBefore(statusEl, beforeEl);
+                else bubble.appendChild(statusEl);
+                return statusEl;
+            }
+
+            function patchMessageDom(messageId, msgData) {
+                var row = document.querySelector('[data-wa-msg-id="' + messageId + '"]');
+                if (!row) return;
+                var bubble = row.querySelector(".wa-msg-bubble");
+                if (!bubble) return;
+                var metaRow = bubble.querySelector(".wa-msg-meta-row");
+                var statusEl = row.querySelector(".wa-msg-analysis-status");
+
+                if (msgData._analysis_pending || msgData._analysis_error) {
+                    statusEl = ensureAnalysisStatusEl(row, bubble, metaRow || null);
+                    if (msgData._analysis_pending) {
+                        statusEl.className = "wa-msg-analysis-status mt-1 text-[11px] text-gray-300 flex items-center gap-1.5";
+                        statusEl.innerHTML = '<svg class="animate-spin h-3.5 w-3.5 text-[#25D366]" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-90" fill="currentColor" d="M4 12a8 8 0 018-8v3a5 5 0 00-5 5H4z"></path></svg><span>' + deps.esc(msgData._analysis_pending) + "...</span>";
+                    } else {
+                        statusEl.className = "wa-msg-analysis-status mt-1 text-[11px] text-red-300";
+                        statusEl.textContent = msgData._analysis_error || "Analysis failed";
+                    }
+                } else if (statusEl) {
+                    statusEl.remove();
+                }
+
+                if (!msgData._analysis_pending && !msgData._analysis_error && msgData.caption) {
+                    var captionEl = bubble.querySelector(".wa-msg-caption");
+                    if (!captionEl) {
+                        captionEl = document.createElement("div");
+                        captionEl.className = "wa-msg-caption text-sm text-gray-200 whitespace-pre-wrap mt-1";
+                        if (metaRow) bubble.insertBefore(captionEl, metaRow);
+                        else bubble.appendChild(captionEl);
+                    }
+                    captionEl.textContent = msgData.caption;
+                }
+            }
+
+            if (!msg || !msg.id) {
+                deps.showSnackbar("Message unavailable", "warning");
+                return;
+            }
+
+            var kind = isWaImageType(msg) ? "OCR" : "Transcription";
+            var pendingMsg = updateThreadMessageById(msg.id, function(item) {
+                var next = Object.assign({}, item);
+                next._analysis_pending = kind;
+                next._analysis_error = "";
+                return next;
+            }) || getThreadMessageById(msg.id) || msg;
+            patchMessageDom(msg.id, pendingMsg);
+
+            deps.apiFetch("/api/kanban/whatsapp/messages/" + encodeURIComponent(msg.id) + "/analyze-media", {
+                method: "POST",
+            }).then(function(resp) {
+                if (!resp || resp.success !== true) {
+                    throw new Error((resp && (resp.error || resp.detail)) || "Analysis failed");
+                }
+                var successLabel = analysisLabelFromResponse(resp, msg);
+                var merged = updateThreadMessageById(msg.id, function(item) {
+                    var next = Object.assign({}, item);
+                    next._analysis_pending = "";
+                    next._analysis_error = "";
+                    next.caption = upsertExtractedBlock(next.caption, successLabel, resp.text);
+                    return next;
+                }) || getThreadMessageById(msg.id) || msg;
+                patchMessageDom(msg.id, merged);
+                deps.showSnackbar(successLabel + " added to message", "success");
+                setTimeout(function() { deps.refreshWaThreadIfOpen(); }, 800);
+            }).catch(function(err) {
+                var failed = updateThreadMessageById(msg.id, function(item) {
+                    var next = Object.assign({}, item);
+                    next._analysis_pending = "";
+                    next._analysis_error = (err && err.message ? err.message : String(err));
+                    return next;
+                }) || getThreadMessageById(msg.id) || msg;
+                patchMessageDom(msg.id, failed);
+                deps.showSnackbar("Failed: " + (err && err.message ? err.message : String(err)), "error");
+            });
+        }
+
+        function bindWaMessageActionsUi() {
+            if (window._waMsgActionsUiBound) return;
+            window._waMsgActionsUiBound = true;
+            var msgList = document.getElementById("kb-wa-thread-messages");
+            if (msgList) {
+                msgList.addEventListener("click", function(ev) {
+                    var btn = ev.target.closest(".kb-wa-msg-more");
+                    if (!btn || !msgList.contains(btn)) return;
+                    ev.preventDefault();
+                    ev.stopPropagation();
+                    var id = parseInt(btn.getAttribute("data-wa-msg-id"), 10);
+                    var state = deps.getState();
+                    var arr = state.waThreadMessages || [];
+                    var msg = arr.find(function(m) { return String(m.id) === String(id); });
+                    if (!msg) return;
+                    showWaMsgActionsMenu(btn, msg);
+                });
+            }
+            var menu = document.getElementById("kb-wa-msg-actions-menu");
+            if (menu) {
+                var openEl = menu.querySelector(".kb-wa-act-open");
+                var analyzeEl = menu.querySelector(".kb-wa-act-analyze");
+                var copyEl = menu.querySelector(".kb-wa-act-copy");
+                var dlEl = menu.querySelector(".kb-wa-act-download");
+                if (openEl) openEl.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var msg = waActionsCurrentMsg;
+                    hideWaMsgActionsMenu();
+                    if (msg) openWaMediaLightbox(msg);
+                });
+                if (analyzeEl) analyzeEl.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var msg = waActionsCurrentMsg;
+                    hideWaMsgActionsMenu();
+                    if (msg) waAnalyzeMessageMedia(msg);
+                });
+                if (copyEl) copyEl.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var msg = waActionsCurrentMsg;
+                    hideWaMsgActionsMenu();
+                    if (msg) waCopyMessageContent(msg);
+                });
+                if (dlEl) dlEl.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var msg = waActionsCurrentMsg;
+                    hideWaMsgActionsMenu();
+                    if (msg) waDownloadMessageMedia(msg);
+                });
+            }
+            var lb = document.getElementById("kb-wa-media-lightbox");
+            var lbClose = document.getElementById("kb-wa-media-lightbox-close");
+            if (lbClose) lbClose.addEventListener("click", function(e) {
+                e.stopPropagation();
+                hideWaMediaLightbox();
+            });
+            if (lb) {
+                lb.addEventListener("click", function(e) {
+                    if (e.target === lb) hideWaMediaLightbox();
+                });
+            }
+            document.addEventListener("keydown", function(e) {
+                if (e.key === "Escape") hideWaMediaLightbox();
+            });
+        }
+
         return {
             loadWhatsAppChats: loadWhatsAppChats,
             processWhatsAppMessages: processWhatsAppMessages,
@@ -1280,6 +1727,8 @@
             resetWhatsAppVoiceRecordingUi: resetWhatsAppVoiceRecordingUi,
             startWhatsAppVoiceRecording: startWhatsAppVoiceRecording,
             stopWhatsAppVoiceRecordingAndSend: stopWhatsAppVoiceRecordingAndSend,
+            bindWaMessageActionsUi: bindWaMessageActionsUi,
+            hideWaMsgActionsMenu: hideWaMsgActionsMenu,
         };
     }
 

@@ -10,6 +10,7 @@ from distr.gui.oracle.animation_player import AnimationPlayer
 from distr.gui.oracle.chat_bubble import ChatBubbleWidget
 from distr.gui.oracle.event_dispatcher import EventHookDispatcher
 from distr.gui.oracle.file_drop import FileDropMixin
+from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
 from distr.gui.oracle.glow_engine import GlowEngine
 from distr.gui.oracle.menu import MenuTrayMixin
 from distr.gui.oracle.lifecycle import LifecycleMixin
@@ -23,6 +24,13 @@ import platform
 
 
 logger = logging.getLogger(__name__)
+
+
+class _GlobalPttBridge(QtCore.QObject):
+    pressed = QtCore.pyqtSignal()
+    released = QtCore.pyqtSignal()
+    oracle_size_down = QtCore.pyqtSignal()
+    oracle_size_up = QtCore.pyqtSignal()
 
 
 class RoundContainer(QtWidgets.QWidget):
@@ -66,6 +74,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         super().__init__(parent)
         self._updating_menu = False
         self.is_exiting = False  # Flag to track exit state
+        self._global_ptt_bridge = _GlobalPttBridge(self)
+        self._global_ptt_listener = None
 
         # Check for DEBUG environment variable
         debug_env = os.environ.get('DEBUG', '').strip().upper()
@@ -246,6 +256,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         # Connect dispatcher signals now that signal_manager is available
         self._event_dispatcher.connect_signals()
+        self._global_ptt_bridge.pressed.connect(self._on_global_ptt_pressed)
+        self._global_ptt_bridge.released.connect(self._on_global_ptt_released)
+        self._global_ptt_bridge.oracle_size_down.connect(self._on_global_oracle_size_down)
+        self._global_ptt_bridge.oracle_size_up.connect(self._on_global_oracle_size_up)
+        self._setup_global_ptt_hotkey()
 
         if self.settings.get('restore_position'):
             self.restore_screen_position()
@@ -744,8 +759,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
 
         if self.ptt_requested:
-            logging.info("[ORACLE] Push-to-talk ignored - PTT already requested (stuck state?)")
-            return
+            logging.warning("[ORACLE] Push-to-talk was still marked requested; forcing cleanup before new press")
+            try:
+                signal_manager.push_to_talk_stop.emit()
+            except Exception:
+                pass
+            self.ptt_requested = False
+            self._cleanup_ptt()
         if not self.is_listening or self.dragging:
             logging.info(f"[ORACLE] Push-to-talk NOT requested - conditions not met (listening={self.is_listening}, dragging={self.dragging})")
             return
@@ -1092,6 +1112,128 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         if self.settings.get('restore_position'):
             self.save_current_position()
+
+    def _setup_global_ptt_hotkey(self):
+        """Initialize global keyboard combo listener for PTT."""
+        if self._global_ptt_listener is None:
+            self._global_ptt_listener = GlobalPttHotkeyListener(
+                on_combo_pressed=lambda: self._global_ptt_bridge.pressed.emit(),
+                on_combo_released=lambda: self._global_ptt_bridge.released.emit(),
+                get_enabled=self._is_global_ptt_hotkey_enabled,
+                get_combo=self._get_global_ptt_hotkey_combo,
+                get_size_down_combo=self._get_oracle_size_down_hotkey_combo,
+                get_size_up_combo=self._get_oracle_size_up_hotkey_combo,
+                on_size_down=lambda: self._global_ptt_bridge.oracle_size_down.emit(),
+                on_size_up=lambda: self._global_ptt_bridge.oracle_size_up.emit(),
+            )
+            self._global_ptt_listener.start()
+
+    def shutdown_global_ptt_hotkey(self):
+        """Stop global keyboard listener during app shutdown."""
+        if self._global_ptt_listener is not None:
+            self._global_ptt_listener.stop()
+
+    def _is_global_ptt_hotkey_enabled(self) -> bool:
+        try:
+            current_settings = load_settings_from_db()
+            return bool(current_settings.get("global_ptt_hotkey_enabled", True))
+        except Exception:
+            return bool(self.settings.get("global_ptt_hotkey_enabled", True))
+
+    def _get_global_ptt_hotkey_combo(self):
+        valid = {"option", "command", "control", "shift"}
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+        primary = str(current_settings.get("global_ptt_hotkey_primary", "option")).strip().lower()
+        secondary = str(current_settings.get("global_ptt_hotkey_secondary", "command")).strip().lower()
+        if primary not in valid:
+            primary = "option"
+        if secondary not in valid:
+            secondary = "command"
+        if primary == secondary:
+            secondary = "command" if primary != "command" else "option"
+        return {primary, secondary}
+
+    def _on_global_ptt_pressed(self):
+        """Map global key hold to regular PTT press behavior."""
+        self.start_hold_to_talk()
+
+    def _on_global_ptt_released(self):
+        """Map global key release to regular PTT release behavior."""
+        self.stop_hold_to_talk()
+
+    def _get_oracle_size_down_hotkey_combo(self):
+        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
+        valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+
+        modifier = str(current_settings.get("oracle_size_hotkey_decrease_modifier", "option_command")).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_decrease_key", "left_bracket")).strip().lower()
+        if modifier not in valid_modifiers:
+            modifier = "option_command"
+        if key not in valid_keys:
+            key = "left_bracket"
+        return (modifier, key)
+
+    def _get_oracle_size_up_hotkey_combo(self):
+        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
+        valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+
+        modifier = str(current_settings.get("oracle_size_hotkey_increase_modifier", "option_command")).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_increase_key", "right_bracket")).strip().lower()
+        if modifier not in valid_modifiers:
+            modifier = "option_command"
+        if key not in valid_keys:
+            key = "right_bracket"
+        return (modifier, key)
+
+    def _normalize_oracle_scale(self, raw_size):
+        """Normalize persisted size to slider-like scale (4..10)."""
+        try:
+            value = int(raw_size)
+        except Exception:
+            value = 9
+        if value > 10:
+            value = int(round(value / 20.0))
+        return max(4, min(10, value))
+
+    def _adjust_oracle_size_from_hotkey(self, delta: int):
+        """Adjust oracle size by one scale step and emit the existing size signal."""
+        settings = load_settings_from_db()
+        current_scale = self._normalize_oracle_scale(settings.get("sphere_size", 9))
+        new_scale = max(4, min(10, current_scale + delta))
+        if new_scale == current_scale:
+            return
+        signal_manager.oracle_size_changed.emit(new_scale * 20)
+        down_modifier, down_key = self._get_oracle_size_down_hotkey_combo()
+        up_modifier, up_key = self._get_oracle_size_up_hotkey_combo()
+        logger.info(
+            "[HOTKEY] Oracle size changed via shortcuts down=%s+%s up=%s+%s: %s -> %s (%spx)",
+            down_modifier,
+            down_key,
+            up_modifier,
+            up_key,
+            current_scale,
+            new_scale,
+            new_scale * 20,
+        )
+
+    def _on_global_oracle_size_down(self):
+        """Shrink oracle one step via global keyboard shortcut."""
+        self._adjust_oracle_size_from_hotkey(-1)
+
+    def _on_global_oracle_size_up(self):
+        """Grow oracle one step via global keyboard shortcut."""
+        self._adjust_oracle_size_from_hotkey(1)
 
 
     def on_move_event(self, event):

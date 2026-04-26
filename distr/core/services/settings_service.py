@@ -29,6 +29,7 @@ def _safe_emit(signal, *args, label: str = "signal"):
 def update_setting(key: str, value: Any, *, signal=None, signal_args: tuple = (), signal_label: str = "") -> dict:
     """Load settings, set *key* to *value*, save, optionally emit *signal*."""
     settings = load_settings_from_db()
+    previous_settings = dict(settings)
     settings[key] = value
     save_settings_to_db(settings)
     if signal is not None:
@@ -42,6 +43,18 @@ def update_setting(key: str, value: Any, *, signal=None, signal_args: tuple = ()
 
 def save_general_settings(data) -> None:
     """Persist all general-tab fields and emit every relevant signal."""
+    valid_modifiers = {"option", "option_command", "command", "control", "shift"}
+    primary = str(getattr(data, "global_ptt_hotkey_primary", "option")).strip().lower()
+    secondary = str(getattr(data, "global_ptt_hotkey_secondary", "command")).strip().lower()
+    if primary not in valid_modifiers:
+        primary = "option"
+    if secondary not in valid_modifiers:
+        secondary = "command"
+    if primary == secondary:
+        secondary = "command" if primary != "command" else "option"
+    data.global_ptt_hotkey_primary = primary
+    data.global_ptt_hotkey_secondary = secondary
+
     settings = load_settings_from_db()
 
     # Bulk-copy every field from the Pydantic model
@@ -68,7 +81,25 @@ def save_general_settings(data) -> None:
                     data.elevenlabs_style, data.elevenlabs_use_speaker_boost,
                     label="elevenlabs_voice_settings_changed")
 
-    _safe_emit(signal_manager.reload_agent, label="reload_agent (general save)")
+    # Reload agent only when core voice provider/voice selections changed.
+    # Avoid reloading for UI-only settings (e.g. global PTT hotkey toggle),
+    # which can destabilize macOS during active desktop listeners.
+    reload_sensitive_fields = (
+        "voice_provider",
+        "kokoro_voice",
+        "elevenlabs_voice",
+        "openai_voice",
+        "coqui_voice",
+        "qwen3_voice",
+        "f5tts_voice",
+        "voxcpm_voice",
+    )
+    should_reload_agent = any(
+        previous_settings.get(field) != settings.get(field)
+        for field in reload_sensitive_fields
+    )
+    if should_reload_agent:
+        _safe_emit(signal_manager.reload_agent, label="reload_agent (general save)")
     # Oracle skin/size signals removed — those now go through Skins routes
     # (Requirements: 8.8)
     _safe_emit(signal_manager.oracle_position_changed, data.oracle_position,
@@ -80,6 +111,119 @@ def save_general_settings(data) -> None:
         set_autostart(data.load_on_startup)
     except Exception as e:
         logger.warning("Failed to update autostart setting: %s", e)
+
+
+def save_shortcut_settings(data) -> None:
+    """Persist shortcut-related settings with validation."""
+    valid_modifiers = {"option", "command", "control", "shift"}
+    valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+
+    def _norm_modifier(value: str, default: str = "option") -> str:
+        v = str(value or default).strip().lower()
+        return v if v in valid_modifiers else default
+
+    def _norm_key(value: str, default: str = "left_bracket") -> str:
+        v = str(value or default).strip().lower()
+        return v if v in valid_keys else default
+
+    primary = _norm_modifier(getattr(data, "global_ptt_hotkey_primary", "option"), "option")
+    secondary = _norm_modifier(getattr(data, "global_ptt_hotkey_secondary", "command"), "command")
+    if primary == secondary:
+        secondary = "command" if primary != "command" else "option"
+
+    down_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_decrease_modifier", "option"), "option")
+    up_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_increase_modifier", "option"), "option")
+    down_key = _norm_key(getattr(data, "oracle_size_hotkey_decrease_key", "left_bracket"), "left_bracket")
+    up_key = _norm_key(getattr(data, "oracle_size_hotkey_increase_key", "right_bracket"), "right_bracket")
+
+    if down_modifier == up_modifier and down_key == up_key:
+        up_key = "right_bracket" if down_key != "right_bracket" else "left_bracket"
+
+    settings = load_settings_from_db()
+    settings["global_ptt_hotkey_enabled"] = bool(getattr(data, "global_ptt_hotkey_enabled", True))
+    settings["global_ptt_hotkey_primary"] = primary
+    settings["global_ptt_hotkey_secondary"] = secondary
+    settings["oracle_size_hotkey_decrease_modifier"] = down_modifier
+    settings["oracle_size_hotkey_decrease_key"] = down_key
+    settings["oracle_size_hotkey_increase_modifier"] = up_modifier
+    settings["oracle_size_hotkey_increase_key"] = up_key
+    save_settings_to_db(settings)
+
+
+def apply_voice_selection_to_settings(
+    settings: Dict[str, Any],
+    voice_provider_id: str,
+    voice_model: str,
+) -> bool:
+    """Mutate *settings* in place to match General-tab voice semantics.
+
+    Sets canonical ``voice_provider`` (lowercase id), human-readable ``tts_provider``
+    (descriptor ``name``, same legacy meaning as "Kokoro (Offline)" in DB), legacy
+    ``tts_voice`` (active voice id string), and each registered provider's
+    ``settings_key`` column when present on ORM.
+
+    Returns True if fields were applied, False if inputs are empty or provider unknown.
+    """
+    from distr.core.agent.constants import normalize_voice_provider
+    from distr.core.agent.services.tts.registry import tts_registry
+    from distr.core.db import Settings
+
+    vp_raw = (voice_provider_id or "").strip()
+    vm_raw = (voice_model or "").strip()
+    if not vp_raw or not vm_raw:
+        return False
+
+    pid = normalize_voice_provider(vp_raw)
+
+    try:
+        active_desc = tts_registry.get(pid)
+    except KeyError:
+        logger.warning("apply_voice_selection_to_settings: unknown TTS provider %r", pid)
+        return False
+
+    settings["voice_provider"] = pid
+    settings["tts_provider"] = active_desc.name
+    settings["tts_voice"] = vm_raw
+
+    # Same pattern as settings/js/general.js saveGeneralSettings — one column per provider
+    for d in tts_registry.all_providers():
+        sk = d.settings_key
+        val = vm_raw if d.id == pid else (d.default_voice or "")
+        if hasattr(Settings, sk):
+            settings[sk] = val
+
+    return True
+
+
+def save_voice_selection(voice_provider_id: str, voice_model: str) -> None:
+    """Persist global TTS provider and voice model (same in-memory shape as General tab)."""
+    vp_raw = (voice_provider_id or "").strip()
+    vm_raw = (voice_model or "").strip()
+    if not vp_raw or not vm_raw:
+        logger.warning("save_voice_selection: missing provider or voice model")
+        return
+
+    settings = load_settings_from_db()
+    if not apply_voice_selection_to_settings(settings, vp_raw, vm_raw):
+        return
+
+    save_settings_to_db(settings)
+
+    from distr.core.agent.constants import normalize_voice_provider as _norm_vp
+
+    pid = _norm_vp(vp_raw)
+    if pid == "elevenlabs":
+        try:
+            from distr.core.audio.tts_handler import clear_elevenlabs_voice_cache
+            clear_elevenlabs_voice_cache()
+        except Exception as e:
+            logger.warning("Failed to clear ElevenLabs voice cache: %s", e)
+
+    # Do NOT emit reload_agent here. Chat UI calls this right after POST /chats while the
+    # desktop agent is handling web_create_chat_emits_requested → current_chat_changed.
+    # reload_agent_session() stops the agent process and races that flow, causing crashes /
+    # dropped first replies. Voice is persisted to DB; agent reload is only needed for a full
+    # configuration refresh — use Settings → General Save for that (save_general_settings).
 
 
 # ---------------------------------------------------------------------------

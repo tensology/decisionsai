@@ -14,7 +14,9 @@ let chatWsReconnectTimer = null;
 let chatWsReconnectDelay = 1000; // ms, doubles on each failure up to 30s
 /** When non-null, we are showing a streamed assistant message for this chat (PTT/voice). */
 let streamingChatId = null;
-/** True when this chat was loaded with skipLoadInAgent (new chat from modal). First send must call load-in-agent so agent gets full TTS/identity setup. */
+/** Plain text of the last reply finalized in stream_finished — suppress duplicate assistant message_added / poll rows. */
+let _lastStreamFinalizedPlain = null;
+/** True when this chat was loaded with skipLoadInAgent (new chat from modal). POST /chats already hot-swapped the agent; first send must NOT call load-in-agent (would interrupt_tts and kill in-flight first reply). */
 let loadedChatSkippedLoadInAgent = false;
 /** Monotonically increasing token; each poll/stream registers its token and checks it's still current before resolving. Prevents stale polls from old chats firing on new chats. */
 let _streamToken = 0;
@@ -35,10 +37,12 @@ const sendButton = document.getElementById('sendButton');
 const speakerToggle = document.getElementById('speakerToggle');
 let ttsEnabled = true;
 let transcriptionStatusTimer = null;
+/** Updates the clock in the live STT preview row every second (same styling as message timestamps). */
+let _sttPreviewClockInterval = null;
 const newChatBtn = document.getElementById('newChatBtn');
 const chatSettingsHeader = document.getElementById('chatSettingsHeader');
 
-// Disable input until setup form is loaded
+// Disable input until empty state is shown or a chat is selected/loaded
 messageInput.disabled = true;
 messageInput.placeholder = 'Loading...';
 sendButton.disabled = true;
@@ -94,25 +98,61 @@ function getVoiceSettingsKey(voiceProvider) {
     return voiceProvider + '_voice';  // fallback
 }
 
+/** Sync chat configure TTS choice to global Settings (General) so GET /api/general restores it. */
+async function persistGlobalVoiceToSettings(voiceProvider, voiceModel) {
+    const vp = (voiceProvider || '').trim();
+    const vm = (voiceModel || '').trim();
+    if (!vp || !vm) return;
+    try {
+        const r = await fetch('/api/general/voice-selection', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ voice_provider: vp, voice_model: vm }),
+        });
+        if (!r.ok) {
+            const err = await r.json().catch(() => ({}));
+            console.warn('persistGlobalVoiceToSettings failed:', r.status, err);
+        }
+    } catch (e) {
+        console.warn('persistGlobalVoiceToSettings failed:', e);
+    }
+}
+
+/** Align saved Settings voice fields with modal <option value="id"> (handles legacy display strings). */
+function canonicalVoiceProviderForSelect(generalData) {
+    const raw = generalData && (generalData.tts_provider || generalData.voice_provider);
+    if (!raw || raw === '—') return 'kokoro';
+    const s = String(raw).toLowerCase().trim();
+    if (_ttsProviders && _ttsProviders.length) {
+        const byId = _ttsProviders.find(p => (p.id || '').toLowerCase() === s);
+        if (byId && byId.id) return byId.id;
+        const bySub = _ttsProviders.find(p => s.includes((p.id || '').toLowerCase()));
+        if (bySub && bySub.id) return bySub.id;
+    }
+    return s;
+}
+
 // Listen for provider changes from the settings page (cross-tab via BroadcastChannel)
 try {
     const _providersBc = new BroadcastChannel('providers-changed');
     _providersBc.onmessage = function(ev) {
         if (ev.data && ev.data.type === 'thirdparty-providers-changed') {
-            console.log('Third-party providers changed (cross-tab) — refreshing chat provider dropdowns');
-            // Refresh the empty-state dropdowns if visible
+            console.log('Third-party providers changed (cross-tab) — refreshing configure forms');
+            if (typeof loadDefaultSettings === 'function') loadDefaultSettings();
             if (typeof loadEmptyStateDropdowns === 'function') loadEmptyStateDropdowns();
         }
     };
 } catch (_) { /* BroadcastChannel not supported — no-op */ }
 
-// Create one chat with default config when there are no chats. Uses Settings API (LLM + voice from Settings).
-// We do not pass starting_question so the backend adds the welcome message "How can I help you today?"
-async function createDefaultChat() {
+/**
+ * Resolve LLM + voice from Settings (same sources as createDefaultChat).
+ * Fills first available model/voice when settings omit them so first-send works without the modal.
+ */
+async function fetchDefaultsForNewChat() {
     let provider = 'ollama';
-    let modelName = null;
-    let voiceProvider = 'kokoro';
-    let voiceModel = null;
+    let model_name = null;
+    let voice_provider = 'kokoro';
+    let voice_model = null;
     try {
         await _ensureTTSProviders();
         const [llmsRes, generalRes] = await Promise.all([
@@ -124,26 +164,54 @@ async function createDefaultChat() {
             const p = (llms.conversational_provider || 'ollama').toString().toLowerCase();
             const m = (llms.conversational_model || '').trim();
             if (p) provider = p;
-            if (m && m !== '—') modelName = m;
+            if (m && m !== '—') model_name = m;
         }
         if (generalRes.ok) {
             const general = await generalRes.json();
-            const vp = (general.voice_provider || 'kokoro').toString().toLowerCase();
-            if (vp) voiceProvider = vp;
-            const key = getVoiceSettingsKey(voiceProvider);
+            voice_provider = canonicalVoiceProviderForSelect(general);
+            const key = getVoiceSettingsKey(voice_provider);
             const v = (general[key] || '').trim();
-            if (v && v !== '—') voiceModel = v;
+            if (v && v !== '—') voice_model = v;
         }
     } catch (e) {
-        console.warn('Settings fetch failed, using defaults:', e);
+        console.warn('fetchDefaultsForNewChat settings fetch failed:', e);
     }
+    if (!model_name && provider) {
+        try {
+            const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
+            const data = await response.json();
+            const models = data.models || [];
+            if (models.length) {
+                const first = models[0];
+                model_name = String(first.id || first || '').trim();
+            }
+        } catch (_) {}
+    }
+    if (!voice_model && voice_provider) {
+        try {
+            const response = await fetch(`/api/voices/${encodeURIComponent(voice_provider)}`);
+            const data = await response.json();
+            const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
+            if (voices.length) {
+                const first = voices[0];
+                voice_model = String(first.id || first || '').trim();
+            }
+        } catch (_) {}
+    }
+    return { provider, model_name, voice_provider, voice_model };
+}
+
+// Create one chat with default config when there are no chats. Uses Settings API (LLM + voice from Settings).
+// We do not pass starting_question so the backend adds the welcome message "How can I help you today?"
+async function createDefaultChat() {
+    const d = await fetchDefaultsForNewChat();
     const body = {
         title: 'New Chat',
-        provider,
-        voice_provider: voiceProvider,
-        voice_model: voiceModel
+        provider: d.provider,
+        voice_provider: d.voice_provider,
+        voice_model: d.voice_model
     };
-    if (modelName) body.model_name = modelName;
+    if (d.model_name) body.model_name = d.model_name;
     try {
         const response = await fetch(`${API_BASE}/chats`, {
             method: 'POST',
@@ -194,7 +262,6 @@ document.addEventListener('DOMContentLoaded', () => {
                 await selectChat(lastId);
             }
         }
-        if (!currentChatId) loadEmptyStateDropdowns();
     });
 });
 
@@ -219,17 +286,38 @@ function setupEventListeners() {
         loadLlmModels(llmProviderSelect.value);
         toggleModalOllamaPullBtn();
     });
-    voiceProviderSelect.addEventListener('change', () => loadVoiceModels(voiceProviderSelect.value));
+    if (voiceProviderSelect) {
+        voiceProviderSelect.addEventListener('change', async () => {
+            await loadVoiceModels(voiceProviderSelect.value);
+            await persistGlobalVoiceToSettings(voiceProviderSelect.value, voiceModelSelect ? voiceModelSelect.value : '');
+        });
+    }
+    if (voiceModelSelect) {
+        voiceModelSelect.addEventListener('change', () => {
+            persistGlobalVoiceToSettings(voiceProviderSelect ? voiceProviderSelect.value : '', voiceModelSelect.value);
+        });
+    }
 
     const emptyStateLlmProvider = document.getElementById('emptyStateLlmProvider');
-    const emptyStateLlmModel = document.getElementById('emptyStateLlmModel');
     const emptyStateVoiceProvider = document.getElementById('emptyStateVoiceProvider');
     const emptyStateVoiceModel = document.getElementById('emptyStateVoiceModel');
     if (emptyStateLlmProvider) emptyStateLlmProvider.addEventListener('change', () => {
         loadEmptyStateLlmModels(emptyStateLlmProvider.value);
         toggleEmptyStateOllamaPullBtn();
     });
-    if (emptyStateVoiceProvider) emptyStateVoiceProvider.addEventListener('change', () => loadEmptyStateVoiceModels(emptyStateVoiceProvider.value));
+    if (emptyStateVoiceProvider) {
+        emptyStateVoiceProvider.addEventListener('change', async () => {
+            await loadEmptyStateVoiceModels(emptyStateVoiceProvider.value);
+            const vmEl = document.getElementById('emptyStateVoiceModel');
+            await persistGlobalVoiceToSettings(emptyStateVoiceProvider.value, vmEl ? vmEl.value : '');
+        });
+    }
+    if (emptyStateVoiceModel) {
+        emptyStateVoiceModel.addEventListener('change', () => {
+            const vpEl = document.getElementById('emptyStateVoiceProvider');
+            persistGlobalVoiceToSettings(vpEl ? vpEl.value : '', emptyStateVoiceModel.value);
+        });
+    }
 
     const modalPlayVoiceBtn = document.getElementById('modalPlayVoiceBtn');
     if (modalPlayVoiceBtn) modalPlayVoiceBtn.addEventListener('click', playVoiceModal);
@@ -373,7 +461,11 @@ function startChatWebSocket(force) {
                 }
                 if (msg.event === 'transcription_progress') {
                     if (msg.chat_id === currentChatId) {
-                        showTranscriptionStatus(msg.status || 'Transcription in progress...', Boolean(msg.done));
+                        showTranscriptionStatus(
+                            msg.status != null ? msg.status : '',
+                            Boolean(msg.done),
+                            Boolean(msg.clear_live_preview)
+                        );
                     }
                     return;
                 }
@@ -414,10 +506,15 @@ function startChatWebSocket(force) {
                                 voice_model: data.voice_model, voice_model_display: data.voice_model_display
                             });
                             scrollToBottom();
+                            syncRenderedMessageCountFromDom();
+                            _suppressChatUpdatedFetchUntil = Date.now() + 2500;
                         }).catch(() => {});
                         return;
                     }
                     if (streamingChatId === currentChatId) return;
+                    if (Date.now() < _suppressChatUpdatedFetchUntil) {
+                        return;
+                    }
                     fetch(`${API_BASE}/chats/${currentChatId}`).then(r => r.json()).then(data => {
                         renderMessages(data.messages || [], true);
                         updateChatSettingsDisplay({
@@ -459,6 +556,82 @@ function startChatWebSocket(force) {
     so handleChatEventMessageAdded can skip duplicates but render voice/PTT messages. */
 let _optimisticUserMessages = new Set();  // first-100-chars of user messages we already rendered
 
+function _normalizeMsgPlain(s) {
+    return (s != null ? String(s) : '').replace(/\s+/g, ' ').trim();
+}
+
+/** Drop consecutive assistant messages with identical body (pipeline/WS double-write). */
+function dedupeConsecutiveDuplicateAssistants(msgs) {
+    if (!msgs || msgs.length < 2) return msgs;
+    const out = [msgs[0]];
+    for (let i = 1; i < msgs.length; i++) {
+        const m = msgs[i];
+        const prev = out[out.length - 1];
+        if (m.role === 'assistant' && prev.role === 'assistant'
+            && _normalizeMsgPlain(m.content) === _normalizeMsgPlain(prev.content)) {
+            continue;
+        }
+        out.push(m);
+    }
+    return out;
+}
+
+function _lastRenderedUserBubblePlain() {
+    const users = [...chatMessages.querySelectorAll('.message.user')].filter(
+        el => el.id !== 'transcriptionStatus'
+    );
+    if (!users.length) return '';
+    const te = users[users.length - 1].querySelector('.message-text');
+    return te ? _normalizeMsgPlain(te.textContent) : '';
+}
+
+function _stopSttPreviewClock() {
+    if (_sttPreviewClockInterval) {
+        clearInterval(_sttPreviewClockInterval);
+        _sttPreviewClockInterval = null;
+    }
+}
+
+/** Live STT strip uses the same slot as timestamps — show the current time, not the word “Listening”. */
+function _tickSttPreviewClock() {
+    const lab = document.querySelector('#transcriptionStatus .stt-preview-label');
+    if (!lab) return;
+    const clock = _formatTimestamp(Date.now());
+    lab.textContent = clock || '—';
+}
+
+function _ensureSttPreviewClockRunning() {
+    _tickSttPreviewClock();
+    if (!_sttPreviewClockInterval) {
+        _sttPreviewClockInterval = setInterval(_tickSttPreviewClock, 1000);
+    }
+}
+
+/** Keep `#transcriptionStatus` directly above `#streamingAssistantMessage` (appendChild order is wrong once the stream mounts first). */
+function _ensureTranscriptionPreviewPlacement() {
+    const preview = document.getElementById('transcriptionStatus');
+    const streamEl = document.getElementById('streamingAssistantMessage');
+    if (!preview || !chatMessages || preview.parentNode !== chatMessages) return;
+    if (streamEl && streamEl.parentNode === chatMessages) {
+        chatMessages.insertBefore(preview, streamEl);
+    }
+}
+
+/** Always remove live STT preview + reset composer — must run even when we skip duplicate message_added. */
+function _discardLiveTranscriptionUi() {
+    _stopSttPreviewClock();
+    const liveStt = document.getElementById('transcriptionStatus');
+    if (liveStt) liveStt.remove();
+    if (transcriptionStatusTimer) {
+        clearTimeout(transcriptionStatusTimer);
+        transcriptionStatusTimer = null;
+    }
+    if (messageInput) {
+        messageInput.value = '';
+        messageInput.placeholder = 'Send message...';
+    }
+}
+
 function handleChatEventMessageAdded(msg) {
     if (msg.chat_id !== currentChatId) return;
     const role = msg.role || 'user';
@@ -467,8 +640,18 @@ function handleChatEventMessageAdded(msg) {
         // Voice/PTT messages come via WS without sendMessage() — render them.
         // Skip only if sendMessage() already rendered this exact text optimistically.
         const key = content.substring(0, 100);
-        if (_optimisticUserMessages.has(key)) return;
-        const div = createMessageElement({ role, content });
+        if (_optimisticUserMessages.has(key)) {
+            _discardLiveTranscriptionUi();
+            return;
+        }
+        const np = _normalizeMsgPlain(content);
+        if (np && np === _lastRenderedUserBubblePlain()) {
+            _discardLiveTranscriptionUi();
+            return;
+        }
+        _lastStreamFinalizedPlain = null;
+        _discardLiveTranscriptionUi();
+        const div = createMessageElement({ role, content, timestamp: msg.timestamp });
         // Insert BEFORE the streaming assistant message or typing indicator
         // so the user message appears chronologically first.
         const streamingMsg = document.getElementById('streamingAssistantMessage');
@@ -483,6 +666,32 @@ function handleChatEventMessageAdded(msg) {
         return;
     }
     if (role === 'assistant' && streamingChatId === currentChatId) return;
+    if (role === 'assistant') {
+        const plainA = _normalizeMsgPlain(content);
+        if (plainA && _lastStreamFinalizedPlain && plainA === _lastStreamFinalizedPlain) {
+            return;
+        }
+        // DB/pipeline may append the full reply after stream_finished finalized a prefix (interrupt/TTS race).
+        if (
+            plainA && _lastStreamFinalizedPlain
+            && plainA.length > _lastStreamFinalizedPlain.length
+            && plainA.startsWith(_lastStreamFinalizedPlain)
+        ) {
+            const nodes = [...chatMessages.querySelectorAll('.message.assistant')].filter(
+                el => el.id !== 'streamingAssistantMessage'
+            );
+            const lastAsst = nodes[nodes.length - 1];
+            if (lastAsst) {
+                const textEl = lastAsst.querySelector('.message-text');
+                if (textEl) {
+                    textEl.innerHTML = formatMessage(content);
+                    _lastStreamFinalizedPlain = plainA;
+                    scrollToBottom();
+                    return;
+                }
+            }
+        }
+    }
     const div = createMessageElement({ role, content });
     chatMessages.appendChild(div);
     scrollToBottom();
@@ -512,6 +721,7 @@ function handleChatEventStreamStarted(msg) {
         </div>
     `;
     chatMessages.appendChild(div);
+    _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
 }
 
@@ -552,9 +762,13 @@ function handleChatEventStreamFinished(msg) {
         // Prefer response_text from event (clean, tool_call tags stripped) over raw streamed DOM text
         const raw = (msg.response_text != null && msg.response_text !== '') ? msg.response_text : (textEl ? textEl.textContent : '');
         wrap.id = '';
+        const finishedAt = Date.now();
+        const clock = _formatTimestamp(finishedAt);
+        const headerTs = clock ? `<span class="message-header-timestamp">${clock}</span>` : '';
         wrap.innerHTML = `
             <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
             <div class="message-content">
+                ${headerTs}
                 <div class="message-text">${formatMessage(raw)}</div>
                 <div class="message-actions">
                     <button class="message-action-btn" onclick="copyMessage(this)">Copy</button>
@@ -562,6 +776,9 @@ function handleChatEventStreamFinished(msg) {
                 </div>
             </div>
         `;
+        syncRenderedMessageCountFromDom();
+        _lastStreamFinalizedPlain = _normalizeMsgPlain(raw);
+        _suppressChatUpdatedFetchUntil = Date.now() + 2500;
         scrollToBottom();
     } else {
         // Streaming element was destroyed (e.g. by polling race) - fetch final state from DB
@@ -569,6 +786,8 @@ function handleChatEventStreamFinished(msg) {
         fetch(`${API_BASE}/chats/${chatId}`).then(r => r.json()).then(data => {
             if (currentChatId === chatId) {
                 renderMessages(data.messages || [], false);
+                syncRenderedMessageCountFromDom();
+                _suppressChatUpdatedFetchUntil = Date.now() + 2500;
                 updateChatSettingsDisplay({
                     title: data.title || 'New Chat',
                     provider: data.provider || '-',
@@ -602,6 +821,7 @@ function handleChatEventStreamError(msg) {
     if (msg.chat_id != null && msg.chat_id !== currentChatId) return;
     _streamTextBuffer = '';
     _streamRafPending = false;
+    _lastStreamFinalizedPlain = null;
     removeTypingIndicator();
     // Remove any in-progress streaming bubble
     const wrap = document.getElementById('streamingAssistantMessage');
@@ -641,36 +861,114 @@ function handleChatEventStreamError(msg) {
     streamingChatId = null;
 }
 
-function showTranscriptionStatus(text, done) {
+function showTranscriptionStatus(text, done, clearLivePreview) {
     if (!chatMessages) return;
+    const t = text != null ? String(text) : '';
+    const trimmed = t.trim();
+
+    function removeStatusBar() {
+        _stopSttPreviewClock();
+        if (transcriptionStatusTimer) {
+            clearTimeout(transcriptionStatusTimer);
+            transcriptionStatusTimer = null;
+        }
+        const el = document.getElementById('transcriptionStatus');
+        if (el) el.remove();
+    }
+
+    // Committed user message — real bubble arrives via message_added
+    if (clearLivePreview) {
+        _discardLiveTranscriptionUi();
+        return;
+    }
+    // Backend sent done + empty (defensive)
+    if (done && !trimmed) {
+        _discardLiveTranscriptionUi();
+        return;
+    }
+    // File / tool transcription finished — short assistant notice, then hide
+    if (done && trimmed) {
+        let wrap = document.getElementById('transcriptionStatus');
+        if (!wrap) {
+            wrap = document.createElement('div');
+            wrap.className = 'message assistant';
+            wrap.id = 'transcriptionStatus';
+            wrap.innerHTML = `
+                <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+                <div class="message-content">
+                    <div class="message-text" id="transcriptionStatusText"></div>
+                </div>
+            `;
+            chatMessages.appendChild(wrap);
+        } else {
+            wrap.className = 'message assistant';
+            const av = wrap.querySelector('.message-avatar');
+            if (av) av.innerHTML = AVATAR_SVG_ASSISTANT;
+            wrap.querySelectorAll('.message-meta, .stt-preview-label').forEach(el => el.remove());
+        }
+        const textEl = document.getElementById('transcriptionStatusText');
+        if (textEl) textEl.textContent = trimmed;
+        scrollToBottom();
+        if (transcriptionStatusTimer) {
+            clearTimeout(transcriptionStatusTimer);
+            transcriptionStatusTimer = null;
+        }
+        transcriptionStatusTimer = setTimeout(removeStatusBar, 5000);
+        return;
+    }
+
+    // Live speech-to-text (updates while you talk)
     let wrap = document.getElementById('transcriptionStatus');
     if (!wrap) {
         wrap = document.createElement('div');
-        wrap.className = 'message assistant';
+        wrap.className = 'message user';
         wrap.id = 'transcriptionStatus';
         wrap.innerHTML = `
-            <div class="message-avatar">${AVATAR_SVG_ASSISTANT}</div>
+            <div class="message-avatar">${AVATAR_SVG_USER}</div>
             <div class="message-content">
-                <div class="message-text" id="transcriptionStatusText"></div>
+                <span class="message-header-timestamp stt-preview-label" aria-live="polite"></span>
+                <div class="message-text" id="transcriptionStatusText" aria-live="polite"></div>
+                <div class="message-actions">
+                    <button type="button" class="message-action-btn" onclick="copyMessage(this)">Copy</button>
+                </div>
             </div>
         `;
-        chatMessages.appendChild(wrap);
+        const streamAnchor = document.getElementById('streamingAssistantMessage');
+        if (streamAnchor && chatMessages.contains(streamAnchor)) {
+            chatMessages.insertBefore(wrap, streamAnchor);
+        } else {
+            chatMessages.appendChild(wrap);
+        }
+    } else {
+        wrap.className = 'message user';
+        const av = wrap.querySelector('.message-avatar');
+        if (av) av.innerHTML = AVATAR_SVG_USER;
+        if (!wrap.querySelector('.stt-preview-label')) {
+            const mc = wrap.querySelector('.message-content');
+            if (mc) {
+                const meta = document.createElement('span');
+                meta.className = 'message-header-timestamp stt-preview-label';
+                meta.setAttribute('aria-live', 'polite');
+                const first = mc.firstChild;
+                if (first) mc.insertBefore(meta, first);
+                else mc.appendChild(meta);
+            }
+        }
+        if (!wrap.querySelector('.message-actions')) {
+            const mc = wrap.querySelector('.message-content');
+            if (mc) {
+                const actions = document.createElement('div');
+                actions.className = 'message-actions';
+                actions.innerHTML = '<button type="button" class="message-action-btn" onclick="copyMessage(this)">Copy</button>';
+                mc.appendChild(actions);
+            }
+        }
     }
-
     const textEl = document.getElementById('transcriptionStatusText');
-    if (textEl) textEl.textContent = text || 'Transcription in progress...';
+    if (textEl) textEl.textContent = trimmed || '…';
+    _ensureSttPreviewClockRunning();
+    _ensureTranscriptionPreviewPlacement();
     scrollToBottom();
-
-    if (transcriptionStatusTimer) {
-        clearTimeout(transcriptionStatusTimer);
-        transcriptionStatusTimer = null;
-    }
-    if (done) {
-        transcriptionStatusTimer = setTimeout(() => {
-            const el = document.getElementById('transcriptionStatus');
-            if (el) el.remove();
-        }, 5000);
-    }
 }
 
 // Load Chats (from database via settings API; returns { chats, last_chat_id, agent_current_chat_id } for restore on refresh)
@@ -792,7 +1090,7 @@ async function createNewChat() {
     _createChatGuard = true;
     newChatBtn.disabled = true;
     try {
-        // Inherit provider/model/voice from current chat settings if loaded, else empty-state dropdowns
+        // Inherit provider/model/voice from current chat settings if loaded, else Settings defaults
         let provider = null, modelName = null, voiceProvider = null, voiceModel = null;
         if (currentChatSettings?.provider) {
             provider = currentChatSettings.provider;
@@ -800,14 +1098,19 @@ async function createNewChat() {
             voiceProvider = currentChatSettings.voice_provider || null;
             voiceModel = currentChatSettings.voice_model || null;
         } else {
-            const emptyLlmProvider = document.getElementById('emptyStateLlmProvider');
-            const emptyLlmModel = document.getElementById('emptyStateLlmModel');
-            const emptyVoiceProvider = document.getElementById('emptyStateVoiceProvider');
-            const emptyVoiceModel = document.getElementById('emptyStateVoiceModel');
-            provider = emptyLlmProvider?.value?.trim() || null;
-            modelName = emptyLlmModel?.value?.trim() || null;
-            voiceProvider = emptyVoiceProvider?.value?.trim() || null;
-            voiceModel = emptyVoiceModel?.value?.trim() || null;
+            const ep = document.getElementById('emptyStateLlmProvider');
+            if (ep) {
+                provider = document.getElementById('emptyStateLlmProvider')?.value?.trim() || null;
+                modelName = document.getElementById('emptyStateLlmModel')?.value?.trim() || null;
+                voiceProvider = document.getElementById('emptyStateVoiceProvider')?.value?.trim() || null;
+                voiceModel = document.getElementById('emptyStateVoiceModel')?.value?.trim() || null;
+            } else {
+                const d = await fetchDefaultsForNewChat();
+                provider = d.provider;
+                modelName = d.model_name || null;
+                voiceProvider = d.voice_provider || null;
+                voiceModel = d.voice_model || null;
+            }
         }
         const response = await fetch(`${API_BASE}/chats`, {
             method: 'POST',
@@ -866,6 +1169,7 @@ async function loadChat(chatId, options = {}) {
     currentChatId = chatId;
     loadedChatId = chatId;
     streamingChatId = null;
+    _lastStreamFinalizedPlain = null;
     isStreaming = false;
     setSendButtonStreaming(false);
     updateActiveChat();
@@ -993,9 +1297,8 @@ function hideEmptyStateAgentLoading() {
     if (loading) loading.style.display = 'none';
 }
 
-// Populate empty-state dropdowns (same sources as create-chat modal)
+/** Populates empty-state form (shared markup with New chat modal) and reveals it. */
 async function loadEmptyStateDropdowns() {
-    // Show loader, hide form while loading
     const loader = document.getElementById('emptyStateLoader');
     const form = document.getElementById('emptyStateForm');
     const prompt = document.getElementById('emptyStatePrompt');
@@ -1033,7 +1336,7 @@ async function loadEmptyStateDropdowns() {
                 else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
             } else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
         }
-        const voiceProvider = generalData.voice_provider || 'kokoro';
+        const voiceProvider = canonicalVoiceProviderForSelect(generalData);
         voiceProviderEl.value = voiceProvider;
         await loadEmptyStateVoiceModels(voiceProvider);
         const voiceKey = getVoiceSettingsKey(voiceProvider);
@@ -1047,13 +1350,9 @@ async function loadEmptyStateDropdowns() {
     } catch (e) {
         console.error('Error loading empty-state dropdowns:', e);
     }
-    // Load skin picker
     await loadEmptyStateSkins();
-    // Show/hide Ollama download button
     toggleEmptyStateOllamaPullBtn();
-    // Hide Kilo promo if KiloCode is already a provider
     toggleKiloPromo('emptyStateLlmProvider');
-    // Reveal the form, hide the loader, enable input
     revealEmptyStateForm();
 }
 
@@ -1064,15 +1363,14 @@ function revealEmptyStateForm() {
     if (loader) loader.style.display = 'none';
     if (form) form.style.display = '';
     if (prompt) prompt.style.display = '';
-    // Enable the message input now that everything is ready
     if (!loadedChatId && !currentChatId) {
         messageInput.disabled = false;
         messageInput.placeholder = 'Send message...';
         sendButton.disabled = !messageInput.value.trim();
     }
+    if (typeof injectInfoIcons === 'function') injectInfoIcons();
 }
 
-// ── Skin picker in empty state ──
 let _emptyStateSkinSelection = null;
 
 async function loadEmptyStateSkins() {
@@ -1091,15 +1389,12 @@ async function loadEmptyStateSkins() {
             const card = document.createElement('div');
             card.className = 'empty-state-skin-card' + (isSel ? ' selected' : '');
             card.dataset.folder = skin.folder_name;
-
             const idleFile = skin.idle_animation || 'idle.webm';
             const previewUrl = '/api/skins/' + encodeURIComponent(skin.folder_name) + '/preview/' + encodeURIComponent(idleFile);
             const ext = idleFile.split('.').pop().toLowerCase();
             const isOracle = skin.type === 'oracle';
-
             const previewWrap = document.createElement('div');
             previewWrap.className = 'empty-state-skin-preview' + (isOracle ? '' : ' avatar-preview');
-
             let previewEl;
             if (ext === 'webm') {
                 previewEl = document.createElement('video');
@@ -1115,19 +1410,16 @@ async function loadEmptyStateSkins() {
             }
             previewWrap.appendChild(previewEl);
             card.appendChild(previewWrap);
-
             const nameEl = document.createElement('span');
             nameEl.className = 'empty-state-skin-name';
             nameEl.textContent = skin.name || skin.folder_name;
             card.appendChild(nameEl);
-
             card.addEventListener('click', function() {
                 _emptyStateSkinSelection = skin.folder_name;
                 grid.querySelectorAll('.empty-state-skin-card').forEach(function(c) {
                     c.classList.toggle('selected', c.dataset.folder === skin.folder_name);
                 });
             });
-
             grid.appendChild(card);
         });
     } catch (e) {
@@ -1144,12 +1436,47 @@ function applySelectedSkin() {
     }).catch(function(e) { console.error('Failed to apply skin:', e); });
 }
 
-// ── Ollama model download button in empty state ──
 function toggleEmptyStateOllamaPullBtn() {
     const btn = document.getElementById('emptyStateOllamaPullBtn');
     const provider = document.getElementById('emptyStateLlmProvider');
     if (!btn || !provider) return;
     btn.style.display = (provider.value === 'ollama') ? '' : 'none';
+}
+
+async function pullOllamaModelFromEmptyState() {
+    window.open('/settings#llms', '_blank');
+}
+
+async function loadEmptyStateLlmModels(provider) {
+    const el = document.getElementById('emptyStateLlmModel');
+    if (!el) return;
+    el.innerHTML = '<option value="">Loading…</option>';
+    try {
+        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
+        const data = await response.json();
+        const models = data.models || [];
+        el.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
+    } catch (e) {
+        el.innerHTML = '<option value="">Error loading</option>';
+    }
+}
+
+async function loadEmptyStateVoiceModels(provider) {
+    const el = document.getElementById('emptyStateVoiceModel');
+    if (!el) return;
+    el.innerHTML = '<option value="">Loading…</option>';
+    if (!provider) {
+        el.innerHTML = '<option value="">Select provider</option>';
+        return;
+    }
+    try {
+        const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
+        const data = await response.json();
+        const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
+        el.innerHTML = voices.length ? voices.map(v => `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`).join('') : '<option value="">No voices</option>';
+    } catch (e) {
+        el.innerHTML = '<option value="">Error loading</option>';
+    }
 }
 
 function toggleKiloPromo(providerSelectId, containerSelector) {
@@ -1162,10 +1489,6 @@ function toggleKiloPromo(providerSelectId, containerSelector) {
     const keyHint = container.querySelector('.empty-state-key-hint-wrap');
     if (kiloWrap) kiloWrap.style.display = hasKilo ? 'none' : '';
     if (keyHint) keyHint.style.display = hasKilo ? 'none' : '';
-}
-
-async function pullOllamaModelFromEmptyState() {
-    window.open('/settings#llms', '_blank');
 }
 
 // ── Modal: Ollama download + skin picker ──
@@ -1242,53 +1565,35 @@ function applyModalSelectedSkin() {
     }).catch(function(e) { console.error('Failed to apply skin:', e); });
 }
 
-async function loadEmptyStateLlmModels(provider) {
-    const el = document.getElementById('emptyStateLlmModel');
-    if (!el) return;
-    el.innerHTML = '<option value="">Loading…</option>';
-    try {
-        const response = await fetch(`/api/llms/models?type=conversational&provider=${encodeURIComponent(provider)}`);
-        const data = await response.json();
-        const models = data.models || [];
-        el.innerHTML = models.length ? models.map(m => `<option value="${escapeHtml(m.id || m)}">${escapeHtml(m.name || m.id || m)}</option>`).join('') : '<option value="">No models</option>';
-    } catch (e) {
-        el.innerHTML = '<option value="">Error loading</option>';
-    }
-}
-
-async function loadEmptyStateVoiceModels(provider) {
-    const el = document.getElementById('emptyStateVoiceModel');
-    if (!el) return;
-    el.innerHTML = '<option value="">Loading…</option>';
-    if (!provider) {
-        el.innerHTML = '<option value="">Select provider</option>';
-        return;
-    }
-    try {
-        const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
-        const data = await response.json();
-        const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
-        el.innerHTML = voices.length ? voices.map(v => `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`).join('') : '<option value="">No voices</option>';
-    } catch (e) {
-        el.innerHTML = '<option value="">Error loading</option>';
-    }
-}
-
 // Render Messages. When preserveOnEmpty is true, don't replace with empty (avoids clearing during send flow).
 /** Track how many child message elements are currently rendered to enable incremental append. */
 let _renderedMessageCount = 0;
+/** After stream_finished updates the DOM, ignore chat_updated refetches briefly (same write often triggers both). */
+let _suppressChatUpdatedFetchUntil = 0;
+
+/** Keep _renderedMessageCount aligned when WebSocket finalizes #streamingAssistantMessage (no renderMessages() call). */
+function syncRenderedMessageCountFromDom() {
+    if (!chatMessages) return;
+    _renderedMessageCount = [...chatMessages.querySelectorAll('.message')].filter(
+        el => el.id !== 'transcriptionStatus'
+    ).length;
+}
 
 function renderMessages(messages, preserveOnEmpty) {
     // Always clean up streaming/typing state when rendering messages
     removeTypingIndicator();
     const streamingEl = document.getElementById('streamingAssistantMessage');
     if (streamingEl) streamingEl.remove();
+    // Incremental reload from API does not wipe innerHTML — remove live STT preview so
+    // "Listening…" never sits next to persisted rows from the socket.
+    _discardLiveTranscriptionUi();
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
         chatMessages.innerHTML = '';
         _renderedMessageCount = 0;
         _optimisticUserMessages.clear();
+        _lastStreamFinalizedPlain = null;
         return;
     }
     // Incremental render: only append new messages instead of wiping the whole DOM.
@@ -1302,6 +1607,14 @@ function renderMessages(messages, preserveOnEmpty) {
             if (msg.role === 'user' && msg.content && _optimisticUserMessages.has(msg.content.substring(0, 100))) {
                 continue;
             }
+            // Duplicate assistant rows (same body back-to-back) — DB/pipeline race with PTT/voice
+            if (msg.role === 'assistant' && i > 0 && messages[i - 1].role === 'assistant') {
+                const a = _normalizeMsgPlain(messages[i - 1].content);
+                const b = _normalizeMsgPlain(msg.content);
+                if (a && a === b) {
+                    continue;
+                }
+            }
             const messageDiv = createMessageElement(msg);
             chatMessages.appendChild(messageDiv);
         }
@@ -1312,11 +1625,13 @@ function renderMessages(messages, preserveOnEmpty) {
     // Full rebuild (chat switch, refresh, etc.)
     chatMessages.innerHTML = '';
     _optimisticUserMessages.clear();
-    messages.forEach(message => {
+    _lastStreamFinalizedPlain = null;
+    const toRender = dedupeConsecutiveDuplicateAssistants(messages);
+    toRender.forEach(message => {
         const messageDiv = createMessageElement(message);
         chatMessages.appendChild(messageDiv);
     });
-    _renderedMessageCount = messages.length;
+    _renderedMessageCount = toRender.length;
     scrollToBottomImmediate();
 }
 
@@ -1519,7 +1834,11 @@ function createMessageElement(message) {
            <button class="message-action-btn message-action-play" onclick="playTTS(this)" title="Play with TTS">Play</button>`
         : `<button class="message-action-btn" onclick="copyMessage(this)">Copy</button>`;
 
-    const ts = _formatTimestamp(message.timestamp);
+    let tsRaw = message.timestamp;
+    if (tsRaw === undefined || tsRaw === null || tsRaw === '') {
+        tsRaw = Date.now();
+    }
+    const ts = _formatTimestamp(tsRaw);
     const headerTimestamp = ts ? `<span class="message-header-timestamp">${ts}</span>` : '';
 
     div.innerHTML = `
@@ -1572,24 +1891,33 @@ async function sendMessage() {
             alert('Please load a chat to reply.');
             return;
         }
-        const emptyLlmProvider = document.getElementById('emptyStateLlmProvider');
-        const emptyLlmModel = document.getElementById('emptyStateLlmModel');
-        const emptyVoiceProvider = document.getElementById('emptyStateVoiceProvider');
-        const emptyVoiceModel = document.getElementById('emptyStateVoiceModel');
-        const provider = emptyLlmProvider?.value?.trim();
-        const modelName = emptyLlmModel?.value?.trim();
-        const voiceProvider = emptyVoiceProvider?.value?.trim();
-        const voiceModel = emptyVoiceModel?.value?.trim();
+        let provider;
+        let modelName;
+        let voiceProvider;
+        let voiceModel;
+        const ep = document.getElementById('emptyStateLlmProvider');
+        if (ep) {
+            provider = document.getElementById('emptyStateLlmProvider')?.value?.trim();
+            modelName = document.getElementById('emptyStateLlmModel')?.value?.trim();
+            voiceProvider = document.getElementById('emptyStateVoiceProvider')?.value?.trim();
+            voiceModel = document.getElementById('emptyStateVoiceModel')?.value?.trim();
+        } else {
+            const defaults = await fetchDefaultsForNewChat();
+            provider = defaults.provider;
+            modelName = defaults.model_name;
+            voiceProvider = defaults.voice_provider;
+            voiceModel = defaults.voice_model;
+        }
         if (!provider || !modelName) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select LLM provider and model in Setup your Agent.');
+            alert('Please select LLM provider and model in Setup your Agent, or set defaults in Settings > LLMs.');
             return;
         }
         if (!voiceProvider || !voiceModel) {
             isStreaming = false;
             sendButton.disabled = !messageInput.value.trim();
-            alert('Please select Voice provider and voice in Setup your Agent.');
+            alert('Please select Voice provider and voice in Setup your Agent, or set defaults in Settings > General.');
             return;
         }
         showEmptyStateAgentLoading();
@@ -1625,10 +1953,10 @@ async function sendMessage() {
                 alert('Could not create chat: ' + (data.detail || response.statusText || 'Please try again.'));
                 return;
             }
+            persistGlobalVoiceToSettings(voiceProvider, voiceModel);
             newChatId = data.id;
             loadedChatId = data.id;
             currentChatId = data.id;
-            // Apply selected skin when initializing chat
             if (typeof applySelectedSkin === 'function') applySelectedSkin();
             updateActiveChat();
             // Clear input immediately so user sees it sent
@@ -1639,6 +1967,7 @@ async function sendMessage() {
             const userMsg = createMessageElement({ role: 'user', content: message });
             chatMessages.appendChild(userMsg);
             _optimisticUserMessages.add(message.substring(0, 100));
+            _lastStreamFinalizedPlain = null;
             const typing = createTypingIndicator();
             chatMessages.appendChild(typing);
             scrollToBottom();
@@ -1685,6 +2014,7 @@ async function sendMessage() {
     handleInputChange();
     chatMessages.appendChild(createMessageElement({ role: 'user', content: message }));
     _optimisticUserMessages.add(message.substring(0, 100));
+    _lastStreamFinalizedPlain = null;
     chatMessages.appendChild(createTypingIndicator());
     scrollToBottom();
     setSendButtonStreaming(true);
@@ -1708,16 +2038,13 @@ async function sendMessage() {
 async function sendToAgentWhenReady(message, abortSignal) {
     // Capture chat ID once — loadedChatId may change if user switches chats during retry delays
     const targetChatId = loadedChatId;
-    // If this chat was loaded with skipLoadInAgent (new chat from modal), ensure agent has full setup before first send.
+    // New chat from modal: POST /chats already emitted web_create_chat_emits_requested, which runs
+    // current_chat_changed(initial_message) on the agent. Do NOT call load-in-agent here — that
+    // path sends interrupt_tts first and cancels the in-flight LLM/TTS for the starting question.
     if (loadedChatSkippedLoadInAgent && targetChatId) {
         loadedChatSkippedLoadInAgent = false;
-        try {
-            await fetch(`${API_BASE}/chats/${targetChatId}/load-in-agent`, { method: 'POST' });
-            agentCurrentChatId = targetChatId;
-            updateActiveChat();
-        } catch (e) {
-            console.warn('Load-in-agent before send failed:', e);
-        }
+        agentCurrentChatId = targetChatId;
+        updateActiveChat();
     }
 
     const maxAttempts = 20;
@@ -1804,6 +2131,17 @@ async function pollUntilAgentResponse(abortSignal) {
             const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
+                // WebSocket stream_finished may have finalized the assistant row already; don't append again.
+                const domN = chatMessages ? chatMessages.querySelectorAll('.message').length : 0;
+                if (domN >= messages.length) {
+                    finish();
+                    if (currentChatId === myChatId) {
+                        syncRenderedMessageCountFromDom();
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                        scrollToBottom();
+                    }
+                    return;
+                }
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
@@ -1887,6 +2225,16 @@ async function sendToAgentAndPoll(message, abortSignal) {
             const has_new = messages.length > adjustedInitialCount;
             const last_is_assistant = messages.length && messages[messages.length - 1].role === 'assistant';
             if (has_new && last_is_assistant) {
+                const domN = chatMessages ? chatMessages.querySelectorAll('.message').length : 0;
+                if (domN >= messages.length) {
+                    finish();
+                    if (currentChatId === myChatId) {
+                        syncRenderedMessageCountFromDom();
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display });
+                        scrollToBottom();
+                    }
+                    return;
+                }
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
@@ -2194,7 +2542,6 @@ async function playVoiceModal() {
     }
 }
 
-// Empty-state voice sample (same API as modal)
 let _emptyStateVoiceAudio = null;
 let _emptyStateVoiceLoading = false;
 
@@ -2341,7 +2688,7 @@ async function loadDefaultSettings() {
             }
         }
 
-        const voiceProvider = generalData.voice_provider || 'kokoro';
+        const voiceProvider = canonicalVoiceProviderForSelect(generalData);
         voiceProviderSelect.value = voiceProvider;
         await loadVoiceModels(voiceProvider);
         const voiceKey = getVoiceSettingsKey(voiceProvider);
@@ -2454,6 +2801,8 @@ async function createNewChatWithSettings() {
 
         const data = await response.json();
 
+        persistGlobalVoiceToSettings(voiceProvider, voiceModel);
+
         currentChatSettings = {
             provider: llmProvider,
             model_name: llmModel,
@@ -2561,7 +2910,7 @@ let _chatCvRecordLevelRAF = null;
 let _chatCvPlaybackAudio = null;
 const _CHAT_CV_MAX_SECS = 12;
 
-// Show/hide custom voice buttons based on provider and selected voice
+// Show/hide custom voice buttons (modal + empty-state configure form)
 function updateChatVoiceButtons(prefix) {
     const providerEl = document.getElementById(prefix === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider');
     const voiceEl = document.getElementById(prefix === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
@@ -2580,23 +2929,21 @@ function updateChatVoiceButtons(prefix) {
     if (editBtn) editBtn.style.display = isCustomVoice ? '' : 'none';
 }
 
-// Hook into provider and voice changes
 (function() {
     const esVP = document.getElementById('emptyStateVoiceProvider');
     const esVM = document.getElementById('emptyStateVoiceModel');
     const mVP = document.getElementById('voiceProvider');
     const mVM = document.getElementById('voiceModel');
 
-    function hookChange(el, prefix) {
+    function hookChange(el, pfx) {
         if (!el) return;
-        el.addEventListener('change', () => updateChatVoiceButtons(prefix));
+        el.addEventListener('change', () => updateChatVoiceButtons(pfx));
     }
     hookChange(esVP, 'emptyState');
     hookChange(esVM, 'emptyState');
     hookChange(mVP, 'modal');
     hookChange(mVM, 'modal');
 
-    // Also update after voice lists load (programmatic value changes don't fire 'change')
     const origLoadES = window.loadEmptyStateVoiceModels;
     if (origLoadES) {
         window.loadEmptyStateVoiceModels = async function(p) {
@@ -2612,7 +2959,6 @@ function updateChatVoiceButtons(prefix) {
         };
     }
 
-    // Initial update after page load
     setTimeout(() => {
         updateChatVoiceButtons('emptyState');
         updateChatVoiceButtons('modal');
@@ -2756,19 +3102,15 @@ function _pollChatCv(voiceId, context, provider) {
             if (data.status === 'ready') {
                 clearInterval(interval);
                 closeChatCustomVoiceModal();
-                // Reload voice list and select the new voice
                 const voiceSelect = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
-                if (context === 'emptyState') {
-                    await loadEmptyStateVoiceModels(provider);
-                } else {
-                    await loadVoiceModels(provider);
-                }
+                if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
+                else await loadVoiceModels(provider);
                 if (voiceSelect) {
                     const newId = 'custom_' + voiceId;
                     const opt = Array.from(voiceSelect.options).find(o => o.value === newId);
                     if (opt) voiceSelect.value = newId;
                 }
-                updateChatVoiceButtons(context);
+                updateChatVoiceButtons(context === 'emptyState' ? 'emptyState' : 'modal');
             } else if (data.status === 'failed') {
                 clearInterval(interval);
                 document.getElementById('chatCv_processing').classList.add('hidden');
@@ -2799,7 +3141,7 @@ async function deleteChatCustomVoice(context) {
             const provider = providerEl.value;
             if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
             else await loadVoiceModels(provider);
-            updateChatVoiceButtons(context);
+            updateChatVoiceButtons(context === 'emptyState' ? 'emptyState' : 'modal');
         }
     } catch (e) { console.error('Delete failed:', e); }
 }

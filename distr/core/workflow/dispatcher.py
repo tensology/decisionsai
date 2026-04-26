@@ -10,6 +10,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import threading
 from dataclasses import dataclass
 from datetime import datetime
@@ -652,7 +653,12 @@ class StepDispatcher:
                 _on_playback_done("Recording completed.", True)
 
             def _on_stopped(reason: str):
-                _on_playback_done(f"Recording stopped: {reason}" if reason else "Recording stopped.", True)
+                # "stopped" usually indicates an interruption/cancel path rather
+                # than a successful recording completion.
+                _on_playback_done(
+                    f"Recording stopped: {reason}" if reason else "Recording stopped.",
+                    False,
+                )
 
             def _on_failed(error_msg: str):
                 _on_playback_done(f"Recording failed: {error_msg}", False)
@@ -714,6 +720,9 @@ class StepDispatcher:
                 def _on_agent_done(fut):
                     try:
                         result_text = fut.result(timeout=0)
+                        result_text = self._augment_agent_result_with_tool_evidence(
+                            result_text, run_ctx.workflow_agent,
+                        )
                         self._record_result_and_route(step_id, run_id=run_id,
                                                       result_text=result_text, passed=True)
                     except asyncio.CancelledError:
@@ -1027,6 +1036,53 @@ class StepDispatcher:
                 db.commit()
         increment_workflow_updated()
 
+    @staticmethod
+    def _extract_attachment_paths(text: str) -> List[str]:
+        if not text:
+            return []
+        # Capture absolute file paths that end in common media extensions.
+        pattern = r"(/[^ \n\t\"']+\.(?:png|jpg|jpeg|webp|gif|mp4|mov|m4a|wav|mp3))"
+        hits = re.findall(pattern, text, flags=re.IGNORECASE)
+        deduped: List[str] = []
+        for p in hits:
+            if p not in deduped:
+                deduped.append(p)
+        return deduped
+
+    def _augment_agent_result_with_tool_evidence(self, result_text: str, workflow_agent) -> str:
+        """Append tool evidence + attachments so workflow history/audit is actionable."""
+        base = (result_text or "").strip() or "Step completed."
+        try:
+            msgs = list(workflow_agent.messages or [])
+        except Exception:
+            return base
+
+        # Collect tool outputs from this step only (messages since last user prompt).
+        recent_tool_outputs: List[str] = []
+        for msg in reversed(msgs):
+            role = (msg or {}).get("role")
+            if role == "user":
+                break
+            if role == "tool":
+                content = str((msg or {}).get("content") or "").strip()
+                if content:
+                    recent_tool_outputs.append(content[:600])
+        recent_tool_outputs.reverse()
+
+        attachment_paths = self._extract_attachment_paths(base)
+        for chunk in recent_tool_outputs:
+            for path in self._extract_attachment_paths(chunk):
+                if path not in attachment_paths:
+                    attachment_paths.append(path)
+
+        out = base
+        if recent_tool_outputs:
+            preview = "\n".join(f"- {c}" for c in recent_tool_outputs[:4])
+            out = f"{out}\n\nTool evidence:\n{preview}"
+        if attachment_paths:
+            out = f"{out}\n\nAttachments:\n" + "\n".join(f"- {p}" for p in attachment_paths)
+        return out[:8000]
+
     def _fail_step(self, step_id: int, error_msg: str) -> None:
         """Mark step as failed with error message."""
         self._set_status(step_id, "failed", result=error_msg)
@@ -1084,6 +1140,7 @@ class StepDispatcher:
                 from distr.core.workflow.router import StepRouter
                 router = StepRouter()
                 decision = router.route(step_id, result_text, passed, run_id)
+                self._append_workflow_step_audit(step_id, run_id, result_text, passed)
 
                 if decision.get("action") == "next_step":
                     next_step_id = decision["step_id"]
@@ -1122,6 +1179,40 @@ class StepDispatcher:
                 except Exception:
                     pass
 
+    def _append_workflow_step_audit(
+        self,
+        step_id: int,
+        run_id: int,
+        result_text: str,
+        passed: bool,
+    ) -> None:
+        """Mirror workflow step outputs to the workflow audit trail for the UI."""
+        try:
+            from distr.core.workflow.audit import append_audit_step
+
+            with get_session() as db:
+                step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if not step or not run:
+                    return
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == step.workflow_id).first()
+                chat_id = wf.chat_id if wf else None
+                if not chat_id:
+                    return
+
+                status = "passed" if passed else "failed"
+                instruction = (step.instruction or "").strip() or step.name or f"Step {step_id}"
+                label = f"{step.name or 'Step'} (workflow step)"
+                append_audit_step(
+                    chat_id=chat_id,
+                    tool_name=label,
+                    instruction=instruction,
+                    result=(result_text or "")[:4000],
+                    status=status,
+                )
+        except Exception:
+            logger.debug("Failed to append workflow step audit", exc_info=True)
+
     def _enter_wait_state(
         self,
         step_id: int,
@@ -1130,12 +1221,14 @@ class StepDispatcher:
         run_id: Optional[int] = None,
     ) -> bool:
         """Put step into waiting state if wait_for_continue is set. Returns True if entered."""
+        handoff = self._build_wait_handoff_text(step_name="", result_text=result_text, run_id=run_id)
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if not step or not step.wait_for_continue:
                 return False
             step.status = "waiting"
             step_name, workflow_id = step.name, step.workflow_id
+            handoff = self._build_wait_handoff_text(step_name=step_name, result_text=result_text, run_id=run_id)
             if run_id is not None:
                 run = db.query(AutoWorkflowRun).filter(
                     AutoWorkflowRun.id == run_id,
@@ -1154,17 +1247,22 @@ class StepDispatcher:
                 run_data = json.loads(run.run_data or "{}")
                 run_data["waiting_result"] = result_text
                 run_data["waiting_passed"] = passed
+                run_data["waiting_prompt"] = handoff["prompt"]
                 run.run_data = json.dumps(run_data)
+            # Persist a readable wait-state handoff in step history so users can
+            # see exactly what the step asked for (not just raw output).
+            db.add(AutoWorkflowStepResult(
+                step_id=step_id,
+                run_id=resolved_run_id,
+                agent_response=handoff["history_entry"],
+                status="waiting",
+            ))
             db.commit()
         increment_workflow_updated()
         # Notify main agent via TTS
         try:
             from distr.core.signals import speak_text_directly_event_queue
-            speak = result_text.strip()[:400]
-            if len(result_text.strip()) > 400:
-                speak += "..."
-            speak_text_directly_event_queue(
-                f"{speak}. Step '{step_name}' is now waiting for your input.")
+            speak_text_directly_event_queue(handoff["tts"])
         except Exception as e:
             logger.debug("Could not speak wait notification: %s", e)
         # Queue report for the main agent
@@ -1172,8 +1270,48 @@ class StepDispatcher:
             from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
             WorkflowAgentBridge().queue_report_to_agent(
                 workflow_id,
-                f"Workflow step '{step_name}' completed and is now WAITING for your input. "
-                f"Run ID: {resolved_run_id}. Result: {result_text[:1000]}")
+                handoff["report"].replace("__RUN_ID__", str(resolved_run_id)),
+            )
         except Exception as e:
             logger.debug("Could not queue wait report: %s", e)
         return True
+
+    @staticmethod
+    def _build_wait_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
+        """Build curated wait-state text for TTS, history, and agent report."""
+        clean_result = (result_text or "").strip()
+        if not clean_result:
+            clean_result = "Step completed with no detailed output."
+        summary = clean_result[:280]
+        if len(clean_result) > 280:
+            summary += "..."
+        step_label = step_name or "workflow step"
+        prompt = (
+            f"{step_label} is waiting for your decision. "
+            "Reply with what should happen next, for example: continue, retry, skip, or provide extra instructions."
+        )
+        tts = f"{summary}. {prompt}"
+        report = (
+            f"[WORKFLOW_WAIT_HANDOFF]\n"
+            f"step_name: {step_label}\n"
+            f"run_id: __RUN_ID__\n"
+            f"status: waiting_for_user_input\n"
+            f"step_result_summary: {summary}\n"
+            f"step_result_full: {clean_result[:1500]}\n\n"
+            "Orchestrator instructions:\n"
+            "1) Relay the step result faithfully; do not re-style or expand scope.\n"
+            "2) Ask one clear follow-up question for user input.\n"
+            "3) After user reply, call continue_workflow with that reply."
+        )
+        history_entry = (
+            f"{clean_result}\n\n"
+            f"[WAITING FOR INPUT]\n{prompt}"
+        )
+        if run_id is not None:
+            history_entry = f"{history_entry}\nRun ID: {run_id}"
+        return {
+            "prompt": prompt,
+            "tts": tts,
+            "report": report,
+            "history_entry": history_entry,
+        }

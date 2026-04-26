@@ -27,7 +27,12 @@ from dataclasses import dataclass, field
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 
 from distr.core.initiative.policy import PolicyDecision, evaluate
-from distr.core.initiative.service import ProposedAction, parse_llm_response, serialize, deserialize
+from distr.core.initiative.proposed_action import (
+    ProposedAction,
+    deserialize,
+    parse_llm_response,
+    serialize,
+)
 from distr.core.initiative.draft_queue import DraftQueue, DraftEntry
 from distr.core.initiative.context import ContextAssembler, ContextBundle
 

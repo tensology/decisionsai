@@ -40,15 +40,29 @@
 .kb-card-actions {
     opacity: 1;
     display: flex;
-    flex-wrap: wrap;
-    justify-content: center;
+    justify-content: space-between;
     align-items: center;
-    gap: 6px;
-    overflow-x: hidden;
+    width: 100%;
+    overflow: visible;
     padding-top: 4px;
     padding-bottom: 2px;
 }
+.kb-card-actions-left {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+.kb-card-actions-right {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
 /* Card action buttons + immediate tooltips */
+.kb-card-action-tip {
+    position: relative;
+    display: inline-flex;
+}
 .kb-card-action-btn {
     position: relative;
     color: #ffffff;
@@ -71,7 +85,8 @@
 .kb-act-project { background: rgba(168,85,247,0.32); }
 .kb-act-transfer { background: rgba(34,197,94,0.28); }
 .kb-act-delete { background: rgba(239,68,68,0.28); }
-.kb-card-action-btn[data-tooltip]:hover::after {
+.kb-card-action-tip[data-tooltip]:not([data-tooltip=""]):hover::after,
+.kb-card-action-tip[data-tooltip]:not([data-tooltip=""]):focus-within::after {
     content: attr(data-tooltip);
     position: absolute;
     left: 50%;
@@ -176,7 +191,7 @@
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Local Boards</span>
                             <div class="flex items-center gap-1">
-                                <button type="button" id="kb-checkin-btn" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                                <button type="button" id="kb-checkin-btn" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in on every board that has “Agent check-in” enabled in board settings (sidebar selection does not filter this)">Check-in</button>
                                 <button type="button" id="kb-add-board" class="text-xs px-2 py-1 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">+ New</button>
                             </div>
                         </div>
@@ -186,7 +201,7 @@
                     <div id="kb-trello-boards-container" class="hidden flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Trello Boards</span>
-                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in on boards with Agent check-in enabled">Check-in</button>
                         </div>
                         <div id="kb-trello-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Trello account connected</p>
@@ -196,7 +211,7 @@
                     <div id="kb-jira-boards-container" class="hidden flex-1 flex flex-col min-h-0">
                         <div class="flex items-center justify-between mb-2">
                             <span class="text-xs font-semibold text-gray-400 uppercase tracking-wider">Jira Boards</span>
-                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in now">Check-in</button>
+                            <button type="button" class="kb-checkin-btn text-xs px-2 py-1 rounded border border-[#f97316]/50 text-[#f97316] hover:bg-[#f97316]/20" title="Run agent check-in on boards with Agent check-in enabled">Check-in</button>
                         </div>
                         <div id="kb-jira-boards" class="space-y-1 flex-1 overflow-y-auto">
                             <p class="text-xs text-gray-500 italic">No Jira account connected</p>
@@ -363,7 +378,7 @@
 <!-- WhatsApp chat context menu (right-click on chat) -->
 <div id="kb-wa-ctx-menu" class="fixed hidden z-50 min-w-[180px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
     <button type="button" class="kb-wa-ctx-view w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"/></svg>View Messages</button>
-    <button type="button" class="kb-wa-ctx-link w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>Link to Board</button>
+    <button type="button" class="kb-wa-ctx-link w-full text-left px-4 py-2 text-sm text-gray-300 hover:bg-white/10 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13.828 10.172a4 4 0 00-5.656 0l-4 4a4 4 0 105.656 5.656l1.102-1.101m-.758-4.899a4 4 0 005.656 0l4-4a4 4 0 00-5.656-5.656l-1.1 1.1"/></svg>Link to Project</button>
     <button type="button" class="kb-wa-ctx-snapshot w-full text-left px-4 py-2 text-sm text-[#25D366] hover:bg-[#25D366]/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z"/><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 13a3 3 0 11-6 0 3 3 0 016 0z"/></svg>Snapshot All to Board</button>
     <button type="button" class="kb-wa-ctx-delete-chat w-full text-left px-4 py-2 text-sm text-red-400 hover:bg-red-500/20 flex items-center gap-2"><svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>Delete Chat</button>
 </div>
@@ -371,7 +386,7 @@
 <!-- Link to board dialog -->
 <div id="kb-wa-link-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
     <div class="kb-modal p-6" style="width: 400px;">
-        <h3 class="text-lg font-semibold text-white mb-4">Link WhatsApp Number to Board</h3>
+        <h3 class="text-lg font-semibold text-white mb-4">Link WhatsApp Chat to Project Board</h3>
         <div class="mb-3">
             <label class="text-sm text-gray-400">Phone</label>
             <div id="kb-wa-link-phone" class="px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm"></div>
@@ -388,9 +403,23 @@
         </div>
         <div class="flex justify-end gap-2">
             <button type="button" id="kb-wa-link-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
-            <button type="button" id="kb-wa-link-confirm" class="px-4 py-2 rounded bg-[#25D366] text-white text-sm hover:bg-[#1da851]">Link</button>
+            <button type="button" id="kb-wa-link-confirm" class="px-4 py-2 rounded bg-[#25D366] text-white text-sm hover:bg-[#1da851]">Save Link</button>
         </div>
     </div>
+</div>
+
+<!-- WhatsApp message ⋮ menu (Open / Copy / Download) -->
+<div id="kb-wa-msg-actions-menu" class="fixed hidden z-[60] min-w-[160px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl">
+    <button type="button" class="kb-wa-act-open w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-white/10">Open</button>
+    <button type="button" class="kb-wa-act-analyze w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-white/10">Transcribe</button>
+    <button type="button" class="kb-wa-act-copy w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-white/10">Copy</button>
+    <button type="button" class="kb-wa-act-download w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-white/10">Download</button>
+</div>
+
+<!-- WhatsApp media lightbox (image / video) -->
+<div id="kb-wa-media-lightbox" class="fixed inset-0 z-[70] hidden items-center justify-center bg-black/85 p-4" role="dialog" aria-modal="true" aria-label="Media preview">
+    <button type="button" id="kb-wa-media-lightbox-close" class="absolute right-4 top-4 z-10 rounded bg-white/10 px-3 py-1 text-2xl leading-none text-white hover:bg-white/20" aria-label="Close">&times;</button>
+    <div id="kb-wa-media-lightbox-inner" class="flex max-h-[90vh] max-w-[95vw] items-center justify-center"></div>
 </div>
 
 <!-- WhatsApp message context menu (right-click on individual message) -->
@@ -503,7 +532,13 @@
                         <div>
                             <label class="text-xs text-gray-500">Workflow</label>
                             <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                <option value="">None</option>
+                                <option value="">Inherit from board default</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">Project</label>
+                            <select id="kb-modal-link-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                                <option value="">Inherit from board default</option>
                             </select>
                         </div>
                     </div>
@@ -662,10 +697,6 @@
         <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-tab="details">Details</button>
             <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="advanced">Advanced</button>
-            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="whatsapp">
-                <svg class="w-3.5 h-3.5 inline -mt-0.5 text-[#25D366]" viewBox="0 0 24 24" fill="currentColor"><path d="M17.472 14.382c-.297-.149-1.758-.867-2.03-.967-.273-.099-.471-.148-.67.15-.197.297-.767.966-.94 1.164-.173.199-.347.223-.644.075-.297-.15-1.255-.463-2.39-1.475-.883-.788-1.48-1.761-1.653-2.059-.173-.297-.018-.458.13-.606.134-.133.298-.347.446-.52.149-.174.198-.298.298-.497.099-.198.05-.371-.025-.52-.075-.149-.669-1.612-.916-2.207-.242-.579-.487-.5-.669-.51-.173-.008-.371-.01-.57-.01-.198 0-.52.074-.792.372-.272.297-1.04 1.016-1.04 2.479 0 1.462 1.065 2.875 1.213 3.074.149.198 2.096 3.2 5.077 4.487.709.306 1.262.489 1.694.625.712.227 1.36.195 1.871.118.571-.085 1.758-.719 2.006-1.413.248-.694.248-1.289.173-1.413-.074-.124-.272-.198-.57-.347z"/><path d="M12 2C6.477 2 2 6.477 2 12c0 1.89.525 3.66 1.438 5.168L2 22l4.832-1.438A9.96 9.96 0 0012 22c5.523 0 10-4.477 10-10S17.523 2 12 2z"/></svg>
-                WhatsApp
-            </button>
         </div>
         <!-- Details tab -->
         <div id="kb-bm-tab-details" class="kb-bm-pane p-6 space-y-3">
@@ -710,15 +741,28 @@
                     </select>
                 </div>
             </div>
-        </div>
-        <!-- WhatsApp tab (board phone number links) -->
-        <div id="kb-bm-tab-whatsapp" class="kb-bm-pane hidden p-6 space-y-4">
-            <p class="text-xs text-gray-500">Link WhatsApp phone numbers to this board. Messages from linked numbers can be viewed and snapshotted into tickets.</p>
-            <div id="kb-bm-wa-links" class="space-y-2"></div>
-            <div class="flex gap-2">
-                <input type="text" id="kb-bm-wa-add-phone" placeholder="Phone number (e.g. 27634103646)" class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
-                <input type="text" id="kb-bm-wa-add-name" placeholder="Contact name" class="w-40 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
-                <button type="button" id="kb-bm-wa-add-btn" class="px-3 py-2 rounded bg-[#25D366] text-white text-xs hover:bg-[#1da851]">+ Link</button>
+            <div class="border-t border-white/10 pt-4">
+                <h4 class="text-xs text-gray-400 uppercase tracking-wide mb-2">WhatsApp</h4>
+                <p class="text-xs text-gray-500 mb-3">Link chats or people to this board. For groups, select the group and optionally a specific participant.</p>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-gray-500">Chat / Group</label>
+                        <select id="kb-bm-wa-chat-select" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
+                            <option value="">Select chat...</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">Person in Group (optional)</label>
+                        <select id="kb-bm-wa-person-select" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#25D366] focus:outline-none">
+                            <option value="">Link full chat / group</option>
+                        </select>
+                    </div>
+                </div>
+                <div class="mt-3 flex items-center gap-2">
+                    <button type="button" id="kb-bm-wa-refresh-candidates" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh List</button>
+                    <button type="button" id="kb-bm-wa-add-btn" class="px-3 py-1.5 rounded bg-[#25D366] text-white text-xs hover:bg-[#1da851]">+ Link to Board</button>
+                </div>
+                <div id="kb-bm-wa-links" class="space-y-2 mt-3"></div>
             </div>
         </div>
         <!-- Footer -->
@@ -744,29 +788,8 @@
             <!-- LLM Configuration Section -->
             <div>
                 <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">LLM Configuration</h4>
-                <p class="text-xs text-gray-500 mb-3">Leave blank to use the global chat settings.</p>
+                <p class="text-xs text-gray-500 mb-3">Orchestrator uses Conversational automatically. Sub-agent and Coder sync with Settings → LLMs.</p>
                 <div class="space-y-3">
-                    <!-- Orchestrator -->
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Orchestrator</label>
-                        <select id="kb-gs-orch-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <select id="kb-gs-orch-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                    </div>
-                    <!-- Coder -->
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
-                        <select id="kb-gs-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <select id="kb-gs-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                    </div>
-                    <!-- Sub-agent -->
                     <div class="flex items-center gap-2">
                         <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Sub-agent</label>
                         <select id="kb-gs-sub-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
@@ -775,6 +798,17 @@
                         <select id="kb-gs-sub-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
                             <option value="">(chat default)</option>
                         </select>
+                        <button type="button" id="kb-gs-sub-download" class="hidden w-7 h-7 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-sm font-bold transition-colors" title="Download Ollama models">+</button>
+                    </div>
+                    <div class="flex items-center gap-2">
+                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
+                        <select id="kb-gs-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                        <select id="kb-gs-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">(chat default)</option>
+                        </select>
+                        <button type="button" id="kb-gs-coder-download" class="hidden w-7 h-7 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-sm font-bold transition-colors" title="Download Ollama models">+</button>
                     </div>
                 </div>
             </div>
@@ -894,10 +928,13 @@
     </div>
 </div>
 
+{% include "settings/sections/modals.html" %}
+
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="/static/shared/js/api.js"></script>
+<script src="/static/settings/js/llms.js"></script>
 <script src="/kanban/static/js/kanban_board.js"></script>
 <script src="/kanban/static/js/kanban_ticket.js"></script>
 <script src="/kanban/static/js/kanban_whatsapp.js"></script>

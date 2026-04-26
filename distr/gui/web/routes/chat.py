@@ -514,13 +514,6 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 or settings.get("voice_provider", None)
                 or "kokoro"
             )
-            # Get voice model with fallback priority: request -> specific voice settings -> empty
-            voice_model = (request_data.voice_model or "").strip() or (
-                settings.get("kokoro_voice", None)
-                or settings.get("openai_voice", None)
-                or settings.get("elevenlabs_voice", None)
-                or ""
-            )
 
             # Normalize provider for validation
             from distr.core.chat import _normalize_provider
@@ -555,6 +548,17 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     detail=f"Invalid voice provider: {voice_provider}. Must be one of {valid_voice_providers}",
                 )
 
+            # Resolve voice model for the chosen provider only.
+            # This avoids cross-provider fallbacks (e.g. using a Kokoro voice when
+            # the selected provider is OpenAI/ElevenLabs).
+            if voice_provider and voice_provider in tts_registry:
+                desc = tts_registry.get(voice_provider)
+                voice_model = (request_data.voice_model or "").strip() or (
+                    settings.get(desc.settings_key) or desc.default_voice
+                )
+            else:
+                voice_model = (request_data.voice_model or "").strip()
+
             title = (request_data.title or "").strip() or None
             starting_question = (request_data.starting_question or "").strip() or None
             speak = request_data.speak if request_data.speak is not None else True
@@ -584,42 +588,34 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 }
 
             # ── Persist chat selections to global settings so the next "new chat" ──
-            # defaults to these choices. Only update keys that the user explicitly
-            # set (i.e. were provided in the request).
+            # defaults to these choices. Persist resolved values (not only explicit
+            # request fields) so provider/model and voice provider/voice stay in sync.
             try:
                 from distr.core.settings import save_settings_to_db as _save_settings
                 _settings = load_settings_from_db()
                 _changed = False
 
                 # LLM provider & model
-                if request_data.provider and request_data.provider.strip():
-                    _settings["conversational_llm_provider"] = provider  # normalised
-                    _settings["llm_provider"] = provider
-                    _settings["agent_provider"] = provider
-                    _changed = True
-                if request_data.model_name and request_data.model_name.strip():
+                _settings["conversational_llm_provider"] = provider  # normalized
+                _settings["llm_provider"] = provider
+                _settings["agent_provider"] = provider
+                _changed = True
+                if model_name:
                     _settings["conversational_llm_model"] = model_name
                     _settings["llm_model"] = model_name
                     _settings["agent_model"] = model_name
                     _changed = True
 
-                # TTS provider
-                if request_data.voice_provider and request_data.voice_provider.strip():
-                    _settings["tts_provider"] = voice_provider  # already normalised
-                    _settings["voice_provider"] = voice_provider
-                    _changed = True
+                # TTS: same as Settings → General / save_voice_selection — voice_provider id,
+                # tts_provider = descriptor display name, tts_voice + per-provider *_voice columns.
+                if voice_provider and voice_model:
+                    from distr.core.services.settings_service import (
+                        apply_voice_selection_to_settings,
+                    )
 
-                # TTS voice — persist to provider-specific key
-                if request_data.voice_model and request_data.voice_model.strip():
-                    vp_id = normalize_voice_provider(voice_provider)
-                    voice_key = {
-                        "kokoro": "kokoro_voice",
-                        "openai": "openai_voice",
-                        "elevenlabs": "elevenlabs_voice",
-                        "coqui": "coqui_voice",
-                    }.get(vp_id)
-                    if voice_key:
-                        _settings[voice_key] = voice_model
+                    if apply_voice_selection_to_settings(
+                        _settings, voice_provider, voice_model
+                    ):
                         _changed = True
 
                 if _changed:
@@ -724,21 +720,26 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     _sett["llm_model"] = request_data.model_name.strip()
                     _sett["agent_model"] = request_data.model_name.strip()
                     _changed = True
-                if request_data.voice_provider and request_data.voice_provider.strip():
-                    vp_id = normalize_voice_provider(request_data.voice_provider.strip())
-                    _sett["tts_provider"] = vp_id
-                    _sett["voice_provider"] = vp_id
-                    _changed = True
-                if request_data.voice_model and request_data.voice_model.strip():
-                    _vp = normalize_voice_provider(
-                        (request_data.voice_provider or "").strip()
-                        or _sett.get("tts_provider", "kokoro")
+
+                # Voice globals: same shape as create-chat / save_voice_selection (tts_provider name,
+                # tts_voice, *_voice columns). Only when this PATCH touches voice fields.
+                voice_touched = (
+                    request_data.voice_provider is not None
+                    or request_data.voice_model is not None
+                )
+                if voice_touched:
+                    from distr.core.services.settings_service import (
+                        apply_voice_selection_to_settings,
                     )
-                    _vkey = {"kokoro": "kokoro_voice", "openai": "openai_voice",
-                             "elevenlabs": "elevenlabs_voice", "coqui": "coqui_voice"}.get(_vp)
-                    if _vkey:
-                        _sett[_vkey] = request_data.voice_model.strip()
-                        _changed = True
+
+                    with get_session() as session:
+                        crow = session.query(Chat).filter(Chat.id == chat_id).first()
+                    vp_eff = ((crow.voice_provider or "") if crow else "").strip()
+                    vm_eff = ((crow.voice_model or "") if crow else "").strip()
+                    if vp_eff and vm_eff:
+                        if apply_voice_selection_to_settings(_sett, vp_eff, vm_eff):
+                            _changed = True
+
                 if _changed:
                     from distr.core.settings import save_settings_to_db as _save_settings
                     _save_settings(_sett)

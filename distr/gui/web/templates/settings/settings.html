@@ -5,6 +5,7 @@
 {% block body_scripts %}
 <script src="/settings/static/js/settings.js"></script>
 <script src="/settings/static/js/general.js"></script>
+<script src="/settings/static/js/shortcuts.js"></script>
 <script src="/settings/static/js/audio.js"></script>
 <script src="/settings/static/js/thirdparty.js"></script>
 <script src="/settings/static/js/llms.js"></script>
@@ -39,6 +40,9 @@
                 </a>
                 <a href="#skins" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="skins">
                     <span class="font-medium">Skins</span>
+                </a>
+                <a href="#shortcuts" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="shortcuts">
+                    <span class="font-medium">Shortcut Keys</span>
                 </a>
                 <a href="#advanced" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="advanced">
                     <span class="font-medium">Advanced</span>
@@ -75,6 +79,9 @@
                 </div>
                 <div id="tab-skins" class="tab-content">
                     {% include "settings/sections/skins.html" %}
+                </div>
+                <div id="tab-shortcuts" class="tab-content">
+                    {% include "settings/sections/shortcuts.html" %}
                 </div>
                 <div id="tab-advanced" class="tab-content">
                     {% include "settings/sections/advanced.html" %}

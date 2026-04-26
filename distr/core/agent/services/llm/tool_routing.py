@@ -40,6 +40,10 @@ def _build_tool_triggers() -> frozenset:
         'volume', 'screenshot', 'snippet', 'snip it', 'snipit',
         'list files', 'show files', 'create file', 'read file', 'delete file',
         'open file', 'copy file', 'move file',
+        # Ticket board and external integrations (Jira/Trello)
+        'ticket board', 'kanban board', 'list boards', 'external board', 'external boards',
+        'jira', 'trello', 'jira board', 'trello board', 'jira ticket', 'trello ticket',
+        'jira tickets', 'trello tickets', 'list jira tickets', 'list trello tickets',
         'search the web', 'look up', 'search for',
         'new chat', 'clear chat', 'save as audio',
         'convert to pdf', 'convert to docx', 'make a pdf', 'export as pdf',

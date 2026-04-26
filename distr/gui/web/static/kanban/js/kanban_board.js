@@ -108,6 +108,9 @@
     function create(deps) {
         function populateProviderDropdowns(selectIds) {
             var providers = deps.getAgentProviders();
+            if (!providers || !providers.length) {
+                providers = [{ id: "ollama", name: "Ollama" }];
+            }
             selectIds.forEach(function(selId) {
                 var sel = document.getElementById(selId);
                 if (!sel) return;
@@ -131,7 +134,7 @@
             });
         }
 
-        function loadAgentModels(prefix, provider, selectedModel) {
+        function loadAgentModels(prefix, provider, selectedModel, llmType) {
             var sel = document.getElementById(prefix + "-model");
             if (!provider) {
                 sel.innerHTML = '<option value="">(chat default)</option>';
@@ -139,7 +142,8 @@
             }
             sel.innerHTML = '<option value="">Loading...</option>';
             sel.disabled = true;
-            return deps.apiFetch("/api/llms/models?type=conversational&provider=" + encodeURIComponent(provider)).then(function(data) {
+            var type = llmType || "conversational";
+            return deps.apiFetch("/api/llms/models?type=" + encodeURIComponent(type) + "&provider=" + encodeURIComponent(provider)).then(function(data) {
                 var models = data.models || [];
                 sel.innerHTML = '<option value="">(chat default)</option>';
                 models.forEach(function(m) {
@@ -205,30 +209,49 @@
                 colorHex.textContent = "#f97316";
                 loadBoardDefaults(null);
             }
+            if (boardId) deps.loadBoardWaLinks(boardId);
+            else {
+                var waLinksEl = document.getElementById("kb-bm-wa-links");
+                if (waLinksEl) waLinksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Save the board first to link WhatsApp chats</div>';
+            }
             document.getElementById("kb-board-modal").classList.remove("hidden");
             if (typeof injectInfoIcons === "function") injectInfoIcons();
         }
 
         function openExternalBoardConfigModal(provider, extBoardId) {
-            deps.apiFetch("/api/kanban/external-boards/" + provider + "/" + encodeURIComponent(extBoardId)).then(function(data) {
+            Promise.all([
+                deps.getExternalBoards(false).catch(function() { return { trello: [], jira: [] }; }),
+                deps.apiFetch("/api/kanban/external-boards/" + provider + "/" + encodeURIComponent(extBoardId) + "/local-config")
+                    .catch(function() { return {}; })
+            ]).then(function(results) {
+                var extData = results[0] || { trello: [], jira: [] };
+                var localCfg = results[1] || {};
+                var list = provider === "trello" ? (extData.trello || []) : (extData.jira || []);
+                var boardMeta = list.find(function(b) { return String(b.id) === String(extBoardId); }) || {};
+                var boardName = localCfg.name || boardMeta.name || (provider === "trello" ? "Trello Board" : "Jira Board");
                 document.getElementById("kb-board-modal-title").textContent = "Configure " + (provider === "trello" ? "Trello" : "Jira") + " Board";
                 document.getElementById("kb-board-modal-save").textContent = "Save";
-                deps.setEditingBoardId(data.local_id || null);
-                document.getElementById("kb-board-modal-name").value = data.name || "";
+                deps.setEditingBoardId(localCfg.local_id || null);
+                document.getElementById("kb-board-modal-name").value = boardName;
                 document.getElementById("kb-board-modal-name").readOnly = false;
                 document.getElementById("kb-board-modal-desc").value = "";
-                document.getElementById("kb-board-modal-agent-enabled").checked = !!data.agent_enabled;
+                document.getElementById("kb-board-modal-agent-enabled").checked = !!localCfg.agent_enabled;
                 var colorInput = document.getElementById("kb-board-modal-color");
                 var colorHex = document.getElementById("kb-board-modal-color-hex");
-                var c = data.color || (provider === "trello" ? "#0079bf" : "#0052cc");
+                var c = localCfg.color || boardMeta.color || (provider === "trello" ? "#0079bf" : "#0052cc");
                 colorInput.value = c;
                 colorHex.textContent = c;
                 loadBoardDefaults({
-                    default_workflow_id: data.default_workflow_id,
-                    default_project_id: data.default_project_id,
+                    default_workflow_id: localCfg.default_workflow_id,
+                    default_project_id: localCfg.default_project_id,
                 });
                 window._extBoardConfig = { provider: provider, extBoardId: extBoardId };
                 switchBoardModalTab("details");
+                if (localCfg.local_id) deps.loadBoardWaLinks(localCfg.local_id);
+                else {
+                    var waLinksEl = document.getElementById("kb-bm-wa-links");
+                    if (waLinksEl) waLinksEl.innerHTML = '<div class="text-xs text-gray-500 italic">Save this external board config first, then link WhatsApp chats.</div>';
+                }
                 document.getElementById("kb-board-modal").classList.remove("hidden");
             }).catch(function(e) {
                 deps.showSnackbar("Failed to load external board config: " + e.message, "error");
@@ -246,9 +269,6 @@
             document.querySelectorAll(".kb-bm-pane").forEach(function(pane) { pane.classList.add("hidden"); });
             var pane = document.getElementById("kb-bm-tab-" + tab);
             if (pane) pane.classList.remove("hidden");
-            if (tab === "whatsapp" && deps.getEditingBoardId()) {
-                deps.loadBoardWaLinks(deps.getEditingBoardId());
-            }
         }
 
         function closeBoardModal() {
@@ -340,17 +360,26 @@
         }
 
         function loadGlobalKanbanSettings() {
-            deps.apiFetch("/api/kanban/settings").then(function(s) {
-                deps.populateProviderDropdowns(["kb-gs-orch-provider", "kb-gs-coder-provider", "kb-gs-sub-provider"]);
-                var orchProv = s.kanban_agent_orchestrator_provider || "";
-                var coderProv = s.kanban_agent_coder_provider || "";
-                var subProv = s.kanban_agent_sub_provider || "";
-                document.getElementById("kb-gs-orch-provider").value = orchProv;
-                document.getElementById("kb-gs-coder-provider").value = coderProv;
+            return loadAgentProviders().then(function() {
+                return Promise.all([
+                deps.apiFetch("/api/kanban/settings"),
+                deps.apiFetch("/api/llms"),
+                ]);
+            }).then(function(results) {
+                var s = results[0] || {};
+                var llm = results[1] || {};
+                // Orchestrator is intentionally hidden here; it follows Conversational LLM globally.
+                // Sub-agent and coder are synced with global LLM settings, but editable via dropdowns.
+                populateProviderDropdowns(["kb-gs-sub-provider", "kb-gs-coder-provider"]);
+                var subProv = (llm.kanban_provider || "").toLowerCase();
+                var subModel = llm.kanban_model || "";
+                var coderProv = (llm.coding_provider || "").toLowerCase();
+                var coderModel = llm.coding_model || "";
                 document.getElementById("kb-gs-sub-provider").value = subProv;
-                deps.loadAgentModels("kb-gs-orch", orchProv, s.kanban_agent_orchestrator_model || "");
-                deps.loadAgentModels("kb-gs-coder", coderProv, s.kanban_agent_coder_model || "");
-                deps.loadAgentModels("kb-gs-sub", subProv, s.kanban_agent_sub_model || "");
+                document.getElementById("kb-gs-coder-provider").value = coderProv;
+                loadAgentModels("kb-gs-sub", subProv, subModel, "kanban");
+                loadAgentModels("kb-gs-coder", coderProv, coderModel, "coding");
+                updateKanbanLlmDownloadButtons();
                 document.getElementById("kb-gs-agent-enabled").checked = !!s.kanban_agent_enabled;
                 document.getElementById("kb-gs-frequency").value = s.kanban_agent_frequency || "daily";
                 updateGsFrequencyUI(s.kanban_agent_frequency || "daily");
@@ -394,6 +423,19 @@
             }).catch(function(e) { deps.showSnackbar("Failed to load settings: " + e.message, "error"); });
         }
 
+        /** Notify other tabs / listeners that global LLM rows were saved (e.g. Settings → LLMs). */
+        function notifyLlmsSettingsSynced() {
+            try {
+                if (typeof BroadcastChannel !== "undefined") {
+                    var ch = new BroadcastChannel("decisions_llms_settings_sync");
+                    ch.postMessage({ source: "kanban" });
+                    setTimeout(function() {
+                        try { ch.close(); } catch (e2) {}
+                    }, 0);
+                }
+            } catch (e) {}
+        }
+
         function saveGlobalKanbanSettings() {
             var hours = [];
             document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
@@ -405,12 +447,6 @@
                 if (btn.getAttribute("data-selected") === "1") days.push(parseInt(btn.dataset.day, 10));
             });
             var payload = {
-                kanban_agent_orchestrator_provider: document.getElementById("kb-gs-orch-provider").value,
-                kanban_agent_orchestrator_model: document.getElementById("kb-gs-orch-model").value,
-                kanban_agent_coder_provider: document.getElementById("kb-gs-coder-provider").value,
-                kanban_agent_coder_model: document.getElementById("kb-gs-coder-model").value,
-                kanban_agent_sub_provider: document.getElementById("kb-gs-sub-provider").value,
-                kanban_agent_sub_model: document.getElementById("kb-gs-sub-model").value,
                 kanban_agent_enabled: document.getElementById("kb-gs-agent-enabled").checked,
                 kanban_agent_frequency: document.getElementById("kb-gs-frequency").value,
                 kanban_agent_time: document.getElementById("kb-gs-time-input").value || "09:00",
@@ -420,24 +456,35 @@
                 kanban_agent_source_lane: document.getElementById("kb-gs-source-lane").value,
                 kanban_agent_done_lane: document.getElementById("kb-gs-done-lane").value
             };
-            deps.apiFetch("/api/kanban/settings", {
-                method: "PUT",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(payload)
-            }).then(function() {
+            var llmSyncPromise = deps.apiFetch("/api/llms").then(function(current) {
+                var llmPayload = Object.assign({}, current, {
+                    coding_provider: document.getElementById("kb-gs-coder-provider").value || "",
+                    coding_model: document.getElementById("kb-gs-coder-model").value || "",
+                    kanban_provider: document.getElementById("kb-gs-sub-provider").value || "",
+                    kanban_model: document.getElementById("kb-gs-sub-model").value || "",
+                });
+                return deps.apiFetch("/api/llms", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(llmPayload),
+                });
+            });
+            Promise.all([
+                deps.apiFetch("/api/kanban/settings", {
+                    method: "PUT",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify(payload)
+                }),
+                llmSyncPromise
+            ]).then(function() {
                 deps.showSnackbar("Settings saved");
+                notifyLlmsSettingsSynced();
                 closeGlobalSettingsModal();
             }).catch(function(e) { deps.showSnackbar("Save failed: " + e.message, "error"); });
         }
 
         function openGlobalSettingsModal() {
-            deps.apiFetch("/api/llms/available-providers").then(function(data) {
-                deps.setAgentProviders(data.providers || [{ id: "ollama", name: "Ollama" }]);
-            }).catch(function() {
-                deps.setAgentProviders([{ id: "ollama", name: "Ollama" }]);
-            }).then(function() {
-                loadGlobalKanbanSettings();
-            });
+            loadGlobalKanbanSettings();
             document.getElementById("kb-global-settings-modal").classList.remove("hidden");
         }
 
@@ -662,11 +709,55 @@
                     btn.setAttribute("data-selected", cur ? "0" : "1");
                 });
             });
-            ["kb-gs-orch", "kb-gs-coder", "kb-gs-sub"].forEach(function(prefix) {
-                document.getElementById(prefix + "-provider").addEventListener("change", function() {
-                    loadAgentModels(prefix, this.value, "");
-                });
+            document.getElementById("kb-gs-sub-provider").addEventListener("change", function() {
+                loadAgentModels("kb-gs-sub", this.value, "", "kanban");
+                updateKanbanLlmDownloadButtons();
             });
+            document.getElementById("kb-gs-coder-provider").addEventListener("change", function() {
+                loadAgentModels("kb-gs-coder", this.value, "", "coding");
+                updateKanbanLlmDownloadButtons();
+            });
+
+            var subDownload = document.getElementById("kb-gs-sub-download");
+            if (subDownload) {
+                subDownload.addEventListener("click", function() {
+                    if (typeof window.openOllamaModelBrowser === "function") {
+                        window.openOllamaModelBrowser("kanban");
+                    } else {
+                        deps.showSnackbar("Ollama browser is not available on this page.", "error");
+                    }
+                });
+            }
+            var coderDownload = document.getElementById("kb-gs-coder-download");
+            if (coderDownload) {
+                coderDownload.addEventListener("click", function() {
+                    if (typeof window.openOllamaModelBrowser === "function") {
+                        window.openOllamaModelBrowser("coding");
+                    } else {
+                        deps.showSnackbar("Ollama browser is not available on this page.", "error");
+                    }
+                });
+            }
+
+            // When the Ollama browser closes, refresh current model lists.
+            var browserClose = document.getElementById("ollama_browser_modal_close");
+            if (browserClose) {
+                browserClose.addEventListener("click", function() {
+                    var subProv = document.getElementById("kb-gs-sub-provider").value || "";
+                    var coderProv = document.getElementById("kb-gs-coder-provider").value || "";
+                    loadAgentModels("kb-gs-sub", subProv, document.getElementById("kb-gs-sub-model").value || "", "kanban");
+                    loadAgentModels("kb-gs-coder", coderProv, document.getElementById("kb-gs-coder-model").value || "", "coding");
+                });
+            }
+        }
+
+        function updateKanbanLlmDownloadButtons() {
+            var subProv = ((document.getElementById("kb-gs-sub-provider") || {}).value || "").toLowerCase();
+            var coderProv = ((document.getElementById("kb-gs-coder-provider") || {}).value || "").toLowerCase();
+            var subBtn = document.getElementById("kb-gs-sub-download");
+            var coderBtn = document.getElementById("kb-gs-coder-download");
+            if (subBtn) subBtn.classList.toggle("hidden", subProv !== "ollama");
+            if (coderBtn) coderBtn.classList.toggle("hidden", coderProv !== "ollama");
         }
 
         function bindBoardActions() {

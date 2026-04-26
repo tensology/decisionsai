@@ -8,6 +8,7 @@ from PyQt6.QtCore import QTimer
 
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.signals import signal_manager
+from distr.core.util.speak_flag import coerce_speak_enabled
 
 logger = logging.getLogger(__name__)
 
@@ -254,13 +255,14 @@ class SignalBridgeMixin:
             _post_chat_event({"event": "stream_error", "chat_id": int(cid) if cid else None, "error": str(error)})
         signal_manager.chat_stream_error.connect(on_chat_stream_error_web)
 
-        def on_transcription_progress_web(chat_id, status_text, done):
+        def on_transcription_progress_web(chat_id, status_text, done, clear_live_preview=False):
             try:
                 _post_chat_event({
                     "event": "transcription_progress",
                     "chat_id": int(chat_id),
                     "status": status_text or "",
                     "done": bool(done),
+                    "clear_live_preview": bool(clear_live_preview),
                 })
             except Exception:
                 pass
@@ -273,12 +275,17 @@ class SignalBridgeMixin:
         def on_web_send_to_agent_requested(chat_id, message, speak, provider=None, model_name=None):
             """Send message to agent. load-in-agent already ran current_chat_changed; just send the text."""
             try:
-                speak_bool = speak is True or (isinstance(speak, str) and speak.strip().lower() in ('true', '1'))
+                speak_bool = coerce_speak_enabled(speak, default=True)
                 # Pass speak_bool directly into process_text_input so process_chat_input applies it
                 # as a per-request override — no separate set_speaker_enabled needed, and no second
                 # current_chat_changed that would create a new LLM service after set_speaker_enabled ran.
                 self._send_command_to_agent('process_text_input', {'text': message, 'speak': speak_bool})
-                logger.info("Web send-to-agent: process_text_input for chat_id=%s (speak=%s)", chat_id, speak)
+                logger.info(
+                    "Web send-to-agent: process_text_input for chat_id=%s (speak_raw=%r speak_bool=%s)",
+                    chat_id,
+                    speak,
+                    speak_bool,
+                )
             except Exception as e:
                 logger.error("Web send-to-agent slot failed: %s", e, exc_info=True)
         signal_manager.web_send_to_agent_requested.connect(on_web_send_to_agent_requested)
@@ -293,20 +300,30 @@ class SignalBridgeMixin:
             voice_model=None,
         ):
             try:
-                speak_bool = speak is True or (isinstance(speak, str) and speak.strip().lower() in ('true', '1'))
-                # Interrupt any in-flight TTS, then reload agent for this chat so model/voice/persona are correct.
-                # Use ensure_alive=True so if agent is dead it restarts and queues the commands via pending mechanism.
-                self._send_command_to_agent('interrupt_tts', {})
-                self._send_command_to_agent('current_chat_changed', {'chat_id': chat_id})
-                # Queue first message AFTER current_chat_changed via pending mechanism (ensure_alive=True).
-                # This guarantees the message is sent once the agent is alive and has processed the chat switch,
-                # rather than relying on a fixed timer that races against agent startup.
-                self._send_command_to_agent('set_speaker_enabled', {'enabled': speak_bool})
-                self._send_command_to_agent('process_text_input', {'text': first_message, 'speak': speak_bool})
+                speak_bool = coerce_speak_enabled(speak, default=True)
+                # Interrupt only if playback is actually active; sending interrupt_tts when idle can
+                # race with first-response TTS on new chats and suppress audible output.
+                player_active = bool(
+                    hasattr(self, 'player_window')
+                    and self.player_window
+                    and self.player_window.isVisible()
+                )
+                if player_active:
+                    self._send_command_to_agent('interrupt_tts', {})
+                # Send initial message as part of current_chat_changed so the agent processes
+                # it only after chat/model/voice swap + context load complete.
+                self._send_command_to_agent('current_chat_changed', {
+                    'chat_id': chat_id,
+                    'initial_message': first_message,
+                    'initial_speak': speak_bool,
+                })
                 logger.info(
-                    "Web create-chat: queued interrupt_tts + current_chat_changed + set_speaker + process_text_input for chat_id=%s (speak=%s)",
+                    "Web create-chat: queued %scurrent_chat_changed(initial_message) for chat_id=%s "
+                    "(speak_raw=%r speak_bool=%s)",
+                    "interrupt_tts + " if player_active else "",
                     chat_id,
                     speak,
+                    speak_bool,
                 )
             except Exception as e:
                 logger.error("Web create-chat emits slot failed: %s", e, exc_info=True)

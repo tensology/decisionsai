@@ -1,6 +1,6 @@
 import pytest
 from distr.core.initiative.policy import evaluate, migrate_initiative_level, PolicyDecision
-from distr.core.initiative.service import ProposedAction
+from distr.core.initiative.proposed_action import ProposedAction
 
 
 def make_action(action_type):
@@ -117,3 +117,61 @@ class TestMigrateInitiativeLevel:
 
     def test_unknown_value_unchanged(self):
         assert migrate_initiative_level("unknown_value") == "unknown_value"
+
+
+class TestEnhancedPolicyGate:
+    def test_blocked_action_type_skips(self):
+        action = make_action("external_comms")
+        decision = evaluate(
+            action,
+            "own",
+            full_boundaries(ask_external=False),
+            policy_context={"always_block_action_types": ["external_comms"]},
+        )
+        assert decision == PolicyDecision.SKIP
+
+    def test_duplicate_or_cooldown_skips(self):
+        action = make_action("routine_task")
+        decision = evaluate(
+            action,
+            "operate",
+            full_boundaries(allow_routine=True),
+            policy_context={"duplicate_recent": True},
+        )
+        assert decision == PolicyDecision.SKIP
+
+    def test_low_confidence_downgrades_to_suggestion(self):
+        action = make_action("routine_task")
+        action.payload = {"confidence": 0.2}
+        decision = evaluate(
+            action,
+            "own",
+            full_boundaries(allow_routine=True),
+            policy_context={"minimum_confidence_to_execute": 0.5},
+        )
+        assert decision == PolicyDecision.SUGGEST_ONLY
+
+    def test_high_risk_forces_draft_even_when_boundary_allows_execute(self):
+        action = make_action("file_change")
+        action.payload = {"risk_level": "high"}
+        decision = evaluate(
+            action,
+            "operate",
+            full_boundaries(ask_file=False),
+            policy_context={"minimum_risk_to_require_ask": "high"},
+        )
+        assert decision == PolicyDecision.DRAFT_AND_ASK
+
+    def test_scope_policy_overrides_from_payload(self):
+        action = make_action("file_change")
+        action.payload = {
+            "scope_policy": {
+                "always_require_ask_for": ["file_change"],
+            }
+        }
+        decision = evaluate(
+            action,
+            "own",
+            full_boundaries(ask_file=False),
+        )
+        assert decision == PolicyDecision.DRAFT_AND_ASK

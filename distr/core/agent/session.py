@@ -765,6 +765,16 @@ class AgentSession:
             signal_manager.chat_message_added.connect(
                 lambda chat_id, role, content: self.event_queue.put(('chat_message_added', {'chat_id': chat_id, 'role': role, 'content': content}))
             )
+            signal_manager.transcription_progress.connect(
+                lambda chat_id, status_text, done, clear_live_preview=False: self.event_queue.put(
+                    ('transcription_progress', {
+                        'chat_id': int(chat_id),
+                        'status_text': status_text or '',
+                        'done': bool(done),
+                        'clear_live_preview': bool(clear_live_preview),
+                    }), block=False
+                )
+            )
             # Bridge speak_text_directly so TTS works from agent subprocess.
             # Qt signals don't cross process boundaries, so we route via event_queue
             # to the main process which re-emits on its signal_manager (which has slots connected).

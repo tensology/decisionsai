@@ -1,5 +1,12 @@
 import pytest
-from distr.core.initiative.service import parse_llm_response, serialize, deserialize, ProposedAction, VALID_ACTION_TYPES
+
+from distr.core.initiative.proposed_action import (
+    VALID_ACTION_TYPES,
+    ProposedAction,
+    deserialize,
+    parse_llm_response,
+    serialize,
+)
 
 
 class TestParseLLMResponse:

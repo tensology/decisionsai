@@ -397,6 +397,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as _pt_err:
             logging.getLogger(__name__).debug("process_tracker setup failed: %s", _pt_err)
 
+        # Also kill any detached DecisionsAI leftovers not covered by tracked worker PID file.
+        try:
+            from distr.core.process_tracker import kill_rogue_decisions_processes as _kill_rogue
+            _kill_rogue()
+        except Exception as _rogue_err:
+            logging.getLogger(__name__).debug("rogue process cleanup failed: %s", _rogue_err)
+
         # Use explicit spawn context for Queue/Manager to avoid semaphore issues on macOS
         # This ensures proper serialization when passing to spawned child processes
         self.mp_context = multiprocessing.get_context('spawn')
@@ -949,7 +956,9 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             vp_id = normalize_voice_provider(vp)
             _display = {d.id: d.name.split(" (")[0] for d in tts_registry.all_providers()}
             voice_provider = _display.get(vp_id, vp_id.title())
-            voice_model = (settings.get("kokoro_voice") or settings.get("openai_voice") or settings.get("elevenlabs_voice") or "").strip() or None
+            from distr.core.chat import resolve_voice_model_from_global_settings
+
+            voice_model = resolve_voice_model_from_global_settings(vp, settings)
             ChatService.create_new_chat(llm_provider=provider, llm_model=model_name, tts_provider=voice_provider, tts_voice=voice_model, title="New Chat", starting_question=None)
             logger.info("Created default chat on launch (no chats existed)")
         except Exception as e:
@@ -1402,6 +1411,14 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             
             # Close database connections
             self._cleanup_database_connections()
+
+            # Final rogue-process sweep only after normal shutdown work completes.
+            # This ordering avoids killing anything still needed during teardown.
+            try:
+                from distr.core.process_tracker import kill_rogue_decisions_processes
+                kill_rogue_decisions_processes(timeout=2.0)
+            except Exception as e:
+                logger.debug(f"rogue process cleanup error: {e}")
             
             # Force garbage collection
             gc.collect()

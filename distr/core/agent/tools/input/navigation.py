@@ -24,6 +24,29 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+KNOWN_FOLDERS = {
+    "desktop": {
+        "path": os.path.expanduser("~/Desktop"),
+        "spoken_label": "desktop folder",
+    },
+    "downloads": {
+        "path": os.path.expanduser("~/Downloads"),
+        "spoken_label": "downloads folder",
+    },
+    "documents": {
+        "path": os.path.expanduser("~/Documents"),
+        "spoken_label": "documents folder",
+    },
+    "document": {
+        "path": os.path.expanduser("~/Documents"),
+        "spoken_label": "documents folder",
+    },
+    "home": {
+        "path": os.path.expanduser("~"),
+        "spoken_label": "home folder",
+    },
+}
+
 
 class SmartOpenInput(BaseModel):
     """Input schema for smart open tool."""
@@ -147,22 +170,61 @@ class SmartOpenTool(BaseTool):
         """Open an application."""
         try:
             from distr.core.actions.desktop import open_app
-            
-            open_app(text.lower() if text else app_name.lower())
+
+            requested_name = (text or app_name or "").strip()
+            if not requested_name:
+                return "Error opening application: missing application name"
+
+            open_app(requested_name.lower())
             
             logger.info(f"SmartOpenTool: Opened application: {app_name}")
             return f"Opened application: {app_name}"
         except Exception as e:
             logger.error(f"SmartOpenTool: Error opening application: {e}", exc_info=True)
             return f"Error opening application: {str(e)}"
+
+    def _open_known_folder(self, target: str) -> Optional[str]:
+        """Open common user folders directly when explicitly requested."""
+        target_lower = (target or "").lower()
+        if not target_lower:
+            return None
+
+        for folder_key, folder_meta in KNOWN_FOLDERS.items():
+            folder_path = folder_meta["path"]
+            spoken_label = folder_meta["spoken_label"]
+            explicit_folder_request = (
+                (folder_key in target_lower and "folder" in target_lower)
+                or target_lower in {
+                folder_key,
+                f"my {folder_key}",
+                }
+            )
+            if explicit_folder_request:
+                if os.path.isdir(folder_path):
+                    system = platform.system()
+                    if system == "Darwin":
+                        subprocess.run(["open", folder_path], check=True)
+                    elif system == "Windows":
+                        os.startfile(folder_path)
+                    else:
+                        subprocess.run(["xdg-open", folder_path], check=True)
+                    return f"Opened your {spoken_label}."
+        return None
     
     def _run(self, target: str = "", text: str = "", **kwargs) -> str:
         """Execute smart open - automatically detects and handles URLs, files, or applications."""
         try:
+            target = (target or "").strip()
+            text = (text or "").strip()
             if not target:
                 return "Error: No target provided. Please specify a URL, application, or file to open."
             
             logger.info(f"SmartOpenTool: Processing target='{target}', text='{text}'")
+
+            known_folder_result = self._open_known_folder(target)
+            if known_folder_result:
+                logger.info("SmartOpenTool: Opened known folder for target='%s'", target)
+                return known_folder_result
             
             # 1. Check if it's a URL
             if self._is_url(target):

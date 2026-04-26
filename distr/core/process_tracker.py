@@ -11,6 +11,7 @@ import logging
 import os
 import signal
 import time
+import subprocess
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,76 @@ def kill_stale_pids_from_file():
         os.remove(path)
     except Exception:
         pass
+
+
+def kill_rogue_decisions_processes(protected_pids: set | None = None, timeout: float = 2.0):
+    """Kill lingering DecisionsAI processes that are not part of this runtime.
+
+    This catches detached launcher/worker leftovers that are not tracked in
+    worker_pids.txt (for example, stale start.py/decisions.sh/sidecar processes).
+    """
+    protected = set(protected_pids or set())
+    try:
+        protected.add(os.getpid())
+    except Exception:
+        pass
+    try:
+        ppid = os.getppid()
+        if ppid > 1:
+            protected.add(ppid)
+    except Exception:
+        pass
+
+    rogue_pids = set()
+
+    # Prefer psutil for reliable cmdline inspection.
+    try:
+        import psutil  # type: ignore
+
+        for proc in psutil.process_iter(["pid", "cmdline", "name"]):
+            try:
+                pid = int(proc.info.get("pid") or 0)
+                if pid <= 1 or pid in protected:
+                    continue
+                cmdline = " ".join(proc.info.get("cmdline") or []).lower()
+                name = str(proc.info.get("name") or "").lower()
+                haystack = f"{name} {cmdline}"
+                if "decisionsai" not in haystack:
+                    continue
+                if any(marker in haystack for marker in (
+                    "bin/start.py",
+                    "bin/decisions.sh",
+                    " sidecar",
+                    "uvicorn",
+                    "decisions ",
+                )):
+                    rogue_pids.add(pid)
+            except Exception:
+                continue
+    except Exception:
+        # Fallback: pgrep over command line (best-effort).
+        try:
+            out = subprocess.check_output(
+                ["pgrep", "-f", "DecisionsAI"],
+                stderr=subprocess.DEVNULL,
+                text=True,
+            )
+            for line in out.splitlines():
+                if line.strip().isdigit():
+                    pid = int(line.strip())
+                    if pid > 1 and pid not in protected:
+                        rogue_pids.add(pid)
+        except Exception:
+            pass
+
+    if not rogue_pids:
+        return
+
+    logger.info(
+        "process_tracker: killing %d rogue DecisionsAI process(es): %s",
+        len(rogue_pids), sorted(rogue_pids)
+    )
+    kill_tracked_pids(rogue_pids, timeout=timeout)
 
 
 def _atexit_cleanup():

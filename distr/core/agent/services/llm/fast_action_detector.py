@@ -64,6 +64,8 @@ class ActionType(Enum):
     SCREENSHOT_ANALYZE = "screenshot_analyze"   # Analyze screenshot with vision model
     CURSOR_TICKET = "cursor_ticket"            # Create ticket file in Cursor tickets folder
     AUDIO_TRANSCRIBE = "audio_transcribe"      # Transcribe audio files
+    WEB_SEARCH = "web_search"                  # Search the web for current info
+    WORKFLOW_CONTINUE = "workflow_continue"    # Continue waiting workflow run
     CONVERSATIONAL = "conversational"         # Pass to LLM for response
     UNKNOWN = "unknown"                       # Need LLM to determine
 
@@ -555,6 +557,14 @@ class FastActionDetector:
              ActionType.NEW_CHAT, "new_chat", {}, False, "done"),
             (re.compile(r'^(start\s+)?over\.?$', re.IGNORECASE), 
              ActionType.NEW_CHAT, "new_chat", {}, False, "done"),
+
+            # === WORKFLOW CONTINUATION (must be explicit and short) ===
+            # Prevents "Can you continue?" from being treated as generic conversation
+            # when there is a waiting workflow run available.
+            (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?continue\.?$', re.IGNORECASE),
+             ActionType.WORKFLOW_CONTINUE, "continue_workflow", {"user_input": ""}, False, "llm_response"),
+            (re.compile(r'^(go\s+ahead|proceed|yes\s+proceed|looks\s+good(\s*,\s*continue)?|continue\s+please)\.?$', re.IGNORECASE),
+             ActionType.WORKFLOW_CONTINUE, "continue_workflow", {"user_input": ""}, False, "llm_response"),
             
             # === EXIT ===
             (re.compile(r'^(exit|quit|goodbye|bye|close)\s*(app|application|decisions)?\.?$', re.IGNORECASE), 
@@ -861,6 +871,20 @@ class FastActionDetector:
         # Mouse-to-element patterns: "move mouse to the end of...", "move cursor to the X button", etc.
         # These need vision (screenshot_analyzer) and must skip conversational/context checks
         mouse_to_element_pattern = re.compile(r'\b(move|put)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\b', re.IGNORECASE)
+        # Force web_search for explicit research/look-up intent so we don't depend
+        # on the model deciding to call tools. This prevents "I can't search" replies.
+        web_research_pattern = re.compile(
+            r'\b('
+            r'search\s+(the\s+)?web|look\s+up|look\s+it\s+up|find\s+online|'
+            r'do\s+some\s+research|research\s+this|research\s+that|'
+            r'can\s+you\s+research|what\'?s?\s+the\s+latest|current\s+info(?:rmation)?'
+            r')\b',
+            re.IGNORECASE,
+        )
+        local_research_exclusion = re.compile(
+            r'\b(in|from|on)\s+(this|the)\s+(codebase|repo|repository|project|folder|files?)\b',
+            re.IGNORECASE,
+        )
         
         if cursor_ticket_pattern.search(text):
             # This is a cursor ticket command - skip conversational/context checks and go straight to pattern matching
@@ -880,6 +904,17 @@ class FastActionDetector:
         elif mouse_to_element_pattern.search(text):
             # Mouse movement to a specific element/position - skip conversational/context checks
             logger.debug(f"FastActionDetector: Detected mouse-to-element command, skipping conversational/context checks")
+        elif web_research_pattern.search(text) and not local_research_exclusion.search(text):
+            logger.info("FastActionDetector: Detected web research intent, routing to web_search tool")
+            return DetectedAction(
+                action_type=ActionType.WEB_SEARCH,
+                tool_name="web_search",
+                tool_args={"query": text},
+                needs_copy_first=False,
+                response_type="llm_response",
+                confidence=0.95,
+                original_text=text,
+            )
         else:
             # Check for conversational patterns first
             if self._is_conversational(text):
@@ -1068,7 +1103,11 @@ class FastActionDetector:
                 # is running, let the LLM handle it — it can use find_element/move_to_element
                 # which are faster and more accurate than vision analysis.
                 if action_type == ActionType.SCREENSHOT_ANALYZE and tool_name == "screenshot_analyzer":
-                    # Only defer to LLM for mouse-targeting patterns (not pure "what's on screen" queries)
+                    # Mouse-target requests are complex multi-step interactions.
+                    # Do NOT hard-force fast action here — let the LLM planner decide
+                    # whether to use screenshot_analyzer / find_element / move_to_element
+                    # so it can recover gracefully from STT noise ("mouse" vs "mask")
+                    # and avoid brittle center-move fallbacks.
                     _mouse_target_patterns = (
                         r'\b(?:move|put|hover)\s+(?:(?:the|my)\s+)?(?:mouse|mask|cursor|pointer)\s+(?:to|over|towards)\b',
                         r'\b(?:click|press|tap|double[- ]?click|right[- ]?click)\s+(?:on\s+)?(?:the\s+)?',
@@ -1076,20 +1115,17 @@ class FastActionDetector:
                     import re as _re
                     is_mouse_target = any(_re.search(p, text, _re.IGNORECASE) for p in _mouse_target_patterns)
                     if is_mouse_target:
-                        # Always route screen interactions to screenshot_analyzer —
-                        # it needs to SEE the screen to find the element.
-                        # Don't defer to LLM (it will pick execute_code with blind coords).
                         logger.info(
-                            "FastActionDetector: mouse target detected — routing to screenshot_analyzer: '%s'",
+                            "FastActionDetector: mouse target detected — deferring to LLM planner: '%s'",
                             text[:80],
                         )
                         return DetectedAction(
-                            action_type=ActionType.SCREENSHOT_ANALYZE,
-                            tool_name="screenshot_analyzer",
-                            tool_args={"prompt": "__ORIGINAL_TEXT__", "region": "current_mouse_screen"},
+                            action_type=ActionType.UNKNOWN,
+                            tool_name="",
+                            tool_args={},
                             needs_copy_first=False,
                             response_type="llm_response",
-                            confidence=0.85,
+                            confidence=0.0,
                             original_text=text,
                         )
 
@@ -1200,6 +1236,7 @@ class FastActionDetector:
                     # Misc tools
                     'snippet', 'telegram', 'generate', 'export', 'import',
                     'automate', 'workflow', 'project', 'ticket board', 'ticket',
+                    'continue', 'proceed', 'go ahead',
                     # Clipboard — any mention means the user wants clipboard content processed
                     'clipboard', 'clip board',
                 ]

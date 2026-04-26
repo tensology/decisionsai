@@ -6,12 +6,26 @@
 <div class="w-full px-6 py-8">
     <div class="flex gap-6">
         <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-8">
-            <div class="mb-6 pb-4 border-b border-white/20 flex items-center justify-between">
-                <div>
+            <div class="mb-6 pb-4 border-b border-white/20 grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 md:items-center">
+                <div class="min-w-0">
                     <h2 class="text-xl font-semibold text-white mb-1">Skills</h2>
                     <p class="text-sm text-gray-400">86 provider-agnostic skills. Click any card to read it, then push to a project.</p>
                 </div>
-                <input type="text" id="skills-search" placeholder="Search by name, tag, or description…" class="px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm w-72">
+                <!-- Col 2: playback controls + search, one row, vertically centered -->
+                <div class="flex min-w-0 flex-row flex-wrap items-center justify-end gap-2 sm:gap-3">
+                    <div id="skills-tts-controls" class="flex items-center justify-end gap-2 shrink-0" aria-live="polite">
+                        <span id="skills-tts-spinner" class="hidden inline-flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-[#152054] text-[#fb923c]" title="Generating overview…">
+                            <svg class="animate-spin h-5 w-5" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" aria-hidden="true"><circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle><path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+                        </span>
+                        <button type="button" id="skills-tts-stop" class="hidden h-10 w-10 shrink-0 rounded-md border border-white/20 bg-[#152054] text-gray-300 hover:bg-white/10 hover:text-white transition-colors flex items-center justify-center" title="Stop playback" aria-label="Stop playback">
+                            <svg class="w-5 h-5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 6h12v12H6z"/></svg>
+                        </button>
+                        <button type="button" id="skills-tts-play" class="hidden h-10 w-10 shrink-0 rounded-md border border-white/20 bg-[#152054] text-gray-300 hover:bg-white/10 hover:text-[#fb923c] transition-colors flex items-center justify-center" title="Play overview" aria-label="Play overview">
+                            <svg class="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
+                        </button>
+                    </div>
+                    <input type="text" id="skills-search" placeholder="Search by name, tag, or description…" class="min-w-0 flex-1 basis-[12rem] px-3 py-2 rounded-lg bg-[#152054] border border-white/20 text-sm text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none md:max-w-md">
+                </div>
             </div>
 
             <!-- Skills grid -->
@@ -48,6 +62,10 @@
 
         <!-- Skill content -->
         <div class="flex-1 overflow-y-auto p-6">
+            <div id="skill-modal-overview-wrap" class="hidden mb-4 rounded-lg border border-[#f97316]/25 bg-[#152054]/80 p-4">
+                <p class="text-xs font-medium text-[#fb923c] mb-2">AI overview</p>
+                <p id="skill-modal-overview" class="text-sm text-gray-200 leading-relaxed"></p>
+            </div>
             <pre id="skill-modal-content" class="text-sm text-gray-300 whitespace-pre-wrap font-[inherit] leading-relaxed"></pre>
         </div>
 
@@ -57,29 +75,23 @@
             <div class="mb-3">
                 <label for="skill-modal-instructions" class="text-xs text-gray-400 mb-1 block">Use this skill to:</label>
                 <textarea id="skill-modal-instructions" rows="5" placeholder="e.g. audit my auth module for security issues, set up Docker for my API, review test coverage…" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
+                <p class="text-xs text-gray-500 mt-1.5 leading-relaxed">Saved into the project as <span class="font-mono text-gray-400">.pi/skills/&lt;skill&gt;/USER_INTENT.md</span> beside <span class="font-mono text-gray-400">SKILL.md</span> so Pi sees it when you open that folder (no warm CLI required).</p>
             </div>
-            <!-- Project + target + push -->
-            <div class="flex items-end gap-3">
-                <div class="flex-1">
-                    <label for="skill-modal-project" class="text-xs text-gray-400 mb-1 block">Project</label>
-                    <select id="skill-modal-project" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+            <!-- Project + push (Pi CLI only — .pi/skills) -->
+            <div class="flex flex-col gap-2">
+                <div class="flex items-baseline justify-between gap-3">
+                    <label for="skill-modal-project" class="text-xs text-gray-400 shrink-0">Project</label>
+                    <p class="text-xs text-gray-500 text-right">Installs to <span class="text-gray-400 font-mono">.pi/skills/</span> (Pi CLI).</p>
+                </div>
+                <div class="flex items-end gap-3">
+                    <select id="skill-modal-project" class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
                         <option value="">Select project…</option>
                     </select>
+                    <button type="button" id="skill-modal-push" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium flex items-center gap-2 whitespace-nowrap shrink-0">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
+                        Push Skill
+                    </button>
                 </div>
-                <div class="w-36">
-                    <label for="skill-modal-target" class="text-xs text-gray-400 mb-1 block">Push to</label>
-                    <select id="skill-modal-target" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
-                        <option value="pi">pi (auto-load)</option>
-                        <option value="claude">Claude</option>
-                        <option value="cursor">Cursor</option>
-                        <option value="gemini">Gemini</option>
-                        <option value="codex">Codex</option>
-                    </select>
-                </div>
-                <button type="button" id="skill-modal-push" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium flex items-center gap-2 whitespace-nowrap">
-                    <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>
-                    Push Skill
-                </button>
             </div>
             <div id="skill-modal-push-status" class="mt-2 text-xs text-gray-500"></div>
         </div>

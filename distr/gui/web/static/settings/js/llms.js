@@ -216,7 +216,7 @@ function openOllamaModelBrowser(type) {
     // Update modal title based on type
     const titleEl = document.getElementById('ollama_browser_modal_title');
     if (titleEl) {
-        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image', workflow: 'Workflow', computer_use: 'Computer Use', kanban: 'Ticket Board Agent' };
+        const typeLabels = { conversational: 'Conversational', coding: 'Coding', vision: 'Vision', image: 'Image', workflow: 'Workflow', computer_use: 'Computer Use', kanban: 'Ticket Board Sub-agent' };
         titleEl.textContent = 'Download Ollama models — ' + (typeLabels[type] || type);
     }
     modal.classList.remove('hidden');
@@ -490,4 +490,23 @@ window.addEventListener('thirdparty-providers-changed', function() {
     console.log('Third-party providers changed — refreshing LLM provider dropdowns');
     loadLLMsSettings();
 });
+
+// Same-origin tabs: Ticket Boards global save POSTs /api/llms — reload this tab when that happens
+(function initLlmsBroadcastSync() {
+    if (typeof BroadcastChannel === 'undefined') return;
+    try {
+        var bc = new BroadcastChannel('decisions_llms_settings_sync');
+        bc.onmessage = function () {
+            if (document.getElementById('tab-llms')) loadLLMsSettings();
+        };
+        window._decisionsLlmsSyncBc = bc;
+    } catch (e) {}
+})();
+
+window.addEventListener('pageshow', function (ev) {
+    if (!ev.persisted || !document.getElementById('tab-llms')) return;
+    var panel = document.getElementById('tab-llms');
+    if (panel && panel.classList.contains('active-tab-panel')) loadLLMsSettings();
+});
+
 window.saveLLMsSettings = saveLLMsSettings;

@@ -97,7 +97,6 @@ async function loadGeneralSettings() {
 
         // Load oracle settings
         document.getElementById('restore_position').checked = settings.restore_position !== undefined ? settings.restore_position : true;
-
         // Show/hide custom voice button based on provider
         _updateCustomVoiceButton(voiceProvider);
         _updateDeleteButton();
@@ -140,7 +139,10 @@ async function saveGeneralSettings() {
             elevenlabs_style: parseInt(document.getElementById('elevenlabs_style').value, 10) / 100,
             elevenlabs_use_speaker_boost: document.getElementById('elevenlabs_speaker_boost').checked,
             restore_position: document.getElementById('restore_position').checked,
-            oracle_position: document.getElementById('oracle_position').value
+            oracle_position: document.getElementById('oracle_position').value,
+            global_ptt_hotkey_enabled: document.getElementById('shortcuts_global_ptt_hotkey_enabled') ? document.getElementById('shortcuts_global_ptt_hotkey_enabled').checked : true,
+            global_ptt_hotkey_primary: document.getElementById('shortcuts_global_ptt_hotkey_primary') ? document.getElementById('shortcuts_global_ptt_hotkey_primary').value : 'option',
+            global_ptt_hotkey_secondary: document.getElementById('shortcuts_global_ptt_hotkey_secondary') ? document.getElementById('shortcuts_global_ptt_hotkey_secondary').value : 'command'
         };
 
         // Set voice for each provider from the registry (active provider gets

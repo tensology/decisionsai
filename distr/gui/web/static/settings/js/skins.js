@@ -44,9 +44,13 @@ function _applyPingPongToVideo(vid, isPingPong) {
 
 async function loadSkinsSettings() {
     try {
-        var resp = await fetch('/api/skins');
-        if (!resp.ok) throw new Error('Failed to load skins');
-        var data = await resp.json();
+        var responses = await Promise.all([
+            fetch('/api/skins'),
+            fetch('/api/general'),
+        ]);
+        if (!responses[0].ok) throw new Error('Failed to load skins');
+        var data = await responses[0].json();
+        var general = responses[1].ok ? await responses[1].json() : {};
         _skinsList = data.skins || [];
         _selectedSkin = data.selected_skin || 'oracle';
         var rawSize = data.sphere_size !== undefined ? data.sphere_size : 180;
@@ -54,11 +58,50 @@ async function loadSkinsSettings() {
         var slider = document.getElementById('skins_oracle_size');
         if (slider) slider.value = scale;
         updateSkinsOracleSizeLabel(scale);
+
+        // Oracle settings now live in this tab.
+        var restoreEl = document.getElementById('restore_position');
+        if (restoreEl) restoreEl.checked = general.restore_position !== undefined ? general.restore_position : true;
+        var positionEl = document.getElementById('oracle_position');
+        if (positionEl) positionEl.value = general.oracle_position || 'custom';
+
         renderSkinsGrid();
         // Auto-open the selected skin's detail
         showEditorForSkin(_selectedSkin);
     } catch (e) {
         console.error('Error loading skins:', e);
+    }
+}
+
+async function saveSkinsSettings() {
+    try {
+        var restoreEl = document.getElementById('restore_position');
+        var positionEl = document.getElementById('oracle_position');
+        var restorePosition = restoreEl ? restoreEl.checked : true;
+        var oraclePosition = positionEl ? positionEl.value : 'custom';
+
+        // Preserve all existing general settings fields, only override oracle ones.
+        var currentGeneralResp = await fetch('/api/general');
+        if (!currentGeneralResp.ok) throw new Error('Failed to load current general settings');
+        var payload = await currentGeneralResp.json();
+        payload.restore_position = restorePosition;
+        payload.oracle_position = oraclePosition;
+
+        var response = await fetch('/api/general', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            var err = await response.json().catch(function() { return {}; });
+            throw new Error(err.detail || 'Failed to save skins settings');
+        }
+
+        if (typeof showNotification === 'function') showNotification('Skins settings saved', 'success');
+    } catch (e) {
+        console.error('Error saving skins settings:', e);
+        if (typeof showNotification === 'function') showNotification('Failed to save skins settings', 'error');
     }
 }
 
@@ -420,7 +463,7 @@ function renderAvatarHooksTable() {
         as.dataset.hook = hook; as.dataset.field = 'animation';
         _skinFiles.forEach(function(f) {
             var o = document.createElement('option'); o.value = f;
-            o.textContent = f.replace('.webm', '').replace('.gif', '');
+            o.textContent = f.replace(/\.[^.]+$/, '');
             if (f === resp.animation) o.selected = true; as.appendChild(o);
         });
         as.addEventListener('change', function() { _selectedHook = hook; highlightHookRow(hook); previewAnimation(this.value); });
@@ -554,6 +597,7 @@ if (document.readyState === 'loading') document.addEventListener('DOMContentLoad
 else _initSkins();
 
 window.loadSkinsSettings = loadSkinsSettings;
+window.saveSkinsSettings = saveSkinsSettings;
 
 // ===========================================================================
 // Create Skin Modal — Masko AI skin generation

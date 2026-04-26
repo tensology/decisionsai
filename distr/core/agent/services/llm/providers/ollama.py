@@ -36,6 +36,7 @@ from distr.core.agent.services.llm.text_utils import (
     clean_text_for_tts, parse_tool_calls_from_content,
 )
 from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
 from ..core_mixin import LLMSharedMixin
 from ..mixins.ollama_response import OllamaResponseMixin
 from distr.core.agent.tools import load_tools
@@ -827,6 +828,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         final_message = None
         raw_accumulator = ""
         first_token = False
+        tts_text_frames = 0
 
         async for chunk in stream:
             if self._cancelled:
@@ -888,19 +890,41 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                         break
                     if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
                         await self.push_frame(TextFrame(text=cleaned))
+                        tts_text_frames += 1
 
         if not first_token and not tool_calls:
             logger.warning("LLM: _process_stream received no content and no tool_calls from model (empty stream)")
+
+        is_tg = bool(getattr(self, "_is_telegram_request", False))
+        spk = bool(getattr(self, "_speaker_enabled", True))
+        # One grep-friendly line per stream: UI can show tokens while TTS gets zero TextFrames.
+        logger.info(
+            "TTS_PIPELINE stream_done chat_id=%s speaker_enabled=%s is_telegram=%s "
+            "chars=%s tts_text_frames=%s",
+            current_chat_id,
+            spk,
+            is_tg,
+            len(full_response),
+            tts_text_frames,
+        )
+        if full_response and tts_text_frames == 0 and not is_tg and spk:
+            logger.warning(
+                "TTS_PIPELINE speaker enabled but zero TextFrames — UI may still show tokens; "
+                "check TTS service / clean_text_for_tts stripping (chars=%s).",
+                len(full_response),
+            )
 
         return full_response, tool_calls, final_message
 
     async def _execute_tool_calls(self, tool_calls, last_user_message=None):
         """Execute tool calls and return results."""
         results = []
-        for tool_call in tool_calls:
+        decisions = build_computer_use_execution_decisions(tool_calls)
+        for idx, tool_call in enumerate(tool_calls):
             function = tool_call.get('function', {})
             tool_name = function.get('name', '')
             arguments = function.get('arguments', {})
+            decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
 
             try:
                 args_dict = arguments if isinstance(arguments, dict) else json.loads(arguments) if isinstance(arguments, str) else {}
@@ -908,6 +932,13 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     args_dict = {'text': args_dict}
             except (json.JSONDecodeError, ValueError, TypeError):
                 args_dict = {}
+
+            if not decision.get("allow", True):
+                results.append(
+                    "Skipped by computer-use guard: only one actioning computer-use step "
+                    "is executed per round. Re-run next step after observing updated context."
+                )
+                continue
 
             if tool_name in self._tools_dict:
                 tool = self._tools_dict[tool_name]

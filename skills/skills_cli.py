@@ -6,7 +6,7 @@ Usage:
   python skills_cli.py list [--tag TAG] [--limit N]
   python skills_cli.py find <query> [--limit N]
   python skills_cli.py read <skill_id>
-  python skills_cli.py push <skill_id> [--project PATH] [--target TARGET]
+  python skills_cli.py push <skill_id> [--project PATH] [--target TARGET] [--instructions TEXT]
 
 Examples:
   python skills_cli.py list
@@ -15,6 +15,7 @@ Examples:
   python skills_cli.py read ln-731-docker-generator
   python skills_cli.py push brainstorming --project ~/myapp --target claude
   python skills_cli.py push ln-621-security-auditor --target cursor
+  python skills_cli.py push brainstorming --project ~/myapp --instructions "brainstorm launch ideas for the API"
 """
 
 import argparse
@@ -26,6 +27,11 @@ from pathlib import Path
 
 # Resolve project root (skills_cli.py lives in PROJECT_ROOT/skills/)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from distr.core.pi_skill_push_files import USER_INTENT_FILENAME, write_pi_skill_user_intent
+
 SKILLS_DIR = PROJECT_ROOT / "skills"
 REGISTRY_FILE = SKILLS_DIR / "skills_registry.json"
 
@@ -249,6 +255,10 @@ def cmd_push(args):
                 if dest_subdir.exists():
                     shutil.rmtree(dest_subdir)
                 shutil.copytree(subdir, dest_subdir)
+
+        intent_path = write_pi_skill_user_intent(dest_skill_dir, actual_id, (args.instructions or "").strip())
+        if intent_path:
+            print(f"   Also wrote {USER_INTENT_FILENAME} (use this skill to…) → {intent_path.relative_to(project)}")
     else:
         dest_file = target_dir / f"{actual_id}.md"
         shutil.copy2(skill_md, dest_file)
@@ -291,6 +301,11 @@ def main():
     p_push.add_argument("skill_id", help="Skill ID")
     p_push.add_argument("--project", default=".", help="Project directory path (default: current directory)")
     p_push.add_argument("--target", default="pi", choices=list(CLI_TARGETS.keys()), help="CLI target (default: pi)")
+    p_push.add_argument(
+        "--instructions",
+        default="",
+        help="Pi target only: text as in Decisions AI 'Use this skill to'; saved next to SKILL.md as USER_INTENT.md",
+    )
 
     args = parser.parse_args()
 

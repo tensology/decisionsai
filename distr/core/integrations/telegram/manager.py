@@ -87,6 +87,21 @@ class TelegramWebSocketManager(
 
         # QWebSocket Setup
         self.socket = QWebSocket()
+        # Default to direct WebSocket networking (no system proxy auto-detection).
+        # On some macOS setups, PAC/proxy resolution causes intermittent
+        # HostNotFound/Can't assign requested address errors for long-lived WS.
+        try:
+            from PyQt6.QtNetwork import QNetworkProxy, QNetworkProxyFactory
+
+            use_system_proxy = str(os.environ.get("TELEGRAM_USE_SYSTEM_PROXY", "")).strip().lower() in ("1", "true", "yes", "on")
+            if not use_system_proxy:
+                QNetworkProxyFactory.setUseSystemConfiguration(False)
+                self.socket.setProxy(QNetworkProxy(QNetworkProxy.ProxyType.NoProxy))
+                logger.info("[Telegram] Using direct WebSocket networking (system proxy disabled)")
+            else:
+                logger.info("[Telegram] TELEGRAM_USE_SYSTEM_PROXY enabled; using system proxy settings")
+        except Exception as e:
+            logger.debug("[Telegram] Could not configure explicit proxy mode (non-critical): %s", e)
         self.socket.connected.connect(self._on_connected)
         self.socket.disconnected.connect(self._on_disconnected)
         self.socket.textMessageReceived.connect(self._on_message)
@@ -723,6 +738,20 @@ class TelegramWebSocketManager(
             err_str, error_code, self.is_connected(), self._reconnect_attempts,
         )
         self._log_detailed(f"ERROR: {err_str} (code={error_code})")
+
+        # If host resolution for the www subdomain is flaky, fall back to apex.
+        # Both hosts terminate on the same endpoint; this avoids repeated
+        # reconnect loops when local DNS intermittently fails on one name.
+        try:
+            lowered = (err_str or "").lower()
+            host_resolution_err = ("host not found" in lowered) or ("can't assign requested address" in lowered)
+            if host_resolution_err and "www.decisionsai.net" in self.server_url:
+                fallback = self.server_url.replace("www.decisionsai.net", "decisionsai.net")
+                if fallback != self.server_url:
+                    logger.warning("[Telegram] DNS fallback: switching WS host to %s", fallback)
+                    self.server_url = fallback
+        except Exception:
+            pass
 
         # Trigger immediate reconnect for connection-level errors (TLS, remote closed, etc.)
         # Only schedule if no reconnect is already pending — don't reset backoff on repeated errors.

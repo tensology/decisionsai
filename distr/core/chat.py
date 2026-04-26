@@ -41,6 +41,81 @@ def _title_from_question(question: str, max_len: int = 50) -> str:
     return (line[:max_len] + "\u2026") if len(line) > max_len else line
 
 
+def _setting_val(settings, key: str):
+    """Read a Settings column from a SQLAlchemy row or dict."""
+    if settings is None:
+        return None
+    if isinstance(settings, dict):
+        return settings.get(key)
+    return getattr(settings, key, None)
+
+
+def resolve_voice_model_from_global_settings(
+    tts_provider: Optional[str], settings
+) -> Optional[str]:
+    """Voice ID stored in Settings for the active TTS provider; else registry default.
+
+    Avoids mixing providers (e.g. Kokoro ``af_heart`` applied to Coqui), which caused
+    invalid speaker errors when creating a new chat without an explicit voice.
+    """
+    if not settings:
+        return None
+    vp = (tts_provider or "").strip()
+    if not vp:
+        return None
+
+    from distr.core.agent.constants import normalize_voice_provider
+
+    nid = normalize_voice_provider(vp)
+
+    try:
+        from distr.core.agent.services.tts.registry import tts_registry
+
+        desc = tts_registry.get(nid)
+        stored = (_setting_val(settings, desc.settings_key) or "").strip()
+        if stored:
+            return stored
+        dv = (desc.default_voice or "").strip()
+        if dv:
+            return dv
+    except KeyError:
+        pass
+    except Exception:
+        logger.debug(
+            "resolve_voice_model_from_global_settings: registry lookup failed",
+            exc_info=True,
+        )
+
+    # Descriptor missing or no default — map canonical provider id → Settings column
+    _VOICE_KEYS = {
+        "kokoro": "kokoro_voice",
+        "openai": "openai_voice",
+        "elevenlabs": "elevenlabs_voice",
+        "coqui": "coqui_voice",
+        "f5tts": "f5tts_voice",
+        "voxcpm": "voxcpm_voice",
+    }
+    sk = _VOICE_KEYS.get(nid)
+    if sk:
+        v = (_setting_val(settings, sk) or "").strip()
+        if v:
+            return v
+
+    # Last resort only (ambiguous provider): first non-empty voice column
+    for key in (
+        "kokoro_voice",
+        "openai_voice",
+        "elevenlabs_voice",
+        "coqui_voice",
+        "f5tts_voice",
+        "voxcpm_voice",
+    ):
+        v = (_setting_val(settings, key) or "").strip()
+        if v:
+            return v
+    return None
+
+
 class ChatService:
     """Central service for chat DB and settings. Used by web routes and ChatManager. No Qt/signals."""
 
@@ -70,10 +145,8 @@ class ChatService:
                         settings, "voice_provider", None
                     )
                 if not tts_voice:
-                    tts_voice = (
-                        getattr(settings, "kokoro_voice", None)
-                        or getattr(settings, "openai_voice", None)
-                        or getattr(settings, "elevenlabs_voice", None)
+                    tts_voice = resolve_voice_model_from_global_settings(
+                        tts_provider, settings
                     )
 
         provider = _normalize_provider(llm_provider or "ollama")

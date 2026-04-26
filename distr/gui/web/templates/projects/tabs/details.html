@@ -1,4 +1,5 @@
-<div id="tab-details" class="project-tab-pane space-y-4">
+<div id="tab-details" class="project-tab-pane flex h-full min-h-0 flex-1 flex-col gap-4">
+    <div class="flex-shrink-0 space-y-4">
     <div class="flex gap-4">
         <div class="flex-1 min-w-0">
             <label class="block text-sm text-gray-400 mb-1">Name</label>
@@ -49,9 +50,10 @@
             </div>
         </div>
     </div>
-    <hr class="border-white/20">
-    <div>
-        <div class="flex items-center justify-between mb-2">
+    </div>
+    <hr class="flex-shrink-0 border-white/20">
+    <div class="flex min-h-0 flex-1 flex-col gap-2">
+        <div class="flex flex-shrink-0 items-center justify-between">
             <label class="block text-sm text-gray-400">Context items &amp; files</label>
             <div class="flex gap-2">
                 <button type="button" id="context-item-add" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Add Context Item</button>
@@ -59,14 +61,16 @@
                 <input type="file" id="file-upload-input" class="hidden" multiple>
             </div>
         </div>
-        <p class="text-xs text-gray-500 mb-2">Context items: text chunks. Files: upload PDFs, docs, etc. as project context.</p>
-        <div id="detail-items-table" class="border border-white/20 rounded overflow-hidden">
-            <table class="w-full text-sm">
-                <thead class="bg-[#152054] text-left">
-                    <tr><th class="px-3 py-2 text-gray-400 font-medium">Type</th><th class="px-3 py-2 text-gray-400 font-medium">Title / Name</th><th class="px-3 py-2 text-gray-400 font-medium">Description / Preview</th><th class="px-3 py-2 text-gray-400 font-medium">Path</th><th class="px-3 py-2 text-gray-400 font-medium w-28">Actions</th></tr>
-                </thead>
-                <tbody id="detail-items-body" class="text-gray-300"></tbody>
-            </table>
+        <p class="mb-0 flex-shrink-0 text-xs text-gray-500">Context items: text chunks. Files: upload PDFs, docs, etc. as project context.</p>
+        <div id="detail-items-table" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-white/20">
+            <div class="min-h-0 flex-1 overflow-y-auto">
+                <table class="w-full text-sm">
+                    <thead class="sticky top-0 z-10 bg-[#152054] text-left shadow-[0_1px_0_rgba(255,255,255,0.08)]">
+                        <tr><th class="px-3 py-2 text-gray-400 font-medium">Type</th><th class="px-3 py-2 text-gray-400 font-medium">Title / Name</th><th class="px-3 py-2 text-gray-400 font-medium">Description / Preview</th><th class="px-3 py-2 text-gray-400 font-medium">Path</th><th class="px-3 py-2 text-gray-400 font-medium w-28">Actions</th></tr>
+                    </thead>
+                    <tbody id="detail-items-body" class="text-gray-300"></tbody>
+                </table>
+            </div>
         </div>
     </div>
 </div>

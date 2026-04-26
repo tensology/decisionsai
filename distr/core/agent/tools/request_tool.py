@@ -9,9 +9,12 @@ match, injects the cached tool instance into the session's active set.
 """
 
 import logging
-from typing import Callable, Optional, Tuple
+from typing import Callable, Optional, Tuple, Union
 
 from distr.core.agent.tools.base import BaseActionTool
+
+# (success, message) or (success, message, injection_performed)
+RequestToolCallbackResult = Union[Tuple[bool, str], Tuple[bool, str, bool]]
 
 logger = logging.getLogger(__name__)
 
@@ -21,7 +24,7 @@ class RequestToolTool(BaseActionTool):
 
     def __init__(
         self,
-        on_tool_requested: Optional[Callable[[str], Tuple[bool, str]]] = None,
+        on_tool_requested: Optional[Callable[[str], RequestToolCallbackResult]] = None,
         **kwargs,
     ):
         super().__init__(
@@ -49,10 +52,30 @@ class RequestToolTool(BaseActionTool):
             logger.warning("RequestToolTool: injection callback not configured")
             return "Tool injection is not available in this session."
 
-        success, message = self._on_tool_requested(text)
+        raw = self._on_tool_requested(text or "")
+        if len(raw) == 3:
+            success, message, injection_performed = raw
+        elif len(raw) == 2:
+            success, message = raw
+            # Legacy 2-tuple callbacks: assume injection when successful
+            injection_performed = bool(success)
+        else:
+            logger.error(
+                "RequestToolTool: callback returned tuple of length %d (expected 2 or 3)",
+                len(raw),
+            )
+            return (
+                "Internal error: invalid tool-request handler result "
+                "(see application logs)."
+            )
 
-        if success:
+        if success and injection_performed:
             logger.info("RequestToolTool: injected tool for query %r", text)
+        elif success:
+            logger.info(
+                "RequestToolTool: requested tool already active for query %r",
+                text,
+            )
 
         return message
 

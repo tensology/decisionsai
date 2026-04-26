@@ -87,7 +87,10 @@ def open_app(name: str):
     Resolves *name* through APP_ALIASES first, then tries running apps,
     installed apps, and finally the raw name.
     """
-    speech = name.lower().strip()
+    speech = (name or "").lower().strip()
+    if not speech:
+        logger.warning("open_app: empty app request")
+        return
     logger.info("open_app: request='%s'", speech)
 
     # 1. URL shortcut?
@@ -175,7 +178,9 @@ def _fuzzy_match_running(speech: str, threshold=70):
 
     if system == 'Darwin' and APPKIT_AVAILABLE:
         for app in NSWorkspace.sharedWorkspace().runningApplications():
-            name = app.localizedName()
+            name = app.localizedName() or ""
+            if not name:
+                continue
             score = max(fuzz.partial_ratio(speech, name.lower()),
                         fuzz.ratio(speech, name.lower()),
                         fuzz.token_sort_ratio(speech, name.lower()))
@@ -251,8 +256,17 @@ def _center_mouse_on_app(app_name: str):
         return
 
     ws = NSWorkspace.sharedWorkspace()
-    target = next((a for a in ws.runningApplications()
-                    if a.localizedName().lower() == app_name.lower()), None)
+    target_name = (app_name or "").lower()
+    if not target_name:
+        return
+    target = next(
+        (
+            a
+            for a in ws.runningApplications()
+            if (a.localizedName() or "").lower() == target_name
+        ),
+        None,
+    )
     if not target:
         return
 
@@ -260,7 +274,7 @@ def _center_mouse_on_app(app_name: str):
         Quartz.kCGWindowListOptionOnScreenOnly | Quartz.kCGWindowListExcludeDesktopElements,
         Quartz.kCGNullWindowID)
     win = next((w for w in wins
-                if w.get(Quartz.kCGWindowOwnerName, '').lower() == target.localizedName().lower()), None)
+                if w.get(Quartz.kCGWindowOwnerName, '').lower() == (target.localizedName() or '').lower()), None)
     if win:
         b = win.get(Quartz.kCGWindowBounds)
         if b:
@@ -272,9 +286,20 @@ def _platform_open(app_name: str):
     system = platform.system()
 
     if system == 'Darwin' and APPKIT_AVAILABLE:
+        app_name = (app_name or "").strip()
+        if not app_name:
+            logger.warning("_platform_open: empty app_name on macOS")
+            return
         ws = NSWorkspace.sharedWorkspace()
-        target = next((a for a in ws.runningApplications()
-                        if a.localizedName().lower() == app_name.lower()), None)
+        target_name = app_name.lower()
+        target = next(
+            (
+                a
+                for a in ws.runningApplications()
+                if (a.localizedName() or "").lower() == target_name
+            ),
+            None,
+        )
         if target:
             target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
             _center_mouse_on_app(app_name)

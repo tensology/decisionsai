@@ -266,7 +266,11 @@ def create_app() -> FastAPI:
             from distr.core.db.projects import Project
             session = get_session()
             projects = session.query(Project).all()
-            return [{"name": p.name, "path": p.folder} for p in projects if p.folder]
+            return [
+                {"name": p.name, "path": p.folder_location}
+                for p in projects
+                if (p.folder_location or "").strip()
+            ]
         except Exception:
             return []
 
@@ -294,6 +298,91 @@ def create_app() -> FastAPI:
         content = skill_file.read_text()
         return {"id": skill_id, "content": content}
 
+    @app.post("/api/skills/{skill_id}/spoken-overview")
+    async def skill_spoken_overview(skill_id: str):
+        """LLM overview of a skill (subagent-style) plus TTS audio as base64 MP3 for the Skills UI."""
+        import asyncio
+        import base64
+
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail="Skill not found")
+        skill_file = skill_dir / "SKILL.md"
+        if not skill_file.exists():
+            skill_file = skill_dir / "skill.md"
+        if not skill_file.exists():
+            raise HTTPException(status_code=404, detail="Skill SKILL.md not found")
+
+        raw = skill_file.read_text()
+        body = raw
+        if body.startswith("---"):
+            end = body.find("---", 3)
+            if end > 0:
+                body = body[end + 3 :].strip()
+        if len(body) > 14000:
+            body = body[:14000] + "\n\n[Document truncated for overview.]"
+
+        from distr.core.settings import load_settings_from_db
+        from distr.core.llm_factory import create_stream
+        from distr.gui.web.routes.settings.projects import _resolve_terminal_overview_llm
+        from distr.core.audio.tts_handler import generate_tts_audio, wav_to_mp3
+
+        settings = load_settings_from_db()
+        provider, model = _resolve_terminal_overview_llm(settings)
+
+        system_prompt = (
+            "You are a subagent that explains Pi CLI skills (markdown SKILL.md documents) to a developer. "
+            "Your reply will be read aloud by text-to-speech and shown on screen.\n\n"
+            "Rules:\n"
+            "- Plain English only. No markdown, no headings, no bullet characters, no numbered lists, no code fences.\n"
+            "- Do not read URLs, file paths, or YAML literally; describe ideas in words.\n"
+            "- Cover what the skill helps with, when to use it, and what outcome to expect.\n"
+            "- Four to eight sentences. Warm, concise, confident.\n"
+        )
+        llm_messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"Skill id: {skill_id}\n\nSkill document:\n{body}"},
+        ]
+
+        def _generate_overview() -> str:
+            parts = []
+            try:
+                for token in create_stream(provider, model, llm_messages, settings):
+                    parts.append(token)
+                return "".join(parts).strip()
+            except Exception as exc:
+                logger.error("Skill overview LLM failed: %s", exc, exc_info=True)
+                raise
+
+        try:
+            overview = await asyncio.get_running_loop().run_in_executor(None, _generate_overview)
+        except Exception:
+            raise HTTPException(status_code=500, detail="Could not generate skill overview from the LLM.")
+
+        if not overview:
+            raise HTTPException(status_code=500, detail="Overview was empty.")
+
+        speed = float(settings.get("playback_speed") or 1.0)
+        speed = max(0.5, min(2.0, speed))
+
+        try:
+            wav_path = await asyncio.to_thread(generate_tts_audio, overview, None, None, speed)
+        except Exception as exc:
+            logger.error("Skill overview TTS failed: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Could not synthesize speech for the overview.")
+
+        from pathlib import Path as Pth
+
+        mp3_path = Pth(wav_path).with_suffix(".mp3")
+        await asyncio.to_thread(wav_to_mp3, wav_path, str(mp3_path))
+        if not mp3_path.exists():
+            raise HTTPException(status_code=500, detail="MP3 conversion failed.")
+
+        mp3_bytes = mp3_path.read_bytes()
+        b64 = base64.standard_b64encode(mp3_bytes).decode("ascii")
+        return {"overview": overview, "audio_mp3_base64": b64}
+
     @app.post("/api/skills/{skill_id}/push")
     async def push_skill_to_project(skill_id: str, request: Request):
         """Push a skill to a project's CLI command directory."""
@@ -301,20 +390,10 @@ def create_app() -> FastAPI:
         import shutil
         body = await request.json()
         project_path = body.get("project_path", ".")
-        target = body.get("target", "pi")
         instructions = body.get("instructions", "")
-
-        # Supported CLI targets
-        cli_targets = {
-            "pi": ".pi/skills",
-            "claude": ".claude/commands",
-            "cursor": ".cursor/commands",
-            "gemini": ".gemini/commands",
-            "codex": ".codex/commands",
-        }
-        target_dir_name = cli_targets.get(target.lower())
-        if not target_dir_name:
-            raise HTTPException(status_code=400, detail=f"Unsupported target '{target}'. Supported: {', '.join(cli_targets.keys())}")
+        # Web UI and API: install to Pi CLI only (.pi/skills).
+        target = "pi"
+        target_dir_name = ".pi/skills"
 
         skills_root = project_root / "skills"
         skill_dir = skills_root / skill_id
@@ -350,34 +429,34 @@ def create_app() -> FastAPI:
         target_dir = project / target_dir_name
         target_dir.mkdir(parents=True, exist_ok=True)
 
-        # For pi: directory/SKILL.md (Agent Skills spec). For others: flat .md file
-        if target.lower() == "pi":
-            dest_skill_dir = target_dir / skill_id
-            dest_skill_dir.mkdir(parents=True, exist_ok=True)
-            dest_file = dest_skill_dir / "SKILL.md"
-            shutil.copy2(skill_file, dest_file)
-            # Copy supporting files into the skill directory
-            pushed_files = [str(dest_file)]
-            for subdir_name in ["scripts", "references", "reference"]:
-                subdir = skill_dir / subdir_name
-                if subdir.exists() and subdir.is_dir():
-                    dest_subdir = dest_skill_dir / subdir_name
-                    if dest_subdir.exists():
-                        shutil.rmtree(dest_subdir)
-                    shutil.copytree(subdir, dest_subdir)
-                    pushed_files.append(str(dest_subdir))
-        else:
-            dest_file = target_dir / f"{skill_id}.md"
-            shutil.copy2(skill_file, dest_file)
-            pushed_files = [str(dest_file)]
-            for subdir_name in ["scripts", "references", "reference"]:
-                subdir = skill_dir / subdir_name
-                if subdir.exists() and subdir.is_dir():
-                    dest_subdir = target_dir / skill_id / subdir_name
-                    if dest_subdir.exists():
-                        shutil.rmtree(dest_subdir)
-                    shutil.copytree(subdir, dest_subdir)
-                    pushed_files.append(str(dest_subdir))
+        # Pi CLI: directory/SKILL.md (Agent Skills spec)
+        dest_skill_dir = target_dir / skill_id
+        dest_skill_dir.mkdir(parents=True, exist_ok=True)
+        dest_file = dest_skill_dir / "SKILL.md"
+        shutil.copy2(skill_file, dest_file)
+        pushed_files = [str(dest_file)]
+        for subdir_name in ["scripts", "references", "reference"]:
+            subdir = skill_dir / subdir_name
+            if subdir.exists() and subdir.is_dir():
+                dest_subdir = dest_skill_dir / subdir_name
+                if dest_subdir.exists():
+                    shutil.rmtree(dest_subdir)
+                shutil.copytree(subdir, dest_subdir)
+                pushed_files.append(str(dest_subdir))
+
+        from distr.core.pi_skill_push_files import USER_INTENT_FILENAME, write_pi_skill_user_intent
+
+        intent_path = write_pi_skill_user_intent(dest_skill_dir, skill_id, instructions)
+        if intent_path:
+            pushed_files.append(str(intent_path))
+
+        msg = (
+            f"Pushed '{skill_name}' into {target_dir_name}/{skill_id}/ on disk — "
+            f"Pi will load SKILL.md when you open that project (CLI does not need to be running). "
+            f"Run: /skill:{skill_id}"
+        )
+        if intent_path:
+            msg += f" Your ‘Use this skill to’ notes are in {USER_INTENT_FILENAME} beside SKILL.md."
 
         return {
             "success": True,
@@ -385,8 +464,9 @@ def create_app() -> FastAPI:
             "skill_name": skill_name,
             "target": target,
             "destination": str(dest_file),
+            "user_intent_file": str(intent_path) if intent_path else None,
             "files": pushed_files,
-            "message": f"Pushed '{skill_name}' to {target}! Run: /skill:{skill_id}" + (f" with: {instructions}" if instructions else "")
+            "message": msg,
         }
 
     @app.get("/projects/", response_class=HTMLResponse)

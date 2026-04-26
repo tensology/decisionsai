@@ -12,6 +12,7 @@ Same pipeline contract as KokoroTTSService.
 
 import asyncio
 import logging
+import time
 import numpy as np
 
 from distr.core.agent.libs import (
@@ -73,6 +74,7 @@ class CoquiTTSService(TTSService):
         self._speech_volume = max(0.0, min(1.0, speech_volume / 100.0))
         self._cancelled = False
         self._in_response_after_start = False
+        self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self._is_hands_free = False
         self._ptt_active = False
         self._text_buffer = ""
@@ -183,8 +185,18 @@ class CoquiTTSService(TTSService):
                 logger.warning("Coqui TTS: no reference audio for %s, using default speaker", self.voice_id)
 
         # Built-in VCTK speaker
+        from distr.core.agent.services.tts.coqui_descriptor import DEFAULT_COQUI_VOICE
+
         speaker = self.voice_id if not self.voice_id.startswith("custom_") else "p225"
-        wav = self._tts.tts(text=text, speaker=speaker)
+        try:
+            wav = self._tts.tts(text=text, speaker=speaker)
+        except KeyError as e:
+            logger.warning(
+                "Coqui TTS: synthesize failed (%s); retrying with %s",
+                e,
+                DEFAULT_COQUI_VOICE,
+            )
+            wav = self._tts.tts(text=text, speaker=DEFAULT_COQUI_VOICE)
         audio = np.array(wav, dtype=np.float32)
         if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
@@ -297,6 +309,15 @@ class CoquiTTSService(TTSService):
             return
 
         if isinstance(frame, InterruptionFrame):
+            # Guard: ignore stale InterruptionFrames that arrive after the current response
+            # has already started (e.g. from a pre-send interrupt_tts command that raced).
+            now = time.monotonic()
+            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+                logger.debug(
+                    "Coqui TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame)",
+                    (now - self._llm_response_started_at) * 1000,
+                )
+                return
             self._cancelled = True
             self._text_buffer = ""
             self._processed_sentences.clear()
@@ -370,6 +391,7 @@ class CoquiTTSService(TTSService):
         if isinstance(frame, LLMFullResponseStartFrame):
             self._cancelled = False
             self._in_response_after_start = True
+            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
             self._processed_sentences.clear()
             self._tts_session_active = True
             self._total_audio_duration = 0.0
@@ -382,6 +404,7 @@ class CoquiTTSService(TTSService):
 
         if isinstance(frame, LLMFullResponseEndFrame):
             self._in_response_after_start = False
+            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
             if self._text_buffer.strip() and not self._cancelled:
                 text = self._text_buffer.strip()
                 self._text_buffer = ""

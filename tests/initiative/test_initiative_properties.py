@@ -10,17 +10,17 @@ import tempfile
 import threading
 from unittest.mock import MagicMock, patch
 
+import pytest
 from hypothesis import given, settings as h_settings
 from hypothesis import strategies as st
 
 from distr.core.initiative.policy import evaluate, migrate_initiative_level, PolicyDecision
-from distr.core.initiative.service import (
+from distr.core.initiative.proposed_action import (
     ProposedAction,
-    serialize,
     deserialize,
     parse_llm_response,
+    serialize,
     VALID_ACTION_TYPES,
-    InitiativeService,
 )
 from distr.core.initiative.draft_queue import DraftQueue, DraftEntry
 from distr.core.initiative.context import ContextBundle
@@ -146,6 +146,9 @@ def test_idle_timer_always_resets(emission_times):
     For any sequence of chat_stream_finished emissions, _reset_idle_timer must
     call timer.start(IDLE_TIMEOUT_MS) exactly once per emission.
     """
+    pytest.importorskip("PyQt6.QtCore")
+    from distr.core.initiative.service import InitiativeService
+
     mock_timer = MagicMock()
     mock_timer.isActive.return_value = False
 
@@ -266,6 +269,9 @@ def test_no_concurrent_cycles(num_triggers):
     The _cycle_running flag + lock must ensure that at most one cycle runs at
     a time even when multiple threads attempt to start one simultaneously.
     """
+    pytest.importorskip("PyQt6.QtCore")
+    from distr.core.initiative.service import InitiativeService
+
     cycles_started = []
     lock = threading.Lock()
 
@@ -320,6 +326,7 @@ def test_proposed_action_round_trip(action):
     assert deserialized.draft == action.draft
     assert deserialized.telegram_message == action.telegram_message
     assert deserialized.requires_confirmation == action.requires_confirmation
+    assert deserialized.suggested_tool == action.suggested_tool
 
     # Idempotency: serialize(deserialize(s)) == serialize(deserialize(serialize(deserialize(s))))
     s1 = serialize(deserialize(serialized))
@@ -344,6 +351,9 @@ def test_telegram_gate(action, level, boundaries):
     When initiative_allow_telegram=False, no call to send_to_telegram must
     occur — neither via _send_telegram_if_allowed nor _deliver_suggestion.
     """
+    pytest.importorskip("PyQt6.QtCore")
+    from distr.core.initiative.service import InitiativeService
+
     boundaries["initiative_allow_telegram"] = False
 
     mock_telegram = MagicMock()

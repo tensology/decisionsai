@@ -8,7 +8,7 @@ the done lane.
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Dict, Optional, List
+from typing import Any, Dict, Optional, List
 import threading
 
 from distr.core.db import get_session
@@ -176,12 +176,16 @@ class KanbanAgentCheckIn:
             agent_done_lane=agent_done_lane or "Done",
             default_workflow_id=default_workflow_id,
             default_project_id=default_project_id,
-            agent_orchestrator_provider=settings.get('kanban_agent_orchestrator_provider', ''),
-            agent_orchestrator_model=settings.get('kanban_agent_orchestrator_model', ''),
-            agent_coder_provider=settings.get('kanban_agent_coder_provider', ''),
-            agent_coder_model=settings.get('kanban_agent_coder_model', ''),
-            agent_sub_provider=settings.get('kanban_agent_sub_provider', ''),
-            agent_sub_model=settings.get('kanban_agent_sub_model', ''),
+            # Runtime mapping is synchronized with global LLM settings:
+            # - Orchestrator -> Conversational
+            # - Coder -> Coding
+            # - Sub-agent -> kanban_* in LLM settings (Ticket Board Sub-agent row)
+            agent_orchestrator_provider=settings.get('conversational_llm_provider', ''),
+            agent_orchestrator_model=settings.get('conversational_llm_model', ''),
+            agent_coder_provider=settings.get('coding_llm_provider', ''),
+            agent_coder_model=settings.get('coding_llm_model', ''),
+            agent_sub_provider=settings.get('kanban_agent_orchestrator_provider', ''),
+            agent_sub_model=settings.get('kanban_agent_orchestrator_model', ''),
         )
         return info
 
@@ -619,6 +623,217 @@ class KanbanAgentCheckIn:
         self.run()
 
 
+def analyze_board_checkin(board_id: int) -> Dict[str, Any]:
+    """Inspect check-in readiness for one board (no side effects).
+
+    Used by the web UI to explain what check-in will do: source lane, ticket counts,
+    workflow name / first step, and why a board cannot run.
+    """
+    from distr.core.db.workflow import AutoWorkflow
+
+    settings = load_settings_from_db()
+    out: Dict[str, Any] = {
+        "board_id": board_id,
+        "board_name": None,
+        "source_type": "database",
+        "agent_enabled_resolved": False,
+        "blockers": [],
+        "runnable": False,
+        "already_running": False,
+        "agent_source_lane": None,
+        "source_lane_exists": False,
+        "agent_done_lane": None,
+        "default_workflow_id": None,
+        "workflow_name": None,
+        "workflow_step_count": 0,
+        "first_step_name": None,
+        "tickets_in_source": 0,
+        "tickets_runnable": 0,
+        "tickets": [],
+    }
+
+    with _active_agents_lock:
+        existing = _active_agents.get(board_id)
+    if existing and existing.status.state == "running":
+        out["already_running"] = True
+        out["blockers"].append({
+            "code": "already_running",
+            "detail": "A check-in is already in progress on this board — wait or cancel it before starting again.",
+        })
+
+    with get_session() as db:
+        board = db.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
+        if not board:
+            out["blockers"].append({"code": "board_missing", "detail": "Board not found."})
+            return out
+
+        out["board_name"] = board.name
+        out["source_type"] = (board.source or "database").strip() or "database"
+
+        agent_enabled = board.agent_enabled
+        if agent_enabled is None:
+            agent_enabled = settings.get("kanban_agent_enabled", False)
+        out["agent_enabled_resolved"] = bool(agent_enabled)
+        if not agent_enabled:
+            out["blockers"].append({
+                "code": "agent_disabled",
+                "detail": "Agent check-in is disabled for this board (enable “Agent check-in” in board settings).",
+            })
+
+        agent_source_lane = board.agent_source_lane or settings.get("kanban_agent_source_lane", "") or ""
+        agent_done_lane = board.agent_done_lane or settings.get("kanban_agent_done_lane", "") or ""
+        out["agent_source_lane"] = agent_source_lane or None
+        out["agent_done_lane"] = agent_done_lane or None
+
+        if not agent_source_lane:
+            out["blockers"].append({
+                "code": "no_source_lane",
+                "detail": "No source lane is set — choose the column tickets are picked from (e.g. “Current”) in board or global kanban settings.",
+            })
+
+        dwf = board.default_workflow_id
+        out["default_workflow_id"] = dwf
+        if not dwf:
+            out["blockers"].append({
+                "code": "no_workflow",
+                "detail": "No default workflow — select a workflow on this board so each ticket can run step 1 → … until complete.",
+            })
+
+        if dwf:
+            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == dwf).first()
+            if wf:
+                out["workflow_name"] = wf.name
+                steps = sorted(wf.steps, key=lambda s: s.position) if wf.steps else []
+                out["workflow_step_count"] = len(steps)
+                out["first_step_name"] = steps[0].name if steps else None
+            else:
+                out["blockers"].append({
+                    "code": "workflow_missing",
+                    "detail": f"Default workflow (id {dwf}) no longer exists — pick another workflow on the board.",
+                })
+
+        if agent_source_lane:
+            lane = (
+                db.query(KanbanLane)
+                .filter(KanbanLane.board_id == board_id, KanbanLane.name == agent_source_lane)
+                .first()
+            )
+            out["source_lane_exists"] = lane is not None
+            if not lane:
+                out["blockers"].append({
+                    "code": "lane_not_found",
+                    "detail": f"No lane named “{agent_source_lane}” on this board — names must match a column exactly.",
+                })
+            else:
+                tickets = (
+                    db.query(KanbanTicket)
+                    .filter(KanbanTicket.lane_id == lane.id)
+                    .order_by(KanbanTicket.position.asc())
+                    .all()
+                )
+                out["tickets_in_source"] = len(tickets)
+                for t in tickets:
+                    wf_for_ticket = t.linked_workflow_id or dwf
+                    origin = "local"
+                    if t.external_source in ("trello", "jira"):
+                        origin = t.external_source
+                    can_run = bool(wf_for_ticket)
+                    if can_run:
+                        out["tickets_runnable"] += 1
+                    out["tickets"].append({
+                        "id": t.id,
+                        "title": (t.title or "")[:200],
+                        "origin": origin,
+                        "workflow_id": wf_for_ticket,
+                        "workflow_resolvable": can_run,
+                    })
+
+    agent = KanbanAgentCheckIn(board_id)
+    board_info = agent._load_board()
+    out["runnable"] = board_info is not None and not out["already_running"]
+    return out
+
+
+def format_checkin_dispatch_report(
+    board_reports: List[Dict[str, Any]],
+    *,
+    started: int,
+    already_running: int,
+    skipped: int,
+    focused_single_board: bool = False,
+) -> str:
+    """Human-readable summary for the Check-in button (multi-line)."""
+    lines: List[str] = []
+    if len(board_reports) == 1:
+        bn = board_reports[0].get("board_name") or f"Board #{board_reports[0].get('board_id')}"
+        lines.append(
+            f'Check-in for “{bn}”: {started} started, {already_running} already running, '
+            f"{skipped} could not start."
+        )
+        if focused_single_board:
+            lines.append(
+                "(Only the board open in the sidebar — other boards are not included.)"
+            )
+    else:
+        lines.append(
+            f"Check-in dispatch: {started} started, {already_running} already running, "
+            f"{skipped} could not start."
+        )
+        lines.append(
+            "(Every board below has “Agent check-in” enabled in its board settings.)"
+        )
+    lines.append("")
+    for rep in board_reports:
+        name = rep.get("board_name") or f"Board #{rep.get('board_id')}"
+        src = rep.get("source_type") or "database"
+        lines.append(f"— {name}  ({src})")
+
+        if rep.get("already_running"):
+            lines.append("  · Check-in already running on this board.")
+            continue
+
+        if rep.get("blockers"):
+            for b in rep["blockers"]:
+                if b.get("code") == "already_running":
+                    continue
+                lines.append(f"  · {b.get('detail', '')}")
+
+        src_lane = rep.get("agent_source_lane") or "?"
+        n = rep.get("tickets_in_source", 0)
+        nr = rep.get("tickets_runnable", 0)
+        lines.append(f"  · Source lane: “{src_lane}” — {n} ticket(s) there ({nr} can run a workflow).")
+
+        if rep.get("tickets"):
+            preview = rep["tickets"][:8]
+            parts = []
+            for t in preview:
+                tag = t.get("origin") or "local"
+                wf_ok = "+" if t.get("workflow_resolvable") else "-"
+                parts.append(f"#{t.get('id')}{wf_ok} [{tag}] {(t.get('title') or '')[:48]}")
+            lines.append("  · Tickets: " + "; ".join(parts))
+            if len(rep["tickets"]) > 8:
+                lines.append(f"  · … and {len(rep['tickets']) - 8} more.")
+
+        wf_name = rep.get("workflow_name")
+        steps = rep.get("workflow_step_count", 0)
+        first = rep.get("first_step_name")
+        if wf_name and steps:
+            first_bit = f' First step: “{first}”.' if first else ""
+            lines.append(
+                f"  · Workflow: “{wf_name}” ({steps} step(s)).{first_bit} "
+                "When the run finishes successfully, the ticket moves to the next lane on the board "
+                "(or the configured target lane)."
+            )
+        elif rep.get("runnable") and n == 0:
+            lines.append("  · Nothing to process — move tickets into the source lane to pick them up.")
+
+        lines.append("")
+
+    while lines and lines[-1] == "":
+        lines.pop()
+    return "\n".join(lines)
+
+
 def start_agent_checkin(board_id: int) -> dict:
     """Start a board check-in in a background thread using shared runtime checks.
 
@@ -627,16 +842,18 @@ def start_agent_checkin(board_id: int) -> dict:
         - status: "started" | "already_running" | "not_runnable"
         - board_id: int
         - reason: optional string
+        - report: optional analyze_board_checkin snapshot (for UI)
     """
+    report = analyze_board_checkin(board_id)
     with _active_agents_lock:
         existing = _active_agents.get(board_id)
     if existing and existing.status.state == "running":
-        return {"status": "already_running", "board_id": board_id, "reason": "already_running"}
+        return {"status": "already_running", "board_id": board_id, "reason": "already_running", "report": report}
 
     agent = KanbanAgentCheckIn(board_id)
     board = agent._load_board()
     if board is None:
-        return {"status": "not_runnable", "board_id": board_id, "reason": "board_not_runnable"}
+        return {"status": "not_runnable", "board_id": board_id, "reason": "board_not_runnable", "report": report}
 
     threading.Thread(target=agent.run, daemon=True).start()
-    return {"status": "started", "board_id": board_id}
+    return {"status": "started", "board_id": board_id, "report": report}

@@ -159,7 +159,7 @@ class StepRouter:
         if routing_mode == "agent_decision":
             next_step_id = self._agent_route(db, step, result, verified_passed)
         else:
-            next_step_id = self._static_route(step, verified_passed)
+            next_step_id = self._static_route(db, step, verified_passed)
 
         # null / -1 → end run
         if next_step_id is None or next_step_id == -1:
@@ -190,10 +190,26 @@ class StepRouter:
     # ── Static routing ──────────────────────────────────────────────
 
     @staticmethod
-    def _static_route(step: AutoWorkflowStep, passed: bool) -> Optional[int]:
-        """Follow on_pass_goto / on_fail_goto. None or -1 means end."""
+    def _static_route(db, step: AutoWorkflowStep, passed: bool) -> Optional[int]:
+        """Follow explicit goto, otherwise default to next step by position."""
         goto = step.on_pass_goto if passed else step.on_fail_goto
-        return goto
+        if goto is not None:
+            return goto
+
+        # Backward-compatible default: if no explicit route is configured,
+        # advance to the next step in sequence.
+        next_step = (
+            db.query(AutoWorkflowStep)
+            .filter(
+                AutoWorkflowStep.workflow_id == step.workflow_id,
+                AutoWorkflowStep.position > step.position,
+            )
+            .order_by(AutoWorkflowStep.position.asc())
+            .first()
+        )
+        if next_step:
+            return next_step.id
+        return None
 
     # ── Agent routing ───────────────────────────────────────────────
 
@@ -308,6 +324,7 @@ class StepRouter:
         step_id = step.id
         step_name = step.name
         workflow_id = step.workflow_id
+        handoff = self._build_wait_handoff_text(step_name=step_name, result_text=result, run_id=run_id)
 
         run = db.query(AutoWorkflowRun).filter(
             AutoWorkflowRun.id == run_id,
@@ -317,12 +334,19 @@ class StepRouter:
             run_data = json.loads(run.run_data or "{}")
             run_data["waiting_result"] = result
             run_data["waiting_passed"] = passed
+            run_data["waiting_prompt"] = handoff["prompt"]
             run.run_data = json.dumps(run_data)
+        db.add(AutoWorkflowStepResult(
+            step_id=step_id,
+            run_id=run_id,
+            agent_response=handoff["history_entry"],
+            status="waiting",
+        ))
         db.commit()
 
         increment_workflow_updated()
         self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
-        self._notify_main_agent(workflow_id, run_id, step_name, result)
+        self._notify_main_agent(workflow_id, run_id, handoff)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id}
 
@@ -370,19 +394,13 @@ class StepRouter:
     def _notify_main_agent(
         workflow_id: int,
         run_id: Optional[int],
-        step_name: str,
-        result: str,
+        handoff: Dict[str, str],
     ) -> None:
         """Speak result via TTS and queue a report for the main agent."""
         # TTS notification
         try:
             from distr.core.signals import speak_text_directly_event_queue
-            speak_text = result.strip()[:400]
-            if len(result.strip()) > 400:
-                speak_text += "..."
-            speak_text_directly_event_queue(
-                f"{speak_text}. Step '{step_name}' is now waiting for your input.",
-            )
+            speak_text_directly_event_queue(handoff["tts"])
         except Exception as e:
             logger.debug("Could not speak wait notification: %s", e)
 
@@ -391,9 +409,46 @@ class StepRouter:
             from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
             WorkflowAgentBridge().queue_report_to_agent(
                 workflow_id,
-                f"Workflow step '{step_name}' completed and is now WAITING "
-                f"for your input. Run ID: {run_id}. "
-                f"Result: {result[:500]}",
+                handoff["report"].replace("__RUN_ID__", str(run_id)),
             )
         except Exception as e:
             logger.debug("Could not queue wait report: %s", e)
+
+    @staticmethod
+    def _build_wait_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
+        """Build curated wait-state text for TTS, history, and agent report."""
+        clean_result = (result_text or "").strip()
+        if not clean_result:
+            clean_result = "Step completed with no detailed output."
+        summary = clean_result[:280]
+        if len(clean_result) > 280:
+            summary += "..."
+        step_label = step_name or "workflow step"
+        prompt = (
+            f"{step_label} is waiting for your decision. "
+            "Reply with what should happen next, for example: continue, retry, skip, or provide extra instructions."
+        )
+        tts = f"{summary}. {prompt}"
+        report = (
+            f"[WORKFLOW_WAIT_HANDOFF]\n"
+            f"step_name: {step_label}\n"
+            f"run_id: __RUN_ID__\n"
+            f"status: waiting_for_user_input\n"
+            f"step_result_summary: {summary}\n"
+            f"step_result_full: {clean_result[:1500]}\n\n"
+            "Orchestrator instructions:\n"
+            "1) Relay the step result faithfully; do not re-style or expand scope.\n"
+            "2) Ask one clear follow-up question for user input.\n"
+            "3) After user reply, call continue_workflow with that reply."
+        )
+        history_entry = (
+            f"{clean_result}\n\n"
+            f"[WAITING FOR INPUT]\n{prompt}\n"
+            f"Run ID: {run_id if run_id is not None else 'unknown'}"
+        )
+        return {
+            "prompt": prompt,
+            "tts": tts,
+            "report": report,
+            "history_entry": history_entry,
+        }

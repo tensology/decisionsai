@@ -44,6 +44,7 @@ class ElevenLabsTTSService(TTSService):
         self._ptt_active = False  # Track PTT state
         self.event_queue = event_queue  # Queue to send events back to main process
         self._tts_session_active = False  # Track if we're in an active TTS session (between LLMFullResponseStartFrame and LLMFullResponseEndFrame)
+        self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False  # Track if we've emitted tts_started for this session  # Accumulate total audio duration for the entire response
         self._processed_sentences = set()  # Track processed sentences (normalized text) to prevent duplicates
@@ -456,6 +457,11 @@ class ElevenLabsTTSService(TTSService):
         # - Hands-free mode: Pass through (needed for proper interruption)
         # - Push-to-talk mode: STOP here (transport breaks if it receives these)
         if isinstance(frame, CancelFrame):
+            # Guard: ignore stale CancelFrames (same logic as InterruptionFrame)
+            now = time.monotonic()
+            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+                logger.debug("TTS: Ignoring stale CancelFrame (from pre-send interrupt)")
+                return
             # CancelFrame is handled for backwards compatibility; PTT uses InterruptionFrame
             self._cancelled = True
             self._text_buffer = ""
@@ -470,6 +476,15 @@ class ElevenLabsTTSService(TTSService):
         # Handle InterruptionFrame - KILLS AUDIO IMMEDIATELY
         # InterruptionFrame always interrupts, regardless of mode.
         if isinstance(frame, InterruptionFrame):
+            # Guard: ignore stale InterruptionFrames that arrive after the current response
+            # has already started (e.g. from a pre-send interrupt_tts command that raced).
+            now = time.monotonic()
+            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+                logger.debug(
+                    "TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame - from pre-send interrupt)",
+                    (now - self._llm_response_started_at) * 1000,
+                )
+                return
             logger.debug("TTS: InterruptionFrame received - stopping playback")
             self._cancelled = True
             self._text_buffer = ""
@@ -632,6 +647,7 @@ class ElevenLabsTTSService(TTSService):
         
         if isinstance(frame, LLMFullResponseStartFrame):
             logger.debug("TTS: LLMFullResponseStartFrame - resetting TTS state for new response")
+            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
             self._text_buffer = ""
             self._cancelled = False  # Reset cancelled state to allow new audio generation
             self._processed_sentences.clear()  # Clear processed sentences for new response
@@ -648,6 +664,7 @@ class ElevenLabsTTSService(TTSService):
             return
             
         elif isinstance(frame, LLMFullResponseEndFrame):
+            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
             logger.debug(f"TTS: LLMFullResponseEndFrame received - processing remaining buffer: '{self._text_buffer[:50]}...'")
             # Process any remaining text
             if self._text_buffer.strip() and not self._cancelled:

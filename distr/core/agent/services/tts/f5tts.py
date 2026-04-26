@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import re
+import time
 import numpy as np
 import os
 import io
@@ -115,6 +116,7 @@ class F5TTSTTSService(TTSService):
         self._cancelled = False
         self._is_hands_free = False
         self._ptt_active = False
+        self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self.event_queue = event_queue
         self._tts_session_active = False
         self._total_audio_duration = 0.0
@@ -213,6 +215,7 @@ class F5TTSTTSService(TTSService):
             self._tts_started_emitted = False
             self._processed_sentences = set()
             self._text_buffer = ""
+            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
 
         elif isinstance(frame, TextFrame):
             if self._cancelled:
@@ -235,6 +238,7 @@ class F5TTSTTSService(TTSService):
                     await self._speak_sentence(self._text_buffer.strip())
             self._text_buffer = ""
             self._tts_session_active = False
+            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
             if self._tts_started_emitted and self.event_queue:
                 try:
                     self.event_queue.put_nowait({"type": "tts_stopped"})
@@ -242,6 +246,15 @@ class F5TTSTTSService(TTSService):
                     pass
 
         elif isinstance(frame, (CancelFrame, InterruptionFrame)):
+            # Guard: ignore stale CancelFrame/InterruptionFrame that arrive after current response started
+            now = time.monotonic()
+            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+                logger.debug(
+                    "F5-TTS: Ignoring stale %s (%.0fms since LLMFullResponseStartFrame)",
+                    type(frame).__name__,
+                    (now - self._llm_response_started_at) * 1000,
+                )
+                return
             self._cancelled = True
             self._text_buffer = ""
 

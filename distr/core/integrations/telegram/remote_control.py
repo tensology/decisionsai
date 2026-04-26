@@ -1,5 +1,7 @@
 """Remote control mixin — mouse, keyboard, screenshots via Telegram."""
 
+import asyncio
+import difflib
 import json
 import logging
 import os
@@ -45,6 +47,7 @@ class TelegramRemoteControlMixin:
             try:
                 command = data.get("command")
                 command_data = data.get("data", {})
+                take_screenshot = bool(command_data.get("take_screenshot", True))
                 request_id = data.get(
                     "request_id"
                 )  # Optional request ID for response correlation
@@ -191,15 +194,58 @@ class TelegramRemoteControlMixin:
                             self._send_websocket_binary(header + image_data)
                     # No JSON response needed — the binary frame IS the response
 
-                elif command == "start_screen_stream":
-                    # Start VP9/WebM screen streaming
+                elif command == "webrtc_offer":
+                    # WebRTC offer/answer signaling for low-latency desktop video.
                     screen_number = command_data.get("screen_number", 1)
                     fps = command_data.get("fps", 3)
-                    self._start_screen_stream(screen_number, fps)
+                    offer_sdp = command_data.get("sdp", "")
+                    offer_type = command_data.get("type", "offer")
+                    if not offer_sdp:
+                        self._send_websocket_message({
+                            "type": "remote_control_response",
+                            "command": "webrtc_offer",
+                            "request_id": request_id,
+                            "error": "Missing SDP offer",
+                            "data": {},
+                        })
+                        return
+                    try:
+                        answer = self._create_webrtc_answer(
+                            screen_number=screen_number,
+                            fps=fps,
+                            offer_sdp=offer_sdp,
+                            offer_type=offer_type,
+                        )
+                        self._send_websocket_message({
+                            "type": "remote_control_response",
+                            "command": "webrtc_offer",
+                            "request_id": request_id,
+                            "data": {
+                                "success": True,
+                                "screen_number": screen_number,
+                                "fps": fps,
+                                "type": answer.get("type"),
+                                "sdp": answer.get("sdp"),
+                            },
+                        })
+                    except Exception as err:
+                        logger.error("WebRTC offer handling failed: %s", err, exc_info=True)
+                        self._send_websocket_message({
+                            "type": "remote_control_response",
+                            "command": "webrtc_offer",
+                            "request_id": request_id,
+                            "error": str(err),
+                            "data": {},
+                        })
+
+                elif command == "start_screen_stream":
+                    # Deprecated WebM stream path; replaced by webrtc_offer signaling.
                     self._send_websocket_message({
-                        "type": "remote_control_response", "command": "start_screen_stream",
+                        "type": "remote_control_response",
+                        "command": "start_screen_stream",
                         "request_id": request_id,
-                        "data": {"success": True, "screen_number": screen_number, "fps": fps},
+                        "error": "start_screen_stream is deprecated; use webrtc_offer",
+                        "data": {},
                     })
 
                 elif command == "stop_screen_stream":
@@ -211,8 +257,8 @@ class TelegramRemoteControlMixin:
 
                 elif command == "set_stream_fps":
                     fps = command_data.get("fps", 3)
-                    if hasattr(self, '_screen_streamer') and self._screen_streamer:
-                        self._screen_streamer.fps = fps
+                    if hasattr(self, "_webrtc_session") and self._webrtc_session:
+                        self._run_coro_sync(self._webrtc_session.set_fps(fps))
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "set_stream_fps",
                             "request_id": request_id, "data": {"success": True, "fps": fps},
@@ -264,7 +310,7 @@ class TelegramRemoteControlMixin:
                         y,
                         screen_number=screen_number,
                         button=button,
-                        take_screenshot=True,
+                        take_screenshot=take_screenshot,
                     )
                     self._send_websocket_message(
                         {
@@ -341,7 +387,7 @@ class TelegramRemoteControlMixin:
                             y,
                             screen_number=screen_number,
                             button="right",
-                            take_screenshot=True,
+                            take_screenshot=take_screenshot,
                         )
                         self._send_websocket_message(
                             {
@@ -384,29 +430,30 @@ class TelegramRemoteControlMixin:
                     try:
                         if pyautogui:
                             pyautogui.click()
-                        # Take screenshot after click
-                        try:
-                            time.sleep(0.15)
-                            from distr.core.screen_utils import (
-                                get_current_mouse_screen_simple,
-                            )
-                            screen_info = get_current_mouse_screen_simple()
-                            if screen_info and "screen_number" in screen_info:
-                                target_screen_number = screen_info["screen_number"]
-                                screenshot_data = self._capture_screen_screenshot(
-                                    target_screen_number, draw_cursor=True
+                        if take_screenshot:
+                            # Take screenshot after click
+                            try:
+                                time.sleep(0.15)
+                                from distr.core.screen_utils import (
+                                    get_current_mouse_screen_simple,
                                 )
-                                if "error" not in screenshot_data:
-                                    channel = self._get_chat_id() or self.telegram_user_id
-                                    if channel:
-                                        self._post_screenshot_to_server(
-                                            channel=str(channel),
-                                            screen_number=target_screen_number,
-                                            image_data=screenshot_data.get("image_data"),
-                                            image_format=screenshot_data.get("format", "webp"),
-                                        )
-                        except Exception as e:
-                            logger.error(f"Error taking screenshot after left click: {e}")
+                                screen_info = get_current_mouse_screen_simple()
+                                if screen_info and "screen_number" in screen_info:
+                                    target_screen_number = screen_info["screen_number"]
+                                    screenshot_data = self._capture_screen_screenshot(
+                                        target_screen_number, draw_cursor=True
+                                    )
+                                    if "error" not in screenshot_data:
+                                        channel = self._get_chat_id() or self.telegram_user_id
+                                        if channel:
+                                            self._post_screenshot_to_server(
+                                                channel=str(channel),
+                                                screen_number=target_screen_number,
+                                                image_data=screenshot_data.get("image_data"),
+                                                image_format=screenshot_data.get("format", "webp"),
+                                            )
+                            except Exception as e:
+                                logger.error(f"Error taking screenshot after left click: {e}")
                         self._send_websocket_message(
                             {
                                 "type": "remote_control_response",
@@ -444,7 +491,7 @@ class TelegramRemoteControlMixin:
 
                     if x is not None and y is not None:
                         success = self._double_click(
-                            x, y, screen_number=screen_number, take_screenshot=True
+                            x, y, screen_number=screen_number, take_screenshot=take_screenshot
                         )
                         self._send_websocket_message(
                             {
@@ -461,7 +508,7 @@ class TelegramRemoteControlMixin:
                                 pyautogui.doubleClick()
                             success = True
                             # Take screenshot after double click
-                            if success:
+                            if success and take_screenshot:
                                 try:
                                     time.sleep(0.2)
                                     from distr.core.screen_utils import (
@@ -531,8 +578,27 @@ class TelegramRemoteControlMixin:
                 elif command == "type_text":
                     text_to_type = command_data.get("text", "")
                     if text_to_type:
+                        block_reason = self._get_type_text_block_reason(
+                            text=text_to_type, command_data=command_data
+                        )
+                        if block_reason:
+                            logger.warning(
+                                "Blocked type_text command request_id=%s: %s",
+                                request_id,
+                                block_reason,
+                            )
+                            self._send_websocket_message(
+                                {
+                                    "type": "remote_control_response",
+                                    "command": "type_text",
+                                    "request_id": request_id,
+                                    "error": block_reason,
+                                    "data": {},
+                                }
+                            )
+                            return
                         success = self._type_text_quick(
-                            text_to_type, take_screenshot=True
+                            text_to_type, take_screenshot=take_screenshot
                         )
                         self._send_websocket_message(
                             {
@@ -557,7 +623,7 @@ class TelegramRemoteControlMixin:
                         )
 
                 elif command == "key_up":
-                    success = self._press_key("up", take_screenshot=True)
+                    success = self._press_key("up", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -568,7 +634,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_down":
-                    success = self._press_key("down", take_screenshot=True)
+                    success = self._press_key("down", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -579,7 +645,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_enter":
-                    success = self._press_key("enter", take_screenshot=True)
+                    success = self._press_key("enter", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -590,7 +656,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_backspace":
-                    success = self._press_key("backspace", take_screenshot=True)
+                    success = self._press_key("backspace", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -601,7 +667,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_escape":
-                    success = self._press_key("escape", take_screenshot=True)
+                    success = self._press_key("escape", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -612,7 +678,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_page_up":
-                    success = self._press_key("pageup", take_screenshot=True)
+                    success = self._press_key("pageup", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -623,7 +689,7 @@ class TelegramRemoteControlMixin:
                     )
 
                 elif command == "key_page_down":
-                    success = self._press_key("pagedown", take_screenshot=True)
+                    success = self._press_key("pagedown", take_screenshot=take_screenshot)
                     self._send_websocket_message(
                         {
                             "type": "remote_control_response",
@@ -636,7 +702,7 @@ class TelegramRemoteControlMixin:
                 elif command == "key_break":
                     # Control + C (break/interrupt in terminal)
                     success = self._press_key_combination(
-                        ["ctrl", "c"], take_screenshot=True
+                        ["ctrl", "c"], take_screenshot=take_screenshot
                     )
                     self._send_websocket_message(
                         {
@@ -652,11 +718,11 @@ class TelegramRemoteControlMixin:
                     import platform
                     if platform.system() == "Darwin":
                         success = self._press_key_combination(
-                            ["command", "`"], take_screenshot=True
+                            ["command", "`"], take_screenshot=take_screenshot
                         )
                     else:
                         success = self._press_key_combination(
-                            ["alt", "tab"], take_screenshot=True
+                            ["alt", "tab"], take_screenshot=take_screenshot
                         )
                     self._send_websocket_message(
                         {
@@ -670,9 +736,9 @@ class TelegramRemoteControlMixin:
                 elif command == "key_minimize":
                     import platform
                     if platform.system() == "Darwin":
-                        success = self._press_key_combination(["command", "m"], take_screenshot=True)
+                        success = self._press_key_combination(["command", "m"], take_screenshot=take_screenshot)
                     else:
-                        success = self._press_key_combination(["win", "down"], take_screenshot=True)
+                        success = self._press_key_combination(["win", "down"], take_screenshot=take_screenshot)
                     self._send_websocket_message({
                         "type": "remote_control_response", "command": "key_minimize",
                         "request_id": request_id, "data": {"success": success},
@@ -681,9 +747,9 @@ class TelegramRemoteControlMixin:
                 elif command == "key_maximize":
                     import platform
                     if platform.system() == "Darwin":
-                        success = self._press_key_combination(["ctrl", "command", "f"], take_screenshot=True)
+                        success = self._press_key_combination(["ctrl", "command", "f"], take_screenshot=take_screenshot)
                     else:
-                        success = self._press_key_combination(["win", "up"], take_screenshot=True)
+                        success = self._press_key_combination(["win", "up"], take_screenshot=take_screenshot)
                     self._send_websocket_message({
                         "type": "remote_control_response", "command": "key_maximize",
                         "request_id": request_id, "data": {"success": success},
@@ -692,9 +758,9 @@ class TelegramRemoteControlMixin:
                 elif command == "key_close_window":
                     import platform
                     if platform.system() == "Darwin":
-                        success = self._press_key_combination(["command", "w"], take_screenshot=True)
+                        success = self._press_key_combination(["command", "w"], take_screenshot=take_screenshot)
                     else:
-                        success = self._press_key_combination(["ctrl", "w"], take_screenshot=True)
+                        success = self._press_key_combination(["ctrl", "w"], take_screenshot=take_screenshot)
                     self._send_websocket_message({
                         "type": "remote_control_response", "command": "key_close_window",
                         "request_id": request_id, "data": {"success": success},
@@ -707,12 +773,12 @@ class TelegramRemoteControlMixin:
                     if platform.system() == "Darwin":
                         # Use Command on macOS for standard shortcuts
                         success = self._press_key_combination(
-                            ["command", "a"], take_screenshot=True
+                            ["command", "a"], take_screenshot=take_screenshot
                         )
                     else:
                         # Use Control on Windows/Linux
                         success = self._press_key_combination(
-                            ["ctrl", "a"], take_screenshot=True
+                            ["ctrl", "a"], take_screenshot=take_screenshot
                         )
                     self._send_websocket_message(
                         {
@@ -730,12 +796,12 @@ class TelegramRemoteControlMixin:
                     if platform.system() == "Darwin":
                         # Use Command on macOS for standard shortcuts
                         success = self._press_key_combination(
-                            ["command", "c"], take_screenshot=True
+                            ["command", "c"], take_screenshot=take_screenshot
                         )
                     else:
                         # Use Control on Windows/Linux
                         success = self._press_key_combination(
-                            ["ctrl", "c"], take_screenshot=True
+                            ["ctrl", "c"], take_screenshot=take_screenshot
                         )
                     self._send_websocket_message(
                         {
@@ -753,12 +819,12 @@ class TelegramRemoteControlMixin:
                     if platform.system() == "Darwin":
                         # Use Command on macOS for standard shortcuts
                         success = self._press_key_combination(
-                            ["command", "v"], take_screenshot=True
+                            ["command", "v"], take_screenshot=take_screenshot
                         )
                     else:
                         # Use Control on Windows/Linux
                         success = self._press_key_combination(
-                            ["ctrl", "v"], take_screenshot=True
+                            ["ctrl", "v"], take_screenshot=take_screenshot
                         )
                     self._send_websocket_message(
                         {
@@ -786,9 +852,19 @@ class TelegramRemoteControlMixin:
                         try:
                             from distr.core.signals import signal_manager
 
-                            # Emit the instruction to the agent as if it came from Telegram
+                            # Remote-app voice/text instructions should follow the
+                            # remote return path (no local desktop player window).
+                            # Treat as Telegram-originated and force text-format
+                            # response so the remote app can handle TTS playback.
+                            self._mark_remote_agent_response_context(
+                                request_id=request_id,
+                                source_command="instruction",
+                                mode="command",
+                            )
+                            if hasattr(self, "_current_input_type"):
+                                self._current_input_type = "text"
                             signal_manager.send_text_input.emit(
-                                str(instruction_text), True, None, None
+                                str(instruction_text), True, None, False
                             )
                             logger.info(
                                 f"Forwarded instruction to agent via signal_manager: '{instruction_text[:50]}...'"
@@ -842,7 +918,7 @@ class TelegramRemoteControlMixin:
                         })
                         # Stream file as binary chunks
                         # Binary frame format: [4 bytes "FILE"] [request_id as null-terminated string] [chunk data]
-                        CHUNK_SIZE = 512 * 1024  # 512KB chunks
+                        CHUNK_SIZE = 128 * 1024  # 128KB chunks to reduce socket monopolization
                         rid_bytes = request_id.encode("utf-8") + b"\x00"
                         with open(real, "rb") as f:
                             while True:
@@ -851,6 +927,8 @@ class TelegramRemoteControlMixin:
                                     break
                                 frame = b"FILE" + rid_bytes + chunk
                                 self._send_websocket_binary(frame)
+                                # Yield between chunks so control commands can be processed promptly.
+                                time.sleep(0.005)
                         # Send completion marker
                         self._send_websocket_message({
                             "type": "remote_control_response",
@@ -918,7 +996,14 @@ class TelegramRemoteControlMixin:
                     else:
                         if mode == "command":
                             from distr.core.signals import signal_manager
-                            signal_manager.send_text_input.emit(str(text), True, None, None)
+                            self._mark_remote_agent_response_context(
+                                request_id=request_id,
+                                source_command="voice_text_input",
+                                mode=mode,
+                            )
+                            if hasattr(self, "_current_input_type"):
+                                self._current_input_type = "text"
+                            signal_manager.send_text_input.emit(str(text), True, None, False)
                         elif mode == "dictate":
                             self._type_text_quick(text)
                         self._send_websocket_message({
@@ -1021,7 +1106,21 @@ class TelegramRemoteControlMixin:
                                         # For command mode, also send the text to the agent as input
                                         if mode == "command":
                                             from distr.core.signals import signal_manager
-                                            signal_manager.send_text_input.emit(str(transcript), True, None, None)
+                                            self._track_recent_remote_voice_command(
+                                                request_id=request_id, transcript=str(transcript)
+                                            )
+                                            # Route as Telegram-originated so the desktop
+                                            # player does not open for remote-app voice
+                                            # requests. Force text response format so the
+                                            # remote app can stream/play TTS itself.
+                                            self._mark_remote_agent_response_context(
+                                                request_id=request_id,
+                                                source_command="voice_transcribe",
+                                                mode=mode,
+                                            )
+                                            if hasattr(self, "_current_input_type"):
+                                                self._current_input_type = "text"
+                                            signal_manager.send_text_input.emit(str(transcript), True, None, False)
                                     else:
                                         self._send_websocket_message({
                                             "type": "remote_control_response", "command": "voice_transcribe",
@@ -1124,6 +1223,79 @@ class TelegramRemoteControlMixin:
                     }
                 )
 
+    def _mark_remote_agent_response_context(
+        self, request_id: Optional[str], source_command: str, mode: str = "command"
+    ) -> None:
+        """Store context for routing the next agent response back to remote-app."""
+        try:
+            self._pending_remote_agent_response = {
+                "request_id": request_id,
+                "source_command": source_command,
+                "mode": mode,
+                "created_at": time.time(),
+            }
+            logger.info(
+                "Remote response context set: request_id=%s source=%s mode=%s",
+                request_id,
+                source_command,
+                mode,
+            )
+        except Exception:
+            logger.exception("Failed to set remote response context")
+
+    def _track_recent_remote_voice_command(
+        self, request_id: Optional[str], transcript: str
+    ) -> None:
+        """Store latest command-mode voice transcript to prevent accidental auto-typing."""
+        self._recent_remote_voice_command = {
+            "request_id": request_id,
+            "transcript": (transcript or "").strip(),
+            "created_at": time.time(),
+        }
+        logger.info(
+            "Tracked recent remote voice command: request_id=%s chars=%d",
+            request_id,
+            len((transcript or "").strip()),
+        )
+
+    def _get_type_text_block_reason(self, text: str, command_data: dict) -> Optional[str]:
+        """
+        Prevent accidental text injection after command-mode voice.
+
+        Remote voice in command mode should route through the agent/tool stack rather than
+        immediately becoming raw keyboard text. If a near-immediate type_text follows a
+        command-mode voice transcript with similar text, block it unless explicitly allowed.
+        """
+        try:
+            if bool(command_data.get("allow_from_voice")):
+                return None
+
+            recent = getattr(self, "_recent_remote_voice_command", None) or {}
+            if not recent:
+                return None
+
+            recent_ts = float(recent.get("created_at") or 0)
+            if (time.time() - recent_ts) > 10.0:
+                return None
+
+            recent_transcript = (recent.get("transcript") or "").strip().lower()
+            current_text = (text or "").strip().lower()
+            if not recent_transcript or not current_text:
+                return None
+
+            similarity = difflib.SequenceMatcher(
+                None, recent_transcript, current_text
+            ).ratio()
+            if similarity >= 0.7:
+                return (
+                    "Blocked type_text after command voice transcription "
+                    "(likely unintended auto-typing). Use dictate mode or set allow_from_voice=true."
+                )
+            return None
+        except Exception:
+            logger.exception("type_text safety check failed; allowing command")
+            return None
+
     def _get_screens_list(self, force_update: bool = False) -> list:
         """Get list of all screens with their information (thread-safe)."""
         screens_info = []
@@ -1178,16 +1350,10 @@ class TelegramRemoteControlMixin:
     def _draw_cursor_on_pil_image(self, img, screen_geo: dict):
         """Composite cursor.png onto a PIL Image in memory. Returns the modified image."""
         try:
-            from PIL import Image
+            from PIL import Image, ImageDraw
 
             if not pyautogui:
                 return img
-            from distr.core.paths import IMAGES_DIR
-
-            cursor_img_path = os.path.join(IMAGES_DIR, "cursor.png")
-            if not os.path.exists(cursor_img_path):
-                return img
-
             cursor_x, cursor_y = pyautogui.position()
 
             screen_left = screen_geo["x"]
@@ -1221,23 +1387,133 @@ class TelegramRemoteControlMixin:
             rel_x = max(0, min(rel_x, img_width - 1))
             rel_y = max(0, min(rel_y, img_height - 1))
 
-            cursor_img = Image.open(cursor_img_path)
-            if cursor_img.mode != "RGBA":
-                cursor_img = cursor_img.convert("RGBA")
+            from distr.core.paths import IMAGES_DIR
+            cursor_img_path = os.path.join(IMAGES_DIR, "cursor.png")
+            if os.path.exists(cursor_img_path):
+                cursor_img = Image.open(cursor_img_path)
+                if cursor_img.mode != "RGBA":
+                    cursor_img = cursor_img.convert("RGBA")
 
-            if scale_factor != 1.0:
-                new_width = int(cursor_img.width * scale_factor)
-                new_height = int(cursor_img.height * scale_factor)
-                cursor_img = cursor_img.resize(
-                    (new_width, new_height), Image.Resampling.LANCZOS
+                if scale_factor != 1.0:
+                    new_width = max(8, int(cursor_img.width * scale_factor))
+                    new_height = max(8, int(cursor_img.height * scale_factor))
+                    cursor_img = cursor_img.resize(
+                        (new_width, new_height), Image.Resampling.LANCZOS
+                    )
+
+                img.paste(cursor_img, (rel_x, rel_y), cursor_img)
+            else:
+                # Fallback marker so cursor remains visible even if cursor.png is absent.
+                radius = max(5, int(6 * scale_factor))
+                draw = ImageDraw.Draw(img, "RGBA")
+                draw.ellipse(
+                    (rel_x - radius, rel_y - radius, rel_x + radius, rel_y + radius),
+                    fill=(255, 64, 64, 220),
+                    outline=(255, 255, 255, 220),
+                    width=max(1, int(scale_factor)),
                 )
-
-            img.paste(cursor_img, (rel_x, rel_y), cursor_img)
             return img
 
         except Exception as e:
             logger.warning(f"Failed to draw cursor marker: {e}")
             return img
+
+    def _capture_screen_pil_image(self, screen_number: int, draw_cursor: bool = True):
+        """Capture a screen as PIL Image, optionally compositing cursor marker."""
+        try:
+            import platform
+            import subprocess
+            import tempfile
+            from PIL import Image
+
+            screens_info = self._get_screens_list()
+            if not screens_info:
+                return None
+            if screen_number < 1 or screen_number > len(screens_info):
+                return None
+
+            target_screen_info = screens_info[screen_number - 1]
+            screen_geo = target_screen_info["geometry"]
+            system = platform.system()
+            pil_img = None
+
+            if system == "Darwin":
+                x, y = screen_geo["x"], screen_geo["y"]
+                width, height = screen_geo["width"], screen_geo["height"]
+                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                    png_tmp_path = tmp_file.name
+                try:
+                    result = subprocess.run(
+                        ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                        capture_output=True, timeout=10,
+                    )
+                    if result.returncode != 0 or not os.path.exists(png_tmp_path):
+                        result = subprocess.run(
+                            ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
+                            capture_output=True, timeout=10,
+                        )
+                    if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
+                        pil_img = Image.open(png_tmp_path)
+                        pil_img.load()
+                finally:
+                    try:
+                        os.unlink(png_tmp_path)
+                    except OSError:
+                        pass
+            elif system == "Windows":
+                from PIL import ImageGrab
+                bbox = (
+                    screen_geo["x"],
+                    screen_geo["y"],
+                    screen_geo["x"] + screen_geo["width"],
+                    screen_geo["y"] + screen_geo["height"],
+                )
+                pil_img = ImageGrab.grab(bbox=bbox)
+            else:
+                try:
+                    from PIL import ImageGrab
+                    bbox = (
+                        screen_geo["x"],
+                        screen_geo["y"],
+                        screen_geo["x"] + screen_geo["width"],
+                        screen_geo["y"] + screen_geo["height"],
+                    )
+                    pil_img = ImageGrab.grab(bbox=bbox)
+                except Exception:
+                    try:
+                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
+                            png_tmp = tmp_file.name
+                        subprocess.run(["gnome-screenshot", "-f", png_tmp], timeout=10)
+                        if os.path.exists(png_tmp):
+                            pil_img = Image.open(png_tmp)
+                            pil_img.load()
+                    finally:
+                        try:
+                            if 'png_tmp' in locals() and os.path.exists(png_tmp):
+                                os.unlink(png_tmp)
+                        except OSError:
+                            pass
+
+            if pil_img is None:
+                return None
+
+            if draw_cursor:
+                pil_img = self._draw_cursor_on_pil_image(pil_img, screen_geo)
+
+            if pil_img.mode in ("RGBA", "LA", "P"):
+                rgb_img = Image.new("RGB", pil_img.size, (255, 255, 255))
+                if pil_img.mode == "P":
+                    pil_img = pil_img.convert("RGBA")
+                rgb_img.paste(
+                    pil_img, mask=pil_img.split()[-1] if pil_img.mode == "RGBA" else None
+                )
+                pil_img = rgb_img
+            elif pil_img.mode != "RGB":
+                pil_img = pil_img.convert("RGB")
+
+            return pil_img
+        except Exception:
+            return None
 
     def _capture_screen_screenshot(
         self, screen_number: int, draw_cursor: bool = True
@@ -1247,15 +1523,8 @@ class TelegramRemoteControlMixin:
         Pipeline: capture → PIL Image in memory → composite cursor → single WebP encode to BytesIO → done.
         """
         try:
-            import base64
-            import tempfile
-            import platform
-            import subprocess
-            import os
             import io
             from PIL import Image
-
-            system = platform.system()
 
             screens_info = self._get_screens_list()
 
@@ -1270,81 +1539,10 @@ class TelegramRemoteControlMixin:
 
             target_screen_info = screens_info[screen_number - 1]
             screen_geo = target_screen_info["geometry"]
-
-            pil_img = None
-
-            if system == "Darwin":
-                x, y = screen_geo["x"], screen_geo["y"]
-                width, height = screen_geo["width"], screen_geo["height"]
-
-                with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                    png_tmp_path = tmp_file.name
-
-                try:
-                    result = subprocess.run(
-                        ["screencapture", "-x", "-R", f"{x},{y},{width},{height}", png_tmp_path],
-                        capture_output=True, timeout=10,
-                    )
-                    if result.returncode != 0 or not os.path.exists(png_tmp_path):
-                        result = subprocess.run(
-                            ["screencapture", "-R", f"{x},{y},{width},{height}", png_tmp_path],
-                            capture_output=True, timeout=10,
-                        )
-
-                    if os.path.exists(png_tmp_path) and os.path.getsize(png_tmp_path) > 0:
-                        pil_img = Image.open(png_tmp_path)
-                        pil_img.load()
-                finally:
-                    try:
-                        os.unlink(png_tmp_path)
-                    except OSError:
-                        pass
-
-            elif system == "Windows":
-                try:
-                    from PIL import ImageGrab
-                    bbox = (screen_geo["x"], screen_geo["y"],
-                            screen_geo["x"] + screen_geo["width"],
-                            screen_geo["y"] + screen_geo["height"])
-                    pil_img = ImageGrab.grab(bbox=bbox)
-                except ImportError:
-                    return {"error": "PIL/Pillow not installed", "screen_number": screen_number}
-
-            else:  # Linux
-                try:
-                    from PIL import ImageGrab
-                    bbox = (screen_geo["x"], screen_geo["y"],
-                            screen_geo["x"] + screen_geo["width"],
-                            screen_geo["y"] + screen_geo["height"])
-                    pil_img = ImageGrab.grab(bbox=bbox)
-                except Exception:
-                    try:
-                        with tempfile.NamedTemporaryFile(suffix=".png", delete=False) as tmp_file:
-                            png_tmp = tmp_file.name
-                        subprocess.run(["gnome-screenshot", "-f", png_tmp], timeout=10)
-                        if os.path.exists(png_tmp):
-                            pil_img = Image.open(png_tmp)
-                            pil_img.load()
-                            os.unlink(png_tmp)
-                    except Exception:
-                        pass
+            pil_img = self._capture_screen_pil_image(screen_number, draw_cursor=draw_cursor)
 
             if pil_img is None:
                 return {"error": "Failed to capture screenshot", "screen_number": screen_number}
-
-            # Composite cursor in memory (no file I/O)
-            if draw_cursor:
-                pil_img = self._draw_cursor_on_pil_image(pil_img, screen_geo)
-
-            # Convert to RGB for WebP
-            if pil_img.mode in ("RGBA", "LA", "P"):
-                rgb_img = Image.new("RGB", pil_img.size, (255, 255, 255))
-                if pil_img.mode == "P":
-                    pil_img = pil_img.convert("RGBA")
-                rgb_img.paste(pil_img, mask=pil_img.split()[-1] if pil_img.mode == "RGBA" else None)
-                pil_img = rgb_img
-            elif pil_img.mode != "RGB":
-                pil_img = pil_img.convert("RGB")
 
             # Single WebP encode straight to memory buffer (no temp file)
             buf = io.BytesIO()
@@ -1868,7 +2066,7 @@ class TelegramRemoteControlMixin:
             logger.error(f"Error pressing key combination: {e}", exc_info=True)
             return False
 
-    # ── VP9/WebM screen streaming ────────────────────────────────────────
+    # ── WebRTC screen streaming ───────────────────────────────────────────
 
     def _capture_pil_image(self, screen_number: int):
         """Capture a screenshot as an RGB PIL Image with cursor drawn. Returns PIL Image or None.
@@ -1890,23 +2088,39 @@ class TelegramRemoteControlMixin:
         except Exception:
             return None
 
-    def _start_screen_stream(self, screen_number: int, fps: float = 3):
-        """Start VP9/WebM screen streaming."""
-        self._stop_screen_stream()  # stop any existing stream
-        from distr.core.integrations.telegram.screen_stream import ScreenStreamer
-        self._screen_streamer = ScreenStreamer(
+    def _run_coro_sync(self, coro):
+        """Execute async coroutine from this sync command handler."""
+        loop = asyncio.new_event_loop()
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    def _create_webrtc_answer(
+        self, screen_number: int, fps: float, offer_sdp: str, offer_type: str = "offer"
+    ) -> dict:
+        """Create a WebRTC answer and start desktop streaming track."""
+        from distr.core.integrations.telegram.webrtc_stream import WebRTCSession
+
+        self._stop_screen_stream()
+        self._webrtc_session = WebRTCSession(
             screen_number=screen_number,
             capture_fn=self._capture_pil_image,
-            send_binary_fn=self._send_websocket_binary,
             fps=fps,
         )
-        self._screen_streamer.start()
+        return self._run_coro_sync(
+            self._webrtc_session.create_answer(offer_sdp=offer_sdp, offer_type=offer_type)
+        )
 
     def _stop_screen_stream(self):
-        """Stop VP9/WebM screen streaming."""
-        if hasattr(self, '_screen_streamer') and self._screen_streamer:
+        """Stop active screen streaming session."""
+        if hasattr(self, "_screen_streamer") and self._screen_streamer:
+            # Backward-compat cleanup for legacy WebM streamer, if still present.
             self._screen_streamer.stop()
             self._screen_streamer = None
+        if hasattr(self, "_webrtc_session") and self._webrtc_session:
+            self._run_coro_sync(self._webrtc_session.close())
+            self._webrtc_session = None
 
     def _post_screenshot_to_server(
         self, channel: str, screen_number: int, image_data: bytes, image_format: str

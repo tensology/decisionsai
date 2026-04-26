@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 import numpy as np
 
 from distr.core.agent.libs import (
@@ -63,7 +64,10 @@ class KokoroTTSService(TTSService):
         self._total_audio_duration = 0.0  # Accumulate total audio duration
         self._tts_started_emitted = False  # Track if we've emitted tts_started for this session
         self._in_response_after_start = False  # True between LLMFullResponseStartFrame and LLMFullResponseEndFrame; used to ignore stale CancelFrames
+        self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self._processed_sentences = set()  # Track processed sentences (normalized text) to prevent duplicates
+        self._sentence_emit_counts = {}  # Track sentence emission count per response for duplicate diagnostics
+        self._response_debug_id = "boot"
         self._session_text = ""  # Track full text spoken during current TTS session
         self._last_telegram_send_hash = None  # Track last sent message hash to prevent duplicates
         self._last_telegram_send_time = 0  # Track last send time for rate limiting
@@ -417,7 +421,27 @@ class KokoroTTSService(TTSService):
         # - PTT-generated InterruptionFrames always come through and should always interrupt
         # - Don't filter based on hands-free mode here - that's STT's job
         if isinstance(frame, InterruptionFrame):
-            # Always interrupt - filtering happens at STT level
+            # Guard: ignore stale InterruptionFrames that arrive after the current response
+            # has already started (e.g. from a pre-send interrupt_tts command that raced).
+            # Without this, creating a new chat sends interrupt_tts → InterruptionFrame,
+            # then the LLM response starts → LLMFullResponseStartFrame resets _cancelled,
+            # then the stale InterruptionFrame arrives and re-cancels, muting TTS output.
+            now = time.monotonic()
+            # Create-chat / load-in-agent send interrupt_tts before the first LLM token; on slow
+            # pipelines InterruptionFrame can arrive well after LLMFullResponseStartFrame. A short
+            # window caused _cancelled=True + all TextFrames dropped (audible silence, UI still streams).
+            _STALE_INTERRUPT_GRACE_SEC = 2.0
+            if (
+                self._llm_response_started_at > 0
+                and (now - self._llm_response_started_at) < _STALE_INTERRUPT_GRACE_SEC
+            ):
+                logger.info(
+                    "TTS: Ignoring stale InterruptionFrame (%.0fms since LLMFullResponseStartFrame; "
+                    "grace=%.1fs — typical create-chat interrupt_tts race)",
+                    (now - self._llm_response_started_at) * 1000,
+                    _STALE_INTERRUPT_GRACE_SEC,
+                )
+                return
             logger.debug("TTS: InterruptionFrame received - stopping playback")
             # CRITICAL: KILL audio immediately - set cancelled flag FIRST
             self._cancelled = True
@@ -481,7 +505,11 @@ class KokoroTTSService(TTSService):
             # CRITICAL: If cancelled (e.g., by CancelFrame from PTT), DROP all TextFrames
             # Do NOT reset cancelled state - only LLMFullResponseStartFrame should do that
             if self._cancelled:
-                logger.debug("TTS: TextFrame DROPPED - cancelled")
+                logger.warning(
+                    "TTS: TextFrame DROPPED while _cancelled=True (no audio for this chunk). "
+                    "preview=%r — if UI still streamed text, check interrupt_tts race or welcome cancel.",
+                    (frame.text or "")[:120],
+                )
                 # Don't process, don't accumulate, just drop it
                 return
             
@@ -573,8 +601,27 @@ class KokoroTTSService(TTSService):
                     
                     # CRITICAL: Prevent duplicate processing of the same sentence
                     normalized_sentence = sentence.strip().lower()
+                    emit_count = self._sentence_emit_counts.get(normalized_sentence, 0) + 1
+                    self._sentence_emit_counts[normalized_sentence] = emit_count
+                    if emit_count > 1:
+                        logger.warning(
+                            "TTS DUPLICATE DETECT: response_id=%s sentence_count=%d sentence=%r",
+                            self._response_debug_id,
+                            emit_count,
+                            sentence[:120],
+                        )
+                    else:
+                        logger.info(
+                            "TTS SENTENCE EMIT: response_id=%s sentence=%r",
+                            self._response_debug_id,
+                            sentence[:120],
+                        )
                     if normalized_sentence in self._processed_sentences:
-                        logger.warning(f"TTS: Skipping duplicate sentence: '{sentence[:50]}...' (already processed)")
+                        logger.warning(
+                            "TTS: Skipping duplicate sentence (response_id=%s): '%s...' (already processed)",
+                            self._response_debug_id,
+                            sentence[:50],
+                        )
                         continue
                     
                     # Only skip when current is SUBSET of processed (redundant). Do NOT skip when
@@ -635,10 +682,17 @@ class KokoroTTSService(TTSService):
                     # Check on current thread AND check all threads (in case we're on a different thread)
                     # Also store it in instance variable so it persists for the entire TTS session
                     import threading
-                    has_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
+                    force_desktop_tts = bool(
+                        getattr(threading.current_thread(), 'force_desktop_tts', False)
+                        or getattr(self, '_force_desktop_tts', False)
+                    )
+                    has_telegram_request = (
+                        hasattr(threading.current_thread(), 'telegram_request')
+                        and threading.current_thread().telegram_request
+                    )
                     
                     # If not found on current thread, check all threads (for thread pool scenarios)
-                    if not has_telegram_request:
+                    if (not force_desktop_tts) and (not has_telegram_request):
                         import threading as threading_module
                         for thread in threading_module.enumerate():
                             if hasattr(thread, 'telegram_request') and thread.telegram_request:
@@ -652,12 +706,16 @@ class KokoroTTSService(TTSService):
                                 break
                     
                     # Use instance variable if available (persists across the TTS session)
-                    if hasattr(self, '_current_telegram_request') and self._current_telegram_request:
+                    if (not force_desktop_tts) and hasattr(self, '_current_telegram_request') and self._current_telegram_request:
                         has_telegram_request = True
                     
                     # Store for future use in this TTS session
                     if has_telegram_request:
                         self._current_telegram_request = True
+                    if force_desktop_tts:
+                        has_telegram_request = False
+                        self._current_telegram_request = False
+                        logger.debug("TTS: force_desktop_tts=True, bypassing telegram-only mode")
                     
                     if has_telegram_request:
                         logger.debug("TTS: Telegram request - generating audio for Telegram only")
@@ -739,6 +797,10 @@ class KokoroTTSService(TTSService):
         if isinstance(frame, LLMFullResponseStartFrame):
             logger.debug("TTS: LLMFullResponseStartFrame - resetting TTS state for new response")
             self._in_response_after_start = True  # So we ignore stale CancelFrames until EndFrame
+            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
+            self._response_debug_id = f"{int(self._llm_response_started_at * 1000)}"
+            self._sentence_emit_counts.clear()
+            logger.info("TTS RESPONSE START: response_id=%s", self._response_debug_id)
             # Reset session text tracking for new response
             self._session_text = ""
             self._text_buffer = ""
@@ -774,6 +836,14 @@ class KokoroTTSService(TTSService):
             
         elif isinstance(frame, LLMFullResponseEndFrame):
             self._in_response_after_start = False  # Allow CancelFrame to apply again for next interrupt
+            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
+            duplicate_sentences = sum(1 for count in self._sentence_emit_counts.values() if count > 1)
+            logger.info(
+                "TTS RESPONSE END: response_id=%s unique_sentences=%d duplicate_sentences=%d",
+                self._response_debug_id,
+                len(self._sentence_emit_counts),
+                duplicate_sentences,
+            )
             logger.debug(f"TTS: LLMFullResponseEndFrame received - buffer: '{self._text_buffer[:50] if self._text_buffer else 'empty'}...', session_text: '{self._session_text[:50] if self._session_text else 'empty'}...' (len={len(self._session_text) if self._session_text else 0})")
             # Process any remaining text
             if self._text_buffer.strip() and not self._cancelled:
@@ -797,14 +867,18 @@ class KokoroTTSService(TTSService):
                     
                     # CRITICAL: Check if this is a Telegram request - if so, don't push audio frames to desktop
                     import threading
+                    force_desktop_tts = bool(
+                        getattr(threading.current_thread(), 'force_desktop_tts', False)
+                        or getattr(self, '_force_desktop_tts', False)
+                    )
                     has_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
                     
                     # Use instance variable if available (persists across the TTS session)
-                    if hasattr(self, '_current_telegram_request') and self._current_telegram_request:
+                    if (not force_desktop_tts) and hasattr(self, '_current_telegram_request') and self._current_telegram_request:
                         has_telegram_request = True
                     
                     # If not found on current thread or instance, check all threads (for thread pool scenarios)
-                    if not has_telegram_request:
+                    if (not force_desktop_tts) and (not has_telegram_request):
                         import threading as threading_module
                         for thread in threading_module.enumerate():
                             if hasattr(thread, 'telegram_request') and thread.telegram_request:
@@ -814,6 +888,10 @@ class KokoroTTSService(TTSService):
                                 self._current_telegram_request = True
                                 logger.debug(f"TTS: Found telegram_request=True on thread '{thread.name}' (remaining text) - stored")
                                 break
+                    if force_desktop_tts:
+                        has_telegram_request = False
+                        self._current_telegram_request = False
+                        logger.debug("TTS: force_desktop_tts=True for remaining text, bypassing telegram-only mode")
                     
                     audio_frame_count = 0
                     frame_count = 0
@@ -880,19 +958,25 @@ class KokoroTTSService(TTSService):
             if self._tts_session_active:
                 # Check if this is a Telegram request - if so, don't emit tts_stopped
                 import threading
+                force_desktop_tts = bool(
+                    getattr(threading.current_thread(), 'force_desktop_tts', False)
+                    or getattr(self, '_force_desktop_tts', False)
+                )
                 has_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
                 
                 # Also check instance variable
-                if hasattr(self, '_current_telegram_request') and self._current_telegram_request:
+                if (not force_desktop_tts) and hasattr(self, '_current_telegram_request') and self._current_telegram_request:
                     has_telegram_request = True
                 
                 # If not found on current thread, check all threads
-                if not has_telegram_request:
+                if (not force_desktop_tts) and (not has_telegram_request):
                     import threading as threading_module
                     for thread in threading_module.enumerate():
                         if hasattr(thread, 'telegram_request') and thread.telegram_request:
                             has_telegram_request = True
                             break
+                if force_desktop_tts:
+                    has_telegram_request = False
                 
                 total_duration = self._total_audio_duration
                 self._tts_session_active = False

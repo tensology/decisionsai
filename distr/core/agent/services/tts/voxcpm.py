@@ -10,6 +10,7 @@ Install: pip install voxcpm
 import asyncio
 import logging
 import re
+import time
 import numpy as np
 import os
 import platform
@@ -113,6 +114,7 @@ class VoxCPMTTSService(TTSService):
         self._total_audio_duration = 0.0
         self._tts_started_emitted = False
         self._in_response_after_start = False
+        self._llm_response_started_at = 0  # Timestamp of last LLMFullResponseStartFrame; used to ignore stale InterruptionFrames
         self._processed_sentences = set()
         self._session_text = ""
         self._current_telegram_request = False
@@ -300,6 +302,7 @@ class VoxCPMTTSService(TTSService):
             self._text_buffer = ""
             self._cancelled = False
             self._in_response_after_start = True
+            self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
 
         elif isinstance(frame, TextFrame):
             if self._cancelled:
@@ -313,6 +316,7 @@ class VoxCPMTTSService(TTSService):
             self._text_buffer = ""
             self._tts_session_active = False
             self._in_response_after_start = False
+            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
 
             if full_text and not self._cancelled:
                 async for audio_frame in self.run_tts(full_text):
@@ -325,6 +329,15 @@ class VoxCPMTTSService(TTSService):
                     pass
 
         elif isinstance(frame, (CancelFrame, InterruptionFrame)):
+            # Guard: ignore stale CancelFrame/InterruptionFrame that arrive after current response started
+            now = time.monotonic()
+            if self._llm_response_started_at > 0 and (now - self._llm_response_started_at) < 0.3:
+                logger.debug(
+                    "VoxCPM TTS: Ignoring stale %s (%.0fms since LLMFullResponseStartFrame)",
+                    type(frame).__name__,
+                    (now - self._llm_response_started_at) * 1000,
+                )
+                return
             if self._in_response_after_start and isinstance(frame, CancelFrame):
                 return
             self._cancelled = True

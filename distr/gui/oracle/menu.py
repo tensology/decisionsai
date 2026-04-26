@@ -148,7 +148,8 @@ class MenuTrayMixin:
         self.menu.addAction(self.restart_action)
 
         self.exit_action = QAction("Quit", self.menu)
-        self.exit_action.triggered.connect(self.exit_app)
+        # QAction.triggered emits (checked: bool); do not pass it to exit_app(confirm=...)
+        self.exit_action.triggered.connect(lambda: self.exit_app())
         self.menu.addAction(self.exit_action)
 
         # Connect the aboutToShow signal to update the menu

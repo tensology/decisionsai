@@ -6,6 +6,7 @@ import sys
 import os
 import json
 from contextlib import contextmanager
+from typing import Optional
 
 from distr.core.agent.libs import (
     PIPECAT_AVAILABLE,
@@ -421,6 +422,73 @@ class VoskSTTService(BaseSTTService):
             yield ErrorFrame(error=str(e))
         finally:
             self.recognizer = None
+
+    def transcribe_file(self, audio_file_path: str) -> Optional[str]:
+        """Transcribe an audio file using the already-loaded Vosk model.
+
+        Remote-control voice transcription routes through this path via the
+        shared ``transcribe_file`` command so it uses the same active STT
+        provider as the running Pipecat session.
+        """
+        try:
+            import soundfile as sf
+        except ImportError:
+            logger.error("VoskSTTService: soundfile is required for file transcription")
+            return None
+
+        try:
+            logger.info("VoskSTTService: Transcribing file %s", audio_file_path)
+            data, sample_rate = sf.read(audio_file_path)
+
+            # Convert stereo/multi-channel audio to mono.
+            if hasattr(data, "ndim") and data.ndim > 1:
+                data = np.mean(data, axis=1)
+
+            # Resample to 16kHz for Vosk if needed.
+            if sample_rate != 16000:
+                try:
+                    from scipy import signal
+                    target_samples = int(len(data) * 16000 / sample_rate)
+                    data = signal.resample(data, target_samples)
+                    sample_rate = 16000
+                except Exception as e:
+                    logger.error("VoskSTTService: Failed to resample audio: %s", e, exc_info=True)
+                    return None
+
+            # Convert float/int samples to 16-bit PCM bytes expected by Vosk.
+            if data.dtype != np.float32:
+                data = data.astype(np.float32)
+            data = np.clip(data, -1.0, 1.0)
+            pcm = (data * 32767.0).astype(np.int16).tobytes()
+
+            recognizer = vosk.KaldiRecognizer(self.model, 16000)
+            recognizer.SetWords(True)
+
+            chunk_size = 4000
+            text_parts = []
+            for i in range(0, len(pcm), chunk_size):
+                chunk = pcm[i:i + chunk_size]
+                if recognizer.AcceptWaveform(chunk):
+                    result = json.loads(recognizer.Result())
+                    text = (result.get("text") or "").strip()
+                    if text:
+                        text_parts.append(text)
+
+            final_result = json.loads(recognizer.FinalResult())
+            final_text = (final_result.get("text") or "").strip()
+            if final_text:
+                text_parts.append(final_text)
+
+            transcript = " ".join(text_parts).strip()
+            logger.info(
+                "VoskSTTService: File transcription complete (%d chars)",
+                len(transcript) if transcript else 0,
+            )
+            return transcript or None
+
+        except Exception as e:
+            logger.error("VoskSTTService: Error transcribing file: %s", e, exc_info=True)
+            return None
 
     async def process_frame(self, frame, direction):
         """Process frames from the transport - same logic as WhisperSTTService"""

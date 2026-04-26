@@ -40,6 +40,7 @@ from distr.core.agent.tools.vision.vision_api import (  # noqa: F401
     call_openai_vision,
     resolve_vision_llm_config,
 )
+from distr.core.agent.services.vision.action_mode import resolve_execute_action
 
 logger = logging.getLogger(__name__)
 
@@ -53,6 +54,7 @@ class ScreenshotAnalyzerInput(BaseModel):
     prompt: str = Field(description="The question or instruction about what to analyze in the screenshot")
     region: Optional[str] = Field(default=None, description="Optional: 'full', 'window', 'selection', or 'all'.")
     capture_only: Optional[bool] = Field(default=None, description="If True, capture screenshot and return file path only — skip vision LLM analysis. Use when the screenshot file is needed as input to other tools (save to folder, attach to ticket, send to pi, etc.).")
+    execute_action: Optional[bool] = Field(default=None, description="If False, locate and return coordinates only without moving/clicking.")
 
 
 # ---------------------------------------------------------------------------
@@ -240,6 +242,33 @@ def _intent_to_action(intent) -> str:
         VisionIntent.LOCATE_ICON: "click",
     }
     return _map.get(intent, "click")
+
+
+def _split_pointer_targets(text: str) -> list[str]:
+    """
+    Split multi-target pointer commands into sequential single-target commands.
+
+    Example:
+      "move my mouse to X then move my mouse to Y"
+      -> ["move my mouse to X", "move my mouse to Y"]
+    """
+    if not text:
+        return []
+    lowered = text.lower()
+    if " then " not in lowered:
+        return []
+    if not re.search(r"\b(move|hover|click|tap|press)\b", lowered):
+        return []
+    # Split on natural sequence words while preserving segment text.
+    parts = [p.strip(" ,.") for p in re.split(r"\b(?:and then|then)\b", text, flags=re.IGNORECASE) if p.strip(" ,.")]
+    if len(parts) < 2:
+        return []
+    # Only keep parts that still look like pointer target commands.
+    pointer_parts = []
+    for p in parts:
+        if re.search(r"\b(move|hover|click|tap|press)\b", p, flags=re.IGNORECASE) and re.search(r"\bto\b", p, flags=re.IGNORECASE):
+            pointer_parts.append(p)
+    return pointer_parts if len(pointer_parts) >= 2 else []
 
 
 # ---------------------------------------------------------------------------
@@ -642,6 +671,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         prompt: str,
         captured_screen_number: Optional[int],
         screenshot_to_screen_map: dict[str, int],
+        execute_action: bool = True,
     ) -> Optional[str]:
         """
         Try element detection + OCR before falling back to the vision LLM.
@@ -659,7 +689,9 @@ class ScreenshotAnalyzerTool(BaseTool):
 
         def _apply_offset(raw_x: int, raw_y: int, scr: int):
             from distr.core.agent.tools.input.mouse_utils import smooth_move_to
-            ox, oy, scale = 0, 0, 1.0
+            ox, oy = 0, 0
+            logical_w, logical_h = 0, 0
+            image_w, image_h = 0, 0
             try:
                 from distr.core import screen_utils
                 cache = getattr(screen_utils, "_screen_info_cache", None) or {}
@@ -668,13 +700,31 @@ class ScreenshotAnalyzerTool(BaseTool):
                     info = sl[scr - 1]
                     geo = info.get("geometry", {})
                     ox, oy = geo.get("x", 0), geo.get("y", 0)
-                    scale = info.get("scale_factor", 1.0) or 1.0
+                    logical_w = int(geo.get("width", 0) or 0)
+                    logical_h = int(geo.get("height", 0) or 0)
             except Exception:
                 pass
-            lx, ly = int(raw_x / scale), int(raw_y / scale)
+            try:
+                from PIL import Image
+                with Image.open(screenshot_paths[0]) as im:
+                    image_w, image_h = im.size
+            except Exception:
+                pass
+
+            # Map image-space coordinates to screen logical coordinates.
+            # This is more reliable than dividing by scale_factor only, because
+            # screenshots may be resized before detection.
+            if logical_w > 0 and logical_h > 0 and image_w > 0 and image_h > 0:
+                sx = float(logical_w) / float(image_w)
+                sy = float(logical_h) / float(image_h)
+                lx, ly = int(raw_x * sx), int(raw_y * sy)
+            else:
+                lx, ly = int(raw_x), int(raw_y)
             ax, ay = lx + ox, ly + oy
-            logger.info("_apply_offset raw=(%d,%d) scale=%.1f logical=(%d,%d) offset=(%d,%d) final=(%d,%d)",
-                        raw_x, raw_y, scale, lx, ly, ox, oy, ax, ay)
+            logger.info(
+                "_apply_offset raw=(%d,%d) image=(%d,%d) logical=(%d,%d) mapped=(%d,%d) offset=(%d,%d) final=(%d,%d)",
+                raw_x, raw_y, image_w, image_h, logical_w, logical_h, lx, ly, ox, oy, ax, ay
+            )
             smooth_move_to(ax, ay)
             return ax, ay
 
@@ -728,7 +778,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 "description": f"Found {element_match.get('kind', 'element')} ({element_match.get('region', '')}) via element detection",
                 "summary": f"Located at ({element_match['x']}, {element_match['y']})",
             }
-            if vision_intent in ACTION_INTENTS and pyautogui:
+            if execute_action and vision_intent in ACTION_INTENTS and pyautogui:
                 try:
                     _apply_offset(element_match["x"], element_match["y"], screen_num)
                 except Exception:
@@ -754,7 +804,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 "description": f"Found '{loc['matched_text']}' via OCR",
                 "summary": f"Located '{loc['matched_text']}' at ({loc['x']}, {loc['y']})",
             }
-            if vision_intent in ACTION_INTENTS and pyautogui:
+            if execute_action and vision_intent in ACTION_INTENTS and pyautogui:
                 try:
                     _apply_offset(loc["x"], loc["y"], screen_num)
                 except Exception:
@@ -791,6 +841,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         vision_provider: str,
         vision_model: str,
         vision_intent=None,
+        execute_action: bool = True,
     ) -> str:
         """Convert screenshots to base64, call the vision API, and process the result."""
         vision_provider_key = (vision_provider or "").strip().lower()
@@ -862,10 +913,24 @@ class ScreenshotAnalyzerTool(BaseTool):
             return self._process_vision_result(
                 vision_result, is_action_request, capture_region,
                 captured_screen_number, should_send_raw, vision_intent,
+                execute_action=execute_action,
             )
         except Exception as e:
             logger.error(f"Vision processing error: {e}", exc_info=True)
             return f"Error processing screenshots: {e}"
+
+    @staticmethod
+    def _is_retriable_vision_error(error_text: str) -> bool:
+        """Return True when a vision-provider error should trigger fallback."""
+        text = (error_text or "").lower()
+        if not text:
+            return False
+        retry_markers = (
+            "rate limit", "429", "quota", "insufficient", "credit", "billing",
+            "timeout", "timed out", "connection", "network", "temporarily",
+            "overloaded", "503", "502", "500", "unavailable", "capacity",
+        )
+        return any(marker in text for marker in retry_markers)
 
 
     # ------------------------------------------------------------------
@@ -1045,6 +1110,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         captured_screen_number: Optional[int],
         should_send_raw: bool,
         vision_intent=None,
+        execute_action: bool = True,
     ) -> str:
         """Parse the vision LLM response and execute actions (mouse move, click, etc.) if needed."""
         from distr.core.agent.services.vision.intent_classifier import VisionIntent, ACTION_INTENTS
@@ -1082,6 +1148,15 @@ class ScreenshotAnalyzerTool(BaseTool):
             # Target not found
             if result_type == 'target_not_found':
                 summary = result_data.get('summary', 'The requested element is not visible.')
+                try:
+                    from distr.core.agent.services.computer_use_context import record_candidate_target
+                    record_candidate_target(
+                        source="screenshot_analyzer",
+                        status="not_found",
+                        description=summary,
+                    )
+                except Exception:
+                    pass
                 result = (
                     f"TARGET NOT FOUND: {summary}\n\n"
                     "[ACTION REQUIRED] Do NOT call mouse_movement to move to screen center. "
@@ -1099,9 +1174,31 @@ class ScreenshotAnalyzerTool(BaseTool):
             # Action with coordinates — move mouse / click / etc.
             elif result_type == 'action' and 'x' in result_data and 'y' in result_data:
                 action = result_data.get('action', 'click')
-                result = self._execute_mouse_move(result_data, capture_region, captured_screen_number)
+                raw_x, raw_y = int(result_data['x']), int(result_data['y'])
+                screen = result_data.get('screen', captured_screen_number or 1)
+                desc = result_data.get('description', 'target location')
+                try:
+                    from distr.core.agent.services.computer_use_context import record_candidate_target
+                    record_candidate_target(
+                        source="screenshot_analyzer",
+                        x=raw_x,
+                        y=raw_y,
+                        screen=int(screen) if screen else 1,
+                        description=desc,
+                        status="found",
+                    )
+                except Exception:
+                    pass
+
+                if execute_action:
+                    result = self._execute_mouse_move(result_data, capture_region, captured_screen_number)
+                else:
+                    result = (
+                        f"Located {desc} at coordinates ({raw_x}, {raw_y}) on screen {int(screen)}. "
+                        "No action executed because execute_action is false."
+                    )
                 # Execute the specific action after moving
-                if vision_intent in ACTION_INTENTS and pyautogui:
+                if execute_action and vision_intent in ACTION_INTENTS and pyautogui:
                     try:
                         if action == 'double_click':
                             pyautogui.doubleClick()
@@ -1118,6 +1215,17 @@ class ScreenshotAnalyzerTool(BaseTool):
                             result += f"\nScrolled {'down' if clicks < 0 else 'up'}"
                     except Exception as e:
                         logger.warning("Post-move action '%s' failed: %s", action, e)
+
+                # Always append a structured pointer payload for traceability.
+                pointer_payload = {
+                    "target": desc,
+                    "action": action,
+                    "raw_x": raw_x,
+                    "raw_y": raw_y,
+                    "screen": int(screen) if screen else 1,
+                    "executed": bool(execute_action),
+                }
+                result += f"\nPOINTER_RESULT: {json.dumps(pointer_payload, ensure_ascii=True)}"
 
             # Informational reports (error, notification, state, count, app, comparison, multi-screen)
             elif result_type in ('error_report', 'notification_report', 'state_report',
@@ -1419,33 +1527,56 @@ class ScreenshotAnalyzerTool(BaseTool):
             if screen < 1:
                 screen = 1
 
-            # Apply Retina scaling AND screen offset from the shared screen cache.
-            # NOTE: We use the cache (populated by the main GUI process) because the
-            # agent runs in a QCoreApplication subprocess where QScreen is unavailable.
-            ox, oy, scale_factor = 0, 0, 1.0
+            # Apply screen offset from the shared cache (main process) and map
+            # coordinates into logical screen space if screenshot-space dimensions
+            # are provided by the model result.
+            ox, oy = 0, 0
+            logical_w, logical_h = 0, 0
             try:
                 from distr.core import screen_utils as _su
                 _cache = getattr(_su, "_screen_info_cache", None) or {}
                 _sl = _cache.get("screens", [])
                 if _sl and 1 <= screen <= len(_sl):
                     info = _sl[screen - 1]
-                    scale_factor = info.get("scale_factor", 1.0) or 1.0
                     geo = info.get("geometry", {})
                     ox, oy = geo.get("x", 0), geo.get("y", 0)
+                    logical_w = int(geo.get("width", 0) or 0)
+                    logical_h = int(geo.get("height", 0) or 0)
             except Exception:
                 pass
 
-            if scale_factor > 1.0:
-                x, y = int(x / scale_factor), int(y / scale_factor)
+            image_w = int(result_data.get("image_width", 0) or 0)
+            image_h = int(result_data.get("image_height", 0) or 0)
+            if logical_w > 0 and logical_h > 0 and image_w > 0 and image_h > 0:
+                sx = float(logical_w) / float(image_w)
+                sy = float(logical_h) / float(image_h)
+                x, y = int(x * sx), int(y * sy)
             x += ox
             y += oy
 
-            logger.info("_execute_mouse_move: raw=(%d,%d) scale=%.1f offset=(%d,%d) final=(%d,%d) screen=%d",
-                        int(result_data['x']), int(result_data['y']), scale_factor, ox, oy, x, y, screen)
+            logger.info(
+                "_execute_mouse_move: raw=(%d,%d) image=(%d,%d) logical=(%d,%d) offset=(%d,%d) final=(%d,%d) screen=%d",
+                int(result_data['x']), int(result_data['y']), image_w, image_h, logical_w, logical_h, ox, oy, x, y, screen
+            )
 
             from distr.core.agent.tools.input.mouse_utils import smooth_move_to
             smooth_move_to(x, y)
             desc = result_data.get('description', 'target location')
+            try:
+                from distr.core.agent.services.computer_use_context import record_action
+                record_action(
+                    "move_mouse",
+                    "success",
+                    {
+                        "x": x,
+                        "y": y,
+                        "screen": screen,
+                        "description": desc,
+                        "source": "screenshot_analyzer",
+                    },
+                )
+            except Exception:
+                pass
             return f"Moved mouse to {desc} at coordinates ({x}, {y}) on screen {screen}"
 
         except ImportError:
@@ -1488,7 +1619,17 @@ class ScreenshotAnalyzerTool(BaseTool):
             )
             combined_text = (f"{_early_text} {prompt or ''}").lower()
             if any(p in combined_text for p in CAPTURE_ONLY_PATTERNS):
-                capture_only = True
+                # Guard: don't enter capture-only mode for action-oriented requests.
+                # Example: "find X on my screen and move my mouse there" contains
+                # "and move" but should still run full vision locate + action.
+                has_action_intent = any(k in combined_text for k in _ACTION_KEYWORDS)
+                if has_action_intent:
+                    logger.info(
+                        "📸 Capture-only pattern matched, but action intent detected; "
+                        "continuing with full vision analysis"
+                    )
+                else:
+                    capture_only = True
 
         # ── Capture-only mode: capture + return file path artifact ──
         if capture_only:
@@ -1509,6 +1650,24 @@ class ScreenshotAnalyzerTool(BaseTool):
             kwargs.get('transcription', '') or
             kwargs.get('original_text', '')
         )
+        # Multi-target pointer sequencing:
+        # "move to A then move to B" should execute deterministically in order.
+        if not kwargs.get("_is_pointer_substep", False):
+            pointer_steps = _split_pointer_targets(original_text or prompt or "")
+            if pointer_steps:
+                logger.info("ScreenshotAnalyzer: split multi-target pointer request into %d steps", len(pointer_steps))
+                step_results = []
+                for idx, step in enumerate(pointer_steps, start=1):
+                    sub_result = self._run(
+                        prompt=step,
+                        region=region,
+                        last_user_message=step,
+                        original_text=step,
+                        execute_action=kwargs.get("execute_action", True),
+                        _is_pointer_substep=True,
+                    )
+                    step_results.append(f"Step {idx}: {sub_result}")
+                return "\n".join(step_results)
         original_text_for_pattern = original_text
         prompt = _extract_prompt(prompt, original_text)
 
@@ -1528,6 +1687,26 @@ class ScreenshotAnalyzerTool(BaseTool):
             or vision_intent in LOCATE_INTENTS
             or any(kw in text_lower for kw in _ACTION_KEYWORDS)
         )
+        execute_action = resolve_execute_action(
+            kwargs.get('execute_action'),
+            vision_intent,
+            LOCATE_INTENTS,
+        )
+        # If the user explicitly asked to physically move/click/hover, force action
+        # execution even when intent classifier lands on a locate-style intent.
+        explicit_pointer_action = bool(re.search(
+            r"\b(move|hover|click|double[- ]?click|right[- ]?click|tap|press)\b",
+            text_lower,
+            re.IGNORECASE,
+        ))
+        if explicit_pointer_action and not execute_action:
+            execute_action = True
+            logger.info("ScreenshotAnalyzer: forcing execute_action=True from explicit pointer-action text")
+        logger.info(
+            "ScreenshotAnalyzer execute_action=%s (intent=%s)",
+            execute_action,
+            getattr(vision_intent, "value", str(vision_intent)),
+        )
 
         # ── Resolve capture region ──
         screen_number = _extract_screen_number(text_lower)
@@ -1545,18 +1724,21 @@ class ScreenshotAnalyzerTool(BaseTool):
         from distr.core.settings import load_settings_from_db
         from distr.core.llm_factory import resolve_computer_use_config
         settings = load_settings_from_db()
-        vision_provider, vision_model = resolve_vision_llm_config(settings)
+        default_vision_provider, default_vision_model = resolve_vision_llm_config(settings)
+        vision_provider, vision_model = default_vision_provider, default_vision_model
 
         # For action/locate intents, prefer computer_use model if configured
         # (better at coordinate-finding), then fall back to vision LLM.
         from distr.core.agent.services.vision.intent_classifier import LOCATE_INTENTS
+        using_computer_use_primary = False
         if is_action_request or vision_intent in LOCATE_INTENTS:
             cu_provider, cu_model = resolve_computer_use_config(settings)
             if cu_provider and cu_model:
+                using_computer_use_primary = True
                 logger.info(
                     "ScreenshotAnalyzer: Action/locate intent — using computer_use "
                     "model %s/%s instead of vision %s/%s",
-                    cu_provider, cu_model, vision_provider, vision_model,
+                    cu_provider, cu_model, default_vision_provider, default_vision_model,
                 )
                 vision_provider, vision_model = cu_provider, cu_model
 
@@ -1644,6 +1826,7 @@ class ScreenshotAnalyzerTool(BaseTool):
             fast_result = self._try_fast_locate(
                 vision_intent, screenshot_paths, original_text, prompt,
                 captured_screen_number, screenshot_to_screen_map,
+                execute_action=bool(execute_action),
             )
             if fast_result is not None:
                 return fast_result
@@ -1654,8 +1837,26 @@ class ScreenshotAnalyzerTool(BaseTool):
                 sn = screenshot_to_screen_map.get(sp) or captured_screen_number or 1
                 image_screen_info.append(sn)
 
-            # ── Call vision LLM ──
-            return self._call_vision_llm(
+            try:
+                from distr.core.agent.services.computer_use_context import record_observation
+                record_observation(
+                    source="screenshot_analyzer",
+                    details={
+                        "capture_region": capture_region,
+                        "screenshot_count": len(screenshot_paths),
+                        "screen_numbers": image_screen_info,
+                        "provider": vision_provider,
+                        "model": vision_model,
+                        "is_action_request": is_action_request,
+                        "execute_action": bool(execute_action),
+                        "prompt": (prompt or "")[:500],
+                    },
+                )
+            except Exception:
+                pass
+
+            # ── Call vision LLM (primary path) ──
+            primary_result = self._call_vision_llm(
                 screenshot_paths=screenshot_paths,
                 prompt=prompt,
                 original_text=original_text,
@@ -1668,7 +1869,48 @@ class ScreenshotAnalyzerTool(BaseTool):
                 vision_provider=vision_provider,
                 vision_model=vision_model,
                 vision_intent=vision_intent,
+                execute_action=bool(execute_action),
             )
+            if not (isinstance(primary_result, str) and primary_result.startswith("Error:")):
+                return primary_result
+
+            # Fallback strategy: for actionable requests, if Computer Use fails due to
+            # provider/model limits (quota, rate limit, timeout, outage), retry with
+            # the standard vision model automatically.
+            if (
+                using_computer_use_primary
+                and (default_vision_provider or "").strip()
+                and (default_vision_model or "").strip()
+                and self._is_retriable_vision_error(primary_result)
+            ):
+                logger.warning(
+                    "ScreenshotAnalyzer: computer_use failed (%s). Falling back to vision %s/%s",
+                    primary_result[:180],
+                    default_vision_provider,
+                    default_vision_model,
+                )
+                fallback_result = self._call_vision_llm(
+                    screenshot_paths=screenshot_paths,
+                    prompt=prompt,
+                    original_text=original_text,
+                    is_action_request=is_action_request,
+                    capture_region=capture_region,
+                    captured_screen_number=captured_screen_number,
+                    screenshot_to_screen_map=screenshot_to_screen_map,
+                    image_screen_info=image_screen_info,
+                    should_send_raw=should_send_raw,
+                    vision_provider=default_vision_provider,
+                    vision_model=default_vision_model,
+                    vision_intent=vision_intent,
+                    execute_action=bool(execute_action),
+                )
+                if not (isinstance(fallback_result, str) and fallback_result.startswith("Error:")):
+                    return fallback_result
+                return (
+                    f"{primary_result}\n\nFallback with vision model also failed:\n{fallback_result}"
+                )
+
+            return primary_result
 
         except Exception as e:
             logger.error(f"ScreenshotAnalyzer error: {e}", exc_info=True)

@@ -244,6 +244,34 @@ textarea:focus-visible {
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
 }
 
+/* LLM settings: keep provider/model selectors aligned and equal-width across rows */
+.llms-row {
+    display: grid;
+    grid-template-columns: 5rem minmax(0, 1fr) 4rem minmax(0, 1fr);
+    align-items: center;
+    gap: 1rem;
+}
+
+.llms-row select {
+    width: 100%;
+    min-width: 0;
+}
+
+.llms-row > .flex-1 {
+    min-width: 0;
+}
+
+/* Model column: select grows; Ollama download button is fixed width — only the select shrinks */
+.llms-model-with-action {
+    min-width: 0;
+}
+
+.llms-model-with-action select {
+    flex: 1 1 0%;
+    min-width: 0;
+    width: auto;
+}
+
 .provider-row:last-child {
     border-bottom: none;
 }

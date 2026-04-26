@@ -49,6 +49,7 @@ class WhatsAppWebSocketManager(QObject):
     message_received = pyqtSignal(dict)
     connection_status_changed = pyqtSignal(bool, str)  # connected, status_text
     qr_code_received = pyqtSignal(str)  # QR code string for scanning
+    _open_socket_requested = pyqtSignal(str)
 
     @staticmethod
     def _extract_group_display_name(raw_data: dict, jid: str) -> str:
@@ -130,6 +131,9 @@ class WhatsAppWebSocketManager(QObject):
         self._log_dir.mkdir(parents=True, exist_ok=True)
         self._device_identity_path = Path.home() / ".decisionsai" / "device_identity.json"
         self._ws_auth_bundle: Optional[Dict[str, Any]] = None
+        self._connect_lock = threading.Lock()
+        self._connect_worker_running = False
+        self._open_socket_requested.connect(self._open_socket_on_main_thread)
 
     # ═════════════════════════════════════════════════════════════════════════
     # Connection Management
@@ -253,19 +257,46 @@ class WhatsAppWebSocketManager(QObject):
             logger.warning("WhatsApp: QWebSocket not available, cannot connect")
             return
 
+        with self._connect_lock:
+            if self._connect_worker_running:
+                logger.debug("WhatsApp: connect already in progress, skipping duplicate request")
+                return
+            self._connect_worker_running = True
+
+        t = threading.Thread(
+            target=self._connect_worker,
+            name="WhatsAppConnectWorker",
+            daemon=True,
+        )
+        t.start()
+
+    def _connect_worker(self):
+        """Resolve auth bundle off the UI thread, then request socket open on UI thread."""
+        try:
+            bundle = self._request_ws_auth_bundle()
+            ws_url = self.server_url
+            if bundle and bundle.get("ws_token"):
+                sep = "&" if "?" in ws_url else "?"
+                ws_url = f"{ws_url}{sep}ws_token={bundle.get('ws_token')}"
+            self._open_socket_requested.emit(ws_url)
+        finally:
+            with self._connect_lock:
+                self._connect_worker_running = False
+
+    @pyqtSlot(str)
+    def _open_socket_on_main_thread(self, ws_url: str):
+        """Open QWebSocket only from the QObject's owning thread."""
+        if self.socket is None:
+            return
+        if self._active_disconnect:
+            logger.debug("WhatsApp: skipping socket open while active disconnect is set")
+            return
         if self.socket.isValid():
             logger.info("WhatsApp: Closing existing connection before reconnecting")
             self._active_disconnect = True
             self.socket.close()
             self._active_disconnect = False
-
-        bundle = self._request_ws_auth_bundle()
-        ws_url = self.server_url
-        if bundle and bundle.get("ws_token"):
-            sep = "&" if "?" in ws_url else "?"
-            ws_url = f"{ws_url}{sep}ws_token={bundle.get('ws_token')}"
         logger.info(f"WhatsApp: Connecting to {ws_url.split('?')[0]}")
-        self._active_disconnect = False
         self.socket.open(QUrl(ws_url))
 
     def disconnect(self):
@@ -904,6 +935,22 @@ class WhatsAppWebSocketManager(QObject):
                         message_id=msg.get("message_id", "")
                     ).first()
                     if existing:
+                        # Keep synced rows enriched with relay metadata so UI can
+                        # resolve group display names from local DB without
+                        # requiring a live /chats lookup.
+                        if not (existing.raw_data or "").strip():
+                            try:
+                                existing.raw_data = json.dumps(msg, default=str)
+                            except Exception:
+                                pass
+                        if not (existing.sender_push_name or "").strip():
+                            existing.sender_push_name = msg.get("sender_push_name", "") or existing.sender_push_name
+                        if not (existing.chat_type or "").strip():
+                            existing.chat_type = msg.get("chat_type", "private") or existing.chat_type
+                        if not (existing.jid or "").strip():
+                            existing.jid = msg.get("jid", "") or existing.jid
+                        if not (existing.jid_phone or "").strip():
+                            existing.jid_phone = msg.get("jid_phone", "") or existing.jid_phone
                         if mark_processed and not (msg.get("media_type") and not (existing.media_local_path or "").strip()):
                             self._mark_relay_processed(msg.get("id"))
                         continue
@@ -934,6 +981,7 @@ class WhatsAppWebSocketManager(QObject):
                         media_file_length=msg.get("media_file_length"),
                         whatsapp_timestamp=msg.get("whatsapp_timestamp"),
                         from_me=msg.get("from_me", False),
+                        raw_data=json.dumps(msg, default=str),
                         processed=True,
                     )
                     session.add(row)

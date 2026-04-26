@@ -893,6 +893,54 @@ check_pi_agent() {
 
 check_pi_agent
 
+# Check EULA acceptance before boot
+check_eula_acceptance() {
+    local eula_state=""
+    eula_state=$("$VENV_DIR/bin/python" - <<'PY'
+from distr.core.utils import load_settings_from_db
+settings = load_settings_from_db() or {}
+print("1" if bool(settings.get("accepted_eula")) else "0")
+PY
+)
+
+    if [ "$eula_state" = "1" ]; then
+        echo -e "${GREEN}✓${NC} EULA already accepted"
+        return 0
+    fi
+
+    echo ""
+    echo -e "${YELLOW}EULA acceptance is required before DecisionsAI can start.${NC}"
+    echo -e "${YELLOW}Please review LICENSE.md in the project root if you have not read it yet.${NC}"
+    echo ""
+    printf "Do you agree to the EULA? (yes/no): "
+    read -r eula_answer
+    eula_answer=$(printf "%s" "$eula_answer" | tr '[:upper:]' '[:lower:]')
+
+    if [ "$eula_answer" = "yes" ] || [ "$eula_answer" = "y" ]; then
+        if "$VENV_DIR/bin/python" - <<'PY'
+from distr.core.utils import load_settings_from_db, save_settings_to_db
+settings = load_settings_from_db() or {}
+settings["accepted_eula"] = True
+save_settings_to_db(settings)
+print("EULA accepted and saved.")
+PY
+        then
+            echo -e "${GREEN}✓${NC} EULA accepted"
+            return 0
+        else
+            echo -e "${RED}Error: Could not save EULA acceptance. Aborting startup.${NC}"
+            return 1
+        fi
+    fi
+
+    echo -e "${YELLOW}EULA not accepted. Startup aborted.${NC}"
+    return 1
+}
+
+if ! check_eula_acceptance; then
+    exit 1
+fi
+
 # ── Start sidecar (machine control agent) ────────────────────────────────────
 SIDECAR_BIN="$SCRIPT_DIR/sidecar/dist/decisionsai-sidecar"
 SIDECAR_PID=""
@@ -931,7 +979,7 @@ start_sidecar
 
 # Run the application
 echo ""
-echo -e "${GREEN}Starting DecisionsAI...${NC}"
+echo -e "${GREEN}booting up now. Please wait for the agent to speak to you...${NC}"
 echo -e "${GREEN}YOU CAN NOW CLOSE THIS TERMINAL${NC}"
 # Filter macOS dylib duplicate class warnings from stderr (harmless noise from cv2/av FFmpeg conflict)
 "$VENV_DIR/bin/python" bin/start.py 2> >(grep -v "^objc\[" >&2)

@@ -20,74 +20,27 @@ import logging
 import dataclasses
 import threading
 import uuid
-from dataclasses import dataclass, field
+from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
 
-from PyQt6.QtCore import QTimer
+from PyQt6.QtCore import QObject, QTimer, pyqtSignal
 
 from distr.core.initiative.context import ContextAssembler
 from distr.core.initiative.draft_queue import DraftQueue, DraftEntry
+from distr.core.initiative.proposed_action import (
+    ProposedAction,
+    VALID_ACTION_TYPES,
+    deserialize,
+    parse_llm_response,
+    serialize,
+)
 
 logger = logging.getLogger("distr.core.initiative.service")
 
-VALID_ACTION_TYPES = {"suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"}
 
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ProposedAction:
-    action_type: str = "none"
-    description: str = "No description provided"
-    payload: dict = field(default_factory=dict)
-    draft: str = ""
-    telegram_message: str = ""
-    requires_confirmation: bool = False
-
-
-def serialize(action: ProposedAction) -> dict:
-    return dataclasses.asdict(action)
-
-
-def deserialize(data: dict) -> ProposedAction:
-    description = data.get("description", "No description provided")
-    if not description:
-        description = "No description provided"
-    return ProposedAction(
-        action_type=data.get("action_type", "none"),
-        description=description,
-        payload=data.get("payload") or {},
-        draft=data.get("draft") or "",
-        telegram_message=data.get("telegram_message") or "",
-        requires_confirmation=data.get("requires_confirmation", False),
-    )
-
-
-def parse_llm_response(raw: str) -> ProposedAction:
-    """Parse a JSON action proposal from the LLM response."""
-    text = raw.strip()
-    if text.startswith("```json"):
-        text = text[len("```json"):]
-    elif text.startswith("```"):
-        text = text[len("```"):]
-    if text.endswith("```"):
-        text = text[:-3]
-    text = text.strip()
-
-    try:
-        data = json.loads(text)
-    except (json.JSONDecodeError, ValueError):
-        logger.warning("parse_llm_response: failed to parse JSON from LLM response")
-        return ProposedAction(action_type="none")
-
-    action_type = data.get("action_type", "none")
-    if action_type not in VALID_ACTION_TYPES:
-        logger.warning("parse_llm_response: invalid action_type %r, defaulting to 'none'", action_type)
-        data["action_type"] = "none"
-
-    return deserialize(data)
+class _InitiativeQtBridge(QObject):
+    """Bridge signals so timer mutations always execute on Qt thread."""
+    reset_idle_timer_requested = pyqtSignal()
 
 
 # ---------------------------------------------------------------------------
@@ -136,6 +89,8 @@ class InitiativeService:
         self._idle_timer.timeout.connect(self._on_idle_timer_expired)
         self._schedule_timer = QTimer()
         self._schedule_timer.timeout.connect(self._on_schedule_tick)
+        self._qt_bridge = _InitiativeQtBridge()
+        self._qt_bridge.reset_idle_timer_requested.connect(self._reset_idle_timer_on_qt)
         self._cycle_lock = threading.Lock()
         self._cycle_running = False
         self._stopped = False
@@ -221,8 +176,14 @@ class InitiativeService:
     # ------------------------------------------------------------------
 
     def _reset_idle_timer(self, chat_id: int = 0) -> None:
+        # This method can be called from worker threads (initiative cycle),
+        # so marshal the timer mutation onto the Qt thread.
+        self._qt_bridge.reset_idle_timer_requested.emit()
+        logger.debug("InitiativeService: idle timer reset requested (chat_id=%s)", chat_id)
+
+    def _reset_idle_timer_on_qt(self) -> None:
         self._idle_timer.start(self.IDLE_TIMEOUT_MS)
-        logger.debug("InitiativeService: idle timer reset (chat_id=%s)", chat_id)
+        logger.debug("InitiativeService: idle timer reset (Qt thread)")
 
     def _on_idle_timer_expired(self) -> None:
         try:
@@ -474,7 +435,13 @@ class InitiativeService:
             "  description: what the action does (string)\n"
             "  payload: optional dict with details (e.g. board_id, lane, title for ticket board)\n"
             "  draft: optional text draft for the action\n"
-            "  telegram_message: optional notification text\n\n"
+            "  telegram_message: optional notification text\n"
+            "  suggested_tool: OPTIONAL. Only if action_type is suggestion or none. "
+            "If the user could resolve this by asking the main assistant to run one tool, set "
+            '{"name": "<tool>", "args": {}} using ONLY these names: '
+            "create_ticket, pi_agent, terminal_overview, list_workflows, get_workflow, "
+            "run_workflow, continue_workflow, cancel_workflow_run, find_skill, push_skill. "
+            "Otherwise omit suggested_tool.\n\n"
             "If nothing useful can be done, return {\"action_type\": \"none\"}."
         )
 
@@ -550,6 +517,10 @@ class InitiativeService:
     def _deliver_suggestion(self, action: ProposedAction, settings: dict) -> None:
         """Deliver a suggestion via chat and optionally Telegram."""
         msg = action.description
+        if action.suggested_tool and isinstance(action.suggested_tool, dict):
+            tn = action.suggested_tool.get("name", "")
+            if tn:
+                msg = f"{msg} (You can ask me to use the {tn} tool for this.)"
         self._log_to_chat(f"Suggestion: {msg}", settings)
         self._send_telegram_if_allowed(
             action.telegram_message or f"Suggestion: {msg}",

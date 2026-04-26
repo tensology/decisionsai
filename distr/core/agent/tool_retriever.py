@@ -18,6 +18,8 @@ and return all tools (checked at retrieval time, no restart needed).
 
 import logging
 import os
+
+from distr.core.agent.tool_telemetry import log_retrieval_summary
 import re
 import threading
 import time
@@ -300,6 +302,13 @@ class ToolRetriever:
         if tier == "micro":
             result = list(ALWAYS_ON_NAMES)
             logger.debug("Tool retrieval: query=%r tier=%s tools=%s", user_message[:100], tier, result)
+            log_retrieval_summary(
+                user_message_preview=user_message,
+                tier=tier,
+                tool_count=len(result),
+                tool_names_preview=result,
+                backend="micro_always_on",
+            )
             return result
 
         if k is None:
@@ -322,4 +331,11 @@ class ToolRetriever:
 
         logger.debug("Tool retrieval (%s): query=%r tier=%s tools=%s",
                       self._backend, user_message[:100], tier, result)
+        log_retrieval_summary(
+            user_message_preview=user_message,
+            tier=tier,
+            tool_count=len(result),
+            tool_names_preview=result,
+            backend=self._backend,
+        )
         return result

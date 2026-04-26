@@ -76,6 +76,13 @@ DEFAULT_SETTINGS = {
     # Telegram response format settings
     'telegram_text_only_override': False,
     'telegram_auto_match_mode': True,
+    'global_ptt_hotkey_enabled': True,
+    'global_ptt_hotkey_primary': 'option',
+    'global_ptt_hotkey_secondary': 'command',
+    'oracle_size_hotkey_decrease_modifier': 'option_command',
+    'oracle_size_hotkey_decrease_key': 'left_bracket',
+    'oracle_size_hotkey_increase_modifier': 'option_command',
+    'oracle_size_hotkey_increase_key': 'right_bracket',
 }
 
 def load_settings_from_db() -> Dict[str, Any]:

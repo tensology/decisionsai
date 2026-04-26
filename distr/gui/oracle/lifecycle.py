@@ -11,14 +11,28 @@ import sys
 
 from PyQt6 import QtCore, QtWidgets
 from PyQt6.QtCore import QTimer
+from PyQt6.QtGui import QIcon, QPixmap
 from PyQt6.QtWidgets import QApplication
 
+from distr.core.paths import ASSETS_DIR, ICONS_DIR
 from distr.core.signals import signal_manager
 
 logger = logging.getLogger(__name__)
 
 # Project root: lifecycle.py is at distr/gui/oracle/lifecycle.py → 3 levels up
 _PROJECT_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '../../..'))
+
+
+def _quit_confirmation_icon_path():
+    """Path to favicon for quit dialog; falls back to tray icon."""
+    for candidate in (
+        os.path.join(ASSETS_DIR, "icons", "favicon.png"),
+        os.path.join(ASSETS_DIR, "icons", "decisions.ico"),
+        os.path.join(ICONS_DIR, "tray.png"),
+    ):
+        if os.path.isfile(candidate):
+            return candidate
+    return None
 
 
 class LifecycleMixin:
@@ -76,12 +90,37 @@ class LifecycleMixin:
                 )
 
             logger.info("[RESTART] Spawned restart process, quitting in 500ms")
-            QTimer.singleShot(500, self.exit_app)
+            QTimer.singleShot(500, lambda: self.exit_app(confirm=False))
 
         except Exception as e:
             logger.error("[RESTART] Failed: %s", e, exc_info=True)
 
-    def exit_app(self):
+    def exit_app(self, confirm: bool = True):
+        if confirm:
+            msg = QtWidgets.QMessageBox(self)
+            msg.setWindowTitle("Quit")
+            msg.setText("Quit DecisionsAI?")
+            msg.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
+            icon_path = _quit_confirmation_icon_path()
+            if icon_path:
+                pm = QPixmap(icon_path)
+                if not pm.isNull():
+                    scaled = pm.scaled(
+                        48,
+                        48,
+                        QtCore.Qt.AspectRatioMode.KeepAspectRatio,
+                        QtCore.Qt.TransformationMode.SmoothTransformation,
+                    )
+                    msg.setIconPixmap(scaled)
+                    msg.setWindowIcon(QIcon(pm))
+            msg.setStandardButtons(
+                QtWidgets.QMessageBox.StandardButton.Yes
+                | QtWidgets.QMessageBox.StandardButton.No
+            )
+            msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+            if msg.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+                return
+
         self.reload_settings()
 
         # Hide the oracle window itself
@@ -96,6 +135,8 @@ class LifecycleMixin:
         # Hide all windows first
         if hasattr(self, 'player_window') and self.player_window:
             self.player_window.hide()
+        if hasattr(self, 'shutdown_global_ptt_hotkey'):
+            self.shutdown_global_ptt_hotkey()
         if hasattr(self, 'about_window') and self.about_window:
             self.about_window.hide()
         # Explicitly clean up any animation resources

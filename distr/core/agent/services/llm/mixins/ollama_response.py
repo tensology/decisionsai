@@ -306,9 +306,19 @@ class OllamaResponseMixin:
                 tool_calls[i] = {'function': {'name': 'find_skill', 'arguments': {'query': last_user_message}}}
                 continue
 
-            # 2. push_skill redirect
+            # 2. push_skill redirect (heuristic; main model should pass proper skill_id + instructions)
             if ('push' in user_lower or 'install' in user_lower or 'add' in user_lower) and is_skill:
-                tool_calls[i] = {'function': {'name': 'push_skill', 'arguments': {'skill_id': last_user_message}}}
+                tool_calls[i] = {
+                    'function': {
+                        'name': 'push_skill',
+                        'arguments': {
+                            'skill_id': last_user_message,
+                            'project_path': '.',
+                            'target': 'pi',
+                            'instructions': '',
+                        },
+                    }
+                }
                 continue
 
             # 3. hallucinated "findskill" / "usesnippet"
@@ -718,6 +728,14 @@ class OllamaResponseMixin:
         exec_called = any(tc.get('function', {}).get('name') in ('execute_code', 'file_operations') for tc in tool_calls)
         if exec_called:
             return None  # LLM will respond
+        # Action playback tools already emit direct TTS status updates from the
+        # playback service; avoid repeating the same short acknowledgements here.
+        action_tool_names = {'play_action', 'stop_action', 'pause_action', 'resume_action'}
+        if any(tc.get('function', {}).get('name') in action_tool_names for tc in tool_calls):
+            for result in tool_results:
+                result_str = (str(result) if result else "").strip().lower()
+                if result_str.startswith(("running action ", "action stopped", "paused", "resumed", "done")):
+                    return None
 
         # For all other tools: use the tool result as confirmation if it's meaningful.
         # Fall back to None (no text) only if there's truly nothing to say.

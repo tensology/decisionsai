@@ -75,22 +75,59 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
         if rtt is None:
             return
 
-        def _on_tool_requested(query: str) -> tuple:
-            from distr.core.agent.tools.loader import TOOL_REGISTRY, TOOL_DESCRIPTIONS, get_cached_tool
+        def _on_tool_requested(query: str) -> tuple[bool, str, bool]:
+            from distr.core.agent.tools.loader import (
+                TOOL_REGISTRY,
+                TOOL_DESCRIPTIONS,
+                _get_tool_class,
+                _tool_cache,
+            )
+            from distr.core.agent.tool_telemetry import log_request_tool_event
+
+            _mn = getattr(self, "_model_name", None)
+            qnorm = (query or "").strip()
+            qlow = qnorm.lower()
+
+            if not qnorm:
+                msg = "Provide a tool name or short description of the capability you need."
+                log_request_tool_event(
+                    query="",
+                    success=False,
+                    model_name=_mn,
+                    message=msg,
+                )
+                return (False, msg, False)
+
             try:
                 from thefuzz import fuzz
             except ImportError:
                 try:
                     from fuzzywuzzy import fuzz
                 except ImportError:
-                    return (False, "Fuzzy matching library not available.")
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=False,
+                        model_name=_mn,
+                        message="Fuzzy matching library not available.",
+                    )
+                    return (False, "Fuzzy matching library not available.", False)
+
+            if not TOOL_REGISTRY:
+                msg = "No tools are registered in this build."
+                log_request_tool_event(
+                    query=qnorm,
+                    success=False,
+                    model_name=_mn,
+                    message=msg,
+                )
+                return (False, msg, False)
 
             # Score against registry keys and description values
             scores: list[tuple[str, int]] = []
             for class_name in TOOL_REGISTRY:
-                name_score = fuzz.token_set_ratio(query.lower(), class_name.lower())
+                name_score = fuzz.token_set_ratio(qlow, class_name.lower())
                 desc = TOOL_DESCRIPTIONS.get(class_name, "")
-                desc_score = fuzz.token_set_ratio(query.lower(), desc.lower()) if desc else 0
+                desc_score = fuzz.token_set_ratio(qlow, desc.lower()) if desc else 0
                 best = max(name_score, desc_score)
                 scores.append((class_name, best))
 
@@ -98,27 +135,86 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
             if scores and scores[0][1] >= 75:
                 matched_class = scores[0][0]
-                # Find the cached tool instance by iterating the cache
-                from distr.core.agent.tools.loader import _tool_cache
+                best_score = scores[0][1]
+                # Resolve by imported class — avoids collisions on duplicate short __name__
                 matched_tool = None
-                for tool in _tool_cache.values():
-                    if type(tool).__name__ == matched_class:
-                        matched_tool = tool
-                        break
+                try:
+                    expected_cls = _get_tool_class(matched_class)
+                except Exception as exc:
+                    logger.debug(
+                        "request_tool: cannot import class %r: %s",
+                        matched_class,
+                        exc,
+                    )
+                    expected_cls = None
+                if expected_cls is not None:
+                    for tool in _tool_cache.values():
+                        if isinstance(tool, expected_cls):
+                            matched_tool = tool
+                            break
 
                 if matched_tool is None:
-                    return (False, f"Tool '{matched_class}' found in registry but not in cache.")
+                    msg = f"Tool '{matched_class}' found in registry but not in cache."
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=False,
+                        matched_registry_class=matched_class,
+                        fuzzy_score=best_score,
+                        top_candidates=[n for n, _ in scores[:5]],
+                        model_name=_mn,
+                        message=msg,
+                    )
+                    return (False, msg, False)
 
-                # Inject into session active set
-                if matched_tool.name not in self._tools_dict:
-                    self._tools.append(matched_tool)
-                    self._tools_dict[matched_tool.name] = matched_tool
+                # Already active — do not claim a fresh injection (misleading UX + telemetry)
+                if matched_tool.name in self._tools_dict:
+                    msg = (
+                        f"Tool '{matched_tool.name}' is already in your active set — "
+                        "you can call it directly."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        matched_registry_class=matched_class,
+                        injected_tool_name=matched_tool.name,
+                        fuzzy_score=best_score,
+                        model_name=_mn,
+                        injection_performed=False,
+                        message=msg,
+                    )
+                    return (True, msg, False)
 
-                return (True, f"Tool '{matched_tool.name}' is now available. Please retry your task.")
+                self._tools.append(matched_tool)
+                self._tools_dict[matched_tool.name] = matched_tool
+
+                log_request_tool_event(
+                    query=qnorm,
+                    success=True,
+                    matched_registry_class=matched_class,
+                    injected_tool_name=matched_tool.name,
+                    fuzzy_score=best_score,
+                    model_name=_mn,
+                    injection_performed=True,
+                    message=f"Tool '{matched_tool.name}' is now available.",
+                )
+                return (
+                    True,
+                    f"Tool '{matched_tool.name}' is now available. Please retry your task.",
+                    True,
+                )
 
             # No match — return top 5 candidates
             top_5 = [name for name, _ in scores[:5]]
-            return (False, f"Tool not found. Closest matches: {', '.join(top_5)}")
+            msg = f"Tool not found. Closest matches: {', '.join(top_5)}"
+            log_request_tool_event(
+                query=qnorm,
+                success=False,
+                fuzzy_score=scores[0][1] if scores else None,
+                top_candidates=top_5,
+                model_name=_mn,
+                message=msg,
+            )
+            return (False, msg, False)
 
         object.__setattr__(rtt, "_on_tool_requested", _on_tool_requested)
 
@@ -240,6 +336,8 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
         self.chat_manager.add_user_message(current_chat_id, text.strip())
         try:
             signal_manager.chat_message_added.emit(int(current_chat_id), "user", text.strip())
+            # Drop the web “live speech-to-text” preview row; the real user bubble follows via message_added.
+            self._notify_transcription_progress(int(current_chat_id), "", True, True)
         except Exception:
             pass
         return current_chat_id
@@ -498,6 +596,40 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 signal_manager.typing_indicator_changed.emit(False)
         except Exception as e:
             logger.warning("Error in _emit_interruption_cleanup: %s", e)
+
+    def _is_critical_tool_run_in_progress(self) -> bool:
+        """Return True when a tool run is actively executing and should not be interrupted."""
+        return bool(getattr(self, '_tool_execution_in_progress', False))
+
+    def _notify_transcription_progress(
+        self,
+        chat_id: int,
+        text: str,
+        done: bool = False,
+        clear_live_preview: bool = False,
+    ) -> None:
+        """Forward live STT / preview to the desktop app and web (agent runs in a subprocess).
+
+        Qt signals do not cross the agent boundary; event_queue is required for the web UI.
+        """
+        payload = {
+            'chat_id': int(chat_id),
+            'status_text': text or '',
+            'done': bool(done),
+            'clear_live_preview': bool(clear_live_preview),
+        }
+        if getattr(self, 'event_queue', None):
+            try:
+                self.event_queue.put(('transcription_progress', payload), block=False)
+            except Exception:
+                pass
+            return
+        try:
+            signal_manager.transcription_progress.emit(
+                int(chat_id), text or '', bool(done), bool(clear_live_preview),
+            )
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------ #
     #  Conversation summary (LLM call — used by FastActionMixin)          #
@@ -917,6 +1049,10 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             return
 
         if isinstance(frame, CancelFrame):
+            if self._is_critical_tool_run_in_progress():
+                logger.info("LLM: Ignoring CancelFrame during critical tool execution")
+                await self.push_frame(frame, direction)
+                return
             if hasattr(self, '_generation_requested_at') and self._generation_requested_at > 0:
                 now = time.monotonic()
                 if (now - self._generation_requested_at) < 0.5:
@@ -935,6 +1071,10 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
         if isinstance(frame, UserStartedSpeakingFrame):
             if self._is_hands_free:
+                if self._is_critical_tool_run_in_progress():
+                    logger.info("LLM: Ignoring hands-free interruption during critical tool execution")
+                    await self.push_frame(frame, direction)
+                    return
                 self._cancelled = True
                 if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                     self._generation_task.cancel()
@@ -946,6 +1086,10 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             return
 
         if isinstance(frame, InterruptionFrame):
+            if self._is_critical_tool_run_in_progress():
+                logger.info("LLM: Ignoring InterruptionFrame during critical tool execution")
+                await self.push_frame(frame, direction)
+                return
             self._cancelled = True
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
                 self._generation_task.cancel()
@@ -964,6 +1108,24 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 return
 
             logger.info("LLM: Received transcription: '%s'", text[:100])
+            # Drop duplicate frames (e.g. PTT / pipeline emits the same utterance twice in a row)
+            _now = time.monotonic()
+            if (
+                text == getattr(self, '_last_ptt_transcription_text', None)
+                and (_now - getattr(self, '_last_ptt_transcription_mono', 0.0)) < 2.5
+            ):
+                logger.warning(
+                    "LLM: Duplicate TranscriptionFrame within 2.5s — ignoring (%.50s…)",
+                    text,
+                )
+                return
+            self._last_ptt_transcription_text = text
+            self._last_ptt_transcription_mono = _now
+
+            # Live preview for web chat (voice / hands-free incremental STT)
+            cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+            if cid:
+                self._notify_transcription_progress(int(cid), text, False, False)
             text_lower = text.lower().strip()
 
             # When listening is disabled, only "start listening" can get through
@@ -1090,6 +1252,9 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             self._messages.append({"role": "user", "content": user_content})
 
             if hasattr(self, '_generation_task') and self._generation_task and not self._generation_task.done():
+                if self._is_critical_tool_run_in_progress():
+                    logger.info("LLM: New transcription received while critical tool execution is running; keeping current task alive")
+                    return
                 self._cancelled = True
                 self._generation_task.cancel()
                 try:

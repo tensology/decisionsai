@@ -508,6 +508,7 @@
     });
     var waRuntime = window.KanbanWhatsAppRuntime.create({
         apiFetch: apiFetch,
+        showSnackbar: showSnackbar,
         esc: esc,
         dedupeThreadMessages: dedupeThreadMessages,
         switchSidebarTab: switchSidebarTab,
@@ -767,9 +768,13 @@
         container.innerHTML = filtered.length ? "" : '<p class="text-xs text-gray-500 italic">No matching boards</p>';
         filtered.forEach(function(b) {
             var div = document.createElement("div");
-            var cls = source === "trello" ? "kb-src-trello" : "kb-src-jira";
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === source ? " active" : "");
-            div.innerHTML = '<span class="kb-src-icon ' + cls + '"></span>' + esc(b.name);
+            var defaultColor = source === "trello" ? "#0079bf" : "#0052cc";
+            var iconColor = b.color || defaultColor;
+            var agentTag = b.agent_enabled
+                ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>'
+                : "";
+            div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(iconColor) + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + agentTag;
             div.onclick = function() { selectBoard(source, b.id, b.url); };
             div.oncontextmenu = function(e) { e.preventDefault(); showExtBoardContextMenu(e, source, b.id, b.url); };
             container.appendChild(div);
@@ -957,7 +962,7 @@
 
         // Store board-level data for conditional actions
         currentBoardData = data;
-        currentBoardHasProject = !!(data.default_project_id || (currentBoard.source === "database" && data.id));
+        currentBoardHasProject = !!data.default_project_id;
         if (!isLocal && data.local_id) {
             currentBoard._localId = data.local_id;
         }
@@ -1157,6 +1162,7 @@
     /** Copy an external ticket to the local board, then optionally send to CLI or project. */
     function copyAndPushExternalTicket(ticket, source, action) {
         if (!dbBoards.length) { showSnackbar("No local boards available", "error"); return; }
+        var requiresProject = action === 'cli' || action === 'project';
         // Find the best target board
         var targetBoard = (currentBoardData && currentBoardData.local_id) ? null : null;
         // Prefer a board linked to the same project as the external board config
@@ -1172,6 +1178,21 @@
             }
         }
         if (!preferredBoard) preferredBoard = dbBoards[0];
+
+        // Sending to CLI/project requires a local board linked to a project.
+        if (requiresProject) {
+            if (!preferredBoard.default_project_id) {
+                var fallbackBoard = null;
+                for (var k = 0; k < dbBoards.length; k++) {
+                    if (dbBoards[k].default_project_id) { fallbackBoard = dbBoards[k]; break; }
+                }
+                preferredBoard = fallbackBoard;
+            }
+            if (!preferredBoard || !preferredBoard.default_project_id) {
+                showSnackbar("Link a local board to a project before sending to " + (action === 'cli' ? "CLI" : "project"), "error");
+                return;
+            }
+        }
 
         var payload = {
             board_id: preferredBoard.id,
@@ -1324,6 +1345,7 @@
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
             loadLinkableEntities(t);
+            setModalProjectActionState(!!(t.linked_project_id || (currentBoardData && currentBoardData.default_project_id)));
             // Hide external metadata section for local tickets
             var extMeta = document.getElementById("kb-modal-external-meta");
             if (extMeta) extMeta.classList.add("hidden");
@@ -1369,9 +1391,31 @@
         document.getElementById("kb-modal-delete").classList.remove("hidden");
         var transferBtn = document.getElementById("kb-modal-transfer-ext");
         if (transferBtn) transferBtn.classList.add("hidden");
+        setModalProjectActionState(true);
         // Clear todos input
         var todoInput = document.getElementById("kb-modal-todo-input");
         if (todoInput) todoInput.readOnly = false;
+    }
+
+    function setModalProjectActionState(enabled) {
+        var canPush = !!enabled;
+        var disabledTip = "link ticket/board to project.";
+        var cliBtn = document.getElementById("kb-modal-act-cli");
+        var projectBtn = document.getElementById("kb-modal-act-project");
+        if (cliBtn) {
+            cliBtn.disabled = !canPush;
+            cliBtn.classList.toggle("opacity-40", !canPush);
+            cliBtn.classList.toggle("cursor-not-allowed", !canPush);
+            cliBtn.title = canPush ? "Push to CLI" : disabledTip;
+            cliBtn.setAttribute("aria-label", cliBtn.title);
+        }
+        if (projectBtn) {
+            projectBtn.disabled = !canPush;
+            projectBtn.classList.toggle("opacity-40", !canPush);
+            projectBtn.classList.toggle("cursor-not-allowed", !canPush);
+            projectBtn.title = canPush ? "Send to Project (.tickets)" : disabledTip;
+            projectBtn.setAttribute("aria-label", projectBtn.title);
+        }
     }
 
     function setPriorityButtons(pri) {
@@ -1408,6 +1452,7 @@
             time_estimate: estimate,
             time_spent: duration,
             linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value) || null,
+            linked_project_id: parseInt(document.getElementById("kb-modal-link-project").value) || null,
             linked_snippet_id: null,
             linked_action_id: null,
         };
@@ -1662,11 +1707,11 @@
 
         // Populate board dropdown
         apiFetch("/api/kanban/boards").then(function(boards) {
-            var dbBs = boards.filter(function(b) { return b.source === "database"; });
             boardSelect.innerHTML = '<option value="">Select a board...</option>';
-            dbBs.forEach(function(b) {
+            boards.forEach(function(b) {
                 var selected = (currentBoard && currentBoard.id === b.id) ? " selected" : "";
-                boardSelect.innerHTML += '<option value="' + b.id + '"' + selected + '>' + esc(b.name) + '</option>';
+                var sourceTag = b.source === "database" ? "Local" : (b.source || "").toUpperCase();
+                boardSelect.innerHTML += '<option value="' + b.id + '"' + selected + '>' + esc(b.name) + " [" + esc(sourceTag) + ']</option>';
             });
         });
 
@@ -1762,6 +1807,7 @@
                 });
             });
         updateWaSidebarFooterUi();
+        if (typeof waRuntime.bindWaMessageActionsUi === "function") waRuntime.bindWaMessageActionsUi();
         document.getElementById("kb-wa-thread-attach").addEventListener("click", function() {
             var fileInput = document.getElementById("kb-wa-thread-file");
             if (fileInput) fileInput.click();
@@ -1829,6 +1875,9 @@
             if (!e.target.closest("#kb-wa-ctx-menu")) hideWaChatContextMenu();
             if (!e.target.closest("#kb-wa-msg-ctx-menu")) hideWaMsgContextMenu();
             if (!e.target.closest("#kb-wa-sync-ctx-menu")) hideWaSyncContextMenu();
+            if (!e.target.closest("#kb-wa-msg-actions-menu") && !e.target.closest(".kb-wa-msg-more")) {
+                if (typeof waRuntime.hideWaMsgActionsMenu === "function") waRuntime.hideWaMsgActionsMenu();
+            }
         });
 
         document.getElementById("kb-wa-link-cancel").addEventListener("click", function() {
@@ -1858,8 +1907,33 @@
             });
         });
 
-        // Board modal: WhatsApp tab — add link button
+        // Board modal: WhatsApp links (inside Advanced)
         document.getElementById("kb-bm-wa-add-btn").addEventListener("click", waManagement.addWaLinkFromBoardModal);
+        var waChatSelect = document.getElementById("kb-bm-wa-chat-select");
+        if (waChatSelect) {
+            waChatSelect.addEventListener("change", function() {
+                var sel = String(waChatSelect.value || "").trim();
+                if (!sel) {
+                    waManagement.loadWaGroupPeopleCandidates(null);
+                    return;
+                }
+                var selectedOpt = waChatSelect.options[waChatSelect.selectedIndex];
+                var isGroup = selectedOpt && /\(group\)$/i.test(String(selectedOpt.textContent || "").trim());
+                var selectedChat = {
+                    jid: sel,
+                    phone: sel.split("@")[0].split(":")[0],
+                    chat_type: isGroup ? "group" : "private",
+                };
+                waManagement.loadWaGroupPeopleCandidates(selectedChat);
+            });
+        }
+        var waRefreshCandidatesBtn = document.getElementById("kb-bm-wa-refresh-candidates");
+        if (waRefreshCandidatesBtn) {
+            waRefreshCandidatesBtn.addEventListener("click", function() {
+                waManagement.loadWaLinkCandidates();
+            });
+        }
+        waManagement.loadWaLinkCandidates(true);
     }
 
     function startWhatsAppBootstrap() {
@@ -2017,8 +2091,20 @@
                 btn.disabled = true;
                 btn.textContent = "Running…";
             });
-            apiFetch("/api/kanban/agent/checkin", { method: "POST" }).then(function(data) {
-                showSnackbar(data.message || "Check-in complete");
+            // Omit board_id: server runs check-in only on boards with “Agent check-in” enabled
+            // (not the currently selected sidebar board).
+            apiFetch("/api/kanban/agent/checkin", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({}),
+            }).then(function(data) {
+                var msg = data.message || "Check-in complete";
+                var snackOpts = { id: "kb-snackbar" };
+                if (data.long_message || (msg.indexOf("\n") !== -1)) {
+                    snackOpts.multiline = true;
+                    snackOpts.duration = 26000;
+                }
+                window.DecisionsAPI.snackbar(msg, "success", snackOpts);
                 var statusBoardId = getCurrentStatusBoardId();
                 if (statusBoardId) startAgentStatusPolling(statusBoardId);
             }).catch(function(e) {
@@ -2070,6 +2156,7 @@
             }
         });
         document.getElementById("kb-modal-act-cli").addEventListener("click", function() {
+            if (this.disabled) return;
             if (modalTicketId) {
                 pushTicketToCli(modalTicketId, document.getElementById("kb-modal-act-cli"));
             } else if (window._extTicketData) {
@@ -2077,6 +2164,7 @@
             }
         });
         document.getElementById("kb-modal-act-project").addEventListener("click", function() {
+            if (this.disabled) return;
             if (modalTicketId) {
                 apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
                     .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
@@ -2103,6 +2191,14 @@
 
         // Links
         document.getElementById("kb-modal-add-link").addEventListener("click", addLink);
+        var ticketProjectSelect = document.getElementById("kb-modal-link-project");
+        if (ticketProjectSelect) {
+            ticketProjectSelect.addEventListener("change", function() {
+                var explicitProject = parseInt(ticketProjectSelect.value, 10) || null;
+                var boardProject = currentBoardData && currentBoardData.default_project_id;
+                setModalProjectActionState(!!(explicitProject || boardProject));
+            });
+        }
         document.getElementById("kb-modal-link-url").addEventListener("keydown", function(e) {
             if (e.key === "Enter") addLink();
         });

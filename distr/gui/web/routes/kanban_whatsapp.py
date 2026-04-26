@@ -6,6 +6,9 @@ import base64
 import json
 import logging
 import os
+import tempfile
+import subprocess
+import shutil
 from urllib.parse import quote
 
 from fastapi import HTTPException, Query, WebSocket, WebSocketDisconnect
@@ -27,6 +30,48 @@ _wa_sse_loop = None
 
 
 def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_identity):
+    def _is_voice_type(media_type: str, media_mime_type: str) -> bool:
+        t = str(media_type or "").lower()
+        m = str(media_mime_type or "").lower()
+        return t in ("voice", "audio", "ptt") or m.startswith("audio/")
+
+    def _is_video_type(media_type: str, media_mime_type: str) -> bool:
+        t = str(media_type or "").lower()
+        m = str(media_mime_type or "").lower()
+        return t == "video" or m.startswith("video/")
+
+    def _is_image_type(media_type: str, media_mime_type: str) -> bool:
+        t = str(media_type or "").lower()
+        m = str(media_mime_type or "").lower()
+        return t in ("photo", "image") or m.startswith("image/")
+
+    def _upsert_extracted_block(existing_caption: str, label: str, extracted_text: str) -> str:
+        """Insert or replace a prefixed extraction block in caption text."""
+        text = (extracted_text or "").strip()
+        if not text:
+            return existing_caption or ""
+        block = f"[{label}] {text}"
+        existing = (existing_caption or "").strip()
+        if not existing:
+            return block
+        lines = existing.splitlines()
+        out = []
+        i = 0
+        consumed = False
+        prefix = f"[{label}]"
+        while i < len(lines):
+            line = lines[i]
+            if line.strip().startswith(prefix):
+                # Drop existing same-label block (single-line style)
+                consumed = True
+                i += 1
+                continue
+            out.append(line)
+            i += 1
+        if out and out[0].strip():
+            return block + "\n\n" + "\n".join(out).strip()
+        return block if not out else block + "\n" + "\n".join(out).strip()
+
     """Attach WhatsApp-centric routes to the provided router."""
     async def _get_media_auth(base_url: str) -> tuple[dict, dict]:
         """Return (headers, params) for relay media fetch auth.
@@ -392,6 +437,90 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             logger.error(f"WhatsApp chats query error: {e}")
             return JSONResponse({"chats": [], "total": 0, "error": str(e)})
 
+    @router.post("/kanban/whatsapp/messages/{message_id}/analyze-media")
+    async def analyze_whatsapp_message_media(message_id: int):
+        """On-demand media extraction for WhatsApp messages.
+
+        - Voice notes / audio / video => transcription
+        - Images => OCR text extraction
+        Result is written into message caption with [Transcription] / [OCR] prefix.
+        """
+        with get_session() as s:
+            msg = s.query(WhatsAppMessage).get(message_id)
+            if not msg:
+                raise HTTPException(404, "Message not found")
+            local_path = (msg.media_local_path or "").strip()
+            if not local_path:
+                raise HTTPException(409, "Media not cached yet. Open/download the media first.")
+
+            if not os.path.exists(local_path):
+                raise HTTPException(404, "Media file not found on disk")
+
+            media_type = msg.media_type or ""
+            media_mime_type = msg.media_mime_type or ""
+            extracted = ""
+            label = ""
+
+            try:
+                if _is_voice_type(media_type, media_mime_type):
+                    from distr.core.audio.voice_cloning import transcribe_audio_file
+
+                    extracted = (transcribe_audio_file(local_path) or "").strip()
+                    label = "Transcription"
+                elif _is_video_type(media_type, media_mime_type):
+                    from distr.core.audio.voice_cloning import transcribe_audio_file
+
+                    ffmpeg_path = shutil.which("ffmpeg")
+                    if ffmpeg_path:
+                        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                            wav_path = tmp_wav.name
+                        try:
+                            subprocess.run(
+                                [ffmpeg_path, "-y", "-i", local_path, "-ar", "16000", "-ac", "1", wav_path],
+                                capture_output=True,
+                                timeout=180,
+                                check=True,
+                            )
+                            extracted = (transcribe_audio_file(wav_path) or "").strip()
+                        finally:
+                            try:
+                                os.unlink(wav_path)
+                            except Exception:
+                                pass
+                    else:
+                        # Fallback: some backends can transcribe video directly.
+                        extracted = (transcribe_audio_file(local_path) or "").strip()
+                    label = "Transcription"
+                elif _is_image_type(media_type, media_mime_type):
+                    from distr.core.agent.services.vision.locate import build_ocr_context
+
+                    ocr_text = (build_ocr_context(local_path, max_lines=120) or "").strip()
+                    if ocr_text.startswith("OCR text detected on screen:"):
+                        ocr_text = ocr_text.split(":", 1)[1].strip()
+                    extracted = ocr_text
+                    label = "OCR"
+                else:
+                    raise HTTPException(400, "Unsupported media type for analysis")
+            except HTTPException:
+                raise
+            except Exception as exc:
+                logger.error("WhatsApp media analysis failed for message %s: %s", message_id, exc, exc_info=True)
+                raise HTTPException(500, f"Analysis failed: {exc}") from exc
+
+            if not extracted:
+                raise HTTPException(422, "No text extracted from media")
+
+            msg.caption = _upsert_extracted_block(msg.caption or "", label, extracted)
+            s.commit()
+            return JSONResponse(
+                {
+                    "success": True,
+                    "message_id": message_id,
+                    "analysis_type": label.lower(),
+                    "text": extracted,
+                }
+            )
+
     @router.get("/kanban/whatsapp/relay-media/{message_id}")
     async def relay_whatsapp_media(
         message_id: int,
@@ -401,7 +530,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         """Proxy media from relay server and cache locally.
 
         Query params:
-          format: "m4a" — return M4A transcode for Safari/iOS audio playback
+          format: "m4a" (Safari/iOS audio), "mp3" (voice download via ffmpeg), or empty
           wa_key: optional WhatsApp message_id string (same as Baileys key id) for relay fetch
         """
         import requests as req_lib
@@ -480,6 +609,36 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 except Exception:
                     pass
             raise HTTPException(404, "M4A transcode not available")
+
+        # ── MP3 format (voice download) — transcode cached local file with ffmpeg ─
+        if format == "mp3":
+            import shutil
+            import subprocess
+
+            if not msg_media_local_path:
+                raise HTTPException(404, "Media not available yet — open the message once to cache audio")
+            local_src = _resolve_local_media_path(msg_media_local_path)
+            if not local_src or not os.path.exists(local_src):
+                raise HTTPException(404, "Media file not found")
+            mp3_path = os.path.splitext(local_src)[0] + ".wa.mp3"
+            if os.path.exists(mp3_path):
+                return FileResponse(mp3_path, media_type="audio/mpeg")
+            ffmpeg_path = shutil.which("ffmpeg")
+            if not ffmpeg_path:
+                raise HTTPException(503, "MP3 export requires ffmpeg in PATH")
+            try:
+                subprocess.run(
+                    [ffmpeg_path, "-y", "-i", local_src, "-c:a", "libmp3lame", "-q:a", "4", mp3_path],
+                    capture_output=True,
+                    timeout=120,
+                    check=True,
+                )
+            except Exception as ex:
+                logger.warning("relay-media MP3 transcode failed: %s", ex)
+                raise HTTPException(503, "MP3 conversion failed") from ex
+            if os.path.exists(mp3_path):
+                return FileResponse(mp3_path, media_type="audio/mpeg")
+            raise HTTPException(503, "MP3 conversion failed")
 
         if msg_media_local_path:
             media_dir = os.path.realpath(os.path.join(DB_DIR, "whatsapp_media"))

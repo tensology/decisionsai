@@ -26,6 +26,7 @@ from distr.core.agent.libs import (
 )
 from distr.core.agent.services.llm.prompt import load_system_prompt_template
 from distr.core.agent.tools import load_tools
+from distr.core.agent.services.llm.computer_use_guard import build_computer_use_execution_decisions
 from distr.core.signals import signal_manager
 from .core_mixin import LLMSharedMixin
 
@@ -173,8 +174,21 @@ class BaseLLMService(LLMSharedMixin, LLMService):
     async def _execute_tool_calls(self, tool_calls: list) -> list:
         """Execute tool calls and return results. Works for OpenAI-compatible format."""
         results = []
-        for tool_call in tool_calls:
+        decisions = build_computer_use_execution_decisions(tool_calls)
+        for idx, tool_call in enumerate(tool_calls):
+            decision = decisions[idx] if idx < len(decisions) else {"allow": True, "reason": "ok"}
             tool_name = tool_call["function"]["name"]
+            if not decision.get("allow", True):
+                results.append({
+                    "role": "tool",
+                    "tool_call_id": tool_call["id"],
+                    "name": tool_name,
+                    "content": (
+                        "Skipped by computer-use guard: only one actioning computer-use step "
+                        "is executed per round. Re-run next step after observing updated context."
+                    ),
+                })
+                continue
             try:
                 tool_args = json.loads(tool_call["function"]["arguments"])
             except json.JSONDecodeError:

@@ -9,7 +9,7 @@
         function buildExternalLink(ticketUrl, source) {
             if (!ticketUrl) return "";
             var sourceLabel = source || "browser";
-            return '<a href="' + deps.esc(ticketUrl) + '" target="_blank" class="kb-card-action-btn text-white transition-colors" data-tooltip="Open in ' + deps.esc(sourceLabel) + '" title="Open in ' + deps.esc(sourceLabel) + '" onclick="event.stopPropagation()">' +
+            return '<a href="' + deps.esc(ticketUrl) + '" target="_blank" class="kb-card-action-btn text-white transition-colors" data-tooltip="Open in ' + deps.esc(sourceLabel) + '" aria-label="Open in ' + deps.esc(sourceLabel) + '" onclick="event.stopPropagation()">' +
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
         }
 
@@ -17,53 +17,58 @@
             var disabled = !!config.disabled;
             var stateClass = disabled ? "text-gray-700 cursor-not-allowed" : "text-white";
             var tooltip = config.tooltip || "";
-            var label = config.label || "";
-            return '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" data-tooltip="' + tooltip + '" title="' + tooltip + '"' + (disabled ? " disabled" : "") + ">" +
-                config.iconSvg + '<span class="kb-act-label">' + label + "</span></button>";
+            var titleAttr = config.nativeTooltip ? ' title="' + tooltip + '"' : "";
+            return '<span class="kb-card-action-tip" data-tooltip="' + tooltip + '"' + titleAttr + ">" +
+                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" aria-label="' + tooltip + '"' + (disabled ? " disabled" : "") + ">" +
+                config.iconSvg + "</button></span>";
         }
 
         function buildActionRow(opts) {
-            var actions = [
+            var leftActions = [
                 actionButtonHtml({
                     keyClass: "kb-act-copy",
-                    label: "Copy Text",
                     tooltip: "Copy ticket title and description",
+                    nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-cli",
-                    label: "CLI",
-                    tooltip: opts.hasProject ? "Push to CLI" : "Link this board to a project in Configure to enable CLI",
+                    tooltip: opts.hasProject
+                        ? "Push to CLI"
+                        : "link ticket/board to project.",
                     disabled: !opts.hasProject,
+                    nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
                 }),
-                actionButtonHtml({
-                    keyClass: "kb-act-project",
-                    label: "Project",
-                    tooltip: opts.hasProject ? "Send to Project (.tickets)" : "Link this board to a project in Configure to enable Project send",
-                    disabled: !opts.hasProject,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-                }),
             ];
+            leftActions.push(actionButtonHtml({
+                keyClass: "kb-act-project",
+                tooltip: opts.hasProject
+                    ? "Send to Project (.tickets)"
+                    : "link ticket/board to project.",
+                disabled: !opts.hasProject,
+                nativeTooltip: true,
+                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+            }));
             if (opts.canTransfer) {
-                actions.push(actionButtonHtml({
+                leftActions.push(actionButtonHtml({
                     keyClass: "kb-act-transfer",
-                    label: "Import",
                     tooltip: "Copy ticket into a local board",
                     disabled: false,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 16H3v-5"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
                 }));
             }
+            var deleteAction = "";
             if (opts.canDelete) {
-                actions.push(actionButtonHtml({
+                deleteAction = actionButtonHtml({
                     keyClass: "kb-act-delete",
-                    label: "Delete",
                     tooltip: "Delete ticket",
                     disabled: false,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>',
-                }));
+                });
             }
-            return actions.join("");
+            return '<div class="kb-card-actions-left">' + leftActions.join("") + "</div>" +
+                '<div class="kb-card-actions-right">' + deleteAction + "</div>";
         }
 
         function buildCardMarkup(opts) {
@@ -80,7 +85,7 @@
                 "</div>" +
                 (opts.description ? '<p class="text-xs text-gray-400 mt-2 mb-1 leading-relaxed line-clamp-2">' + deps.esc(opts.description) + "</p>" : "") +
                 (opts.labelsHtml || "") + (opts.membersHtml || "") + (opts.timeHtml || "") + (opts.mediaHtml || "") +
-                '<div class="flex items-center justify-center gap-2 mt-2 kb-card-actions">' + actionRowHtml + "</div>" +
+                '<div class="kb-card-actions mt-2">' + actionRowHtml + "</div>" +
                 '<div class="flex items-center mt-1">' + (opts.todoHtml || "") + "</div>";
         }
 
@@ -218,6 +223,25 @@
             document.getElementById("kb-modal-transfer-ext").classList.remove("hidden");
             document.getElementById("kb-modal-save").classList.add("hidden");
             document.getElementById("kb-modal-delete").classList.add("hidden");
+            var projectActionBtn = document.getElementById("kb-modal-act-project");
+            var cliActionBtn = document.getElementById("kb-modal-act-cli");
+            if (projectActionBtn) {
+                var currentBoardData = deps.getCurrentBoardData() || {};
+                var canPush = !!currentBoardData.default_project_id;
+                var disabledTip = "link ticket/board to project.";
+                projectActionBtn.disabled = !canPush;
+                projectActionBtn.classList.toggle("opacity-40", !canPush);
+                projectActionBtn.classList.toggle("cursor-not-allowed", !canPush);
+                projectActionBtn.title = canPush ? "Send to Project (.tickets)" : disabledTip;
+                projectActionBtn.setAttribute("aria-label", projectActionBtn.title);
+                if (cliActionBtn) {
+                    cliActionBtn.disabled = !canPush;
+                    cliActionBtn.classList.toggle("opacity-40", !canPush);
+                    cliActionBtn.classList.toggle("cursor-not-allowed", !canPush);
+                    cliActionBtn.title = canPush ? "Push to CLI" : disabledTip;
+                    cliActionBtn.setAttribute("aria-label", cliActionBtn.title);
+                }
+            }
             document.getElementById("kb-modal-title").textContent = ticket.title || "Ticket";
             window._extTicketData = ticket;
             window._extTicketSource = source;
@@ -292,7 +316,7 @@
                 mediaHtml += "</div>";
             }
 
-            var hasProject = !!(boardData.default_project_id || (isLocal && boardData.id));
+            var hasProject = !!(ticket.linked_project_id || boardData.default_project_id);
             var canDelete = isLocal;
             var canTransfer = !isLocal;
             card.innerHTML = buildCardMarkup({
@@ -498,12 +522,14 @@
         function loadLinkableEntities(ticket) {
             deps.apiFetch("/api/kanban/linkable").then(function(data) {
                 populateSelect("kb-modal-link-workflow", data.workflows, "id", "title", ticket.linked_workflow_id);
+                populateSelect("kb-modal-link-project", data.projects, "id", "name", ticket.linked_project_id);
             }).catch(function() {});
         }
 
         function populateSelect(selectId, items, valKey, labelKey, selectedVal) {
             var sel = document.getElementById(selectId);
-            sel.innerHTML = '<option value="">None</option>';
+            if (!sel) return;
+            sel.innerHTML = '<option value="">Inherit from board default</option>';
             (items || []).forEach(function(it) {
                 var o = document.createElement("option");
                 o.value = it[valKey];

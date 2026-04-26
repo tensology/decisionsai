@@ -8,6 +8,7 @@ tray context-menu items do.
 
 import json
 import logging
+import urllib.request
 import webbrowser
 from typing import Any, Optional
 
@@ -24,6 +25,7 @@ _PAGE_MAP = {
     # Settings / Preferences
     "settings":       "/settings",
     "preferences":    "/settings",
+    "preference":     "/settings",
     # Settings sections
     "general":        "/settings#general",
     "general settings": "/settings#general",
@@ -60,6 +62,8 @@ _PAGE_MAP = {
     # Ticket Board / Board
     "kanban":         "/kanban/",
     "board":          "/kanban/",
+    "ticket board":   "/kanban/",
+    "ticketboard":    "/kanban/",
     # API Docs
     "api docs":       "/docs/",
     "api documentation": "/docs/",
@@ -142,17 +146,16 @@ class OpenPageTool(BaseTool):
         try:
             import time
 
-            # Build URL — try server object first, fall back to default port
-            url = None
-            try:
-                from distr.gui.web.server import get_unified_server
-                server = get_unified_server()
-                if server and server.is_ready():
-                    url = f"{server.get_url()}{path}"
-            except Exception:
-                pass
-            if not url:
-                url = f"http://localhost:8765{path}"
+            # Build URL from the live GUI server. This tool runs in the agent
+            # subprocess, so get_unified_server() may be unavailable there.
+            # Probe local health endpoints to discover the current runtime port.
+            base_url = self._resolve_web_base_url()
+            if not base_url:
+                return (
+                    "Error: Web server is not ready right now. "
+                    "Please try again in a moment."
+                )
+            url = f"{base_url}{path}"
 
             webbrowser.open(url)
             logger.info(f"OpenPageTool: Opened {url}")
@@ -175,6 +178,36 @@ class OpenPageTool(BaseTool):
         except Exception as e:
             logger.error(f"OpenPageTool: Error opening page: {e}", exc_info=True)
             return f"Error opening page: {e}"
+
+    def _resolve_web_base_url(self) -> Optional[str]:
+        """Resolve the active DecisionsAI web server base URL.
+
+        Priority:
+        1) In-process unified server singleton (main process path)
+        2) Probe localhost ports (agent subprocess path)
+        """
+        try:
+            from distr.gui.web.server import get_unified_server
+            server = get_unified_server()
+            if server and server.is_ready():
+                return server.get_url()
+        except Exception:
+            pass
+
+        hosts = ("127.0.0.1", "localhost")
+        # Unified server starts at 8765 and may increment when occupied.
+        ports = range(8765, 8781)
+        for host in hosts:
+            for port in ports:
+                base = f"http://{host}:{port}"
+                health_url = f"{base}/health"
+                try:
+                    with urllib.request.urlopen(health_url, timeout=0.25) as resp:
+                        if resp.status == 200:
+                            return base
+                except Exception:
+                    continue
+        return None
 
     def _handle_new_chat(self) -> str:
         """Create a new chat and open the chat page."""

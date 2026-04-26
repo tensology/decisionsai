@@ -16,7 +16,7 @@
   },
   "events": {
     "idle": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -31,7 +31,7 @@
       "playback": "loop"
     },
     "hands_free_listening": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -46,7 +46,7 @@
       "playback": "loop"
     },
     "ptt_active": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -61,7 +61,7 @@
       "playback": "loop"
     },
     "dictation": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -76,7 +76,7 @@
       "playback": "loop"
     },
     "recording_action": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -91,7 +91,7 @@
       "playback": "loop"
     },
     "file_drop_success": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": true,
@@ -106,7 +106,7 @@
       "playback": "loop"
     },
     "tts_response": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": true,
       "show_chat_bubble": false,
       "glow": false,
@@ -121,7 +121,7 @@
       "playback": "loop"
     },
     "running_action": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -136,7 +136,7 @@
       "playback": "loop"
     },
     "running_step_runner": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -151,7 +151,7 @@
       "playback": "loop"
     },
     "snippet_copied": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -166,7 +166,7 @@
       "playback": "loop"
     },
     "thinking": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,
@@ -181,7 +181,7 @@
       "playback": "loop"
     },
     "needs_attention": {
-      "animation": "0.webm",
+      "animation": "2.webm",
       "show_player": false,
       "show_chat_bubble": false,
       "glow": false,

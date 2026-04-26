@@ -66,6 +66,17 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     # Strip lone # characters that arrive in streaming chunks
     text = re.sub(r'(?:^|\n)#{1,6}\s', '\n', text)
 
+    # Suppress noisy path/URL readouts in spoken output.
+    # Replace with concise placeholders so users do not hear slash-heavy strings.
+    text = re.sub(r'https?://\S+', 'a web link', text, flags=re.IGNORECASE)
+    text = re.sub(r'file://\S+', 'a file link', text, flags=re.IGNORECASE)
+    # Unix-like absolute paths
+    text = re.sub(r'(?<!\w)/(?:[^/\s]+/){2,}[^/\s]*', 'a file path', text)
+    # Windows-style paths
+    text = re.sub(r'\b[A-Za-z]:\\(?:[^\\\s]+\\){1,}[^\\\s]*', 'a file path', text)
+    # Residual slash runs that are unpleasant for TTS ("slash slash slash")
+    text = re.sub(r'(?:\s*/\s*){2,}', ' path ', text)
+
     # Normalize whitespace
     text = re.sub(r'[ \t]{2,}', ' ', text)
     text = text.replace('\r\n', '\n').replace('\r', '\n')

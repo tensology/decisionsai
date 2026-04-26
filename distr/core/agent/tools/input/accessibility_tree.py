@@ -12,6 +12,11 @@ from typing import Optional
 
 import requests
 from langchain.tools import BaseTool
+from distr.core.agent.services.computer_use_context import (
+    record_action,
+    record_candidate_target,
+    record_observation,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +92,16 @@ class GetWindowTreeTool(BaseTool):
             with _element_cache_lock:
                 _element_cache.clear()
                 _element_cache.extend(elements)
+            record_observation(
+                source="accessibility_tree",
+                details={
+                    "tool": "get_window_tree",
+                    "app_name": app_name,
+                    "window_title": result.get("window_title", "unknown"),
+                    "pid": result.get("pid"),
+                    "element_count": len(elements),
+                },
+            )
             lines = [f"Window: {result.get('window_title', 'unknown')} (pid={result.get('pid', '?')})"]
             lines.append(f"Found {len(elements)} elements:")
             for el in elements[:60]:
@@ -135,6 +150,19 @@ class FindElementTool(BaseTool):
                 for el in elements:
                     if el["id"] not in existing_ids:
                         _element_cache.append(el)
+            first = elements[0]
+            rect = first.get("rect", {})
+            if rect:
+                cx = int(rect.get("x", 0) + rect.get("w", 0) / 2)
+                cy = int(rect.get("y", 0) + rect.get("h", 0) / 2)
+                record_candidate_target(
+                    source="accessibility_tree",
+                    x=cx,
+                    y=cy,
+                    screen=1,
+                    description=first.get("name", ""),
+                    status="found",
+                )
             lines = [f"Found {len(elements)} matching element(s):"]
             for el in elements:
                 rect = el.get("rect", {})
@@ -181,6 +209,16 @@ class MoveToElementTool(BaseTool):
 
             result = _call_sidecar("move_mouse", {"element_id": element_id})
             if result.get("success"):
+                record_action(
+                    "move_mouse",
+                    "success",
+                    {
+                        "source": "accessibility_tree",
+                        "element_id": element_id,
+                        "x": result.get("x"),
+                        "y": result.get("y"),
+                    },
+                )
                 return f"Moved mouse to element [{element_id}] at ({result.get('x')}, {result.get('y')})"
             return f"Failed to move mouse to element [{element_id}]"
         except RuntimeError as e:
@@ -220,6 +258,16 @@ class ClickElementTool(BaseTool):
 
             result = _call_sidecar("click_element", {"element_id": element_id, "action": action})
             if result.get("success"):
+                record_action(
+                    action,
+                    "success",
+                    {
+                        "source": "accessibility_tree",
+                        "element_id": element_id,
+                        "x": result.get("x"),
+                        "y": result.get("y"),
+                    },
+                )
                 return f"Clicked element [{element_id}] ({action}) at ({result.get('x')}, {result.get('y')})"
             return f"Failed to click element [{element_id}]"
         except RuntimeError as e:

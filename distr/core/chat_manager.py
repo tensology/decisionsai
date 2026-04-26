@@ -396,10 +396,10 @@ class ChatManagerCore:
                     or getattr(settings, "voice_provider", None)
                     or ""
                 ).strip() or None
+                from distr.core.chat import resolve_voice_model_from_global_settings
+
                 voice_model = (
-                    getattr(settings, "kokoro_voice", None)
-                    or getattr(settings, "openai_voice", None)
-                    or getattr(settings, "elevenlabs_voice", None)
+                    resolve_voice_model_from_global_settings(voice_provider, settings)
                     or ""
                 ).strip() or None
         finally:

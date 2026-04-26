@@ -47,7 +47,10 @@
         type = type || "success";
         opts = opts || {};
         var id = opts.id || "shared-snackbar";
-        var duration = opts.duration || 3000;
+        var duration = opts.duration != null ? opts.duration : 3000;
+        if (opts.multiline) {
+            duration = opts.duration != null ? opts.duration : 24000;
+        }
 
         var existing = document.getElementById(id);
         if (existing) existing.remove();
@@ -59,6 +62,15 @@
             "z-index:9999;padding:0.75rem 1.25rem;border-radius:0.5rem;" +
             "color:#fff;font-size:0.875rem;font-weight:500;" +
             "box-shadow:0 4px 12px rgba(0,0,0,.3);transition:opacity 0.3s;";
+        if (opts.multiline) {
+            el.style.whiteSpace = "pre-wrap";
+            el.style.textAlign = "left";
+            el.style.fontWeight = "400";
+            el.style.lineHeight = "1.45";
+            el.style.maxWidth = opts.maxWidth || "min(92vw, 560px)";
+            el.style.maxHeight = "min(70vh, 420px)";
+            el.style.overflowY = "auto";
+        }
         el.style.background =
             type === "error" ? "#dc2626" :
             type === "info"  ? "#1a237e" :

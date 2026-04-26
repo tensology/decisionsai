@@ -13,6 +13,40 @@
             <span id="skins_oracle_size_value" class="text-sm text-[#ececf1] w-12 text-right">180px</span>
         </div>
 
+        <!-- Oracle Settings -->
+        <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+            <h3 class="text-lg font-semibold text-white mb-4">Oracle Settings</h3>
+            <div class="grid grid-cols-2 gap-6">
+                <div>
+                    <label class="flex items-center cursor-pointer group">
+                        <input type="checkbox" id="restore_position" name="restore_position" checked
+                               class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                      checked:bg-[#10a37f] checked:border-[#10a37f]
+                                      focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                      transition-colors cursor-pointer">
+                        <span class="ml-2 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Restore Position
+                        </span>
+                    </label>
+                </div>
+                <div>
+                    <label for="oracle_position" class="block text-sm font-medium text-[#ececf1] mb-2">Position:</label>
+                    <select id="oracle_position" name="oracle_position"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
+                                   focus:outline-none focus:border-[#10a37f] transition-colors
+                                   hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="custom">Custom</option>
+                        <option value="top_left">Top Left</option>
+                        <option value="top_right">Top Right</option>
+                        <option value="middle_left">Middle Left</option>
+                        <option value="middle_right">Middle Right</option>
+                        <option value="bottom_left">Bottom Left</option>
+                        <option value="bottom_right">Bottom Right</option>
+                    </select>
+                </div>
+            </div>
+        </div>
+
         <!-- Skin Grid — 4 per row, big preview cards. Create Skin card is appended as last item via JS -->
         <div id="skins_grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
             <!-- Dynamically populated -->
