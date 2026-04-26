@@ -263,7 +263,7 @@ Build multi-step workflows the agent executes in sequence. Each step has an acti
 
 | Concept | How it works |
 |---|---|
-| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, Playwright scripts, or variable assignments |
+| **Actions** | Agent instructions, recorded macros, shell commands, HTTP requests, or Playwright scripts |
 | **Tool-calling agent** | Each step runs through a dedicated LLM with native tool calling — it actually does things instead of describing what it would do |
 | **Validation** | Text matching, rule-based checks, LLM judgment, or screenshot comparison |
 | **Static routing** | Pick a "go to" step for pass/fail |
@@ -271,7 +271,7 @@ Build multi-step workflows the agent executes in sequence. Each step has an acti
 | **Recording** | 3-2-1 countdown, captures keyboard + mouse, replays automatically |
 | **Presets** | Export/import `.dwf` bundles — workflow + recordings + screenshots in one file |
 | **Scheduling** | Hourly, daily, or weekly on specific days |
-| **Variables** | Persist across steps within a single run |
+| **Agent Context** | One central context block for rules, credentials, conventions, and reusable guidance prepended to step prompts |
 
 <p align="center">
   <img src="assets/readme/steprunner.webp" alt="Workflows" />

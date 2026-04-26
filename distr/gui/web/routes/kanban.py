@@ -25,7 +25,13 @@ from distr.core.db.kanban import (
     KanbanBoard, KanbanLane, KanbanTicket,
     KanbanTicketFile, KanbanTicketLink, KanbanTicketTodo,
 )
-from distr.core.kanban.agent import _active_agents, KanbanAgentCheckIn, start_agent_checkin
+from distr.core.kanban.agent import (
+    _active_agents,
+    KanbanAgentCheckIn,
+    analyze_board_checkin,
+    format_checkin_dispatch_report,
+    start_agent_checkin,
+)
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.gui.web.security import is_allowed_local_origin
 from distr.gui.web.routes.kanban_whatsapp import register_whatsapp_routes
@@ -494,19 +500,47 @@ def create_routes():
     # ── Agent check-in ──
 
     @router.post("/kanban/agent/checkin")
-    async def manual_agent_checkin():
-        """Manually trigger check-ins on all boards flagged with agent_enabled=true."""
+    async def manual_agent_checkin(request: Request):
+        """Trigger agent check-in.
+
+        Body JSON (optional): ``{"board_id": <int>}``
+
+        When ``board_id`` is set, only that board is analyzed and started (API/scripts).
+
+        When omitted (default for the web Check-in button), dispatches every board that
+        has ``agent_enabled=true`` — not limited to the board selected in the sidebar.
+        """
         from distr.core.db.kanban import KanbanBoard
+
+        board_id_filter = None
+        try:
+            raw = await request.body()
+            if raw:
+                data = json.loads(raw)
+                bid = data.get("board_id")
+                if bid is not None:
+                    board_id_filter = int(bid)
+        except (ValueError, TypeError, json.JSONDecodeError):
+            board_id_filter = None
 
         started = 0
         already_running = 0
         not_runnable = 0
+        board_reports = []
         with get_session() as s:
-            boards = s.query(KanbanBoard).filter(KanbanBoard.agent_enabled == True).all()
-            board_ids = [b.id for b in boards]
+            if board_id_filter is not None:
+                board = s.query(KanbanBoard).filter(KanbanBoard.id == board_id_filter).first()
+                if not board:
+                    return JSONResponse({"message": "Board not found.", "boards": []}, status_code=404)
+                board_ids = [board_id_filter]
+            else:
+                boards = s.query(KanbanBoard).filter(KanbanBoard.agent_enabled == True).all()
+                board_ids = [b.id for b in boards]
 
         for bid in board_ids:
             result = start_agent_checkin(bid)
+            report = result.get("report") or analyze_board_checkin(bid)
+            board_reports.append(report)
             if result["status"] == "started":
                 started += 1
             elif result["status"] == "already_running":
@@ -515,16 +549,30 @@ def create_routes():
                 not_runnable += 1
 
         if not board_ids:
-            return JSONResponse({"message": "No boards have agent check-in enabled."})
+            return JSONResponse({
+                "message": (
+                    "No boards have agent check-in enabled. "
+                    "Open each board’s settings and turn on “Agent check-in” for the boards "
+                    "you want included when you click Check-in."
+                ),
+            })
+
+        message = format_checkin_dispatch_report(
+            board_reports,
+            started=started,
+            already_running=already_running,
+            skipped=not_runnable,
+            focused_single_board=(board_id_filter is not None),
+        )
         return JSONResponse({
-            "message": (
-                f"Check-in dispatch complete: started={started}, "
-                f"already_running={already_running}, skipped={not_runnable}."
-            ),
+            "message": message,
+            "long_message": True,
             "started": started,
             "already_running": already_running,
             "skipped": not_runnable,
             "total_enabled": len(board_ids),
+            "boards": board_reports,
+            "board_id": board_id_filter,
         })
 
     @router.post("/kanban/boards/{board_id}/use")
@@ -766,16 +814,30 @@ def create_routes():
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
+            fields_set = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
             if payload.title is not None:
                 t.title = payload.title
             if payload.description is not None:
                 t.description = payload.description
             if payload.priority is not None:
                 t.priority = payload.priority
-            if payload.linked_workflow_id is not None:
-                t.linked_workflow_id = payload.linked_workflow_id
-            if payload.linked_project_id is not None:
-                t.linked_project_id = payload.linked_project_id
+            if "linked_workflow_id" in fields_set or "linked_project_id" in fields_set:
+                lane = s.query(KanbanLane).get(t.lane_id) if t.lane_id else None
+                board = s.query(KanbanBoard).get(lane.board_id) if lane else None
+                if "linked_workflow_id" in fields_set:
+                    # Empty selection in UI means "inherit from board default".
+                    t.linked_workflow_id = (
+                        payload.linked_workflow_id
+                        if payload.linked_workflow_id is not None
+                        else (board.default_workflow_id if board else None)
+                    )
+                if "linked_project_id" in fields_set:
+                    # Empty selection in UI means "inherit from board default".
+                    t.linked_project_id = (
+                        payload.linked_project_id
+                        if payload.linked_project_id is not None
+                        else (board.default_project_id if board else None)
+                    )
             if payload.linked_snippet_id is not None:
                 t.linked_snippet_id = payload.linked_snippet_id
             if payload.linked_action_id is not None:
@@ -1370,16 +1432,24 @@ def create_routes():
 
     @router.get("/kanban/linkable")
     async def get_linkable_entities():
-        """Return lists of workflows, projects, actions for linking."""
+        """Return lists of workflows, projects, actions for linking.
+
+        Workflow options match **Workflows** page lists: same ``list_workflows`` helper,
+        which excludes internal chat audit workflows (``workflow_type == 'audit'``).
+        """
+        from distr.core.workflow.service import list_workflows
+
+        auto_rows = list_workflows(limit=500, search=None, workflow_type=None)
+        workflows = [
+            {"id": w["id"], "title": w["name"] or f"Workflow #{w['id']}"}
+            for w in auto_rows
+        ]
         with get_session() as s:
-            from distr.core.db import Workflow, Action
+            from distr.core.db import Action
             from distr.core.db.projects import Project
-            from distr.core.db.workflow import AutoWorkflow
-            workflows = [{"id": w.id, "title": w.title or f"Workflow #{w.id}"} for w in s.query(Workflow).all()]
-            workflow_automations = [{"id": w.id, "title": w.name or f"Workflow #{w.id}"} for w in s.query(AutoWorkflow).all()]
             projects = [{"id": p.id, "name": p.name} for p in s.query(Project).all()]
             actions = [{"id": a.id, "title": a.title or f"Action #{a.id}"} for a in s.query(Action).all()]
-            return JSONResponse({"workflows": workflows + workflow_automations, "projects": projects, "actions": actions})
+            return JSONResponse({"workflows": workflows, "projects": projects, "actions": actions})
 
     # ── External boards (Trello / Jira) ──
 
@@ -1469,6 +1539,48 @@ def create_routes():
         except Exception as e:
             logger.warning("External board fetch error: %s", e)
         return JSONResponse({"trello": trello_boards, "jira": jira_boards})
+
+    @router.get("/kanban/external-boards/{provider}/{board_id}/local-config")
+    async def get_external_board_local_config(provider: str, board_id: str):
+        """Return local DB config for an external board without remote API calls."""
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+
+        with get_session() as s:
+            local_board = (
+                s.query(KanbanBoard)
+                .filter(
+                    KanbanBoard.source == provider,
+                    KanbanBoard.external_board_id == board_id,
+                )
+                .first()
+            )
+            if not local_board:
+                return JSONResponse(
+                    {
+                        "provider": provider,
+                        "external_board_id": board_id,
+                        "local_id": None,
+                        "name": None,
+                        "default_project_id": None,
+                        "default_workflow_id": None,
+                        "color": None,
+                        "agent_enabled": False,
+                    }
+                )
+
+            return JSONResponse(
+                {
+                    "provider": provider,
+                    "external_board_id": board_id,
+                    "local_id": local_board.id,
+                    "name": local_board.name,
+                    "default_project_id": local_board.default_project_id,
+                    "default_workflow_id": local_board.default_workflow_id,
+                    "color": local_board.color,
+                    "agent_enabled": local_board.agent_enabled or False,
+                }
+            )
 
     @router.get("/kanban/external-boards/{provider}/{board_id}")
     async def get_external_board_detail(provider: str, board_id: str):

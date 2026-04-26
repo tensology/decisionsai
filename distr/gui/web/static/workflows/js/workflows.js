@@ -63,7 +63,6 @@
             '<div id="wf-context-menu" class="hidden fixed z-[9999] min-w-[180px] bg-[#1a1f3a] border border-white/20 rounded-lg shadow-2xl py-1">' +
                 '<button type="button" data-action="open" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Open</button>' +
                 '<button type="button" data-action="run" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Run now</button>' +
-                '<button type="button" data-action="set-active" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Set status: Active</button>' +
                 '<button type="button" data-action="duplicate" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Duplicate</button>' +
                 '<button type="button" data-action="export" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Export preset</button>' +
                 '<button type="button" data-action="download" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Download bundle</button>' +
@@ -87,12 +86,6 @@
                     api("POST", "/workflows/" + workflowId + "/run")
                         .then(function () { snack("Workflow started"); if (currentWorkflowId === workflowId) startPolling(); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
                         .catch(function (e) { snack(e.message || "Run failed", "error"); });
-                    return;
-                }
-                if (action === "set-active") {
-                    api("PATCH", "/workflows/" + workflowId, { status: "active" })
-                        .then(function () { snack("Workflow set to active"); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
-                        .catch(function () { snack("Failed to update status", "error"); });
                     return;
                 }
                 if (action === "duplicate") {
@@ -122,6 +115,7 @@
                                 expandedStepId = null;
                                 document.getElementById("wf-detail").classList.add("hidden");
                                 document.getElementById("wf-empty").classList.remove("hidden");
+                                syncWorkflowFooterActionsVisibility();
                             }
                             loadList();
                         })
@@ -155,9 +149,8 @@
                 el.innerHTML = data.map(function (w) {
                     var active = currentWorkflowId === w.id ? " border-[#f97316] bg-white/10" : " border-transparent hover:bg-white/5";
                     var badge = w.schedule_enabled ? '<span class="text-xs px-1.5 py-0.5 rounded bg-blue-600/40 text-blue-300 ml-auto">' + esc(w.schedule_preset || "sched") + "</span>" : "";
-                    var dot = w.status === "active" ? "bg-green-400" : w.status === "paused" ? "bg-yellow-400" : "bg-gray-500";
                     return '<div class="flex items-center gap-2 rounded border px-3 py-2 cursor-pointer' + active + '" data-id="' + w.id + '">' +
-                        '<span class="w-2 h-2 rounded-full ' + dot + ' flex-shrink-0"></span>' +
+                        '<span class="w-2 h-2 rounded-full bg-gray-500 flex-shrink-0"></span>' +
                         '<span class="text-sm text-white truncate">' + esc(w.name) + '</span>' +
                         '<span class="text-xs text-gray-500 ml-1">' + (w.step_count || 0) + '</span>' +
                         badge + '</div>';
@@ -187,17 +180,21 @@
         loadDetail(id);
     }
 
+    function syncWorkflowFooterActionsVisibility() {
+        var footer = document.getElementById("wf-list-footer-actions");
+        if (!footer) return;
+        footer.classList.toggle("hidden", !currentWorkflowId);
+    }
+
     function loadDetail(id) {
         api("GET", "/workflows/" + id).then(function (data) {
             currentWorkflow = data;
             document.getElementById("wf-empty").classList.add("hidden");
             document.getElementById("wf-detail").classList.remove("hidden");
             document.getElementById("wf-detail-name").value = data.name || "";
-            document.getElementById("wf-detail-status").textContent = data.status;
-            document.getElementById("wf-status-select").value = data.status || "draft";
+            syncWorkflowFooterActionsVisibility();
             renderSteps(data.steps || []);
             renderSchedule(data);
-            renderVariables(data.variables || []);
             renderRuns(data.runs || []);
             loadActiveRuns();
             renderContextRules(data);
@@ -223,10 +220,14 @@
                 // Update result indicator if expanded
                 var resultEl = card.querySelector(".sf-goto-history");
                 if (resultEl && s.result) {
-                    var preview = s.result.length > 80 ? s.result.substring(0, 80) + '…' : s.result;
-                    resultEl.textContent = 'ℹ️ ' + preview;
                     var wrap = card.querySelector(".sf-result-wrap");
-                    if (wrap) wrap.classList.remove("hidden");
+                    if (shouldSuppressCancelledText(s.status, s.result)) {
+                        if (wrap) wrap.classList.add("hidden");
+                    } else {
+                        var preview = s.result.length > 80 ? s.result.substring(0, 80) + '…' : s.result;
+                        resultEl.textContent = 'ℹ️ ' + preview;
+                        if (wrap) wrap.classList.remove("hidden");
+                    }
                 } else if (!s.result || !s.result.trim()) {
                     var w = card.querySelector(".sf-result-wrap");
                     if (w) w.classList.add("hidden");
@@ -314,6 +315,12 @@
             cancelled: "bg-gray-600/40 text-gray-400", skipped: "bg-yellow-600/40 text-yellow-300",
             waiting: "bg-amber-600/40 text-amber-300 animate-pulse" };
         return m[status] || "bg-white/10 text-gray-400";
+    }
+
+    function shouldSuppressCancelledText(status, text) {
+        if (status !== "cancelled") return false;
+        var normalized = String(text || "").trim().toLowerCase();
+        return normalized === "cancelled by user" || normalized === "canceled by user";
     }
 
     function startPolling() {
@@ -441,6 +448,7 @@
             var typeLabel = { agent_instruction: "Agent", play_recording: "Recording", run_command: "Command", http_request: "HTTP", execute_code: "Code", playwright: "Playwright" }[s.action_type] || s.action_type;
             var chevronCls = isOpen ? "chevron open" : "chevron";
             var statusCls = statusBadgeClass(s.status);
+            var showStepStatusBadge = !!s.status && s.status !== "pending";
             var headerBtns = '';
             if (s.status === "waiting") {
                 headerBtns = '<button type="button" class="sh-continue-waiting inline-flex items-center justify-center w-6 h-6 rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/20" data-step-id="' + s.id + '" title="Continue">' + SVG_FORWARD + '</button>' +
@@ -455,11 +463,11 @@
             return '<div class="step-card border border-white/20 rounded-lg' + (isOpen ? " expanded" : "") + '" data-step-id="' + s.id + '">' +
                 '<div class="step-header flex items-center gap-3 px-4 py-3" data-step-id="' + s.id + '">' +
                     '<span class="' + chevronCls + ' text-gray-400 text-xs">▶</span>' +
+                    '<span class="text-xs text-gray-500">#' + (parseInt(s.position, 10) + 1) + '</span>' +
                     '<span class="text-sm font-medium text-white flex-1 truncate">' + esc(s.name) + '</span>' +
-                    '<span class="step-status-badge text-xs px-1.5 py-0.5 rounded ' + statusCls + '">' + esc(s.status) + '</span>' +
+                    (showStepStatusBadge ? ('<span class="step-status-badge text-xs px-1.5 py-0.5 rounded ' + statusCls + '">' + esc(s.status) + '</span>') : '') +
                     '<span class="text-xs px-1.5 py-0.5 rounded bg-white/10 text-gray-400">' + esc(typeLabel) + '</span>' +
                     headerBtns +
-                    '<span class="text-xs text-gray-600">#' + s.position + '</span>' +
                 '</div>' +
                 '<div class="step-body' + (isOpen ? "" : " hidden") + '" id="step-body-' + s.id + '"></div>' +
             '</div>';
@@ -703,13 +711,17 @@
         html += '<div class="sf-history-tab-list space-y-2 max-h-64 overflow-y-auto">';
         html += '<p class="text-xs text-gray-600">Loading history...</p>';
         html += '</div>';
+        html += '<div class="mt-2 pt-2 border-t border-white/10">';
+        html += '<button type="button" class="sf-clear-history px-2 py-1 rounded border border-red-500/50 text-red-300 text-xs hover:bg-red-500/20">Clear audit history</button>';
+        html += '</div>';
         html += '</div>';
 
         // ── Compact result indicator (click to jump to History tab)
         var hasResult = step.result && step.result.trim();
         if (hasResult) {
+            var suppressCancelledResult = shouldSuppressCancelledText(step.status, step.result);
             var resultPreview = step.result.length > 80 ? step.result.substring(0, 80) + '…' : step.result;
-            html += '<div class="sf-result-wrap border-t border-white/10 pt-2 mt-1">';
+            html += '<div class="sf-result-wrap border-t border-white/10 pt-2 mt-1' + (suppressCancelledResult ? ' hidden' : '') + '">';
             html += '<p class="text-xs text-gray-400 cursor-pointer hover:text-white sf-goto-history">ℹ️ ' + esc(resultPreview) + '</p>';
             html += '</div>';
         }
@@ -1028,6 +1040,22 @@
             var histContainer = container.querySelector(".sf-history-tab-list");
             if (histContainer) loadStepHistory(step.id, histContainer);
         }
+
+        var clearHistoryBtn = container.querySelector(".sf-clear-history");
+        if (clearHistoryBtn) {
+            clearHistoryBtn.addEventListener("click", function () {
+                if (!confirm("Clear this step's audit history? This cannot be undone.")) return;
+                api("DELETE", "/workflows/" + currentWorkflowId + "/steps/" + step.id + "/results")
+                    .then(function () {
+                        snack("Step audit history cleared");
+                        var histContainer = container.querySelector(".sf-history-tab-list");
+                        if (histContainer) loadStepHistory(step.id, histContainer);
+                        var resultWrap = container.querySelector(".sf-result-wrap");
+                        if (resultWrap) resultWrap.classList.add("hidden");
+                    })
+                    .catch(function (e) { snack(e.message || "Failed to clear history", "error"); });
+            });
+        }
     }
 
     function saveStep(stepId, container) {
@@ -1119,6 +1147,34 @@
     }
 
     function loadStepHistory(stepId, container) {
+        function extractAttachmentPaths(text) {
+            if (!text) return [];
+            var re = /(\/[^\s"'`]+\.(?:png|jpg|jpeg|webp|gif|mp4|mov|m4a|wav|mp3))/ig;
+            var out = [];
+            var m;
+            while ((m = re.exec(text)) !== null) {
+                if (out.indexOf(m[1]) === -1) out.push(m[1]);
+            }
+            return out;
+        }
+        function renderAttachmentBlock(paths) {
+            if (!paths || !paths.length) return "";
+            var html = '<div class="mt-2 border-t border-white/10 pt-2">';
+            html += '<p class="text-[11px] text-gray-500 mb-1">Attachments</p>';
+            paths.forEach(function (p) {
+                var safe = esc(p);
+                var lower = (p || "").toLowerCase();
+                var isImage = /\.(png|jpg|jpeg|webp|gif)$/.test(lower);
+                html += '<div class="mb-1">';
+                html += '<a class="text-[11px] text-blue-300 hover:text-blue-200 underline break-all" href="file://' + safe + '" target="_blank" rel="noreferrer">' + safe + '</a>';
+                if (isImage) {
+                    html += '<div class="mt-1"><img src="file://' + safe + '" class="max-h-40 rounded border border-white/10" alt="Workflow attachment"></div>';
+                }
+                html += '</div>';
+            });
+            html += '</div>';
+            return html;
+        }
         api("GET", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/results?limit=20")
             .then(function (data) {
                 if (!data.length) {
@@ -1126,9 +1182,11 @@
                     return;
                 }
                 container.innerHTML = data.map(function (r, idx) {
-                    var statusColor = r.status === "passed" ? "bg-green-600/40 text-green-300" : r.status === "failed" ? "bg-red-600/40 text-red-300" : r.status === "cancelled" ? "bg-gray-600/40 text-gray-300" : "bg-blue-600/40 text-blue-300";
+                    var statusColor = r.status === "passed" ? "bg-green-600/40 text-green-300" : r.status === "failed" ? "bg-red-600/40 text-red-300" : r.status === "cancelled" ? "bg-gray-600/40 text-gray-300" : r.status === "waiting" ? "bg-amber-600/40 text-amber-300" : "bg-blue-600/40 text-blue-300";
                     var ts = r.created_at ? new Date(r.created_at).toLocaleString() : "—";
                     var response = (r.agent_response || "").trim();
+                    if (shouldSuppressCancelledText(r.status, response)) response = "";
+                    var attachments = extractAttachmentPaths(response);
                     var isLatest = idx === 0;
                     var isCollapsed = !isLatest;
                     var maxPreviewLen = 150;
@@ -1151,6 +1209,7 @@
                         html += '<p class="text-xs text-gray-500">' + esc(preview) + '</p>';
                     } else {
                         html += '<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-64 overflow-auto">' + esc(response || "(no output)") + '</pre>';
+                        html += renderAttachmentBlock(attachments);
                     }
                     html += '</div>';
                     html += '</div>';
@@ -1173,7 +1232,8 @@
                                 var idx = parseInt(hdr.dataset.idx, 10);
                                 var r = data[idx];
                                 var resp = (r && (r.agent_response || '').trim()) || '(no output)';
-                                content.innerHTML = '<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-64 overflow-auto">' + esc(resp) + '</pre>';
+                                var attachments = extractAttachmentPaths(resp);
+                                content.innerHTML = '<pre class="text-xs text-gray-300 font-mono whitespace-pre-wrap max-h-64 overflow-auto">' + esc(resp) + '</pre>' + renderAttachmentBlock(attachments);
                             }
                         }
                     });
@@ -1203,37 +1263,6 @@
             btn.classList.toggle("wf-pill", !active);
         });
         document.getElementById("wf-sched-time-wrap").classList.toggle("hidden", preset === "hourly");
-    }
-
-    // ── Variables tab ──
-    function renderVariables(vars) {
-        var el = document.getElementById("wf-vars-list");
-        if (!vars.length) { el.innerHTML = '<p class="text-sm text-gray-500 py-2">No variables defined.</p>'; return; }
-        el.innerHTML = vars.map(function (v) {
-            return '<div class="flex items-center gap-2 bg-[#152054]/50 rounded px-3 py-2 border border-white/10" data-var-id="' + v.id + '">' +
-                '<input type="text" class="vf-name flex-1 px-2 py-1 bg-transparent border-b border-white/20 text-white text-sm focus:border-[#f97316] focus:outline-none" value="' + esc(v.name) + '" placeholder="Name">' +
-                '<input type="text" class="vf-val flex-1 px-2 py-1 bg-transparent border-b border-white/20 text-white text-sm focus:border-[#f97316] focus:outline-none" value="' + esc(v.default_value) + '" placeholder="Default value">' +
-                '<input type="text" class="vf-desc flex-1 px-2 py-1 bg-transparent border-b border-white/20 text-gray-400 text-sm focus:border-[#f97316] focus:outline-none" value="' + esc(v.description) + '" placeholder="Description">' +
-                '<button type="button" class="vf-save text-green-400 text-xs hover:text-green-300 px-1" title="Save">✓</button>' +
-                '<button type="button" class="vf-delete text-red-400 text-xs hover:text-red-300 px-1" title="Delete">✕</button>' +
-            '</div>';
-        }).join('');
-        el.querySelectorAll("[data-var-id]").forEach(function (row) {
-            var varId = parseInt(row.dataset.varId, 10);
-            row.querySelector(".vf-save").addEventListener("click", function () {
-                api("PATCH", "/workflows/" + currentWorkflowId + "/variables/" + varId, {
-                    name: row.querySelector(".vf-name").value.trim(),
-                    default_value: row.querySelector(".vf-val").value,
-                    description: row.querySelector(".vf-desc").value.trim()
-                }).then(function () { snack("Variable saved"); }).catch(function () { snack("Failed to save variable", "error"); });
-            });
-            row.querySelector(".vf-delete").addEventListener("click", function () {
-                if (!confirm("Delete this variable?")) return;
-                api("DELETE", "/workflows/" + currentWorkflowId + "/variables/" + varId)
-                    .then(function () { snack("Variable deleted"); loadDetail(currentWorkflowId); })
-                    .catch(function () { snack("Failed to delete variable", "error"); });
-            });
-        });
     }
 
     // ── Runs tab ──
@@ -1420,26 +1449,7 @@
             });
         }
 
-        // Name edit
-        var nameEl = document.getElementById("wf-detail-name");
-        if (nameEl) {
-            nameEl.addEventListener("blur", function () {
-                if (!currentWorkflowId) return;
-                api("PATCH", "/workflows/" + currentWorkflowId, { name: nameEl.value.trim() || "Untitled" })
-                    .then(function () { loadList(); }).catch(function () { snack("Failed to rename", "error"); });
-            });
-        }
-
-        // Status change
-        var statusEl = document.getElementById("wf-status-select");
-        if (statusEl) {
-            statusEl.addEventListener("change", function () {
-                if (!currentWorkflowId) return;
-                api("PATCH", "/workflows/" + currentWorkflowId, { status: statusEl.value })
-                    .then(function () { document.getElementById("wf-detail-status").textContent = statusEl.value; loadList(); })
-                    .catch(function () { snack("Failed to update status", "error"); });
-            });
-        }
+        // Workflow title is display-only in the header (no inline rename).
 
         // Delete workflow
         var deleteBtn = document.getElementById("wf-delete-btn");
@@ -1451,6 +1461,7 @@
                         snack("Workflow deleted"); currentWorkflowId = null; currentWorkflow = null; expandedStepId = null;
                         document.getElementById("wf-detail").classList.add("hidden");
                         document.getElementById("wf-empty").classList.remove("hidden");
+                        syncWorkflowFooterActionsVisibility();
                         loadList();
                     }).catch(function () { snack("Failed to delete workflow", "error"); });
             });
@@ -1512,6 +1523,23 @@
             });
         }
 
+        // Stop + Reset workflow
+        var stopResetBtn = document.getElementById("wf-stop-reset-btn");
+        if (stopResetBtn) {
+            stopResetBtn.addEventListener("click", function () {
+                if (!currentWorkflowId) return;
+                if (!confirm("Stop and reset this workflow?\n\nThis will cancel any active run and reset all step states/results.")) return;
+                api("POST", "/workflows/" + currentWorkflowId + "/stop-reset")
+                    .then(function () {
+                        snack("Workflow stopped and reset");
+                        stopPolling();
+                        loadDetail(currentWorkflowId);
+                        loadActiveRuns();
+                    })
+                    .catch(function (e) { snack(e.message || "Failed to stop and reset workflow", "error"); });
+            });
+        }
+
         // Add step
         var addStepBtn = document.getElementById("wf-add-step-btn");
         if (addStepBtn) {
@@ -1524,17 +1552,6 @@
                         if (steps.length) expandedStepId = steps[steps.length - 1].id;
                         loadDetail(currentWorkflowId);
                     }).catch(function () { snack("Failed to add step", "error"); });
-            });
-        }
-
-        // Add variable
-        var addVarBtn = document.getElementById("wf-add-var-btn");
-        if (addVarBtn) {
-            addVarBtn.addEventListener("click", function () {
-                if (!currentWorkflowId) return;
-                api("POST", "/workflows/" + currentWorkflowId + "/variables", { name: "new_var", default_value: "", description: "" })
-                    .then(function () { snack("Variable added"); loadDetail(currentWorkflowId); })
-                    .catch(function () { snack("Failed to add variable", "error"); });
             });
         }
 
@@ -1625,6 +1642,7 @@
             });
         }
 
+        syncWorkflowFooterActionsVisibility();
         loadList();
         checkPresetsExist();
         connectWebSocket();

@@ -22,7 +22,6 @@ class WorkflowCreateRequest(BaseModel):
 class WorkflowUpdateRequest(BaseModel):
     name: Optional[str] = None
     description: Optional[str] = None
-    status: Optional[str] = None
     schedule_enabled: Optional[bool] = None
     schedule_preset: Optional[str] = None
     schedule_cron: Optional[str] = None
@@ -38,18 +37,6 @@ class StepCreateRequest(BaseModel):
     name: str = "New Step"
     action_type: str = "agent_instruction"
     position: Optional[int] = None
-
-
-class VariableCreateRequest(BaseModel):
-    name: str
-    default_value: str = ""
-    description: str = ""
-
-
-class VariableUpdateRequest(BaseModel):
-    name: Optional[str] = None
-    default_value: Optional[str] = None
-    description: Optional[str] = None
 
 
 class StepReorderRequest(BaseModel):
@@ -106,10 +93,10 @@ def register_routes(router, templates):
         return get_workflow_type(workflow_id) == "audit"
 
     @router.get("/workflows")
-    async def workflow_list(limit: int = 50, search: Optional[str] = None, status: Optional[str] = None, type: Optional[str] = None):
+    async def workflow_list(limit: int = 50, search: Optional[str] = None, type: Optional[str] = None):
         try:
             from distr.core.workflow.service import list_workflows
-            return JSONResponse(list_workflows(limit=limit, search=search, status=status, workflow_type=type))
+            return JSONResponse(list_workflows(limit=limit, search=search, workflow_type=type))
         except Exception as e:
             logger.error("Workflow list failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
@@ -300,7 +287,7 @@ def register_routes(router, templates):
                 '      "wait_for_continue": false\n'
                 "    }\n"
                 "  ],\n"
-                '  "variables": []\n'
+                '  "context_rules": ""\n'
                 "}\n\n"
                 "Valid action_type values and when to use them:\n"
                 '- "agent_instruction" — general-purpose desktop/UI automation (default for most tasks)\n'
@@ -480,6 +467,21 @@ def register_routes(router, templates):
             return JSONResponse({"success": True})
         except Exception as e:
             logger.error("Workflow cancel run failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/stop-reset")
+    async def workflow_stop_reset(workflow_id: int):
+        """Cancel active run (if any) and reset all step statuses/results."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import reset_workflow_steps
+            result = reset_workflow_steps(workflow_id)
+            if "error" in result:
+                return JSONResponse({"detail": result["error"]}, status_code=404)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow stop-reset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
@@ -694,6 +696,20 @@ def register_routes(router, templates):
             logger.error("Workflow step results failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.delete("/workflows/{workflow_id}/steps/{step_id}/results")
+    async def workflow_clear_step_results(workflow_id: int, step_id: int):
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import clear_step_results
+            result = clear_step_results(step_id)
+            if "error" in result:
+                return JSONResponse({"detail": result["error"]}, status_code=404)
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow clear step results failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     # Step recording
     @router.post("/workflows/{workflow_id}/steps/{step_id}/start-recording")
     async def workflow_start_step_recording(workflow_id: int, step_id: int):
@@ -748,42 +764,6 @@ def register_routes(router, templates):
             return JSONResponse({"success": True, "message": "Playing recording"})
         except Exception as e:
             logger.error("Play step recording failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
-
-    # Variables
-    @router.post("/workflows/{workflow_id}/variables")
-    async def workflow_add_variable(workflow_id: int, data: VariableCreateRequest):
-        try:
-            from distr.core.workflow.service import add_variable
-            var_id = add_variable(workflow_id, name=data.name, default_value=data.default_value, description=data.description)
-            if not var_id:
-                return JSONResponse({"detail": "Workflow not found"}, status_code=404)
-            return JSONResponse({"id": var_id, "success": True})
-        except Exception as e:
-            logger.error("Workflow add variable failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
-
-    @router.patch("/workflows/{workflow_id}/variables/{variable_id}")
-    async def workflow_update_variable(workflow_id: int, variable_id: int, data: VariableUpdateRequest):
-        try:
-            from distr.core.workflow.service import update_variable
-            updates = {k: v for k, v in data.dict().items() if v is not None}
-            if not update_variable(variable_id, **updates):
-                return JSONResponse({"detail": "Variable not found"}, status_code=404)
-            return JSONResponse({"success": True})
-        except Exception as e:
-            logger.error("Workflow update variable failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
-
-    @router.delete("/workflows/{workflow_id}/variables/{variable_id}")
-    async def workflow_delete_variable(workflow_id: int, variable_id: int):
-        try:
-            from distr.core.workflow.service import delete_variable
-            if not delete_variable(variable_id):
-                return JSONResponse({"detail": "Variable not found"}, status_code=404)
-            return JSONResponse({"success": True})
-        except Exception as e:
-            logger.error("Workflow delete variable failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # ── Export ──

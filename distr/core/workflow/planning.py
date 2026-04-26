@@ -214,7 +214,6 @@ def plan_workflow(
         wf = AutoWorkflow(
             name=(instruction[:80] + "…") if len(instruction) > 80 else instruction,
             description=instruction,
-            status="draft",
             workflow_type="instruction",
             chat_id=chat_id,
             workflow_input=workflow_input_json,
@@ -316,7 +315,24 @@ def build_step_context_prompt(
             f"Current step: {step_title or f'Step {step_index + 1}'}",
             f"Task: {step_instruction}",
             "",
-            "Execute this step. When finished, confirm exactly what you accomplished.",
+            (
+                "Execute the task exactly as instructed and return an accurate result for THIS step."
+            ),
+            (
+                "Instruction fidelity is the priority: do not invent extra scope, extra analysis, or adjacent tasks."
+            ),
+            (
+                "Match the level of detail requested by the instruction. "
+                "If the instruction asks for detail, provide detail; if it asks for a direct answer, be direct."
+            ),
+            (
+                "Do not use templated status wrappers like 'Step X Complete', 'What I accomplished', "
+                "or markdown section headings unless explicitly requested."
+            ),
+            (
+                "Include technical artifacts (paths, IDs, diagnostics, environment info) only when they are "
+                "explicitly requested or necessary to complete the instruction."
+            ),
         ]
     )
     parts.append("\n".join(lines))

@@ -11,7 +11,6 @@ from typing import List, Dict, Any, Optional
 from distr.core.db import get_session, Action
 from distr.core.db.workflow import (
     AutoWorkflow, AutoWorkflowStep,
-    AutoWorkflowVariable,
 )
 
 logger = logging.getLogger(__name__)
@@ -41,7 +40,6 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
     return {
         "id": wf.id, "name": wf.name,
         "description": wf.description or "",
-        "status": wf.status,
         "workflow_type": wf.workflow_type or "manual",
         "schedule_enabled": wf.schedule_enabled,
         "schedule_preset": wf.schedule_preset,
@@ -55,10 +53,6 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
         "created_date": wf.created_date.isoformat() if wf.created_date else None,
         "modified_date": wf.modified_date.isoformat() if wf.modified_date else None,
         "steps": [_serialize_step(s) for s in steps],
-        "variables": [
-            {"id": v.id, "name": v.name, "default_value": v.default_value or "", "description": v.description or ""}
-            for v in wf.variables
-        ],
         "runs": [
             {
                 "id": r.id,
@@ -126,7 +120,7 @@ def _position_to_step_id(position: Optional[int], position_map: dict) -> Optiona
 # ── Export ──
 
 def export_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
-    """Export a workflow + steps + variables as a portable JSON dict (metadata only, no files)."""
+    """Export a workflow + steps as a portable JSON dict (metadata only, no files)."""
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
@@ -187,10 +181,6 @@ def export_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
                     "wait_for_continue": s.wait_for_continue or False,
                 }
                 for s in steps
-            ],
-            "variables": [
-                {"name": v.name, "default_value": v.default_value or "", "description": v.description or ""}
-                for v in wf.variables
             ],
         }
 
@@ -255,11 +245,6 @@ def _convert_legacy_to_unified(data: Dict[str, Any]) -> Dict[str, Any]:
     type_map = {"instruction": "instruction", "scheduled": "scheduled"}
     workflow_type = type_map.get(session_type, "manual")
 
-    # Map status: planned → draft, in_progress → active
-    status_raw = data.get("status", "planned")
-    status_map = {"planned": "draft", "in_progress": "active"}
-    status = status_map.get(status_raw, status_raw)
-
     unified: Dict[str, Any] = {
         "format_version": "2.0",
         "name": data.get("name", data.get("instruction", "Imported Workflow")[:80] or "Imported Workflow"),
@@ -267,7 +252,6 @@ def _convert_legacy_to_unified(data: Dict[str, Any]) -> Dict[str, Any]:
         "workflow_type": workflow_type,
         "context_rules": data.get("context_rules", ""),
         "workflow_input": data.get("workflow_input", ""),
-        "status": status,
         "start_step_position": data.get("start_step_position", 0),
         "schedule_preset": data.get("schedule"),
         "schedule_time": data.get("schedule_time"),
@@ -310,7 +294,7 @@ def _convert_legacy_to_unified(data: Dict[str, Any]) -> Dict[str, Any]:
         unified_steps.append(unified_step)
 
     unified["steps"] = unified_steps
-    unified["variables"] = data.get("variables", [])
+    unified["variables"] = []
     return unified
 
 
@@ -352,7 +336,6 @@ def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]]
         wf = AutoWorkflow(
             name=data.get("name", "Imported Workflow"),
             description=data.get("description", ""),
-            status="draft",
             workflow_type=wf_type,
             context_rules=data.get("context_rules") or None,
             workflow_input=data.get("workflow_input") or None,
@@ -464,14 +447,6 @@ def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]]
         for step in position_to_step.values():
             step.on_pass_goto = _position_to_step_id(pass_refs.get(step.id), position_to_step)
             step.on_fail_goto = _position_to_step_id(fail_refs.get(step.id), position_to_step)
-
-        for v_data in data.get("variables", []):
-            db.add(AutoWorkflowVariable(
-                workflow_id=wf.id,
-                name=v_data.get("name", "var"),
-                default_value=v_data.get("default_value", ""),
-                description=v_data.get("description", ""),
-            ))
 
         db.commit()
         return wf.id

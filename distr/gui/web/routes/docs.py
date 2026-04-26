@@ -301,7 +301,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                             {"name": "search", "type": "string", "required": False, "description": "Search text"},
                         ],
                         "body": None,
-                        "response_example": '[{"id": 1, "name": "Deploy pipeline", "status": "draft", "workflow_type": "instruction", "steps": [...]}]',
+                        "response_example": '[{"id": 1, "name": "Deploy pipeline", "workflow_type": "instruction", "step_count": 4, "schedule_enabled": false}]',
                     },
                     {
                         "method": "GET",
@@ -311,7 +311,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "curl": f'curl -s {base}/api/workflows/1',
                         "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
-                        "response_example": '{"id": 1, "name": "Deploy pipeline", "status": "draft", "steps": [{"id": 1, "name": "Build", "instruction": "Run npm build", "status": "pending"}]}',
+                        "response_example": '{"id": 1, "name": "Deploy pipeline", "context_rules": "Use production-safe commands only.", "steps": [{"id": 1, "name": "Build", "instruction": "Run npm build", "status": "pending"}]}',
                     },
                     {
                         "method": "POST",
@@ -325,7 +325,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                             "instruction": {"type": "string", "required": True, "description": "Instruction to break into steps"},
                             "chat_id": {"type": "int", "required": False, "description": "Optional chat ID to link"},
                         },
-                        "response_example": '{"id": 3, "name": "Deploy the app to production", "status": "draft", "steps": [...]}',
+                        "response_example": '{"id": 3, "name": "Deploy the app to production", "context_rules": "", "steps": [...]}',
                     },
                     {
                         "method": "DELETE",
@@ -397,7 +397,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "curl": f'curl -s -X POST {base}/api/workflows/1/duplicate',
                         "params": [{"name": "workflow_id", "type": "int", "required": True, "description": "Workflow ID"}],
                         "body": None,
-                        "response_example": '{"id": 5, "name": "...", "status": "draft"}',
+                        "response_example": '{"id": 5, "name": "...", "context_rules": "", "steps": [...]}',
                     },
                     {
                         "method": "PATCH",
@@ -739,7 +739,8 @@ def create_routes(base_path: str = "") -> APIRouter:
                 "endpoints": [
                     {"method": "GET", "path": "/api/skills", "summary": "List all skills", "description": "Returns the skills registry.", "curl": f'curl -s {base}/api/skills', "body": None, "response_example": '[{"id": "brainstorming", "name": "brainstorming", "description": "..."}]'},
                     {"method": "GET", "path": "/api/skills/{{skill_id}}", "summary": "Get skill detail", "description": "Returns the full SKILL.md content for a skill.", "curl": f'curl -s {base}/api/skills/brainstorming', "params": [{"name": "skill_id", "type": "str", "required": True, "description": "Skill ID"}], "body": None, "response_example": '{"id": "brainstorming", "content": "..."}'},
-                    {"method": "POST", "path": "/api/skills/{{skill_id}}/push", "summary": "Push skill to project", "description": "Push a skill to a project CLI directory (.pi/skills/, .claude/commands/, etc).", "curl": f"curl -s -X POST {base}/api/skills/brainstorming/push -H 'Content-Type: application/json' -d '{{\"target\": \"pi\", \"project_path\": \".\"}}'", "body": {"project_path": {"type": "str", "required": False, "description": "Path to project"}, "target": {"type": "str", "required": False, "description": "CLI target: pi, claude, cursor, gemini, codex"}}, "response_example": '{"success": true, "message": "Pushed brainstorming to pi!"}'},
+                    {"method": "POST", "path": "/api/skills/{{skill_id}}/push", "summary": "Push skill to project", "description": "Copies SKILL.md into project/.pi/skills/<id>/ (works while Pi is cold). Optional instructions become USER_INTENT.md beside SKILL.md.", "curl": f"curl -s -X POST {base}/api/skills/brainstorming/push -H 'Content-Type: application/json' -d '{{\"project_path\": \"/path/to/repo\", \"instructions\": \"audit auth\"}}'", "body": {"project_path": {"type": "str", "required": False, "description": "Project folder (must match DB project folder_location)"}, "instructions": {"type": "str", "required": False, "description": "Saved as USER_INTENT.md next to SKILL.md"}}, "response_example": '{"success": true, "message": "...", "user_intent_file": ".../USER_INTENT.md"}'},
+                    {"method": "POST", "path": "/api/skills/{{skill_id}}/spoken-overview", "summary": "Spoken AI overview of a skill", "description": "Uses the configured coding/conversational LLM to summarize the skill for speech, then returns plain-text overview plus base64-encoded MP3 (General playback speed). For the Skills page listen button.", "curl": f"curl -s -X POST {base}/api/skills/brainstorming/spoken-overview -H 'Content-Type: application/json' -d '{{}}'", "body": None, "response_example": '{"overview": "This skill helps you…", "audio_mp3_base64": "..."}'},
                 ],
             },
             # ── Settings ───────────────────────────────────────

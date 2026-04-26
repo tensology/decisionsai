@@ -9,7 +9,7 @@ from typing import List, Dict, Any, Optional
 from datetime import datetime
 
 from distr.core.db import get_session
-from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.db.kanban import KanbanBoard, KanbanTicket
 from distr.gui.web.workflow_events import increment_workflow_updated
 
@@ -126,7 +126,7 @@ def create_workflow(name: str = "Untitled Workflow", description: str = "", work
             f"Invalid workflow_type '{workflow_type}'. Must be one of: {', '.join(sorted(VALID_WORKFLOW_TYPES))}"
         )
     with get_session() as db:
-        wf = AutoWorkflow(name=name, description=description, status="draft", workflow_type=workflow_type)
+        wf = AutoWorkflow(name=name, description=description, workflow_type=workflow_type)
         db.add(wf)
         db.commit()
         db.refresh(wf)
@@ -148,15 +148,13 @@ def get_workflow_type(workflow_id: int) -> Optional[str]:
         return wf[0] if wf else None
 
 
-def list_workflows(limit: int = 50, search: Optional[str] = None, status: Optional[str] = None, workflow_type: Optional[str] = None) -> List[Dict[str, Any]]:
+def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type: Optional[str] = None) -> List[Dict[str, Any]]:
     with get_session() as db:
         q = db.query(AutoWorkflow)
         if workflow_type:
             q = q.filter(AutoWorkflow.workflow_type == workflow_type)
         else:
             q = q.filter(AutoWorkflow.workflow_type != 'audit')
-        if status:
-            q = q.filter(AutoWorkflow.status == status)
         if search and search.strip():
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
         rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(limit).all()
@@ -164,7 +162,6 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, status: Option
             {
                 "id": w.id, "name": w.name,
                 "description": (w.description or "")[:200],
-                "status": w.status,
                 "schedule_enabled": w.schedule_enabled,
                 "schedule_preset": w.schedule_preset,
                 "schedule_time": w.schedule_time,
@@ -179,7 +176,7 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, status: Option
 
 def update_workflow(workflow_id: int, **kwargs) -> bool:
     allowed = {
-        "name", "description", "status", "schedule_enabled",
+        "name", "description", "schedule_enabled",
         "schedule_preset", "schedule_cron", "schedule_time",
         "schedule_days", "schedule_timezone", "next_run_at",
         "start_step_position", "workflow_type", "context_rules",
@@ -216,7 +213,7 @@ def duplicate_workflow(workflow_id: int) -> Optional[int]:
             return None
         new_wf = AutoWorkflow(
             name=f"{orig.name} (copy)", description=orig.description,
-            status="draft", start_step_position=orig.start_step_position,
+            start_step_position=orig.start_step_position,
         )
         db.add(new_wf)
         db.flush()
@@ -239,11 +236,6 @@ def duplicate_workflow(workflow_id: int) -> Optional[int]:
                 validation_code=step.validation_code,
                 linked_project_id=step.linked_project_id,
                 wait_for_continue=step.wait_for_continue,
-            ))
-        for var in orig.variables:
-            db.add(AutoWorkflowVariable(
-                workflow_id=new_wf.id, name=var.name,
-                default_value=var.default_value, description=var.description,
             ))
         db.commit()
         return new_wf.id
@@ -305,43 +297,6 @@ def reorder_steps(workflow_id: int, step_ids: List[int]) -> bool:
             ).first()
             if step:
                 step.position = pos
-        db.commit()
-        return True
-
-
-# ── Variable CRUD ──
-
-def add_variable(workflow_id: int, name: str, default_value: str = "", description: str = "") -> Optional[int]:
-    with get_session() as db:
-        wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
-        if not wf:
-            return None
-        var = AutoWorkflowVariable(workflow_id=workflow_id, name=name, default_value=default_value, description=description)
-        db.add(var)
-        db.commit()
-        db.refresh(var)
-        return var.id
-
-
-def update_variable(variable_id: int, **kwargs) -> bool:
-    allowed = {"name", "default_value", "description"}
-    with get_session() as db:
-        var = db.query(AutoWorkflowVariable).filter(AutoWorkflowVariable.id == variable_id).first()
-        if not var:
-            return False
-        for k, v in kwargs.items():
-            if k in allowed:
-                setattr(var, k, v)
-        db.commit()
-        return True
-
-
-def delete_variable(variable_id: int) -> bool:
-    with get_session() as db:
-        var = db.query(AutoWorkflowVariable).filter(AutoWorkflowVariable.id == variable_id).first()
-        if not var:
-            return False
-        db.delete(var)
         db.commit()
         return True
 
@@ -470,6 +425,30 @@ def get_step_results(step_id: int, limit: int = 20) -> List[Dict[str, Any]]:
             }
             for r in rows
         ]
+
+
+def clear_step_results(step_id: int) -> Dict[str, Any]:
+    """Delete execution result history for a single step."""
+    with get_session() as db:
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        if not step:
+            return {"error": "Step not found"}
+
+        deleted_results = (
+            db.query(AutoWorkflowStepResult)
+            .filter(AutoWorkflowStepResult.step_id == step_id)
+            .delete(synchronize_session=False)
+        )
+
+        # Remove compact "latest result" text from step UI after history clear.
+        step.result = None
+        db.commit()
+
+    return {
+        "success": True,
+        "step_id": step_id,
+        "deleted_results": deleted_results,
+    }
 
 
 # ── Screenshot management ──

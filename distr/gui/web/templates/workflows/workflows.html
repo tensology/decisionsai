@@ -56,8 +56,11 @@
                     <button type="button" id="wf-presets-btn" class="hidden px-2 py-1.5 rounded border border-white/20 text-gray-400 text-sm hover:bg-white/10 hover:text-white" title="Presets">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     </button>
-                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="px-2 py-1.5 rounded border border-white/20 text-gray-400 text-sm hover:bg-white/10 hover:text-white">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a4 4 0 0 0-4 4v2H6a2 2 0 0 0-2 2v10a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V10a2 2 0 0 0-2-2h-2V6a4 4 0 0 0-4-4z"/><circle cx="12" cy="15" r="2"/></svg>
+                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="flex-shrink-0 px-2 py-1.5 rounded border border-white/20 text-gray-400 hover:bg-white/10 hover:text-white">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
                     </button>
                     <div id="wf-presets-dropdown" class="hidden absolute right-0 top-full mt-1 z-50 w-72 bg-[#1a1f3a] border border-white/20 rounded-lg p-3 max-h-64 overflow-y-auto shadow-xl">
                         <p class="text-xs text-gray-500 mb-2">Presets & Import</p>
@@ -67,6 +70,11 @@
                     </div>
                 </div>
                 <div id="wf-list" class="flex-1 overflow-y-auto space-y-1"></div>
+                <div id="wf-list-footer-actions" class="hidden mt-3 pt-3 border-t border-white/10 flex items-center justify-center gap-2">
+                    <button type="button" id="wf-export-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" title="Save to presets folder">📤 Export</button>
+                    <button type="button" id="wf-download-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" title="Download .dwf file">⬇ Download</button>
+                    <button type="button" id="wf-duplicate-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Duplicate</button>
+                </div>
             </div>
         </div>
         <!-- Right panel -->
@@ -77,21 +85,12 @@
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
                 <!-- Header -->
                 <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 min-w-0">
-                        <input type="text" id="wf-detail-name" class="bg-transparent text-lg font-semibold text-white border-b border-transparent hover:border-white/30 focus:border-[#f97316] focus:outline-none truncate max-w-sm" value="">
-                        <span id="wf-detail-status" class="text-xs px-2 py-1 rounded bg-white/10 text-gray-400">draft</span>
+                    <div class="flex items-center gap-3 min-w-0 flex-1 pr-3">
+                        <input type="text" id="wf-detail-name" readonly class="bg-transparent text-lg font-semibold text-white border-0 focus:outline-none w-full min-w-0" value="">
                     </div>
                     <div class="flex items-center gap-2 flex-shrink-0">
-                        <select id="wf-status-select" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs">
-                            <option value="draft">Draft</option>
-                            <option value="active">Active</option>
-                            <option value="paused">Paused</option>
-                            <option value="archived">Archived</option>
-                        </select>
                         <button type="button" id="wf-run-btn" class="px-3 py-1 rounded bg-green-600 text-white text-xs font-medium hover:bg-green-700">▶ Run</button>
-                        <button type="button" id="wf-export-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" title="Save to presets folder">📤 Export</button>
-                        <button type="button" id="wf-download-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" title="Download .dwf file">⬇ Download</button>
-                        <button type="button" id="wf-duplicate-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Duplicate</button>
+                        <button type="button" id="wf-stop-reset-btn" class="px-2 py-1 rounded border border-orange-500/60 text-orange-300 text-xs hover:bg-orange-500/20" title="Cancel active run and reset all step states/results">⟲ Stop & Reset</button>
                         <button type="button" id="wf-delete-btn" class="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
                     </div>
                 </div>
@@ -100,10 +99,9 @@
                 <!-- Tabs -->
                 <div class="border-b border-white/20 px-6 flex gap-1">
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="steps">Steps</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="schedule">Schedule</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Context & Rules</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="variables">Variables</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Agent Context</button>
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Run History</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="schedule">Schedule</button>
                 </div>
                 <!-- Tab content -->
                 <div class="flex-1 overflow-y-auto p-6">
@@ -112,11 +110,13 @@
                         <div class="flex justify-between items-center mb-4">
                             <p class="text-xs text-gray-500">Click a step to expand and edit it.</p>
                             <div class="flex gap-2">
-                                <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Add Steps from AI</button>
                                 <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Step</button>
                             </div>
                         </div>
                         <div id="wf-steps-list" class="space-y-2"></div>
+                        <div class="mt-4 flex justify-center">
+                            <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Add Steps from AI</button>
+                        </div>
                     </div>
                     <!-- Schedule tab -->
                     <div id="wf-tab-schedule" class="wf-tab-content hidden">
@@ -155,18 +155,10 @@
                     <!-- Context & Rules tab -->
                     <div id="wf-tab-context" class="wf-tab-content hidden">
                         <div class="max-w-2xl">
-                            <p class="text-xs text-gray-500 mb-3">Context rules are prepended to every step's prompt as a [CONTEXT AND RULES] section. Use this to set global instructions, constraints, or persona for the workflow agent.</p>
-                            <textarea id="wf-context-rules" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm font-mono placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="e.g., Always respond in JSON format. Never delete files without confirmation."></textarea>
+                            <p class="text-xs text-gray-500 mb-3">Use one central context block for this workflow. Put all instructions here: rules, credentials, reusable values, conventions, and any persistent guidance the agent should follow on every step.</p>
+                            <textarea id="wf-context-rules" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm font-mono placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="e.g., SSH host/user, API keys from env vars, output format rules, safety constraints, naming conventions, and execution notes."></textarea>
                             <p id="wf-context-save-status" class="text-xs text-gray-500 mt-2"></p>
                         </div>
-                    </div>
-                    <!-- Variables tab -->
-                    <div id="wf-tab-variables" class="wf-tab-content hidden">
-                        <div class="flex justify-between items-center mb-4">
-                            <p class="text-xs text-gray-500">Variables persist across steps within a single run.</p>
-                            <button type="button" id="wf-add-var-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Variable</button>
-                        </div>
-                        <div id="wf-vars-list" class="space-y-2"></div>
                     </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">

@@ -2,6 +2,35 @@
 
 ---
 
+## [2.7.10] - 2026-04-26
+
+### Workflow UI Simplification and Context Unification
+
+Enhanced the workflows area and simplified it for a cleaner, more focused experience. Workflow controls, step readability, context authoring, and history interactions are now more streamlined and intuitive, with a stronger emphasis on a single central workflow context and faster day-to-day operation.
+
+---
+
+## [2.7.9] - 2026-04-22
+
+### WhatsApp Media That Actually Shows Up, Relay You Can Trust, Kanban JS Split
+
+Hey Believers — since the last drop (2.7.8), we chased down the messy stuff between your phone, the relay, and the Kanban **Messages** tab so pictures and files stop ghosting you. We’re not at full “set it and forget it” yet, but the pipeline is way closer to **full automation**: messages land, media can be fetched and cached, and the UI stops lying with broken placeholders.
+
+**WhatsApp inbound media (the real tea)** — The relay was returning 404 for images because the Baileys service was calling `sock.downloadMediaMessage`, which isn’t a thing anymore in current `@whiskeysockets/baileys`. It now uses the proper `downloadMediaMessage` helper with logging and reupload support, so inbound photos/voice/docs can actually be downloaded server-side before they ever reach your machine.
+
+**Desktop relay-media route** — When local files aren’t there yet, the app falls back to the relay correctly: it uses the real WhatsApp message id (plus hints from stored raw JSON, optional `wa_key`, and path fallback), URL-encodes ids safely, and **never** treats your local database row number as a WhatsApp id (that bug was sending the relay on a wild goose chase).
+
+**Thread list honesty** — Message deduping in the chat thread now keys off WhatsApp id **and** local id, so two media messages in the same second don’t collapse into one wrong bubble — which was breaking image URLs and making inbound photos look missing when they weren’t.
+
+**Kanban front-end cleanup** — WhatsApp UI logic moved into dedicated bundles (`kanban_whatsapp.js`, plus board/ticket splits) so the big `kanban.js` file isn’t a monolith anymore; the template loads the pieces in order.
+
+**What you see in the bubble** — Images and video get tighter max sizes so one JPEG doesn’t eat the whole screen; attachment links still work when something isn’t a photo.
+
+**Server housekeeping** — Orphan media files on the relay host got cleaned up when the database no longer referenced them, so we’re not hoarding random bytes next to SQLite forever.
+
+---
+
+
 ## [2.7.8] - 2026-04-17
 
 ### WhatsApp Snapshots, Agent Terminals, Real-Time CLI, Icons Everywhere

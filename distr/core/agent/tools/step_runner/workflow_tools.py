@@ -10,12 +10,36 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
+# Lightweight in-process workflow context memory for ambiguous follow-ups
+# like "continue", "that workflow", or "what's running".
+_last_workflow_context: dict[str, Optional[int]] = {
+    "workflow_id": None,
+    "run_id": None,
+}
+
+
+def _remember_workflow_context(
+    workflow_id: Optional[int] = None,
+    run_id: Optional[int] = None,
+) -> None:
+    if workflow_id is not None:
+        _last_workflow_context["workflow_id"] = int(workflow_id)
+    if run_id is not None:
+        _last_workflow_context["run_id"] = int(run_id)
+
+
+def _get_remembered_workflow_id() -> Optional[int]:
+    return _last_workflow_context.get("workflow_id")
+
+
+def _get_remembered_run_id() -> Optional[int]:
+    return _last_workflow_context.get("run_id")
+
 
 # --- List workflows ---
 class ListWorkflowsInput(BaseModel):
     limit: int = Field(default=20, description="Max workflows to return")
     search: Optional[str] = Field(default=None, description="Search by workflow name")
-    status: Optional[str] = Field(default=None, description="Filter by status: draft, active, paused, archived")
 
 
 class ListWorkflowsTool(BaseTool):
@@ -28,10 +52,10 @@ class ListWorkflowsTool(BaseTool):
     )
     args_schema: Type[BaseModel] = ListWorkflowsInput
 
-    def _run(self, limit: int = 20, search: Optional[str] = None, status: Optional[str] = None, **kwargs) -> str:
+    def _run(self, limit: int = 20, search: Optional[str] = None, **kwargs) -> str:
         try:
             from distr.core.workflow.service import list_workflows
-            workflows = list_workflows(limit=limit, search=search, status=status)
+            workflows = list_workflows(limit=limit, search=search)
             if not workflows:
                 return "No workflows found."
             lines = []
@@ -43,7 +67,7 @@ class ListWorkflowsTool(BaseTool):
                         sched += f" at {w['schedule_time']}"
                     sched += "]"
                 lines.append(
-                    f"- ID {w['id']}: {w['name']} ({w['status']}, {w['step_count']} steps){sched}"
+                    f"- ID {w['id']}: {w['name']} ({w['step_count']} steps){sched}"
                 )
             return "Workflows:\n" + "\n".join(lines)
         except Exception as e:
@@ -75,7 +99,8 @@ class GetWorkflowTool(BaseTool):
             wf = get_workflow(workflow_id)
             if not wf:
                 return f"Workflow {workflow_id} not found."
-            lines = [f"Workflow: {wf['name']} (ID {wf['id']}, {wf['status']})"]
+            _remember_workflow_context(workflow_id=workflow_id)
+            lines = [f"Workflow: {wf['name']} (ID {wf['id']})"]
             if wf.get("description"):
                 lines.append(f"Description: {wf['description']}")
             steps = wf.get("steps", [])
@@ -124,6 +149,7 @@ class RunWorkflowTool(BaseTool):
             if "error" in result:
                 return f"Failed to start workflow: {result['error']}"
             run_id = result.get("run_id")
+            _remember_workflow_context(workflow_id=workflow_id, run_id=run_id)
             return f"Workflow run started (run ID {run_id}). Steps are executing in sequence."
         except Exception as e:
             logger.error("run_workflow failed: %s", e, exc_info=True)
@@ -151,6 +177,7 @@ class CancelWorkflowRunTool(BaseTool):
             from distr.core.workflow.service import cancel_run
             success = cancel_run(run_id)
             if success:
+                _remember_workflow_context(run_id=run_id)
                 return f"Workflow run {run_id} cancelled."
             return f"Could not cancel run {run_id} — it may not exist or already finished."
         except Exception as e:
@@ -531,7 +558,7 @@ class GenerateWorkflowTool(BaseTool):
                 '      "wait_for_continue": false\n'
                 "    }\n"
                 "  ],\n"
-                '  "variables": []\n'
+                '  "context_rules": ""\n'
                 "}\n\n"
                 "Valid action_type values: agent_instruction, execute_code, playwright, "
                 "play_recording, set_variable.\n\n"
@@ -643,7 +670,8 @@ class ClearWorkflowHistoryTool(BaseTool):
 
 # --- Continue a waiting workflow ---
 class ContinueWorkflowInput(BaseModel):
-    run_id: int = Field(description="Workflow run ID that is in waiting state")
+    run_id: Optional[int] = Field(default=None, description="Workflow run ID that is in waiting state. If omitted, auto-resolve latest waiting run.")
+    workflow_id: Optional[int] = Field(default=None, description="Optional workflow ID to narrow auto-resolution when run_id is omitted.")
     user_input: str = Field(default="", description="Optional user input/feedback to pass to the next step")
 
 
@@ -660,15 +688,105 @@ class ContinueWorkflowTool(BaseTool):
     )
     args_schema: Type[BaseModel] = ContinueWorkflowInput
 
-    def _run(self, run_id: int, user_input: str = "", **kwargs) -> str:
+    def _resolve_run_id(self, run_id: Optional[int], workflow_id: Optional[int]) -> tuple[Optional[int], Optional[str]]:
+        """Resolve a run_id for continue operations when not provided explicitly."""
+        if run_id is not None:
+            return int(run_id), None
+        try:
+            from distr.core.workflow.service import get_active_runs
+            effective_workflow_id = workflow_id if workflow_id is not None else _get_remembered_workflow_id()
+            candidates = get_active_runs(limit=50, workflow_id=effective_workflow_id)
+            waiting_runs = [r for r in candidates if str(r.get("status")) == "waiting"]
+            if waiting_runs:
+                # Most recent waiting run comes first from get_active_runs.
+                selected = waiting_runs[0]
+                _remember_workflow_context(
+                    workflow_id=selected.get("workflow_id"),
+                    run_id=selected.get("id"),
+                )
+                return int(selected["id"]), None
+            running_runs = [r for r in candidates if str(r.get("status")) == "running"]
+            if running_runs:
+                return None, (
+                    "I found active workflow runs, but none are waiting for input yet. "
+                    "Wait until a step pauses, then continue."
+                )
+            remembered_run = _get_remembered_run_id()
+            if remembered_run is not None:
+                # Final fallback: we remember a recent run but it's not active now.
+                return remembered_run, None
+            return None, "No active workflow runs found to continue."
+        except Exception as e:
+            logger.error("continue_workflow auto-resolve failed: %s", e, exc_info=True)
+            return None, f"Failed to resolve an active run automatically: {str(e)}"
+
+    def _run(self, run_id: Optional[int] = None, workflow_id: Optional[int] = None, user_input: str = "", **kwargs) -> str:
         try:
             from distr.core.workflow.dispatcher import continue_waiting_step
-            result = continue_waiting_step(run_id, user_input)
+            resolved_run_id, resolve_error = self._resolve_run_id(run_id, workflow_id)
+            if resolve_error:
+                return f"Failed: {resolve_error}"
+            result = continue_waiting_step(int(resolved_run_id), user_input)
             if "error" in result:
                 return f"Failed: {result['error']}"
-            return "Workflow resumed with your input. Execution continuing."
+            _remember_workflow_context(workflow_id=workflow_id, run_id=resolved_run_id)
+            return f"Workflow run {resolved_run_id} resumed with your input. Execution continuing."
         except Exception as e:
             logger.error("continue_workflow failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+# --- Active workflow run context ---
+class GetActiveWorkflowRunsInput(BaseModel):
+    workflow_id: Optional[int] = Field(default=None, description="Optional workflow ID filter")
+    status: Optional[str] = Field(default=None, description="Optional status filter: running or waiting")
+    limit: int = Field(default=20, description="Max active runs to return")
+
+
+class GetActiveWorkflowRunsTool(BaseTool):
+    name: str = "get_active_workflow_runs"
+    description: str = (
+        "List currently active workflow runs with run IDs, status, and current step context. "
+        "Use this first when user asks 'what workflow is running', 'what is waiting', "
+        "'which run should we continue', or 'what step is active right now'."
+    )
+    args_schema: Type[BaseModel] = GetActiveWorkflowRunsInput
+
+    def _run(
+        self,
+        workflow_id: Optional[int] = None,
+        status: Optional[str] = None,
+        limit: int = 20,
+        **kwargs,
+    ) -> str:
+        try:
+            from distr.core.workflow.service import get_active_runs
+            runs = get_active_runs(limit=limit, workflow_id=workflow_id)
+            if status:
+                status_l = str(status).strip().lower()
+                runs = [r for r in runs if str(r.get("status", "")).lower() == status_l]
+            if not runs:
+                return "No active workflow runs found."
+            lines = ["Active workflow runs:"]
+            for r in runs:
+                wf_name = r.get("workflow_name") or f"Workflow {r.get('workflow_id')}"
+                step_name = r.get("current_step_name") or "unknown step"
+                run_status = r.get("status") or "unknown"
+                lines.append(
+                    f"- Run {r.get('id')}: {wf_name} ({run_status}) on '{step_name}'"
+                )
+            # Store latest visible run context to improve follow-up disambiguation.
+            top = runs[0]
+            _remember_workflow_context(
+                workflow_id=top.get("workflow_id"),
+                run_id=top.get("id"),
+            )
+            return "\n".join(lines)
+        except Exception as e:
+            logger.error("get_active_workflow_runs failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
 
     async def _arun(self, **kwargs) -> str:
