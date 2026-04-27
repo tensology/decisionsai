@@ -6,27 +6,23 @@
 
 ### Workflows, Hotkeys, and Stability Improvements
 
-Big cleanup release focused on making workflows feel faster, clearer, and less confusing during real use.
+This update focuses on making daily use cleaner, clearer, and easier to trust.
 
-**Workflows run more reliably** — Fixed double-step execution, improved continue behavior for waiting steps, and made active run details clearer with board/ticket/project context.
+**Workflow runs are more stable** — Continuing a waiting run works more reliably, duplicate step runs were cleaned up, and run progress is easier to follow.
 
-**Agent context is cleaner now** — Context is now managed as multiple editable items (not one giant text blob), and workflow payloads carry better project info for continuity.
+**Context is easier to manage** — You can now keep multiple context items instead of forcing everything into one big block of text.
 
-**Workflow UI got simpler** — Added step reordering, clearer run state visuals, board usage indicators, and better step controls (including safer stop/delete actions).
+**Workflow editing is better** — Step ordering is easier, run states are clearer, and step actions are simpler to manage safely.
 
-**Scheduling conflicts are handled better** — If a board check-in and workflow schedule hit at the same time for the same workflow, the board check-in wins.
+**Scheduling is clearer** — If two triggers hit at the same time for the same workflow, board check-ins take priority.
 
-**Recording flow feels better** — Stopping a recording now consistently asks for action naming/confirmation instead of silently guessing.
+**Recording flow is clearer** — Stopping a recording now consistently asks you to confirm or set the action name.
 
-**Global shortcuts expanded** — Added editable shortcuts for opening key web sections, toggling recording, moving between skins, and selecting skins directly (`1..9`).
+**Shortcuts are more useful** — Added editable shortcuts for opening key web sections, toggling recording, and switching skins.
 
-**Desktop shutdown + audio cleanup** — Quit flow is less likely to lock up, and TTS playback session handling is smoother.
+**Desktop behavior is smoother** — Quit flow is less likely to hang, and voice playback is more consistent.
 
-**VS Code ticket flow improved** — Ticket submission now supports append mode and structured callbacks for workflow-driven flows.
-
-**Prompt loading is smarter** — Added tiered prompt profiles (`lite` / `standard` / `full`) so smaller models don’t get overloaded.
-
-**Startup migrations are safer** — Hardened settings/account migrations to avoid missing-column startup crashes.
+**VS Code ticket handoff improved** — Ticket submission is more flexible and reports back more clearly when used inside workflows.
 
 ---
 
