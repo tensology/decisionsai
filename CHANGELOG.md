@@ -32,21 +32,19 @@
 
 ### Workflow Editor Cleanup
 
-**What you’re editing:** A **workflow** is a saved sequence of steps (agent instructions, recordings, commands, etc.) you run from the Workflows section of the web UI. This update doesn’t change that definition—it cleans up **where** controls live and **how** you set global text the agent sees on every step.
+**Workflows UI simplified** — Draft/Active/Paused controls were removed, the title area was cleaned up, and the run/reset/delete actions are now the primary controls in the header.
 
-**Agent Context in one tab.** “Context & rules” and “Variables” were merged into a single **Agent Context** tab: one text area per workflow for rules, credentials, and conventions. The **Schedule** tab moved to the end of the row (after Run History).
+**Agent Context unified** — Context and variables were consolidated into one **Agent Context** area so global workflow guidance lives in a single place.
 
-**Removed draft/status workflow.** There is no Draft/Active/Paused control or draft label on the workflow title. The title is shown full-width and read-only in the header; you run the workflow, use **Stop & Reset** when you need to cancel and clear step state, or delete the workflow.
+**Tabs and actions reorganized** — Schedule moved to the end of the tab row; export/download/duplicate moved to the selected-workflow footer area in the left panel.
 
-**Buttons grouped by task.** **Export preset**, **Download** (`.dwf` bundle), and **Duplicate** moved to the **bottom of the left sidebar** when a workflow is selected. The detail header keeps **Run**, **Stop & Reset**, and **Delete**.
+**Steps panel cleaned up** — “Add Steps from AI” moved below the list, idle steps show less badge noise, and cancelled output is less repetitive.
 
-**Steps list.** **Add Steps from AI** sits **below** the step list and centered so it reads as optional help, not the primary add action next to **+ Add Step**. Steps that are simply idle show fewer redundant “pending” labels; cancelled steps show less duplicated text next to the status badge.
+**Step history controls added** — You can clear per-step audit history to reset results and run with a clean slate.
 
-**Per-step audit history.** You can clear a step’s audit/history when you want a clean slate; history styling distinguishes waiting vs other outcomes more clearly.
+**Kanban check-in responses improved** — Check-in can target one board or all enabled boards, and the response messaging is clearer when nothing runs.
 
-**Kanban agent check-in.** Check-in can target **one board** or **every board** that has agent check-in enabled. Responses spell out when nothing ran (e.g. enable check-in on a board) and summarize multi-board results more clearly.
-
-**Layout.** The main site navigation uses full width so it lines up with page content below.
+**Layout alignment improved** — Main nav width now matches full-page content width.
 
 ---
 
@@ -54,19 +52,17 @@
 
 ### WhatsApp Media, Relay, and Kanban Messages
 
-You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp—and half the time it’s a broken tile or nothing at all. This release is about closing the gap between “message arrived” and “you can actually see it” in the Kanban **Messages** view, with the relay and desktop working together instead of blaming each other.
+**Inbound media reliability improved** — WhatsApp images, voice notes, and documents are fetched more reliably instead of showing broken or missing previews.
 
-**Photos and files actually arrive.** Inbound media is downloaded the way the current WhatsApp stack expects, so the relay can serve images, voice, and documents instead of failing quietly. What lands on your machine matches what people sent—not a dead link or empty preview.
+**Relay fallback fixed** — If media is not yet local, the desktop now resolves and requests the correct relay item using the right message identity.
 
-**If it isn’t on disk yet, the app still finds it.** When the desktop doesn’t have the file locally yet, it asks the relay using the real message identity, so fetches line up with the right chat bubble. You’re not stuck with “missing media” because the app pointed at the wrong message.
+**Message dedupe tightened** — Back-to-back media messages no longer collapse into one bubble and break thumbnails.
 
-**Back-to-back messages don’t eat each other.** Two attachments landing in the same second used to merge into one wrong bubble and break thumbnails. Matching is tighter now, so each message keeps its own media and you’re not chasing ghosts.
+**Kanban Messages code split** — WhatsApp-related UI logic was separated into clearer modules to make behavior easier to maintain.
 
-**Kanban WhatsApp UI is easier to evolve.** The board’s WhatsApp pieces load in clearly separated chunks instead of one giant script, which keeps the Messages tab maintainable as we keep tightening behavior.
+**Media rendering tuned** — Image/video bubble sizing is more controlled, and non-previewable files still appear as usable attachment links.
 
-**Bubbles stay readable.** Images and video cap at sensible sizes so one screenshot doesn’t dominate the thread; anything that isn’t a preview-friendly image still shows up as a proper attachment link.
-
-**Relay storage stays sane.** Files that nothing references anymore get cleared out over time, so the relay isn’t accumulating endless orphaned media beside your data.
+**Relay cleanup added** — Unreferenced media files are cleaned up to avoid relay storage bloat.
 
 ---
 
@@ -117,27 +113,21 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 ### Sidecar Tools, Workflow Engine, Small Model Tool Calling, Coqui TTS, Initiative System
 
-**Sidecar tools** – Sidecar is the companion process that runs next to the main app (named after a motorcycle sidecar: attached, but separate). We built it so the agent can execute machine-control tools on your actual computer over a persistent connection (and expose the same tools locally over HTTP), instead of trying to do OS-level actions inside the main app process. It is written in Go so it ships as a small cross-platform binary, starts fast, and runs reliably as a background service on macOS/Windows/Linux. Sidecar now includes five new tools: `screen_analyze`, `run_python`, `drag_to`, `scroll`, and `wait_for_element` for better screen understanding, more reliable UI control, and quick Python task execution. These tools are available in regular chat and in workflows whenever sidecar is enabled.
+**Sidecar machine tools expanded** — Added `screen_analyze`, `run_python`, `drag_to`, `scroll`, and `wait_for_element` for stronger desktop control and screen-aware automation.
 
-**Workflow engine rewrite** – Workflow internals were split into clear modules (dispatcher, router, verification, planning, import/export, migration, audit) instead of one giant file. The workflow agent now uses tools during runs (with provider-native tool calling and a safety loop cap), so it acts instead of just describing actions. Async steps now continue properly when they finish, and hung steps now fail on timeout instead of running forever.
+**Workflow runtime rebuilt** — Workflow internals were modularized and step execution became more reliable (tool-based execution, proper async continuation, timeout handling).
 
-**Small model tool calling** – Smaller Ollama models that do not support native function calling now still get tool access. The system adds a tool hint block, reads `TOOL: ...` intents from model output, and runs the matching tool. It also adds guardrails: hallucinated tool-name matching, prompt-injection checks, and argument type coercion.
+**Small-model tool calling supported** — Models without native function calling can still use tools through intent parsing plus safety guardrails.
 
-**LLM settings page** – All model slots are now in one place: Conversational, Coding, Vision, Image, Computer Use, Workflows, and Kanban Agent. Workflow and Kanban model settings are no longer hidden in separate screens. Computer Use is new for pixel-precise element location, and optional slots can inherit from Conversational when left empty.
+**LLM settings consolidated** — Conversational, coding, vision, image, computer-use, workflow, and kanban model slots are now configured in one place.
 
-**VoxCPM TTS tested** – VoxCPM integration was built and tested, including voice cloning. After real-use testing, it was not recommended due to latency and output quality. The code is still in the repo for anyone who wants to experiment.
+**TTS options expanded and stabilized** — Coqui voice cloning support was added; reliability fixes prevent TTS silence and wrong-provider voice routing.
 
-**Coqui TTS voice cloning** – Coqui now supports custom voice cloning via XTTS v2 in the same custom-voice flow as Kokoro and ElevenLabs. Built-in VCTK speakers are still available, and cloned voices appear with a ⭐ prefix in the voice picker. Coqui chat-creation validation and voice-key resolution were also fixed.
+**Initiative system introduced** — Added four initiative modes (`observe`, `assist`, `operate`, `own`) with scheduled policy-checked execution cycles.
 
-**TTS provider notes** – Coqui has strong speaker coverage and now cloning, but Python 3.12 support can still be finicky. F5-TTS remains available for users who want it. Kokoro (offline) and ElevenLabs (cloud) remain the recommended pair while we focus on reliability over provider count. Rube integration was removed.
+**Autostart support added** — App can launch on login via settings.
 
-**Initiative system** – The proactive agent now has four levels: observe, assist, operate, and own. It runs on two timers: idle checks (5 minutes) and scheduled checks (every 60 seconds). Each cycle gathers context, proposes one action, and runs that action through policy checks before dispatch.
-
-**Autostart** – The app can now start automatically on system login. You can toggle this from settings.
-
-**Legacy Step Runner removed** – Remaining legacy Step Runner models, frontend code, tools, and service code were removed. Workflows stay on the unified system introduced in `2.7.0`.
-
-**Reliability** – TTS no longer goes silent after tool calls; Coqui voice selection correctly routes to Coqui instead of falling through to ElevenLabs.
+**Legacy Step Runner removed** — Remaining legacy Step Runner paths were removed so workflows stay on the unified execution model.
 
 ---
 
