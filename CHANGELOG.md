@@ -4,47 +4,49 @@
 
 ## [2.7.11] - 2026-04-27
 
-### Workflows, Hotkeys, and Stability Improvements
+### Workflows, Hotkeys, Desktop Polish
 
-Picture your normal day: you kick off a workflow, step through it, maybe pause for input, then pick up again. That loop should feel obvious in the UI and never run the same step twice by accident. That’s what this drop is chasing—same tools, less friction.
+**What a workflow is (if you haven’t used it yet):** In the web app under Workflows you build a **named list of steps**. Each step is an action for the assistant—natural-language instructions, running a saved mouse/keyboard recording, shell commands, browser automation, HTTP calls, and similar. Steps run in order. Some steps can pause until you continue. **Agent Context** is separate text (or items—see below) that gets applied on every step so the model sees your rules, credentials, and conventions without you repeating them per step. Workflows can also be tied into ticket boards and projects so runs show *which board, ticket, and project* they belong to.
 
-**Workflow runs stay on track.** When a step waits for you and you hit continue, the run actually moves forward and the steps panel reflects it. Runs that shouldn’t fire twice won’t stack on top of each other, so you spend less time wondering “did it skip or duplicate?” Active runs also surface enough context—board, ticket, project—that you’re not guessing which job you’re looking at.
+**What changed in this release**
 
-**Context you can actually maintain.** Instead of one endless rules-and-secrets paragraph, you split things into separate items (SSH notes, client tone, “always do X”). You add and edit them like a checklist, and the agent pulls from that same pile every step—so onboarding a new convention means adding a line, not rewriting a novel.
+**Running and continuing a workflow.** Fixed cases where the same step could run twice or “Continue” didn’t move the run forward in the UI. Waiting steps are supposed to resume cleanly, and the Workflows page is meant to stay in sync with what the backend is doing. Active run summaries list more useful context (including project) so you’re not staring at a run with no idea what it’s for.
 
-**Editing workflows feels like editing a list.** Drag steps by the grip to reorder; see at a glance what’s running or waiting; stop or delete a step when you mean to, with confirmations where it matters. You’re arranging a playbook, not fighting the interface.
+**Agent Context is a manageable list.** You can add, edit, and delete multiple context entries (rules, snippets, credentials notes) instead of maintaining one giant text field. Combined with what you already had in 2.7.10, this is the “several sticky notes instead of one wall of text” model.
 
-**Two alarms, one workflow.** Your board agent checks in at the same moment a schedule would have fired the same workflow—now the board path wins first, so you’re not getting two competing starts for the same thing.
+**Building and reading a workflow.** Steps can be reordered (drag the **⋮⋮** handle on each row). The list shows clearer run/wait state, and which boards use a workflow. Stop and delete on steps include confirm where it helps. Export / duplicate / download behavior from 2.7.10 stays; this release is mostly execution reliability and editor detail.
 
-**Recording ends with a name you recognize.** You stop capturing a macro and get a prompt to confirm or change the title right then, instead of hunting for a generic “Recorded action” later.
+**Schedule vs ticket board.** If something on a **ticket board** starts a workflow at the same instant a **time-based schedule** would start the **same** workflow, the board-triggered run is preferred so you don’t get two competing starts for one workflow.
 
-**Fewer clicks to the places you live in.** From the desktop you can jump straight to Chat, Projects, Actions, Snippets, Workflows, or Preferences; toggle recording without hunting the UI; cycle Oracle skins without opening settings. Wire the chords in Preferences once, then muscle-memory does the rest.
+**Action recordings.** When you stop recording an action, you get a prompt to confirm or type the action name instead of silently saving under a vague default.
 
-**Closing and listening feel less brittle.** Quitting after you confirm shouldn’t beach-ball the app, and assistant voice should play through without stuttering or doubling when you’re mid-conversation.
+**Keyboard shortcuts (all configurable).** Under **Preferences → Shortcuts** you can turn shortcuts on/off and choose modifiers and keys. This release adds and wires shortcuts for: starting/stopping action recording from the desktop; jumping to Chat, Projects, Actions, Snippets, Workflows, and Preferences in the browser; cycling the Oracle / avatar skins. Defaults use Command–Option combinations on macOS; you’re not locked to those if you change them in Preferences.
 
-**Tickets from Cursor fit the story.** When a workflow sends work into VS Code, you can keep building on the same ticket instead of always spawning a fresh thread, and status can flow back to the workflow when that’s how you’ve set things up—so “agent did the thing” isn’t a dead end.
+**App exit and voice.** Quitting after you confirm is less likely to freeze the window stack. Text-to-speech playback was adjusted so responses don’t sound choppy when events fire close together.
+
+**VS Code tickets from workflows.** If a workflow creates or updates a Cursor/VS Code ticket, you can use **append mode** so new work attaches to the current ticket instead of always opening a fresh one, and workflows can receive a status callback when the ticket path is set up for it.
 
 ---
 
 ## [2.7.10] - 2026-04-26
 
-### Workflows — Less Noise, One Place for Context
+### Workflow Editor Cleanup
 
-You spend real time in the Workflows screen: naming steps, pasting conventions, kicking off runs, digging through history. This pass trims the chrome so that work stays in front—not status dropdowns, duplicate buttons, or a separate “variables” cupboard that fought with your rules text.
+**What you’re editing:** A **workflow** is a saved sequence of steps (agent instructions, recordings, commands, etc.) you run from the Workflows section of the web UI. This update doesn’t change that definition—it cleans up **where** controls live and **how** you set global text the agent sees on every step.
 
-**One tab for everything the agent should remember.** Rules, credentials, tone, and reusable notes live together under **Agent Context** instead of splitting “Context & Rules” from “Variables.” You edit one coherent block per workflow; Schedule and Run History stay easy to reach, with Schedule parked at the end where it belongs.
+**Agent Context in one tab.** “Context & rules” and “Variables” were merged into a single **Agent Context** tab: one text area per workflow for rules, credentials, and conventions. The **Schedule** tab moved to the end of the row (after Run History).
 
-**Workflows aren’t drafts anymore.** The fake article workflow—Draft / Active / Paused badges and status pickers—is gone from the UI. The title reads clean across the header (no cramped edit-in-place dance), and the mental model is simpler: pick a workflow, run it or reset it, delete it if you must.
+**Removed draft/status workflow.** There is no Draft/Active/Paused control or draft label on the workflow title. The title is shown full-width and read-only in the header; you run the workflow, use **Stop & Reset** when you need to cancel and clear step state, or delete the workflow.
 
-**Actions sit where your eyes already are.** Export, download bundle, and duplicate moved down to the footer of the left-hand list—they show up when you’ve actually selected something—so the top bar isn’t a junk drawer. Up top you keep what you do all day: **Run**, **Stop & Reset** when a run goes sideways, and **Delete** when you’re done with the workflow.
+**Buttons grouped by task.** **Export preset**, **Download** (`.dwf` bundle), and **Duplicate** moved to the **bottom of the left sidebar** when a workflow is selected. The detail header keeps **Run**, **Stop & Reset**, and **Delete**.
 
-**Steps stay the hero.** “Add Steps from AI” sits under the step list where it reads as an optional boost, not a competitor to adding a normal step. Idle steps don’t spam **pending** badges anymore, and when something’s cancelled you don’t get a wall of redundant “cancelled by user” text next to what the badge already says.
+**Steps list.** **Add Steps from AI** sits **below** the step list and centered so it reads as optional help, not the primary add action next to **+ Add Step**. Steps that are simply idle show fewer redundant “pending” labels; cancelled steps show less duplicated text next to the status badge.
 
-**Step history you can reset.** Each step’s audit trail can be cleared when you want a fresh run without carrying old verdicts forever; history coloring calls out waiting states more clearly when you scroll back.
+**Per-step audit history.** You can clear a step’s audit/history when you want a clean slate; history styling distinguishes waiting vs other outcomes more clearly.
 
-**Ticket board check-in tells you what happened.** You can run check-in against one board when you want a tight loop—or hit every board that has agent check-in turned on. If nothing can run, the message explains what to turn on instead of shrugging silently, and multi-board runs give a clearer recap of what started versus what was already busy.
+**Kanban agent check-in.** Check-in can target **one board** or **every board** that has agent check-in enabled. Responses spell out when nothing ran (e.g. enable check-in on a board) and summarize multi-board results more clearly.
 
-**Web shell matches the content.** The main nav stretches full width like the pages beneath it, so workflows and boards don’t feel squeezed into a postcard column.
+**Layout.** The main site navigation uses full width so it lines up with page content below.
 
 ---
 
@@ -71,7 +73,7 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 ## [2.7.8] - 2026-04-17
 
-### WhatsApp Snapshots, Agent Terminals, Real-Time CLI, Icons Everywhere
+### WhatsApp Snapshots, Agent Terminals, Real-Time CLI
 
 **WhatsApp → Ticket in one click** — Snapshot an entire WhatsApp thread into a kanban ticket. Messages get batched together in the Backlog lane with a camera badge showing which ones were included. No more copying messages one by one.
 
@@ -91,10 +93,6 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 **Terminal overview sees tools** — The overview summary now includes tool activity (which tools ran, which failed) alongside the last command and response.
 
-**Icons on everything** — Project tabs, chat context menus, kanban right-clicks, action menus — all have proper SVG icons now instead of bare text.
-
-**Simpler project view** — Two-column layout, board config living inside Details, three tabs instead of four.
-
 ---
 
 
@@ -111,8 +109,6 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 **Step Runner Presets** — Six ready-made presets for common tasks: file ops, HTTP health checks, opening apps, Python data pipelines, and web login/scraping with Playwright.
 
 **pi CLI Setup** — Setup now installs and configures the pi coding agent automatically. One run and both DecisionsAI and pi are ready to go.
-
-**Housekeeping** — Ditched kiro_cli and old xterm vendor files. Updated launcher script.
 
 ---
 
@@ -139,11 +135,9 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 **Autostart** – The app can now start automatically on system login. You can toggle this from settings.
 
-**Voice Provider Guide** – Added `VOICE_PROVIDER_GUIDE.md` with setup details, quality notes, and recommendations for all supported TTS providers.
-
 **Legacy Step Runner removed** – Remaining legacy Step Runner models, frontend code, tools, and service code were removed. Workflows stay on the unified system introduced in `2.7.0`.
 
-**Bug fixes** – Fixed silent TTS after tool calls. Fixed Coqui voice key resolution falling through to ElevenLabs instead of `coqui_voice`. Updated Oracle skin WebM animation assets. Refreshed model recommendations data. Added test updates for the new workflow modules.
+**Reliability** – TTS no longer goes silent after tool calls; Coqui voice selection correctly routes to Coqui instead of falling through to ElevenLabs.
 
 ---
 
@@ -165,7 +159,7 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 **Voice navigation** – Tell the agent "open skins", "open audio settings", "open providers" and it navigates directly to that section. Works for every page and settings tab in the app.
 
-**Bug fixes** – Fixed speech-to-text crashes with Vosk fallback. Fixed Whisper failing to load on some setups. Fixed the agent not finding the right fast action handler. Fixed startup log spam. Database migrations for new workflow columns run automatically. Tailwind CSS is now bundled locally — the CDN dependency was defeating the whole offline-first point.
+**Stability & offline use** – Speech-to-text (Vosk fallback, Whisper load failures) and fast-action routing hardened. Tailwind bundled locally so the web UI works without relying on a CDN. Workflow schema updates apply on startup.
 
 ---
 
@@ -183,11 +177,11 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 **Telegram Tool Results** – Previously, when the agent used a tool during a Telegram conversation, you'd sometimes get an empty "Done" message instead of the actual result. Fixed. Tool results now get forwarded properly, and stale screenshot flags get cleared between responses so you don't get yesterday's screenshot attached to today's message.
 
-**Windows Experience** – A bunch of work went into making Windows feel less janky. The app now gets Start Menu shortcuts, a desktop shortcut, and a proper uninstaller. Console windows no longer flash on screen when the app launches background processes. The player window hides from the taskbar. Sound playback uses the right backend. And if you try to launch the app twice, it catches that instead of running two copies.
+**Windows installer & runtime** — Proper shortcuts, uninstaller, single-instance guard, and fewer background-console flashes on launch.
 
 **Restart & Exit** – The restart and exit tools were rewritten to use the event queue instead of Qt signals, which fixes crashes when they were called from background threads. Restart actually works now — it does a clean `sleep + exec` instead of the old approach that would sometimes just kill the app without coming back. There's a new "Restart" option in the oracle's right-click menu too.
 
-**Voice & TTS Fixes** – Voice provider names like "Kokoro (Offline)" no longer confuse the system — they get normalized properly everywhere. The TTS sentence splitter stopped breaking on version numbers (like "2.5" getting split into two sentences). All LLM providers now get the full tool list instead of having tools stripped based on provider — the model decides what to use.
+**Voice & routing** — Voice provider labels normalize consistently; TTS sentence splitting no longer splits on version-like numbers (e.g. `2.5`). LLM providers receive the full tool catalog so the model chooses tools instead of the app hiding them by provider.
 
 ---
 
@@ -219,7 +213,7 @@ You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp�
 
 **Voice & Mouse** – Fixed "move mouse to center" accidentally taking a screenshot instead. Fixed audio glitches in push-to-talk where blank audio artifacts would show up as text. Fixed the agent randomly dying every 5 minutes due to an idle timeout.
 
-**Other** – Create multiple tickets from one voice command. Config folder unified to one location. App shows version info at startup. Various UI fixes.
+**Bulk tickets & config** — Multiple tickets from one voice command; unified config location; version shown at startup.
 
 ---
 
@@ -249,7 +243,7 @@ This one's huge. Remember swapping Winamp skins back in the day and completely c
 
 **Settings Migration** – Existing users' oracle settings (GIF filenames like "0.gif") are automatically migrated to the new skin system on first launch. No manual steps needed.
 
-**Bug Fixes** – Fixed PTT getting stuck after dragging. Fixed glow not clearing on release. Fixed animation flickering from dual rendering systems. Cleaned up ~200 lines of dead legacy code from the oracle window.
+**Fixes** – PTT stuck after drag; glow clearing on release; animation flicker from overlapping render paths; removed dead legacy oracle code.
 
 ---
 
@@ -265,7 +259,7 @@ Big internal cleanup — the entire project was reorganized, about 15,000 lines 
 
 **Telegram Remote Control** – Type "remote" in Telegram and you get an HMAC-encrypted link to a full web UI for your machine. Screenshots stream live, you can view multiple screens, drag and drop with the cursor, upload and download files, even move files between machines. Chats, actions, step runner, snippets — all controllable from your phone. Each session is token-protected with rate limiting and SSRF prevention.
 
-**Bug Fixes & Performance** – Fixed a startup crash with agent persona loading. Fixed voice personality not carrying over to custom voices. Removed unnecessary database calls and stale imports. The app loads faster. 
+**Fixes** – Startup crash with agent persona loading; voice personality on custom voices; fewer redundant DB round-trips on load.
 
 ---
 
