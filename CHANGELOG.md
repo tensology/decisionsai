@@ -6,23 +6,23 @@
 
 ### Workflows, Hotkeys, and Stability Improvements
 
-This update focuses on making daily use cleaner, clearer, and easier to trust.
+Picture your normal day: you kick off a workflow, step through it, maybe pause for input, then pick up again. That loop should feel obvious in the UI and never run the same step twice by accident. That’s what this drop is chasing—same tools, less friction.
 
-**Workflow runs are more stable** — Continuing a waiting run works more reliably, duplicate step runs were cleaned up, and run progress is easier to follow.
+**Workflow runs stay on track.** When a step waits for you and you hit continue, the run actually moves forward and the steps panel reflects it. Runs that shouldn’t fire twice won’t stack on top of each other, so you spend less time wondering “did it skip or duplicate?” Active runs also surface enough context—board, ticket, project—that you’re not guessing which job you’re looking at.
 
-**Context is easier to manage** — You can now keep multiple context items instead of forcing everything into one big block of text.
+**Context you can actually maintain.** Instead of one endless rules-and-secrets paragraph, you split things into separate items (SSH notes, client tone, “always do X”). You add and edit them like a checklist, and the agent pulls from that same pile every step—so onboarding a new convention means adding a line, not rewriting a novel.
 
-**Workflow editing is better** — Step ordering is easier, run states are clearer, and step actions are simpler to manage safely.
+**Editing workflows feels like editing a list.** Drag steps by the grip to reorder; see at a glance what’s running or waiting; stop or delete a step when you mean to, with confirmations where it matters. You’re arranging a playbook, not fighting the interface.
 
-**Scheduling is clearer** — If two triggers hit at the same time for the same workflow, board check-ins take priority.
+**Two alarms, one workflow.** Your board agent checks in at the same moment a schedule would have fired the same workflow—now the board path wins first, so you’re not getting two competing starts for the same thing.
 
-**Recording flow is clearer** — Stopping a recording now consistently asks you to confirm or set the action name.
+**Recording ends with a name you recognize.** You stop capturing a macro and get a prompt to confirm or change the title right then, instead of hunting for a generic “Recorded action” later.
 
-**Shortcuts are more useful** — Added editable shortcuts for opening key web sections, toggling recording, and switching skins.
+**Fewer clicks to the places you live in.** From the desktop you can jump straight to Chat, Projects, Actions, Snippets, Workflows, or Preferences; toggle recording without hunting the UI; cycle Oracle skins without opening settings. Wire the chords in Preferences once, then muscle-memory does the rest.
 
-**Desktop behavior is smoother** — Quit flow is less likely to hang, and voice playback is more consistent.
+**Closing and listening feel less brittle.** Quitting after you confirm shouldn’t beach-ball the app, and assistant voice should play through without stuttering or doubling when you’re mid-conversation.
 
-**VS Code ticket handoff improved** — Ticket submission is more flexible and reports back more clearly when used inside workflows.
+**Tickets from Cursor fit the story.** When a workflow sends work into VS Code, you can keep building on the same ticket instead of always spawning a fresh thread, and status can flow back to the workflow when that’s how you’ve set things up—so “agent did the thing” isn’t a dead end.
 
 ---
 
