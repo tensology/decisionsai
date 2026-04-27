@@ -176,6 +176,7 @@ class WebMPlayer(QObject):
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._frames: List[QPixmap] = []
+        self._source_images: List[QImage] = []
         self._current_index: int = 0
         self._forward: bool = True
         self._pingpong: bool = True
@@ -183,6 +184,7 @@ class WebMPlayer(QObject):
         self._timer.timeout.connect(self._advance)
         self._interval_ms: int = _DEFAULT_INTERVAL_MS
         self._size: QSize | None = None
+        self._device_pixel_ratio: float = 1.0
 
     # ------------------------------------------------------------------
     # Public API
@@ -197,6 +199,7 @@ class WebMPlayer(QObject):
         """
         self.stop()
         self._frames = []
+        self._source_images = []
         self._current_index = 0
         self._forward = True
         self._pingpong = (playback == "pingpong")
@@ -225,14 +228,8 @@ class WebMPlayer(QObject):
             qimages = [_apply_chroma_key_to_image(img, effective_key, chroma_threshold)
                        for img in qimages]
 
-        for qimg in qimages:
-            if self._size is not None:
-                qimg = qimg.scaled(
-                    self._size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
-                    Qt.TransformationMode.SmoothTransformation,
-                )
-            self._frames.append(QPixmap.fromImage(qimg))
+        self._source_images = qimages
+        self._rebuild_frames()
 
         if fps > 0:
             self._interval_ms = max(1, int(1000.0 / fps))
@@ -254,18 +251,17 @@ class WebMPlayer(QObject):
     def set_size(self, width: int, height: int) -> None:
         """Set the display size. Rescales existing frames if loaded."""
         self._size = QSize(width, height)
-        if self._frames:
-            # Re-scale all cached frames
-            rescaled = []
-            for px in self._frames:
-                rescaled.append(
-                    px.scaled(
-                        self._size,
-                        Qt.AspectRatioMode.KeepAspectRatio,
-                        Qt.TransformationMode.SmoothTransformation,
-                    )
-                )
-            self._frames = rescaled
+        if self._source_images:
+            self._rebuild_frames()
+
+    def set_device_pixel_ratio(self, dpr: float) -> None:
+        """Set DPR so frames are rendered at physical pixel density."""
+        safe_dpr = max(1.0, float(dpr or 1.0))
+        if abs(safe_dpr - self._device_pixel_ratio) < 0.001:
+            return
+        self._device_pixel_ratio = safe_dpr
+        if self._source_images:
+            self._rebuild_frames()
 
     # ------------------------------------------------------------------
     # Internal
@@ -282,3 +278,27 @@ class WebMPlayer(QObject):
         else:
             self._current_index = (self._current_index + 1) % len(self._frames)
         self.frame_ready.emit(self._frames[self._current_index])
+
+    def _rebuild_frames(self) -> None:
+        """Rebuild display frames from original decoded images."""
+        rebuilt: List[QPixmap] = []
+        target_size = self._size
+        dpr = max(1.0, float(self._device_pixel_ratio or 1.0))
+        for qimg in self._source_images:
+            out = qimg
+            if target_size is not None:
+                physical_size = QSize(
+                    max(1, int(target_size.width() * dpr)),
+                    max(1, int(target_size.height() * dpr)),
+                )
+                out = out.scaled(
+                    physical_size,
+                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+            px = QPixmap.fromImage(out)
+            px.setDevicePixelRatio(dpr)
+            rebuilt.append(px)
+        self._frames = rebuilt
+        if self._frames:
+            self._current_index = max(0, min(self._current_index, len(self._frames) - 1))

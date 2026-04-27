@@ -132,6 +132,7 @@ class AnimationPlayer(QObject):
         self._webm_player = None  # WebMPlayer, imported lazily
         self._width: int = 0
         self._height: int = 0
+        self._device_pixel_ratio: float = 1.0
 
     def load(self, file_path: str, playback: str = "loop",
              chroma_key: tuple | None = None, chroma_threshold: int = 35) -> None:
@@ -150,6 +151,7 @@ class AnimationPlayer(QObject):
             from distr.gui.oracle.webm_player import WebMPlayer
             player = WebMPlayer(self)
             player.frame_ready.connect(self.frame_ready)
+            player.set_device_pixel_ratio(self._device_pixel_ratio)
             player.load(file_path, playback=playback,
                         chroma_key=chroma_key, chroma_threshold=chroma_threshold)
             if self._width and self._height:
@@ -188,3 +190,9 @@ class AnimationPlayer(QObject):
             self._player.set_size(width, height)
         if self._webm_player is not None:
             self._webm_player.set_size(width, height)
+
+    def set_device_pixel_ratio(self, dpr: float) -> None:
+        """Set device pixel ratio used by WebM playback frames."""
+        self._device_pixel_ratio = max(1.0, float(dpr or 1.0))
+        if self._webm_player is not None:
+            self._webm_player.set_device_pixel_ratio(self._device_pixel_ratio)

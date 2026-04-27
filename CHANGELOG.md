@@ -4,13 +4,29 @@
 
 ## [2.7.11] - 2026-04-27
 
-### Workflow Responsiveness, Shortcut Expansion, and Recording UX Improvements
+### Workflow Reliability, Agent Context, Hotkeys, and Runtime Quality Pass
 
-Enhanced workflow editing and runtime responsiveness with drag-and-drop step reordering in the Web UI, clearer run/status feedback, and safer migration handling during startup.
+This release consolidates the full day of workflow and runtime work into one stability-focused pass: tighter orchestration behavior, clearer Web UI activity feedback, stronger context propagation, safer scheduling precedence, and better desktop interaction controls.
 
-Expanded global shortcut support with editable Web UI launcher hotkeys, skin navigation shortcuts (next/previous and direct skin index selection), and improved macOS key normalization so Option+Command combinations resolve reliably.
+**Workflow orchestration and execution** — Addressed step double-execution paths, improved idempotency guards in dispatch, and tightened the continue flow so waiting steps reliably resume and visibly progress in the Web UI. Active run summaries now include richer board/ticket/project context, and continue-target guidance is clearer for multi-run situations.
 
-Improved recording stop behavior by adding a consistent confirmation/name input popup flow when recordings are saved, so users can immediately confirm or rename actions without losing context.
+**Workflow context model** — Agent context now supports structured multi-item CRUD (instead of a single blob), and prompt assembly combines base context with authored context items more predictably. Run history/active-run payloads now include project metadata for stronger board/project/ticket continuity.
+
+**Workflow UI clarity and control** — Added drag-and-drop step reordering, improved live run state indicators, board-consumer visuals, refined step controls (including stop/delete confirmations), and cleaner status presentation to reduce ambiguity during long-running or waiting flows.
+
+**Scheduler precedence rules** — When board check-ins and workflow schedules are due at the same tick for the same workflow, board-driven check-ins now take priority to avoid overlap and conflicting execution ownership.
+
+**Recording and action naming UX** — Stopping recordings now triggers a consistent confirmation/name prompt flow so users can immediately confirm or rename saved actions without losing context.
+
+**Global shortcut system expansion** — Added and exposed editable global shortcuts in Preferences for web launchers (Chat, Projects, Actions, Snippets, Workflows, Preferences), recording toggle, skin navigation (next/previous), and direct skin selection (`1..9`). macOS key normalization was improved so Option+Command combos map reliably even when system glyph variants are emitted.
+
+**Desktop lifecycle and audio quality fixes** — Improved quit sequencing to reduce lockups (confirm → hide oracle → dismiss blockers → exit), and refined TTS session dedupe behavior for smoother playback.
+
+**VS Code extension + callback flow** — Extended ticket handling with append-mode support and callback metadata flow so workflow-driven ticket submissions can report back through structured callback paths more reliably.
+
+**Prompt/runtime profiling and safeguards** — Added model-tiered prompt loading (`lite`/`standard`/`full`) with debug-gated developer context, reducing prompt overload on smaller models while preserving developer self-update capabilities in debug mode.
+
+**Migration hardening** — Fixed startup migration fragility where ORM-wide settings queries could fail before new columns existed; migration paths now use safer, column-aware handling in critical account-migration flows.
 
 ---
 

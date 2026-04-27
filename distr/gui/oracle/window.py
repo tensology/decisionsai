@@ -385,6 +385,14 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         migrated = migrate_selected_oracle(skin_name)
         self._skin_folder = migrated
 
+        # Persist active skin selection immediately (hotkeys/settings both route here).
+        try:
+            settings = load_settings_from_db()
+            settings['selected_oracle'] = migrated
+            save_settings_to_db(settings)
+        except Exception as e:
+            logger.warning("Failed to persist selected_oracle=%s: %s", migrated, e)
+
         result = get_skin_by_name(AVATARS_DIR, migrated)
         if result is None:
             logger.warning("Skin '%s' not found on change, ignoring", migrated)
@@ -583,6 +591,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # in _on_skin_frame_ready, avoiding pixelation
         extract_size = int(self.content_size * max(image_scale, 1.0))
         self._animation_player.set_size(extract_size, extract_size)
+        self._animation_player.set_device_pixel_ratio(self.devicePixelRatioF())
         self._animation_player.load(
             anim_path,
             playback=response.playback,
@@ -1226,6 +1235,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         new_scale = max(4, min(10, current_scale + delta))
         if new_scale == current_scale:
             return
+        # Persist immediately so size survives restart even if downstream signal handling
+        # is interrupted. update_size() still performs the canonical resize + save path.
+        try:
+            settings['sphere_size'] = new_scale * 20
+            save_settings_to_db(settings)
+        except Exception as e:
+            logger.warning("Failed to persist hotkey size change to %spx: %s", new_scale * 20, e)
         signal_manager.oracle_size_changed.emit(new_scale * 20)
         down_modifier, down_key = self._get_oracle_size_down_hotkey_combo()
         up_modifier, up_key = self._get_oracle_size_up_hotkey_combo()
