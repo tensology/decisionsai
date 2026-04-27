@@ -28,29 +28,43 @@ Picture your normal day: you kick off a workflow, step through it, maybe pause f
 
 ## [2.7.10] - 2026-04-26
 
-### Workflow UI Simplification and Context Unification
+### Workflows — Less Noise, One Place for Context
 
-Enhanced the workflows area and simplified it for a cleaner, more focused experience. Workflow controls, step readability, context authoring, and history interactions are now more streamlined and intuitive, with a stronger emphasis on a single central workflow context and faster day-to-day operation.
+You spend real time in the Workflows screen: naming steps, pasting conventions, kicking off runs, digging through history. This pass trims the chrome so that work stays in front—not status dropdowns, duplicate buttons, or a separate “variables” cupboard that fought with your rules text.
+
+**One tab for everything the agent should remember.** Rules, credentials, tone, and reusable notes live together under **Agent Context** instead of splitting “Context & Rules” from “Variables.” You edit one coherent block per workflow; Schedule and Run History stay easy to reach, with Schedule parked at the end where it belongs.
+
+**Workflows aren’t drafts anymore.** The fake article workflow—Draft / Active / Paused badges and status pickers—is gone from the UI. The title reads clean across the header (no cramped edit-in-place dance), and the mental model is simpler: pick a workflow, run it or reset it, delete it if you must.
+
+**Actions sit where your eyes already are.** Export, download bundle, and duplicate moved down to the footer of the left-hand list—they show up when you’ve actually selected something—so the top bar isn’t a junk drawer. Up top you keep what you do all day: **Run**, **Stop & Reset** when a run goes sideways, and **Delete** when you’re done with the workflow.
+
+**Steps stay the hero.** “Add Steps from AI” sits under the step list where it reads as an optional boost, not a competitor to adding a normal step. Idle steps don’t spam **pending** badges anymore, and when something’s cancelled you don’t get a wall of redundant “cancelled by user” text next to what the badge already says.
+
+**Step history you can reset.** Each step’s audit trail can be cleared when you want a fresh run without carrying old verdicts forever; history coloring calls out waiting states more clearly when you scroll back.
+
+**Ticket board check-in tells you what happened.** You can run check-in against one board when you want a tight loop—or hit every board that has agent check-in turned on. If nothing can run, the message explains what to turn on instead of shrugging silently, and multi-board runs give a clearer recap of what started versus what was already busy.
+
+**Web shell matches the content.** The main nav stretches full width like the pages beneath it, so workflows and boards don’t feel squeezed into a postcard column.
 
 ---
 
 ## [2.7.9] - 2026-04-22
 
-### WhatsApp Media That Actually Shows Up, Relay You Can Trust, Kanban JS Split
+### WhatsApp Media, Relay, and Kanban Messages
 
-Hey Believers — since the last drop (2.7.8), we chased down the messy stuff between your phone, the relay, and the Kanban **Messages** tab so pictures and files stop ghosting you. We’re not at full “set it and forget it” yet, but the pipeline is way closer to **full automation**: messages land, media can be fetched and cached, and the UI stops lying with broken placeholders.
+You’re in a ticket thread expecting a photo or a PDF someone sent on WhatsApp—and half the time it’s a broken tile or nothing at all. This release is about closing the gap between “message arrived” and “you can actually see it” in the Kanban **Messages** view, with the relay and desktop working together instead of blaming each other.
 
-**WhatsApp inbound media (the real tea)** — The relay was returning 404 for images because the Baileys service was calling `sock.downloadMediaMessage`, which isn’t a thing anymore in current `@whiskeysockets/baileys`. It now uses the proper `downloadMediaMessage` helper with logging and reupload support, so inbound photos/voice/docs can actually be downloaded server-side before they ever reach your machine.
+**Photos and files actually arrive.** Inbound media is downloaded the way the current WhatsApp stack expects, so the relay can serve images, voice, and documents instead of failing quietly. What lands on your machine matches what people sent—not a dead link or empty preview.
 
-**Desktop relay-media route** — When local files aren’t there yet, the app falls back to the relay correctly: it uses the real WhatsApp message id (plus hints from stored raw JSON, optional `wa_key`, and path fallback), URL-encodes ids safely, and **never** treats your local database row number as a WhatsApp id (that bug was sending the relay on a wild goose chase).
+**If it isn’t on disk yet, the app still finds it.** When the desktop doesn’t have the file locally yet, it asks the relay using the real message identity, so fetches line up with the right chat bubble. You’re not stuck with “missing media” because the app pointed at the wrong message.
 
-**Thread list honesty** — Message deduping in the chat thread now keys off WhatsApp id **and** local id, so two media messages in the same second don’t collapse into one wrong bubble — which was breaking image URLs and making inbound photos look missing when they weren’t.
+**Back-to-back messages don’t eat each other.** Two attachments landing in the same second used to merge into one wrong bubble and break thumbnails. Matching is tighter now, so each message keeps its own media and you’re not chasing ghosts.
 
-**Kanban front-end cleanup** — WhatsApp UI logic moved into dedicated bundles (`kanban_whatsapp.js`, plus board/ticket splits) so the big `kanban.js` file isn’t a monolith anymore; the template loads the pieces in order.
+**Kanban WhatsApp UI is easier to evolve.** The board’s WhatsApp pieces load in clearly separated chunks instead of one giant script, which keeps the Messages tab maintainable as we keep tightening behavior.
 
-**What you see in the bubble** — Images and video get tighter max sizes so one JPEG doesn’t eat the whole screen; attachment links still work when something isn’t a photo.
+**Bubbles stay readable.** Images and video cap at sensible sizes so one screenshot doesn’t dominate the thread; anything that isn’t a preview-friendly image still shows up as a proper attachment link.
 
-**Server housekeeping** — Orphan media files on the relay host got cleaned up when the database no longer referenced them, so we’re not hoarding random bytes next to SQLite forever.
+**Relay storage stays sane.** Files that nothing references anymore get cleared out over time, so the relay isn’t accumulating endless orphaned media beside your data.
 
 ---
 
