@@ -611,6 +611,16 @@ def register_routes(router, templates):
             logger.error("Workflow add step failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.patch("/workflows/{workflow_id}/steps/reorder")
+    async def workflow_reorder_steps(workflow_id: int, data: StepReorderRequest):
+        try:
+            from distr.core.workflow.service import reorder_steps
+            reorder_steps(workflow_id, data.step_ids)
+            return JSONResponse({"success": True})
+        except Exception as e:
+            logger.error("Workflow reorder steps failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.patch("/workflows/{workflow_id}/steps/{step_id}")
     async def workflow_update_step(workflow_id: int, step_id: int, request: Request):
         try:
@@ -632,16 +642,6 @@ def register_routes(router, templates):
             return JSONResponse({"success": True})
         except Exception as e:
             logger.error("Workflow delete step failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
-
-    @router.patch("/workflows/{workflow_id}/steps/reorder")
-    async def workflow_reorder_steps(workflow_id: int, data: StepReorderRequest):
-        try:
-            from distr.core.workflow.service import reorder_steps
-            reorder_steps(workflow_id, data.step_ids)
-            return JSONResponse({"success": True})
-        except Exception as e:
-            logger.error("Workflow reorder steps failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # Step execution (path-param route)

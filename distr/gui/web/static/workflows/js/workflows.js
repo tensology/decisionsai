@@ -154,7 +154,29 @@
         var opts = { method: method, headers: { "Content-Type": "application/json" } };
         if (body !== undefined) opts.body = JSON.stringify(body);
         return fetch(API + path, opts).then(function (r) {
-            if (!r.ok) return r.json().then(function (d) { throw new Error(d.detail || "Request failed"); });
+            if (!r.ok) {
+                return r.json()
+                    .then(function (d) {
+                        var detail = d && d.detail;
+                        if (typeof detail === "string" && detail.trim()) {
+                            throw new Error(detail);
+                        }
+                        if (Array.isArray(detail) && detail.length) {
+                            var first = detail[0] || {};
+                            var loc = Array.isArray(first.loc) ? first.loc.join(".") : "";
+                            var msg = first.msg || "Request failed";
+                            throw new Error(loc ? (loc + ": " + msg) : msg);
+                        }
+                        if (detail && typeof detail === "object") {
+                            throw new Error(JSON.stringify(detail));
+                        }
+                        throw new Error("Request failed");
+                    })
+                    .catch(function (e) {
+                        if (e instanceof Error) throw e;
+                        throw new Error("Request failed");
+                    });
+            }
             return r.json();
         });
     }
@@ -699,13 +721,16 @@
         var cards = listEl.querySelectorAll(".step-card");
         cards.forEach(function (card) {
             var stepId = parseInt(card.dataset.stepId, 10);
-            var header = card.querySelector(".step-header");
-            if (!header || !stepId) return;
+            var handle = card.querySelector(".step-drag-grip");
+            if (!handle || !stepId) return;
 
-            header.setAttribute("draggable", "true");
-            header.classList.add("step-drag-handle");
+            handle.setAttribute("draggable", "true");
+            handle.classList.add("step-drag-handle");
+            handle.addEventListener("click", function (evt) {
+                evt.stopPropagation();
+            });
 
-            header.addEventListener("dragstart", function (evt) {
+            handle.addEventListener("dragstart", function (evt) {
                 draggingStepId = stepId;
                 card.classList.add("step-card-dragging");
                 if (evt.dataTransfer) {
@@ -714,7 +739,7 @@
                 }
             });
 
-            header.addEventListener("dragend", function () {
+            handle.addEventListener("dragend", function () {
                 draggingStepId = null;
                 listEl.querySelectorAll(".step-card-drop-target").forEach(function (el) {
                     el.classList.remove("step-card-drop-target");
@@ -770,6 +795,7 @@
             var showStepStatusBadge = !!s.status && s.status !== "pending";
             return '<div class="' + stepCardClass(s.status, isOpen) + '" data-step-id="' + s.id + '">' +
                 '<div class="step-header flex items-center gap-3 px-4 py-3" data-step-id="' + s.id + '">' +
+                    '<span class="step-drag-grip text-xs" title="Drag to reorder">⋮⋮</span>' +
                     '<span class="' + chevronCls + ' text-gray-400 text-xs">▶</span>' +
                     '<span class="text-xs text-gray-500">#' + (parseInt(s.position, 10) + 1) + '</span>' +
                     '<span class="text-sm font-medium text-white flex-1 truncate">' + esc(s.name) + '</span>' +

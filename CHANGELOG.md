@@ -4,29 +4,29 @@
 
 ## [2.7.11] - 2026-04-27
 
-### Workflow Reliability, Agent Context, Hotkeys, and Runtime Quality Pass
+### Workflows, Hotkeys, and Stability Improvements
 
-This release consolidates the full day of workflow and runtime work into one stability-focused pass: tighter orchestration behavior, clearer Web UI activity feedback, stronger context propagation, safer scheduling precedence, and better desktop interaction controls.
+Big cleanup release focused on making workflows feel faster, clearer, and less confusing during real use.
 
-**Workflow orchestration and execution** — Addressed step double-execution paths, improved idempotency guards in dispatch, and tightened the continue flow so waiting steps reliably resume and visibly progress in the Web UI. Active run summaries now include richer board/ticket/project context, and continue-target guidance is clearer for multi-run situations.
+**Workflows run more reliably** — Fixed double-step execution, improved continue behavior for waiting steps, and made active run details clearer with board/ticket/project context.
 
-**Workflow context model** — Agent context now supports structured multi-item CRUD (instead of a single blob), and prompt assembly combines base context with authored context items more predictably. Run history/active-run payloads now include project metadata for stronger board/project/ticket continuity.
+**Agent context is cleaner now** — Context is now managed as multiple editable items (not one giant text blob), and workflow payloads carry better project info for continuity.
 
-**Workflow UI clarity and control** — Added drag-and-drop step reordering, improved live run state indicators, board-consumer visuals, refined step controls (including stop/delete confirmations), and cleaner status presentation to reduce ambiguity during long-running or waiting flows.
+**Workflow UI got simpler** — Added step reordering, clearer run state visuals, board usage indicators, and better step controls (including safer stop/delete actions).
 
-**Scheduler precedence rules** — When board check-ins and workflow schedules are due at the same tick for the same workflow, board-driven check-ins now take priority to avoid overlap and conflicting execution ownership.
+**Scheduling conflicts are handled better** — If a board check-in and workflow schedule hit at the same time for the same workflow, the board check-in wins.
 
-**Recording and action naming UX** — Stopping recordings now triggers a consistent confirmation/name prompt flow so users can immediately confirm or rename saved actions without losing context.
+**Recording flow feels better** — Stopping a recording now consistently asks for action naming/confirmation instead of silently guessing.
 
-**Global shortcut system expansion** — Added and exposed editable global shortcuts in Preferences for web launchers (Chat, Projects, Actions, Snippets, Workflows, Preferences), recording toggle, skin navigation (next/previous), and direct skin selection (`1..9`). macOS key normalization was improved so Option+Command combos map reliably even when system glyph variants are emitted.
+**Global shortcuts expanded** — Added editable shortcuts for opening key web sections, toggling recording, moving between skins, and selecting skins directly (`1..9`).
 
-**Desktop lifecycle and audio quality fixes** — Improved quit sequencing to reduce lockups (confirm → hide oracle → dismiss blockers → exit), and refined TTS session dedupe behavior for smoother playback.
+**Desktop shutdown + audio cleanup** — Quit flow is less likely to lock up, and TTS playback session handling is smoother.
 
-**VS Code extension + callback flow** — Extended ticket handling with append-mode support and callback metadata flow so workflow-driven ticket submissions can report back through structured callback paths more reliably.
+**VS Code ticket flow improved** — Ticket submission now supports append mode and structured callbacks for workflow-driven flows.
 
-**Prompt/runtime profiling and safeguards** — Added model-tiered prompt loading (`lite`/`standard`/`full`) with debug-gated developer context, reducing prompt overload on smaller models while preserving developer self-update capabilities in debug mode.
+**Prompt loading is smarter** — Added tiered prompt profiles (`lite` / `standard` / `full`) so smaller models don’t get overloaded.
 
-**Migration hardening** — Fixed startup migration fragility where ORM-wide settings queries could fail before new columns existed; migration paths now use safer, column-aware handling in critical account-migration flows.
+**Startup migrations are safer** — Hardened settings/account migrations to avoid missing-column startup crashes.
 
 ---
 
