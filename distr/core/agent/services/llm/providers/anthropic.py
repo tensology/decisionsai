@@ -104,7 +104,10 @@ class AnthropicLLMService(BaseLLMService):
 
     def _setup_system_prompt(self, system_prompt: Optional[str] = None):
         """Setup system prompt. Anthropic uses system as a string parameter, not a message."""
-        template = load_system_prompt_template()
+        template = load_system_prompt_template(
+            model_name=self._model_name,
+            provider_name="anthropic",
+        )
         template = template.replace("{username}", self._username)
         template = template.replace("{agent_name}", self._agent_name)
         template = template.replace("{model_name}", self._model_name)
@@ -143,7 +146,10 @@ class AnthropicLLMService(BaseLLMService):
         self._system_prompt = f"{system_prompt}\n\n{template}" if system_prompt else template
 
         # Also set _default_template_raw for shared mixin compatibility
-        self._default_template_raw = load_system_prompt_template()
+        self._default_template_raw = load_system_prompt_template(
+            model_name=self._model_name,
+            provider_name="anthropic",
+        )
 
         # Initialize _messages with chat history if available
         # (Anthropic uses system as a separate param, not a message, but we still

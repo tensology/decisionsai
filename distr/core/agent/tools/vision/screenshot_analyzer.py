@@ -244,6 +244,32 @@ def _intent_to_action(intent) -> str:
     return _map.get(intent, "click")
 
 
+def _is_ambiguous_click_target(description: str, confidence: Optional[Any]) -> tuple[bool, str]:
+    """Detect vague/unsafe click targets from vision output."""
+    desc = (description or "").strip().lower()
+    vague_markers = (
+        "part of",
+        "near",
+        "around",
+        "approx",
+        "approximately",
+        "looks like",
+        "likely",
+        "possible",
+        "maybe",
+        "close to",
+    )
+    if any(m in desc for m in vague_markers):
+        return True, "description_is_vague"
+    try:
+        conf = float(confidence) if confidence is not None else None
+    except Exception:
+        conf = None
+    if conf is not None and conf < 0.65:
+        return True, f"low_confidence_{conf:.2f}"
+    return False, ""
+
+
 def _split_pointer_targets(text: str) -> list[str]:
     """
     Split multi-target pointer commands into sequential single-target commands.
@@ -1177,6 +1203,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                 raw_x, raw_y = int(result_data['x']), int(result_data['y'])
                 screen = result_data.get('screen', captured_screen_number or 1)
                 desc = result_data.get('description', 'target location')
+                confidence = result_data.get("confidence")
                 try:
                     from distr.core.agent.services.computer_use_context import record_candidate_target
                     record_candidate_target(
@@ -1190,7 +1217,17 @@ class ScreenshotAnalyzerTool(BaseTool):
                 except Exception:
                     pass
 
-                if execute_action:
+                # Safety: do not click vague/low-confidence targets.
+                ambiguous, ambiguity_reason = _is_ambiguous_click_target(desc, confidence)
+                click_like_actions = {"click", "double_click", "right_click"}
+                if execute_action and action in click_like_actions and ambiguous:
+                    result = (
+                        f"TARGET AMBIGUOUS: Found '{desc}' at ({raw_x}, {raw_y}) on screen {int(screen)} "
+                        f"but did not click because {ambiguity_reason}. "
+                        "Please refine the target text or ask me to locate-only first."
+                    )
+                    execute_action = False
+                elif execute_action:
                     result = self._execute_mouse_move(result_data, capture_region, captured_screen_number)
                 else:
                     result = (
@@ -1224,6 +1261,9 @@ class ScreenshotAnalyzerTool(BaseTool):
                     "raw_y": raw_y,
                     "screen": int(screen) if screen else 1,
                     "executed": bool(execute_action),
+                    "confidence": confidence,
+                    "ambiguous": bool(ambiguous),
+                    "ambiguity_reason": ambiguity_reason or "",
                 }
                 result += f"\nPOINTER_RESULT: {json.dumps(pointer_payload, ensure_ascii=True)}"
 

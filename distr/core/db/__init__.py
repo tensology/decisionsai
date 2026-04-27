@@ -134,6 +134,26 @@ class Settings(Base):
     oracle_size_hotkey_decrease_key = Column(String, default='left_bracket')
     oracle_size_hotkey_increase_modifier = Column(String, default='option_command')
     oracle_size_hotkey_increase_key = Column(String, default='right_bracket')
+    recording_hotkey_enabled = Column(Boolean, default=True)
+    recording_hotkey_modifier = Column(String, default='option_command')
+    recording_hotkey_key = Column(String, default='s')
+    skin_nav_hotkey_previous_modifier = Column(String, default='option_command')
+    skin_nav_hotkey_previous_key = Column(String, default='left_arrow')
+    skin_nav_hotkey_next_modifier = Column(String, default='option_command')
+    skin_nav_hotkey_next_key = Column(String, default='right_arrow')
+    skin_select_hotkey_modifier = Column(String, default='option_command')
+    web_hotkey_chat_modifier = Column(String, default='option_command')
+    web_hotkey_chat_key = Column(String, default='c')
+    web_hotkey_projects_modifier = Column(String, default='option_command')
+    web_hotkey_projects_key = Column(String, default='j')
+    web_hotkey_actions_modifier = Column(String, default='option_command')
+    web_hotkey_actions_key = Column(String, default='a')
+    web_hotkey_snippets_modifier = Column(String, default='option_command')
+    web_hotkey_snippets_key = Column(String, default='n')
+    web_hotkey_workflows_modifier = Column(String, default='option_command')
+    web_hotkey_workflows_key = Column(String, default='w')
+    web_hotkey_preferences_modifier = Column(String, default='option_command')
+    web_hotkey_preferences_key = Column(String, default='grave')
 
     voice_provider = Column(String, default='kokoro')
     kokoro_voice = Column(String, default='af_heart')
@@ -712,6 +732,26 @@ def init_db():
                 oracle_size_hotkey_decrease_key='left_bracket',
                 oracle_size_hotkey_increase_modifier='option_command',
                 oracle_size_hotkey_increase_key='right_bracket',
+                recording_hotkey_enabled=True,
+                recording_hotkey_modifier='option_command',
+                recording_hotkey_key='s',
+                skin_nav_hotkey_previous_modifier='option_command',
+                skin_nav_hotkey_previous_key='left_arrow',
+                skin_nav_hotkey_next_modifier='option_command',
+                skin_nav_hotkey_next_key='right_arrow',
+                skin_select_hotkey_modifier='option_command',
+                web_hotkey_chat_modifier='option_command',
+                web_hotkey_chat_key='c',
+                web_hotkey_projects_modifier='option_command',
+                web_hotkey_projects_key='j',
+                web_hotkey_actions_modifier='option_command',
+                web_hotkey_actions_key='a',
+                web_hotkey_snippets_modifier='option_command',
+                web_hotkey_snippets_key='n',
+                web_hotkey_workflows_modifier='option_command',
+                web_hotkey_workflows_key='w',
+                web_hotkey_preferences_modifier='option_command',
+                web_hotkey_preferences_key='grave',
                 accepted_eula=False,
                 elevenlabs_enabled=False,
                 elevenlabs_key='',

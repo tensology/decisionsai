@@ -150,6 +150,32 @@ class EventHandlerMixin:
         elif event == 'rename_preview_request':
             self._evt_rename_preview(data)
 
+    def _force_oracle_idle_if_ptt_stale(self, reason: str) -> None:
+        """Recover Oracle hook when ptt_active is stale.
+
+        If hook is still `ptt_active` but the Oracle window no longer has an
+        active hold-to-talk request, force the hook back to idle.
+        """
+        try:
+            if not hasattr(self, 'oracle_window') or not self.oracle_window:
+                return
+            ow = self.oracle_window
+            dispatcher = getattr(ow, '_event_dispatcher', None)
+            if not dispatcher:
+                return
+            if dispatcher.get_current_hook() != "ptt_active":
+                return
+
+            hold_active = bool(getattr(ow, 'hold_to_talk_active', False))
+            ptt_requested = bool(getattr(ow, 'ptt_requested', False))
+            if hold_active or ptt_requested:
+                return
+
+            logger.warning("[EVENT QUEUE] Oracle hook stale on ptt_active; forcing idle (%s)", reason)
+            dispatcher.force_idle(reason=reason)
+        except Exception:
+            logger.debug("[EVENT QUEUE] Failed stale-ptt idle recovery", exc_info=True)
+
     # ------------------------------------------------------------------
     # STT / dictation
     # ------------------------------------------------------------------
@@ -183,22 +209,30 @@ class EventHandlerMixin:
         # Lazy-init TTS UI lifecycle state
         if not hasattr(self, '_tts_active_sessions'):
             self._tts_active_sessions = 0
+        if not hasattr(self, '_tts_pending_non_interrupt_closes'):
+            self._tts_pending_non_interrupt_closes = 0
         if not hasattr(self, '_tts_non_interrupt_fallback_timer'):
             self._tts_non_interrupt_fallback_timer = QTimer(self)
             self._tts_non_interrupt_fallback_timer.setSingleShot(True)
             self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
 
         if event == 'tts_started':
-            # Dedup bursty duplicate starts (e.g., direct speak + provider start),
-            # but never suppress opening the player if it is currently hidden.
+            # Dedup bursty duplicate starts (e.g., direct speak + provider start).
+            # Some paths emit two near-identical tts_started events within ~1s,
+            # which creates double session accounting and choppy/non-fluid playback.
             dedup_key = ('tts_started',)
             now = time.time()
             last_time = self._event_dedup_cache.get(dedup_key, 0)
             player_visible = bool(
                 hasattr(self, 'player_window') and self.player_window and self.player_window.isVisible()
             )
-            if now - last_time < 0.5 and player_visible and self._tts_active_sessions > 0:
-                logger.debug("[EVENT QUEUE] Dedup: skipping duplicate tts_started (player already visible)")
+            if now - last_time < 1.2 and self._tts_active_sessions > 0:
+                logger.debug(
+                    "[EVENT QUEUE] Dedup: skipping duplicate tts_started (dt=%.3fs active_sessions=%d visible=%s)",
+                    now - last_time,
+                    self._tts_active_sessions,
+                    player_visible,
+                )
                 return
             self._event_dedup_cache[dedup_key] = now
             self._tts_active_sessions += 1
@@ -225,22 +259,24 @@ class EventHandlerMixin:
             logger.info("[EVENT QUEUE] Playback finished event received - closing player immediately")
             # playback_finished is authoritative end-of-utterance for normal paths
             self._tts_active_sessions = max(0, self._tts_active_sessions - 1)
+            if self._tts_pending_non_interrupt_closes > 0:
+                self._tts_pending_non_interrupt_closes = max(0, self._tts_pending_non_interrupt_closes - 1)
             logger.info(
-                "[EVENT QUEUE] playback_finished: active_sessions=%d",
+                "[EVENT QUEUE] playback_finished: active_sessions=%d pending_non_interrupt=%d",
                 self._tts_active_sessions,
+                self._tts_pending_non_interrupt_closes,
             )
             if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                 self._player_safety_timer.stop()
-            if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
-                self._tts_non_interrupt_fallback_timer.stop()
-            if self._tts_active_sessions == 0:
-                signal_manager.player_stop.emit()
-                player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
-                if player_already_hidden:
-                    logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden")
-                else:
-                    signal_manager.emit_hide_player_window()
-                    logger.info("[EVENT QUEUE] Emitted hide_player_window signal (playback_finished)")
+            # Important: do NOT cancel fallback if there are still pending non-interrupt
+            # closes (multi-utterance/subagent bursts may emit fewer playback_finished events).
+            if self._tts_pending_non_interrupt_closes <= 0:
+                if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
+                    self._tts_non_interrupt_fallback_timer.stop()
+            else:
+                if hasattr(self, '_tts_non_interrupt_fallback_timer'):
+                    self._tts_non_interrupt_fallback_timer.start(2500)
+            self._close_player_if_tts_complete("playback_finished")
 
         elif event == 'tts_stopped':
             duration = data.get('duration', 0.0)
@@ -251,40 +287,45 @@ class EventHandlerMixin:
                 interrupted,
                 self._tts_active_sessions,
             )
+            # Dedup all bursty tts_stopped events (interrupt and non-interrupt).
+            # We round duration to reduce float jitter while still distinguishing
+            # genuinely different utterances.
+            dedup_key = ('tts_stopped', interrupted, round(float(duration or 0.0), 1))
+            now = time.time()
+            last_time = self._event_dedup_cache.get(dedup_key, 0)
+            if now - last_time < 0.6:
+                logger.debug(
+                    "[EVENT QUEUE] Dedup: skipping duplicate tts_stopped interrupted=%s duration=%.3f",
+                    interrupted,
+                    float(duration or 0.0),
+                )
+                return
+            self._event_dedup_cache[dedup_key] = now
             # Dedup: skip duplicate tts_stopped with duration <= 0 within 0.5s
             # These arrive in bursts during PTT activation and cause redundant stop/animation resets
             if interrupted or duration <= 0.0:
-                dedup_key = ('tts_stopped_interrupt',)
-                now = time.time()
-                last_time = self._event_dedup_cache.get(dedup_key, 0)
-                if now - last_time < 0.5:
-                    logger.debug("[EVENT QUEUE] Dedup: skipping duplicate tts_stopped interrupt")
-                    return
-                self._event_dedup_cache[dedup_key] = now
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
                 self._tts_active_sessions = 0
+                self._tts_pending_non_interrupt_closes = 0
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
                 if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
                     self._tts_non_interrupt_fallback_timer.stop()
                 QtWidgets.QApplication.processEvents()
-                signal_manager.player_stop.emit()
-                QtWidgets.QApplication.processEvents()
-                player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
-                if player_already_hidden:
-                    logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden")
-                else:
-                    signal_manager.emit_hide_player_window()
-                    logger.info("[EVENT QUEUE] Emitted hide_player_window signal (tts_stopped interrupt)")
-                QtWidgets.QApplication.processEvents()
+                self._close_player_if_tts_complete("tts_stopped interrupt")
             else:
-                # Do NOT close on normal tts_stopped: TTS generation can finish before
-                # transport playback is complete. Wait for playback_finished only.
-                # Safety close remains the long player_safety_timer (5 minutes).
-                if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
-                    self._tts_non_interrupt_fallback_timer.stop()
+                # Normal non-interrupt stop: playback may still be draining.
+                # Track this utterance as awaiting playback_finished, but keep a
+                # duration-aware fallback for transports that never emit it.
+                self._tts_pending_non_interrupt_closes += 1
+                fallback_ms = int(max(3000, min(90000, (float(duration) * 1000.0) + 1500.0)))
+                if hasattr(self, '_tts_non_interrupt_fallback_timer'):
+                    self._tts_non_interrupt_fallback_timer.start(fallback_ms)
                 logger.info(
-                    "[EVENT QUEUE] Non-interrupt tts_stopped received; waiting for playback_finished (no short fallback close)",
+                    "[EVENT QUEUE] Non-interrupt tts_stopped received; waiting for playback_finished (fallback=%dms active_sessions=%d pending=%d)",
+                    fallback_ms,
+                    self._tts_active_sessions,
+                    self._tts_pending_non_interrupt_closes,
                 )
 
         elif event == 'tts_error':
@@ -321,11 +362,45 @@ class EventHandlerMixin:
             signal_manager.emit_hide_player_window()
 
     def _on_tts_non_interrupt_fallback_timeout(self):
-        """Legacy short fallback timer callback (kept for compatibility, no forced close)."""
+        """Fallback close for missing playback_finished on non-interrupt utterances."""
+        if self._tts_pending_non_interrupt_closes <= 0:
+            return
+
+        self._tts_pending_non_interrupt_closes = max(0, self._tts_pending_non_interrupt_closes - 1)
         if self._tts_active_sessions > 0:
-            logger.warning(
-                "[EVENT QUEUE] Missing playback_finished after non-interrupt tts_stopped - keeping player open and waiting",
-            )
+            self._tts_active_sessions = max(0, self._tts_active_sessions - 1)
+        logger.warning(
+            "[EVENT QUEUE] Missing playback_finished after non-interrupt tts_stopped - fallback closing one session (active=%d pending=%d)",
+            self._tts_active_sessions,
+            self._tts_pending_non_interrupt_closes,
+        )
+        self._close_player_if_tts_complete("tts_non_interrupt_fallback")
+        if self._tts_pending_non_interrupt_closes > 0 and hasattr(self, '_tts_non_interrupt_fallback_timer'):
+            # Drain additional missing completions conservatively.
+            self._tts_non_interrupt_fallback_timer.start(2500)
+
+    def _close_player_if_tts_complete(self, reason: str):
+        """Close player when no active TTS sessions remain."""
+        if self._tts_active_sessions != 0:
+            return
+        signal_manager.player_stop.emit()
+        player_already_hidden = hasattr(self, 'player_window') and self.player_window and not self.player_window.isVisible()
+        if player_already_hidden:
+            logger.info("[EVENT QUEUE] Skipped hide_player_window signal - player already hidden (%s)", reason)
+        else:
+            signal_manager.emit_hide_player_window()
+            logger.info("[EVENT QUEUE] Emitted hide_player_window signal (%s)", reason)
+
+        # Defensive: if oracle is still in 'thinking' after playback is done,
+        # force it back to idle so skin state cannot stick.
+        try:
+            if hasattr(self, 'oracle_window') and self.oracle_window and hasattr(self.oracle_window, '_event_dispatcher'):
+                dispatcher = self.oracle_window._event_dispatcher
+                if dispatcher and dispatcher.get_current_hook() == "thinking":
+                    dispatcher.revert_hook("thinking")
+                self._force_oracle_idle_if_ptt_stale(f"player_close:{reason}")
+        except Exception:
+            logger.debug("[EVENT QUEUE] Failed to apply idle-reset guard after %s", reason, exc_info=True)
 
     # ------------------------------------------------------------------
     # Voice listening state
@@ -412,6 +487,7 @@ class EventHandlerMixin:
             # Do not time-dedupe stream_finished: interrupt cleanup often fires within 2s of
             # normal completion; dropping it leaves the web UI stuck on the streaming bubble.
             signal_manager.chat_stream_finished.emit(chat_id)
+            self._force_oracle_idle_if_ptt_stale("chat_stream_finished")
         elif event == 'transcription_progress':
             _tcid = data.get('chat_id')
             if _tcid is None:

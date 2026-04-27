@@ -132,6 +132,33 @@ def _parse_startup_command_lines(startup_instructions: str) -> list[str]:
     return out
 
 
+def _build_decisions_meta() -> str:
+    """Build workflow callback metadata for .tickets files when applicable."""
+    run_id = os.environ.get("DECISIONS_WORKFLOW_RUN_ID")
+    step_id = os.environ.get("DECISIONS_WORKFLOW_STEP_ID")
+    workflow_id = os.environ.get("DECISIONS_WORKFLOW_ID")
+    if not run_id:
+        return ""
+    try:
+        import json as _json
+        api_base = os.environ.get("DECISIONS_API_BASE", "http://localhost:5555")
+        wf_id = int(workflow_id) if workflow_id else 0
+        r_id = int(run_id)
+        meta = {
+            "run_id": r_id,
+            "step_id": int(step_id) if step_id else 0,
+            "workflow_id": wf_id,
+            "api_base": api_base,
+            "context_type": "workflow",
+            "callback_url": f"{api_base}/api/workflows/{wf_id}/runs/{r_id}/continue",
+            "callback_payload_type": "workflow_continue",
+        }
+        return f"<!-- decisions-meta: {_json.dumps(meta)} -->\n"
+    except (ValueError, TypeError) as e:
+        logger.warning("CreateProjectTicket: Could not build decisions-meta: %s", e)
+        return ""
+
+
 def _applescript_escape_double_quoted(s: str) -> str:
     return s.replace("\\", "\\\\").replace('"', '\\"')
 
@@ -1234,6 +1261,9 @@ status: open
 
             # Write ticket to file
             try:
+                meta_header = _build_decisions_meta()
+                if meta_header:
+                    ticket_content = meta_header + ticket_content
                 with open(ticket_path, 'w', encoding='utf-8') as f:
                     f.write(ticket_content)
 
@@ -1335,6 +1365,168 @@ class OpenProjectTool(BaseTool):
 
         except Exception as e:
             logger.error(f"Error in open_project tool: {e}", exc_info=True)
+            return f"Error: {str(e)}"
+
+
+class CreateTicketAndOpenProjectTool(BaseTool):
+    """Create a project ticket and open the project in Cursor/VS Code."""
+
+    name: str = "create_ticket_and_open_project"
+    description: str = """Create a work ticket in the active project's `.tickets` folder, then open that project in Cursor.
+
+    Use this when the user wants one command to both:
+    1) capture work as a ticket file, and
+    2) jump into the project in Cursor/VS Code.
+
+    REQUIRED PARAMETERS:
+    - instruction: Work request to put in the ticket.
+
+    OPTIONAL PARAMETERS:
+    - title: Optional ticket title override.
+    - context: Extra context to include in ticket body.
+    - open_editor: Defaults to true. Set false to only create the ticket.
+    """
+    event_queue: Any = Field(default=None, exclude=True)
+
+    def __init__(self, event_queue=None, **data):
+        super().__init__(**data)
+        if event_queue:
+            self.event_queue = event_queue
+
+    def get_triggers(self) -> list[str]:
+        return [
+            "create ticket and open project",
+            "tell cursor and open project",
+            "make a ticket and open cursor",
+            "create ticket then open cursor",
+        ]
+
+    def _run(
+        self,
+        text: str = "",
+        instruction: str = "",
+        title: str = "",
+        context: str = "",
+        open_editor: bool = True,
+        **kwargs,
+    ) -> str:
+        try:
+            instruction_text = (instruction or text or "").strip()
+            if not instruction_text:
+                return "Error: No instruction provided."
+
+            ticket_tool = CreateProjectTicketTool(event_queue=self.event_queue)
+            ticket_result = ticket_tool._run(
+                instruction=instruction_text,
+                title=title,
+                context=context,
+            )
+            if isinstance(ticket_result, str) and (
+                ticket_result.startswith("Error:")
+                or ticket_result.startswith("No project")
+            ):
+                return ticket_result
+
+            if not open_editor:
+                return ticket_result
+
+            open_tool = OpenProjectTool(event_queue=self.event_queue)
+            open_result = open_tool._run()
+            return f"{ticket_result}\n\n{open_result}"
+        except Exception as e:
+            logger.error(f"Error in create_ticket_and_open_project tool: {e}", exc_info=True)
+            return f"Error: {str(e)}"
+
+
+class SelfUpdateViaCursorTool(BaseTool):
+    """Developer-only utility to let Decisions self-update through Cursor tickets."""
+
+    name: str = "self_update_via_cursor"
+    description: str = """Developer utility: create a self-update ticket and open the Decisions project in Cursor.
+
+    Safety gates (all required):
+    - Active project exists with folder_location
+    - Project root contains `.env`
+    - `.env` has `DEBUG=True`
+    - Cursor CLI is available in PATH
+
+    If any gate fails, returns a safe no-op message and does nothing.
+    """
+    event_queue: Any = Field(default=None, exclude=True)
+
+    def __init__(self, event_queue=None, **data):
+        super().__init__(**data)
+        if event_queue:
+            self.event_queue = event_queue
+
+    @staticmethod
+    def _is_debug_enabled(project_root: str) -> bool:
+        env_path = os.path.join(project_root, ".env")
+        if not os.path.isfile(env_path):
+            return False
+        try:
+            with open(env_path, "r", encoding="utf-8") as f:
+                for raw_line in f:
+                    line = raw_line.strip()
+                    if not line or line.startswith("#") or "=" not in line:
+                        continue
+                    k, v = line.split("=", 1)
+                    if k.strip().upper() == "DEBUG":
+                        value = v.strip().strip('"').strip("'").upper()
+                        return value in {"TRUE", "1", "YES", "ON"}
+        except Exception:
+            return False
+        return False
+
+    def _run(self, instruction: str = "", text: str = "", append_mode: bool = True, **kwargs) -> str:
+        try:
+            from distr.core.agent.services.rag.project import get_active_project
+
+            request_text = (instruction or text or "").strip()
+            if not request_text:
+                return "Error: No self-update instruction provided."
+
+            project = get_active_project()
+            if not project:
+                return "Self-update disabled: no active project."
+
+            project_root = (project.get("folder_location") or "").strip()
+            if not project_root or not os.path.isdir(project_root):
+                return "Self-update disabled: active project folder is missing."
+
+            env_path = os.path.join(project_root, ".env")
+            if not os.path.isfile(env_path):
+                return "Self-update disabled: `.env` not found at project root."
+
+            if not self._is_debug_enabled(project_root):
+                return "Self-update disabled: `.env` must contain `DEBUG=True`."
+
+            if not shutil.which("cursor"):
+                return "Self-update disabled: Cursor CLI (`cursor`) is not available in PATH."
+
+            payload = request_text
+            if append_mode:
+                payload = (
+                    "Continue the CURRENT running ticket/session if one exists. "
+                    "Do NOT start a brand-new session unless necessary.\n\n"
+                    + request_text
+                )
+
+            create_tool = CreateProjectTicketTool(event_queue=self.event_queue)
+            ticket_result = create_tool._run(instruction=payload, context="Self-update via developer utility")
+            if ticket_result.startswith("Error:") or ticket_result.startswith("No project"):
+                return ticket_result
+
+            open_tool = OpenProjectTool(event_queue=self.event_queue)
+            open_result = open_tool._run()
+            return (
+                "Self-update utility executed.\n\n"
+                + ticket_result
+                + "\n\n"
+                + open_result
+            )
+        except Exception as e:
+            logger.error("Error in self_update_via_cursor tool: %s", e, exc_info=True)
             return f"Error: {str(e)}"
 
 

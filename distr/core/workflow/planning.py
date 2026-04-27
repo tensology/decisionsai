@@ -23,6 +23,7 @@ PLAN_PROMPT = """Break down this instruction into ordered, executable steps for 
 You can choose from these step types (action_type):
 - "agent_instruction" — general-purpose: the workflow agent will execute the instruction using any available tools (open apps, click, type, screenshot, browse web). Use this as the default for most desktop and general UI automation.
 - "run_command" — execute a shell/command-line command directly.
+- "send_to_project_cli" — send the instruction text to the linked project's CLI session (project terminal). Best when you want project-specific CLI execution delegated to the project's terminal.
 - "http_request" — make an HTTP request (GET, POST, PUT, DELETE, etc.).
 - "execute_code" — run a Python script (code is auto-generated from your instruction). Use for data processing, file I/O, or computation tasks.
 - "playwright" — browser automation with Playwright (code is auto-generated from your instruction). Use for web tasks like navigating sites, filling forms, clicking buttons, scraping data, taking screenshots.
@@ -32,6 +33,7 @@ Rules:
 - Keep each step atomic (one clear action per step).
 - Use "playwright" for all web browser tasks (navigate, login, fill forms, scrape, screenshot).
 - Use "agent_instruction" for desktop app interaction and general-purpose tasks.
+- Use "send_to_project_cli" when work should run in the linked project's terminal context.
 - Use "execute_code" for data processing, file I/O, or computation.
 - Use "run_command" only for simple shell commands (mkdir, cp, ls, app launch).
 - For login flows, use "playwright" and include the URL.
@@ -149,7 +151,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
             logger.warning("LLM returned non-array: %s", type(parsed))
             return None
         steps = []
-        valid_action_types = {"agent_instruction", "run_command", "http_request", "execute_code", "playwright", "play_recording"}
+        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "play_recording"}
         for i, item in enumerate(parsed):
             if isinstance(item, dict):
                 title = str(item.get("title") or item.get("label") or f"Step {i + 1}")

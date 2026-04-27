@@ -79,7 +79,7 @@ from distr.core.chat import ChatService
 from distr.core.chat_manager import ChatManagerCore
 from distr.core.chat_qt_adapter import ChatManagerQt
 from distr.core.integrations.telegram import TelegramWebSocketManager
-from distr.core.db import get_session, Chat
+from distr.core.db import get_session, Chat, Action
 from distr.core.paths import DB_DIR, CORE_DIR
 
 from distr.gui.player import PlayerWindow
@@ -559,6 +559,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         signal_manager.workflow_skip_step_requested.connect(self._on_workflow_skip_step_requested)
         signal_manager.workflow_continue_requested.connect(self._on_workflow_continue_requested)
         signal_manager.step_waiting_for_feedback.connect(self._on_step_waiting_for_feedback)
+        signal_manager.waiting_for_action_name.connect(self._on_waiting_for_action_name)
         # Check for missed scheduled runs on startup (delayed to let agent initialize first)
         QTimer.singleShot(10000, self._run_workflow_scheduled)
 
@@ -582,6 +583,40 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             
             # Run initial check immediately to set baseline hash
             QTimer.singleShot(500, self.check_audio_device_changes)  # Small delay to ensure everything is ready
+
+    def _on_waiting_for_action_name(self, action_id: int):
+        """Show confirmation/input popup when a recording stops and needs naming."""
+        try:
+            current_title = ""
+            with get_session() as session:
+                action = session.query(Action).get(action_id)
+                if action:
+                    current_title = (action.title or "").strip()
+
+            prompt_text = (
+                "Recording saved.\nConfirm this action name or enter a new one:"
+                if current_title
+                else "Recording saved.\nEnter a name for this action:"
+            )
+            text, ok = QtWidgets.QInputDialog.getText(
+                self.oracle_window if hasattr(self, "oracle_window") else None,
+                "Name Recorded Action",
+                prompt_text,
+                text=current_title,
+            )
+
+            chosen = (text or "").strip()
+            if ok and chosen:
+                signal_manager.set_action_name.emit(action_id, chosen)
+                return
+
+            # If user cancels or leaves blank, keep existing title and clear waiting state.
+            if current_title:
+                signal_manager.set_action_name.emit(action_id, current_title)
+            elif hasattr(self, "recorder_host") and self.recorder_host:
+                self.recorder_host.waiting_for_action_name_id = None
+        except Exception as e:
+            logger.error("Failed to show action naming popup: %s", e, exc_info=True)
     
     def check_audio_device_changes(self):
         """Check for audio device changes using a background thread."""

@@ -195,6 +195,17 @@ TICKET MANAGEMENT:
 IMPORTANT: "create a ticket" ALWAYS means Kanban board ticket. Never create markdown files for tickets.
 IMPORTANT: "tell cursor" still uses the old CreateCursorTicketTool for Cursor IDE integration — that is different from Kanban tickets.
 
+<!-- BEGIN_DEBUG_ONLY -->
+DEVELOPER SELF-UPDATE FLOW (PROJECT BUG FIXES):
+- When {username} reports a bug in the active project and asks you to fix it through Cursor, use the project tools autonomously.
+- First preference: self_update_via_cursor(instruction="<exact bug fix request>") because it applies developer safety gates (.env exists, DEBUG=True, project path exists, Cursor CLI available).
+- If self_update_via_cursor reports disabled/unavailable, fallback to:
+  1) create_project_ticket(instruction="<exact bug fix request>"), then
+  2) open_project
+- In these bug-fix flows, include concrete context in the instruction: affected files, observed errors/log hints, expected behavior.
+- If workflow metadata exists in the ticket, ensure callbacks continue the workflow run after submission.
+<!-- END_DEBUG_ONLY -->
+
 CRITICAL: FORMAT NUMBERS FOR SPEECH - TTS cannot read "7,300" correctly, it says "seven three hundred"
 - ALWAYS write numbers as words: "seven thousand three hundred" NOT "7,300"
 - Ranges: "eight thousand to ten thousand" NOT "8,000 to 10,000"

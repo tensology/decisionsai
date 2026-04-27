@@ -368,6 +368,7 @@ class SystemInfoTool(BaseTool):
         lines.append("  • Create Cursor tickets: 'tell cursor [message]' or 'create a ticket'")
         lines.append("  • Summarize conversations into tickets")
         lines.append("  • Create Cursor tickets from clipboard content")
+        lines.append("  • Developer self-update utility (guarded by .env DEBUG=True)")
         lines.append("")
         lines.append("9. SYSTEM INFORMATION:")
         lines.append("  • Query system settings and configuration")

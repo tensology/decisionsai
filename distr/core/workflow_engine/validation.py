@@ -35,6 +35,7 @@ class StepValidator:
             StepType.HTTP_REQUEST.value: self.validate_http_request,
             StepType.EXECUTE_CODE.value: self.validate_execute_code,
             StepType.PLAYWRIGHT.value: self.validate_playwright,
+            StepType.SEND_TO_PROJECT_CLI.value: self.validate_send_to_project_cli,
         }
 
         validator = validators.get(step_type)
@@ -130,5 +131,16 @@ class StepValidator:
             errors.append(ValidationError(
                 field="instruction",
                 message="Either an instruction or Playwright code is required",
+            ))
+        return errors
+
+    def validate_send_to_project_cli(self, config: dict) -> List[ValidationError]:
+        """Require a non-empty instruction to send to project CLI."""
+        errors: List[ValidationError] = []
+        instruction = config.get("instruction", "")
+        if not instruction or not str(instruction).strip():
+            errors.append(ValidationError(
+                field="instruction",
+                message="Instruction is required for Send to Project CLI",
             ))
         return errors

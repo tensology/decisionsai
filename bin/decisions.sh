@@ -15,6 +15,22 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
+# ── Integration endpoint safety defaults ──────────────────────────────────────
+# Prevent accidental localhost:8090 collisions with unrelated local dev servers.
+# You can still override these explicitly in your shell before launching.
+if [ -z "${DEBUG:-}" ]; then
+    export DEBUG="FALSE"
+fi
+if [ -z "${DECISIONSAI_WA_API_BASE:-}" ]; then
+    export DECISIONSAI_WA_API_BASE="https://www.decisionsai.net/api/whatsapp"
+fi
+if [ -z "${DECISIONSAI_WA_WS_URL:-}" ]; then
+    export DECISIONSAI_WA_WS_URL="wss://www.decisionsai.net/ws/whatsapp"
+fi
+if [ -z "${DECISIONSAI_WS_URL:-}" ]; then
+    export DECISIONSAI_WS_URL="wss://www.decisionsai.net/ws/telegram"
+fi
+
 echo -e "${GREEN}DecisionsAI Setup & Run${NC}"
 echo "================================"
 

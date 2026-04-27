@@ -12,6 +12,10 @@
 .step-card:hover { border-color: rgba(249,115,22,0.5); }
 .step-card.expanded { border-color: #f97316; }
 .step-header { cursor: pointer; user-select: none; }
+.step-drag-handle { cursor: grab; }
+.step-drag-handle:active { cursor: grabbing; }
+.step-card-dragging { opacity: 0.5; }
+.step-card-drop-target { border-color: #f97316 !important; box-shadow: 0 0 0 1px rgba(249, 115, 22, 0.35) inset; }
 .step-body { overflow: hidden; }
 .action-row { border-left: 3px solid rgba(255,255,255,0.1); }
 .action-row:hover { border-left-color: #f97316; }
@@ -89,6 +93,7 @@
                         <input type="text" id="wf-detail-name" readonly class="bg-transparent text-lg font-semibold text-white border-0 focus:outline-none w-full min-w-0" value="">
                     </div>
                     <div class="flex items-center gap-2 flex-shrink-0">
+                        <div id="wf-board-consumers" class="hidden items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5"></div>
                         <button type="button" id="wf-run-btn" class="px-3 py-1 rounded bg-green-600 text-white text-xs font-medium hover:bg-green-700">▶ Run</button>
                         <button type="button" id="wf-stop-reset-btn" class="px-2 py-1 rounded border border-orange-500/60 text-orange-300 text-xs hover:bg-orange-500/20" title="Cancel active run and reset all step states/results">⟲ Stop & Reset</button>
                         <button type="button" id="wf-delete-btn" class="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>

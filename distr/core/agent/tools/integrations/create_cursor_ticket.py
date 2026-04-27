@@ -598,6 +598,9 @@ Cleaned ticket:"""
                 "step_id": int(step_id) if step_id else 0,
                 "workflow_id": int(workflow_id) if workflow_id else 0,
                 "api_base": api_base,
+                "context_type": "workflow",
+                "callback_url": f"{api_base}/api/workflows/{int(workflow_id) if workflow_id else 0}/runs/{int(run_id)}/continue",
+                "callback_payload_type": "workflow_continue",
             }
             return f"<!-- decisions-meta: {_json.dumps(meta)} -->\n"
         except (ValueError, TypeError) as e:

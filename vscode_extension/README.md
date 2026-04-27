@@ -17,6 +17,40 @@ A VS Code extension that automatically watches for ticket files in your workspac
 4. Ticket content is automatically pasted into Cursor's chat interface
 5. Files are deleted after processing to prevent duplicate submissions
 
+## Append To Current Session
+
+If you want a ticket file to continue the currently running ticket/session (instead of starting a fresh task), add one of these fields in YAML frontmatter:
+
+- `mode: append`
+- `append_to_current_session: true`
+- `continue_current_ticket: true`
+- `do_not_start_new_ticket: true`
+
+Example:
+
+```md
+---
+id: ticket_20260426_105500
+mode: append
+---
+
+Continue implementing the previous task and only apply this delta:
+- update header spacing
+- keep existing session context
+```
+
+## Workflow Callback Behavior
+
+When a ticket contains a `decisions-meta` HTML comment with callback fields, the extension posts a callback after submission.
+
+- `callback_url`: explicit URL to POST to
+- `callback_payload_type: workflow_continue`: sends `{ "input": "..." }` (workflow-compatible)
+- otherwise sends a structured JSON status payload
+
+If `callback_url` is missing but workflow metadata exists (`run_id`, `workflow_id`, `api_base`), the extension falls back to:
+
+- `POST /api/workflows/{workflow_id}/runs/{run_id}/continue`
+
 ## Requirements
 
 - VS Code 1.105.1 or higher

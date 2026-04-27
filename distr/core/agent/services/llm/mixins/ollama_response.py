@@ -290,8 +290,7 @@ class OllamaResponseMixin:
     # 5. Intercept / fix hallucinated tool names
     # ------------------------------------------------------------------
 
-    @staticmethod
-    def _intercept_tool_calls(tool_calls, last_user_message):
+    def _intercept_tool_calls(self, tool_calls, last_user_message):
         """Fix common LLM tool-name hallucinations in-place."""
         if not tool_calls or not last_user_message:
             return
@@ -338,6 +337,27 @@ class OllamaResponseMixin:
                 except (json.JSONDecodeError, ValueError):
                     pass
                 tool_calls[i] = {'function': {'name': 'clipboard_action', 'arguments': {'action': action}}}
+
+            # 6. Gmail request_tool guard: if Gmail/email intent is detected and
+            # google_workspace is active, bypass request_tool and call
+            # google_workspace directly with a Gmail query.
+            if name == 'request_tool' and any(k in user_lower for k in ['gmail', 'email', 'inbox']):
+                if 'google_workspace' in getattr(self, '_tools_dict', {}):
+                    query_parts = ['in:inbox']
+                    if 'snuza' in user_lower:
+                        query_parts.append('from:no-reply@snuza.com')
+                    if 'django' in user_lower and 'error' in user_lower:
+                        query_parts.append('subject:"[Django] ERROR"')
+                    gmail_query = " ".join(query_parts)
+                    tool_calls[i] = {
+                        'function': {
+                            'name': 'google_workspace',
+                            'arguments': {
+                                'action': 'check_inbox',
+                                'params': {'query': gmail_query, 'max_results': 50},
+                            },
+                        }
+                    }
 
     # ------------------------------------------------------------------
     # 6. Post-tool-execution handling

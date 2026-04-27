@@ -38,6 +38,56 @@ def _quit_confirmation_icon_path():
 class LifecycleMixin:
     """Restart and exit handling for OracleWindow."""
 
+    def _force_hide_oracle_for_exit(self):
+        """Hide avatar/oracle immediately (not deferred) before shutdown steps."""
+        try:
+            self.oracle_visible = False
+        except Exception:
+            pass
+        try:
+            self.hide()
+        except Exception:
+            pass
+        try:
+            if hasattr(self, "player_window") and self.player_window:
+                self.player_window.hide()
+        except Exception:
+            pass
+        QtCore.QCoreApplication.processEvents()
+
+    def _dismiss_blocking_popups_for_exit(self):
+        """Close modal dialogs/popups that can deadlock shutdown."""
+        app = QApplication.instance()
+        if not app:
+            return
+
+        # Close the currently active modal first (if any).
+        try:
+            active_modal = app.activeModalWidget()
+            if active_modal is not None and active_modal is not self:
+                active_modal.hide()
+                active_modal.close()
+        except Exception as e:
+            logger.debug("[EXIT] Failed closing active modal: %s", e)
+
+        # Then close any remaining visible top-level modal/dialog popups.
+        try:
+            for widget in app.topLevelWidgets():
+                if widget is self:
+                    continue
+                if not widget.isVisible():
+                    continue
+                try:
+                    is_dialog = isinstance(widget, QtWidgets.QDialog)
+                    is_popup = bool(widget.windowModality() != QtCore.Qt.WindowModality.NonModal)
+                    if is_dialog or is_popup:
+                        widget.hide()
+                        widget.close()
+                except Exception:
+                    continue
+        except Exception as e:
+            logger.debug("[EXIT] Failed scanning top-level widgets: %s", e)
+
     def restart_app(self):
         """Restart the application by spawning a new process and quitting."""
         try:
@@ -97,7 +147,7 @@ class LifecycleMixin:
 
     def exit_app(self, confirm: bool = True):
         if confirm:
-            msg = QtWidgets.QMessageBox(self)
+            msg = QtWidgets.QMessageBox(None)
             msg.setWindowTitle("Quit")
             msg.setText("Quit DecisionsAI?")
             msg.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
@@ -121,10 +171,15 @@ class LifecycleMixin:
             if msg.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
 
-        self.reload_settings()
+        # Shutdown order matters:
+        # 1) Hide oracle/avatar UI immediately
+        # 2) Close modal/popups that can hold the event loop
+        # 3) Continue with app-wide shutdown
+        self._force_hide_oracle_for_exit()
+        self._dismiss_blocking_popups_for_exit()
+        QtCore.QCoreApplication.processEvents()
 
-        # Hide the oracle window itself
-        self.hide_oracle()
+        self.reload_settings()
 
         # Set a flag to prevent any further actions
         self.is_exiting = True

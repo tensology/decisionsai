@@ -45,6 +45,147 @@
     </div>
 
     <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Global Recording Hotkey</h3>
+        <div class="space-y-4">
+            <label class="flex items-center cursor-pointer group">
+                <input type="checkbox" id="shortcuts_recording_hotkey_enabled" name="shortcuts_recording_hotkey_enabled"
+                        class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer">
+                <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                    Enable global recording toggle hotkey
+                </span>
+            </label>
+            <div class="grid grid-cols-2 gap-4 max-w-xl">
+                <div>
+                    <label for="shortcuts_recording_hotkey_modifier" class="block text-sm font-medium text-[#ececf1] mb-2">Modifier</label>
+                    <select id="shortcuts_recording_hotkey_modifier" name="shortcuts_recording_hotkey_modifier"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="option_command">Option + Command</option>
+                        <option value="option">Option (Alt)</option>
+                        <option value="command">Command</option>
+                        <option value="control">Control</option>
+                        <option value="shift">Shift</option>
+                    </select>
+                </div>
+                <div>
+                    <label for="shortcuts_recording_hotkey_key" class="block text-sm font-medium text-[#ececf1] mb-2">Key</label>
+                    <select id="shortcuts_recording_hotkey_key" name="shortcuts_recording_hotkey_key"
+                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="s">S</option>
+                    </select>
+                </div>
+            </div>
+            <p class="text-xs text-gray-400">
+                Default is Command + Option + S on macOS. Press again while recording to stop.
+            </p>
+        </div>
+    </div>
+
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Skin Navigation Hotkeys</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
+            <div class="space-y-3">
+                <p class="text-sm text-[#ececf1] font-medium">Previous Skin / Frame</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="shortcuts_skin_nav_hotkey_previous_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
+                        <select id="shortcuts_skin_nav_hotkey_previous_modifier" name="shortcuts_skin_nav_hotkey_previous_modifier"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="option_command">Option + Command</option>
+                            <option value="option">Option (Alt)</option>
+                            <option value="command">Command</option>
+                            <option value="control">Control</option>
+                            <option value="shift">Shift</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="shortcuts_skin_nav_hotkey_previous_key" class="block text-xs text-gray-400 mb-1">Key</label>
+                        <select id="shortcuts_skin_nav_hotkey_previous_key" name="shortcuts_skin_nav_hotkey_previous_key"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="left_arrow">Left Arrow</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+            <div class="space-y-3">
+                <p class="text-sm text-[#ececf1] font-medium">Next Skin / Frame</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label for="shortcuts_skin_nav_hotkey_next_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
+                        <select id="shortcuts_skin_nav_hotkey_next_modifier" name="shortcuts_skin_nav_hotkey_next_modifier"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="option_command">Option + Command</option>
+                            <option value="option">Option (Alt)</option>
+                            <option value="command">Command</option>
+                            <option value="control">Control</option>
+                            <option value="shift">Shift</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label for="shortcuts_skin_nav_hotkey_next_key" class="block text-xs text-gray-400 mb-1">Key</label>
+                        <select id="shortcuts_skin_nav_hotkey_next_key" name="shortcuts_skin_nav_hotkey_next_key"
+                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                            <option value="right_arrow">Right Arrow</option>
+                        </select>
+                    </div>
+                </div>
+            </div>
+        </div>
+        <div class="max-w-xs">
+            <label for="shortcuts_skin_select_hotkey_modifier" class="block text-sm font-medium text-[#ececf1] mb-2">Number Select Modifier (1..9)</label>
+            <select id="shortcuts_skin_select_hotkey_modifier" name="shortcuts_skin_select_hotkey_modifier"
+                    class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
+                <option value="option_command">Option + Command</option>
+                <option value="option">Option (Alt)</option>
+                <option value="command">Command</option>
+                <option value="control">Control</option>
+                <option value="shift">Shift</option>
+            </select>
+            <p class="text-xs text-gray-400 mt-2">`1` selects Oracle, `2+` selects avatar skins in order.</p>
+        </div>
+    </div>
+
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Web UI Launcher Hotkeys</h3>
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Chat</label>
+                <select id="shortcuts_web_hotkey_chat_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_chat_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="c">C</option></select>
+            </div>
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Projects</label>
+                <select id="shortcuts_web_hotkey_projects_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_projects_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="j">J</option></select>
+            </div>
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Actions</label>
+                <select id="shortcuts_web_hotkey_actions_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_actions_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="a">A</option></select>
+            </div>
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Snippets</label>
+                <select id="shortcuts_web_hotkey_snippets_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_snippets_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="n">N</option></select>
+            </div>
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Workflows</label>
+                <select id="shortcuts_web_hotkey_workflows_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_workflows_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="w">W</option></select>
+            </div>
+            <div class="grid grid-cols-3 gap-3 items-end">
+                <label class="text-sm text-[#ececf1]">Preferences</label>
+                <select id="shortcuts_web_hotkey_preferences_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
+                <select id="shortcuts_web_hotkey_preferences_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="grave">~</option></select>
+            </div>
+        </div>
+    </div>
+
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
         <h3 class="text-lg font-semibold text-white mb-4">Oracle Size Hotkeys</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="space-y-3">

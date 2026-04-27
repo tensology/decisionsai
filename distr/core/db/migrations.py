@@ -778,109 +778,99 @@ def run_migrations():
     # Migrate Jira and Trello accounts from individual columns to connected_accounts JSON
     # This migration moves existing single account data to the new multi-account format
     try:
-        with Session() as session:
-            settings = session.query(Settings).first()
-            if settings:
-                # Check if we have old Jira/Trello columns with data
-                has_jira_data = False
-                has_trello_data = False
-                
-                try:
-                    # Try to read old columns (they may not exist in newer installs)
-                    inspector = inspect(engine)
-                    columns = [col['name'] for col in inspector.get_columns('settings')]
-                    
-                    if 'jira_server_url' in columns:
-                        try:
-                            jira_url = getattr(settings, 'jira_server_url', None) or ''
-                            jira_email = getattr(settings, 'jira_email', None) or ''
-                            jira_token = getattr(settings, 'jira_api_token', None) or ''
-                            has_jira_data = bool(jira_url.strip() and jira_email.strip() and jira_token.strip())
-                        except Exception:
-                            has_jira_data = False
-                    else:
-                        has_jira_data = False
-                    
-                    if 'trello_api_key' in columns:
-                        try:
-                            trello_key = getattr(settings, 'trello_api_key', None) or ''
-                            trello_token = getattr(settings, 'trello_api_token', None) or ''
-                            has_trello_data = bool(trello_key.strip() and trello_token.strip())
-                        except Exception:
-                            has_trello_data = False
-                    else:
-                        has_trello_data = False
-                except Exception as e:
-                    logger.debug(f"Could not check old columns: {e}")
-                    has_jira_data = False
-                    has_trello_data = False
-                
-                # Load existing connected_accounts
-                connected_accounts = []
-                if settings.connected_accounts:
-                    try:
-                        if isinstance(settings.connected_accounts, str):
-                            connected_accounts = json.loads(settings.connected_accounts)
-                        else:
-                            connected_accounts = settings.connected_accounts
-                        if not isinstance(connected_accounts, list):
-                            connected_accounts = [connected_accounts] if isinstance(connected_accounts, dict) else []
-                    except Exception as e:
-                        logger.warning(f"Failed to parse connected_accounts: {e}")
+        inspector = inspect(engine)
+        columns = {col["name"] for col in inspector.get_columns("settings")}
+        if "id" not in columns:
+            logger.debug("Skipping Jira/Trello migration: settings.id column missing")
+        else:
+            # Build a safe projection with only columns that actually exist.
+            wanted_cols = [
+                "id",
+                "connected_accounts",
+                "jira_server_url",
+                "jira_email",
+                "jira_api_token",
+                "is_jira_valid",
+                "trello_api_key",
+                "trello_api_token",
+                "is_trello_valid",
+            ]
+            select_cols = [c for c in wanted_cols if c in columns]
+            if select_cols:
+                with engine.connect() as conn:
+                    row = conn.execute(
+                        text(f"SELECT {', '.join(select_cols)} FROM settings LIMIT 1")
+                    ).mappings().first()
+                    if row:
                         connected_accounts = []
-                
-                # Migrate Jira account if exists
-                if has_jira_data:
-                    # Check if Jira account already exists in connected_accounts
-                    jira_exists = any(
-                        isinstance(acc, dict) and acc.get('provider') == 'jira'
-                        for acc in connected_accounts
-                    )
-                    
-                    if not jira_exists:
-                        try:
-                            jira_account = {
-                                'provider': 'jira',
-                                'name': 'Default Jira Account',
-                                'server_url': getattr(settings, 'jira_server_url', '') or '',
-                                'email': getattr(settings, 'jira_email', '') or '',
-                                'api_token': getattr(settings, 'jira_api_token', '') or '',
-                                'is_valid': bool(getattr(settings, 'is_jira_valid', False)),
-                                'created_at': datetime.utcnow().isoformat()
-                            }
-                            connected_accounts.append(jira_account)
-                            logger.info("Migrated Jira account to connected_accounts")
-                        except Exception as e:
-                            logger.warning(f"Could not migrate Jira account: {e}")
-                
-                # Migrate Trello account if exists
-                if has_trello_data:
-                    # Check if Trello account already exists in connected_accounts
-                    trello_exists = any(
-                        isinstance(acc, dict) and acc.get('provider') == 'trello'
-                        for acc in connected_accounts
-                    )
-                    
-                    if not trello_exists:
-                        try:
-                            trello_account = {
-                                'provider': 'trello',
-                                'name': 'Default Trello Account',
-                                'api_key': getattr(settings, 'trello_api_key', '') or '',
-                                'api_token': getattr(settings, 'trello_api_token', '') or '',
-                                'is_valid': bool(getattr(settings, 'is_trello_valid', False)),
-                                'created_at': datetime.utcnow().isoformat()
-                            }
-                            connected_accounts.append(trello_account)
-                            logger.info("Migrated Trello account to connected_accounts")
-                        except Exception as e:
-                            logger.warning(f"Could not migrate Trello account: {e}")
-                
-                # Save updated connected_accounts if we migrated anything
-                if has_jira_data or has_trello_data:
-                    settings.connected_accounts = json.dumps(connected_accounts)
-                    session.commit()
-                    logger.info("Migration completed: Jira/Trello accounts moved to connected_accounts")
+                        raw_connected = row.get("connected_accounts")
+                        if raw_connected:
+                            try:
+                                if isinstance(raw_connected, str):
+                                    connected_accounts = json.loads(raw_connected)
+                                else:
+                                    connected_accounts = raw_connected
+                                if not isinstance(connected_accounts, list):
+                                    connected_accounts = [connected_accounts] if isinstance(connected_accounts, dict) else []
+                            except Exception as e:
+                                logger.warning(f"Failed to parse connected_accounts: {e}")
+                                connected_accounts = []
+
+                        jira_url = (row.get("jira_server_url") or "").strip()
+                        jira_email = (row.get("jira_email") or "").strip()
+                        jira_token = (row.get("jira_api_token") or "").strip()
+                        has_jira_data = bool(jira_url and jira_email and jira_token)
+
+                        trello_key = (row.get("trello_api_key") or "").strip()
+                        trello_token = (row.get("trello_api_token") or "").strip()
+                        has_trello_data = bool(trello_key and trello_token)
+
+                        migrated_any = False
+                        if has_jira_data:
+                            jira_exists = any(
+                                isinstance(acc, dict) and acc.get("provider") == "jira"
+                                for acc in connected_accounts
+                            )
+                            if not jira_exists:
+                                connected_accounts.append({
+                                    "provider": "jira",
+                                    "name": "Default Jira Account",
+                                    "server_url": jira_url,
+                                    "email": jira_email,
+                                    "api_token": jira_token,
+                                    "is_valid": bool(row.get("is_jira_valid", False)),
+                                    "created_at": datetime.utcnow().isoformat(),
+                                })
+                                migrated_any = True
+                                logger.info("Migrated Jira account to connected_accounts")
+
+                        if has_trello_data:
+                            trello_exists = any(
+                                isinstance(acc, dict) and acc.get("provider") == "trello"
+                                for acc in connected_accounts
+                            )
+                            if not trello_exists:
+                                connected_accounts.append({
+                                    "provider": "trello",
+                                    "name": "Default Trello Account",
+                                    "api_key": trello_key,
+                                    "api_token": trello_token,
+                                    "is_valid": bool(row.get("is_trello_valid", False)),
+                                    "created_at": datetime.utcnow().isoformat(),
+                                })
+                                migrated_any = True
+                                logger.info("Migrated Trello account to connected_accounts")
+
+                        if migrated_any and "connected_accounts" in columns:
+                            conn.execute(
+                                text("UPDATE settings SET connected_accounts = :connected_accounts WHERE id = :id"),
+                                {
+                                    "connected_accounts": json.dumps(connected_accounts),
+                                    "id": int(row["id"]),
+                                },
+                            )
+                            conn.commit()
+                            logger.info("Migration completed: Jira/Trello accounts moved to connected_accounts")
     except Exception as e:
         logger.warning(f"Could not migrate Jira/Trello accounts: {e}")
     
@@ -1634,6 +1624,41 @@ def run_migrations():
                 logger.info("Added load_on_startup column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add load_on_startup column: {e}")
+
+    # Recording shortcut settings
+    for _col_name, _col_type in [
+        ("recording_hotkey_enabled", "BOOLEAN DEFAULT 1"),
+        ("recording_hotkey_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("recording_hotkey_key", "VARCHAR DEFAULT 's'"),
+        ("skin_nav_hotkey_previous_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("skin_nav_hotkey_previous_key", "VARCHAR DEFAULT 'left_arrow'"),
+        ("skin_nav_hotkey_next_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("skin_nav_hotkey_next_key", "VARCHAR DEFAULT 'right_arrow'"),
+        ("skin_select_hotkey_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_chat_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_chat_key", "VARCHAR DEFAULT 'c'"),
+        ("web_hotkey_projects_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_projects_key", "VARCHAR DEFAULT 'j'"),
+        ("web_hotkey_actions_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_actions_key", "VARCHAR DEFAULT 'a'"),
+        ("web_hotkey_snippets_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_snippets_key", "VARCHAR DEFAULT 'n'"),
+        ("web_hotkey_workflows_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_workflows_key", "VARCHAR DEFAULT 'w'"),
+        ("web_hotkey_preferences_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("web_hotkey_preferences_key", "VARCHAR DEFAULT 'grave'"),
+    ]:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {_col_name} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col_name} {_col_type}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", _col_name)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", _col_name, e)
 
     # Handle database migration for whatsapp_messages table
     try:

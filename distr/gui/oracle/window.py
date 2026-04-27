@@ -31,6 +31,8 @@ class _GlobalPttBridge(QtCore.QObject):
     released = QtCore.pyqtSignal()
     oracle_size_down = QtCore.pyqtSignal()
     oracle_size_up = QtCore.pyqtSignal()
+    recording_toggle = QtCore.pyqtSignal()
+    hotkey_action = QtCore.pyqtSignal(str)
 
 
 class RoundContainer(QtWidgets.QWidget):
@@ -260,6 +262,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._global_ptt_bridge.released.connect(self._on_global_ptt_released)
         self._global_ptt_bridge.oracle_size_down.connect(self._on_global_oracle_size_down)
         self._global_ptt_bridge.oracle_size_up.connect(self._on_global_oracle_size_up)
+        self._global_ptt_bridge.recording_toggle.connect(self._on_global_recording_toggle)
+        self._global_ptt_bridge.hotkey_action.connect(self._on_global_hotkey_action)
         self._setup_global_ptt_hotkey()
 
         if self.settings.get('restore_position'):
@@ -784,6 +788,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         Called when PTT delay timer completes - actually sends the interrupt signal.
         Only called if the mouse button is still held down after the delay.
         """
+        # Guard against release/start races: if the user already released PTT,
+        # a queued timer callback must not re-trigger capture/glow.
+        if not self.hold_to_talk_active:
+            logging.info("[ORACLE] PTT delay completed after release - skipping stale start")
+            return
         # Check if we're still in a valid state to send the interrupt
         if self.ptt_requested:
             # Already sent, ignore
@@ -1123,8 +1132,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 get_combo=self._get_global_ptt_hotkey_combo,
                 get_size_down_combo=self._get_oracle_size_down_hotkey_combo,
                 get_size_up_combo=self._get_oracle_size_up_hotkey_combo,
+                get_record_toggle_combo=self._get_recording_hotkey_combo,
+                get_action_combos=self._get_hotkey_action_combos,
                 on_size_down=lambda: self._global_ptt_bridge.oracle_size_down.emit(),
                 on_size_up=lambda: self._global_ptt_bridge.oracle_size_up.emit(),
+                on_record_toggle=lambda: self._global_ptt_bridge.recording_toggle.emit(),
+                on_hotkey_action=lambda action_name: self._global_ptt_bridge.hotkey_action.emit(action_name),
             )
             self._global_ptt_listener.start()
 
@@ -1234,6 +1247,157 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _on_global_oracle_size_up(self):
         """Grow oracle one step via global keyboard shortcut."""
         self._adjust_oracle_size_from_hotkey(1)
+
+    def _is_recording_hotkey_enabled(self) -> bool:
+        try:
+            current_settings = load_settings_from_db()
+            return bool(current_settings.get("recording_hotkey_enabled", True))
+        except Exception:
+            return bool(self.settings.get("recording_hotkey_enabled", True))
+
+    def _get_recording_hotkey_combo(self):
+        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
+        valid_keys = {"s"}
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+
+        modifier = str(current_settings.get("recording_hotkey_modifier", "option_command")).strip().lower()
+        key = str(current_settings.get("recording_hotkey_key", "s")).strip().lower()
+        if modifier not in valid_modifiers:
+            modifier = "option_command"
+        if key not in valid_keys:
+            key = "s"
+        return (modifier, key)
+
+    def _on_global_recording_toggle(self):
+        """Toggle action recording from global hotkey (e.g., Command+Option+S)."""
+        if not self._is_recording_hotkey_enabled():
+            return
+
+        if self._is_recording_active():
+            self.stop_recording_action_handler()
+            logger.info("[HOTKEY] Stopped recording via global recording hotkey")
+            return
+
+        self.start_recording_action()
+        logger.info("[HOTKEY] Started recording via global recording hotkey")
+
+    def _get_hotkey_action_combos(self) -> dict[str, tuple[str, str]]:
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+
+        combos = {
+            "skin_prev": (
+                str(current_settings.get("skin_nav_hotkey_previous_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_previous_key", "left_arrow")).strip().lower(),
+            ),
+            "skin_next": (
+                str(current_settings.get("skin_nav_hotkey_next_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_next_key", "right_arrow")).strip().lower(),
+            ),
+            "open_chat": (
+                str(current_settings.get("web_hotkey_chat_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_chat_key", "c")).strip().lower(),
+            ),
+            "open_projects": (
+                str(current_settings.get("web_hotkey_projects_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_projects_key", "j")).strip().lower(),
+            ),
+            "open_actions": (
+                str(current_settings.get("web_hotkey_actions_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_actions_key", "a")).strip().lower(),
+            ),
+            "open_snippets": (
+                str(current_settings.get("web_hotkey_snippets_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_snippets_key", "n")).strip().lower(),
+            ),
+            "open_workflows": (
+                str(current_settings.get("web_hotkey_workflows_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_workflows_key", "w")).strip().lower(),
+            ),
+            "open_preferences": (
+                str(current_settings.get("web_hotkey_preferences_modifier", "option_command")).strip().lower(),
+                str(current_settings.get("web_hotkey_preferences_key", "grave")).strip().lower(),
+            ),
+        }
+        skin_select_modifier = str(current_settings.get("skin_select_hotkey_modifier", "option_command")).strip().lower()
+        for idx in range(1, 10):
+            combos[f"skin_select_{idx}"] = (skin_select_modifier, str(idx))
+        return combos
+
+    def _get_skin_shortcut_order(self) -> list[str]:
+        try:
+            all_dirs = [
+                d for d in os.listdir(AVATARS_DIR)
+                if os.path.isdir(os.path.join(AVATARS_DIR, d))
+            ]
+        except Exception:
+            all_dirs = []
+        avatars = sorted([d for d in all_dirs if d != "oracle"])
+        return ["oracle"] + avatars
+
+    def _cycle_avatar_skin(self, delta: int):
+        order = self._get_skin_shortcut_order()
+        avatars = [name for name in order if name != "oracle"]
+        if not avatars:
+            return
+        current = str(self._skin_folder or "").strip().lower()
+        if current not in avatars:
+            target = avatars[0]
+        else:
+            idx = avatars.index(current)
+            target = avatars[(idx + delta) % len(avatars)]
+        self._on_direct_oracle_change(target)
+
+    def _select_skin_by_shortcut_index(self, index: int):
+        order = self._get_skin_shortcut_order()
+        if index < 1 or index > len(order):
+            return
+        target = order[index - 1]
+        self._on_direct_oracle_change(target)
+
+    def _on_global_hotkey_action(self, action_name: str):
+        if action_name == "skin_prev":
+            if self._skin_config is not None and self._skin_config.type == "oracle":
+                self.cycle_oracle_previous()
+            else:
+                self._cycle_avatar_skin(-1)
+            return
+        if action_name == "skin_next":
+            if self._skin_config is not None and self._skin_config.type == "oracle":
+                self.cycle_oracle()
+            else:
+                self._cycle_avatar_skin(1)
+            return
+        if action_name.startswith("skin_select_"):
+            try:
+                index = int(action_name.rsplit("_", 1)[-1])
+            except Exception:
+                index = 0
+            if index > 0:
+                self._select_skin_by_shortcut_index(index)
+            return
+        if action_name == "open_chat":
+            self._open_web_url("/chat/")
+            return
+        if action_name == "open_projects":
+            self._open_web_url("/projects/")
+            return
+        if action_name == "open_actions":
+            self._open_web_url("/actions/")
+            return
+        if action_name == "open_snippets":
+            self._open_web_url("/skills/")
+            return
+        if action_name == "open_workflows":
+            self._open_web_url("/workflows/")
+            return
+        if action_name == "open_preferences":
+            self._open_web_url("/settings")
 
 
     def on_move_event(self, event):

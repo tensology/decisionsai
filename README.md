@@ -231,6 +231,22 @@ Speak naturally — exact phrasing can vary.
 | **Media** | "Pause", "Next track", "Volume up", "Mute" |
 | **System** | "Start listening", "Stop speaking", "Exit" |
 
+### Global shortcuts
+
+Defaults are editable in **Preferences → Shortcut Keys**.
+
+| Shortcut | Action |
+|---|---|
+| `Cmd + Option + C` | Open Chat web UI |
+| `Cmd + Option + J` | Open Projects web UI |
+| `Cmd + Option + A` | Open Actions web UI |
+| `Cmd + Option + N` | Open Snippets web UI |
+| `Cmd + Option + W` | Open Workflows web UI |
+| `Cmd + Option + ~` | Open Preferences web UI |
+| `Cmd + Option + Left / Right` | Previous / next skin |
+| `Cmd + Option + 1..9` | Select skin by index (`1` = Oracle) |
+| `Cmd + Option + S` | Toggle recording start/stop |
+
 ---
 
 ## Integrations

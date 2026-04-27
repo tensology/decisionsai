@@ -1,6 +1,8 @@
 """System prompt loading and tool description building."""
 
 import logging
+import os
+import re
 from pathlib import Path
 from typing import List, Optional
 
@@ -10,7 +12,61 @@ logger = logging.getLogger(__name__)
 _template_cache: dict = {}
 
 
-def load_system_prompt_template(template_path: Optional[Path] = None) -> str:
+def _is_debug_enabled() -> bool:
+    val = (os.environ.get("DEBUG") or "").strip().lower()
+    return val in {"true", "1", "yes", "on"}
+
+
+def _resolve_prompt_profile(model_name: Optional[str], provider_name: Optional[str]) -> str:
+    """Choose prompt profile by model capability.
+
+    Profiles:
+    - ``lite``: micro/small models
+    - ``standard``: default local/unknown
+    - ``full``: larger cloud models
+    """
+    model = (model_name or "").strip()
+    provider = (provider_name or "").strip().lower()
+
+    try:
+        from distr.core.agent.tool_retriever import get_tool_retriever
+        tier = get_tool_retriever().classify_model_tier(model)
+        if tier in {"micro", "small"}:
+            return "lite"
+    except Exception:
+        pass
+
+    if provider in {"openai", "anthropic", "groq", "openrouter", "google gemini", "gemini"}:
+        return "full"
+    return "standard"
+
+
+def _strip_debug_only_sections(template: str, debug_enabled: bool) -> str:
+    if debug_enabled:
+        return template
+    return re.sub(
+        r'<!--\s*BEGIN_DEBUG_ONLY\s*-->.*?<!--\s*END_DEBUG_ONLY\s*-->',
+        "",
+        template,
+        flags=re.DOTALL,
+    )
+
+
+def _strip_rest_api_reference(template: str) -> str:
+    return re.sub(
+        r'═+\s*\nREST API REFERENCE\s*\n═+.*?(?=═{3,}|\Z)',
+        "",
+        template,
+        flags=re.DOTALL,
+    )
+
+
+def load_system_prompt_template(
+    template_path: Optional[Path] = None,
+    model_name: Optional[str] = None,
+    provider_name: Optional[str] = None,
+    debug_enabled: Optional[bool] = None,
+) -> str:
     """Load the system prompt template from file.
     
     Caches the result after first read — the template file doesn't change at runtime.
@@ -21,18 +77,26 @@ def load_system_prompt_template(template_path: Optional[Path] = None) -> str:
     Returns:
         Template string with {agent_name} and {tools_description} placeholders
     """
-    cache_key = str(template_path) if template_path else "__default__"
+    profile = _resolve_prompt_profile(model_name, provider_name) if template_path is None else "custom"
+    debug_flag = _is_debug_enabled() if debug_enabled is None else bool(debug_enabled)
+    cache_key = f"{template_path or '__default__'}::{profile}::debug={debug_flag}"
     if cache_key in _template_cache:
         return _template_cache[cache_key]
 
     try:
         if template_path is None:
             current_dir = Path(__file__).parent
-            template_path = current_dir / "system_prompt.txt"
+            if profile == "lite":
+                template_path = current_dir / "system_prompt_lite.txt"
+            else:
+                template_path = current_dir / "system_prompt.txt"
         
         if template_path.exists():
             with open(template_path, 'r', encoding='utf-8') as f:
                 template = f.read()
+            template = _strip_debug_only_sections(template, debug_flag)
+            if profile == "standard":
+                template = _strip_rest_api_reference(template)
             logger.info(f"Loaded system prompt template from {template_path}")
             _template_cache[cache_key] = template
             return template

@@ -353,7 +353,7 @@ def create_routes(base_path: str = "") -> APIRouter:
                         "method": "POST",
                         "path": "/api/workflows/{workflow_id}/runs/{run_id}/continue",
                         "summary": "Continue a waiting step",
-                        "description": "Resumes a step that is in 'waiting' status. Optionally pass 'input' to provide additional context.",
+                        "description": "Resumes a step that is in 'waiting' status. Optionally pass callback text via `input` (preferred) or compatibility fields like `response`, `message`, `result`, or `output`.",
                         "curl": f"""curl -s -X POST {base}/api/workflows/1/runs/1/continue \\
   -H 'Content-Type: application/json' \\
   -d '{{"input": "The deployment finished successfully"}}'""",
@@ -362,7 +362,11 @@ def create_routes(base_path: str = "") -> APIRouter:
                             {"name": "run_id", "type": "int", "required": True, "description": "Run ID"},
                         ],
                         "body": {
-                            "input": {"type": "string", "required": False, "description": "Optional context/data to resume with"},
+                            "input": {"type": "string", "required": False, "description": "Preferred callback text/context"},
+                            "response": {"type": "string", "required": False, "description": "Compatibility alias of input"},
+                            "message": {"type": "string", "required": False, "description": "Compatibility alias of input"},
+                            "result": {"type": "string", "required": False, "description": "Compatibility alias of input"},
+                            "output": {"type": "string", "required": False, "description": "Compatibility alias of input"},
                         },
                         "response_example": '{"success": true, "message": "Continue signal sent"}',
                     },

@@ -115,7 +115,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             # what could be a long chain. (If the LLM already wrote text before
             # the tool calls, that was already streamed in _consume_stream above.)
             if tool_calls and not full_content.strip():
-                self._speak_acknowledgment()
+                self._speak_acknowledgment(last_user_msg, tool_calls)
                 # The acknowledgment's EndFrame closes the TTS transport session.
                 # Push a new StartFrame so follow-up text (after tool execution)
                 # is recognized as a new response by the transport/pipeline.
@@ -151,7 +151,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 if round_num == 1 and self._should_dispatch_to_background(tool_calls):
                     # Speak a descriptive acknowledgment if the LLM hasn't already
                     if not full_content.strip():
-                        self._speak_acknowledgment()
+                        self._speak_acknowledgment(last_user_msg, tool_calls)
                     dispatched = await self._dispatch_chain_to_background(
                         full_content, tools_list, current_chat_id
                     )
@@ -233,12 +233,52 @@ class OpenAICompatibleLLMService(BaseLLMService):
     def _prepare_api_messages(self):
         """Return a validated, truncated copy of self._messages."""
         messages = self._messages.copy()
+        messages = self._apply_response_style_overrides(messages)
         if len(messages) > 35:
             logger.warning("Truncating conversation history from %d to 35 messages", len(messages))
             system = messages[0] if messages and messages[0].get('role') == 'system' else None
             recent = messages[-34:] if system else messages[-35:]
             messages = ([system] + recent) if system else recent
         return self._validate_messages(messages)
+
+    def _apply_response_style_overrides(self, messages: list) -> list:
+        """Apply lightweight style constraints based on explicit user wording.
+
+        This helps instruction fidelity for requests like "quick summary"
+        without changing normal responses.
+        """
+        last_user_msg = ""
+        for msg in reversed(self._messages):
+            if msg.get("role") == "user":
+                last_user_msg = str(msg.get("content", "") or "")
+                break
+
+        text = last_user_msg.lower()
+        wants_brief = (
+            "quick" in text
+            or "brief" in text
+            or "short" in text
+            or "concise" in text
+            or "just an outline" in text
+            or "outline summary" in text
+            or "keep it short" in text
+        )
+        if not wants_brief:
+            return messages
+
+        brevity_instruction = (
+            "Response style override from user instruction: be concise. "
+            "Keep the reply to 3-5 bullets or <= 90 words, no preamble."
+        )
+        patched = list(messages)
+        if patched and patched[0].get("role") == "system":
+            current = str(patched[0].get("content", "") or "")
+            if brevity_instruction not in current:
+                patched[0] = {**patched[0], "content": f"{current}\n\n{brevity_instruction}"}
+            return patched
+
+        patched.insert(0, {"role": "system", "content": brevity_instruction})
+        return patched
 
     async def _call_stream(self, messages, tools_list=None, max_retries=3):
         """Create a streaming chat completion with retry logic."""
@@ -660,7 +700,55 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 self._messages.append({"tool_call_id": tc["id"], "role": "tool", "name": func_name,
                                        "content": f"Error: Tool '{func_name}' not found"})
 
-    def _speak_acknowledgment(self):
+    @staticmethod
+    def _should_speak_acknowledgment(last_user_message: str, tool_calls: list) -> bool:
+        """Return True when a brief progress acknowledgment is actually useful.
+
+        Heuristic:
+        - Avoid repetitive acknowledgments for quick/direct commands.
+        - Use acknowledgments for likely long-running requests so users are not left
+          in silence while background work begins.
+        """
+        if not tool_calls:
+            return False
+
+        message = (last_user_message or "").strip().lower()
+        words = [w for w in re.split(r"\s+", message) if w]
+
+        # Short direct commands ("open chrome", "paste", "click here") should not
+        # get an extra spoken preamble.
+        if len(words) <= 5:
+            return False
+
+        long_running_tools = {
+            "pi_agent",
+            "run_workflow",
+            "continue_workflow",
+            "playwright_browser",
+            "screenshot_analyzer",
+        }
+        called_names = {
+            tc.get("function", {}).get("name", "")
+            for tc in tool_calls
+            if isinstance(tc, dict)
+        }
+        if called_names & long_running_tools:
+            return True
+
+        long_running_intent_markers = (
+            "investigate",
+            "analyze",
+            "debug",
+            "why",
+            "find out",
+            "figure out",
+            "look into",
+            "trace",
+            "diagnose",
+        )
+        return any(marker in message for marker in long_running_intent_markers)
+
+    def _speak_acknowledgment(self, last_user_message: str = "", tool_calls: list | None = None):
         """Speak a brief acknowledgment when the LLM jumps straight to tool calls
         without any preceding text. Prevents the user sitting in silence during
         a long tool chain.
@@ -677,9 +765,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
         if getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False):
             return
 
+        if not self._should_speak_acknowledgment(last_user_message, tool_calls or []):
+            return
+
         try:
             from distr.core.signals import speak_text_directly_event_queue
-            speak_text_directly_event_queue("On it.")
+            speak_text_directly_event_queue("Working on it.")
         except Exception:
             pass
 

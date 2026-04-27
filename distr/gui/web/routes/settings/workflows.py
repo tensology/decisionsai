@@ -7,8 +7,14 @@ from pydantic import BaseModel
 from typing import Optional, List
 import json
 import re
+import time
+import threading
 
 from ._shared import logger
+
+
+_isolated_step_exec_lock = threading.Lock()
+_isolated_step_exec_started_at = {}
 
 
 # ---- Pydantic models (only used in this module) ----
@@ -498,7 +504,12 @@ def register_routes(router, templates):
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
     async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
-        """Resume a waiting workflow run. Accepts optional { "input": "..." } body."""
+        """Resume a waiting workflow run.
+
+        Accepts optional JSON body. Preferred field is ``input``, but callback-style
+        payloads using ``response``, ``message``, ``result``, or ``output`` are
+        also accepted for compatibility.
+        """
         try:
             from distr.core.workflow.dispatcher import continue_waiting_step
             body = {}
@@ -506,7 +517,17 @@ def register_routes(router, templates):
                 body = await request.json()
             except Exception:
                 pass
-            optional_input = body.get("input", "") if isinstance(body, dict) else ""
+            optional_input = ""
+            if isinstance(body, dict):
+                optional_input = (
+                    body.get("input")
+                    or body.get("response")
+                    or body.get("message")
+                    or body.get("result")
+                    or body.get("output")
+                    or ""
+                )
+            optional_input = str(optional_input or "")
             result = continue_waiting_step(run_id, optional_input)
             if "error" in result:
                 status_code = result.get("status_code", 400)
@@ -606,7 +627,7 @@ def register_routes(router, templates):
     async def workflow_delete_step(workflow_id: int, step_id: int):
         try:
             from distr.core.workflow.service import delete_step
-            if not delete_step(step_id):
+            if not delete_step(step_id, workflow_id=workflow_id):
                 return JSONResponse({"detail": "Step not found"}, status_code=404)
             return JSONResponse({"success": True})
         except Exception as e:
@@ -634,13 +655,46 @@ def register_routes(router, templates):
         """
         import asyncio
 
+        # Server-side debounce/idempotency guard for double-clicks or duplicate listeners.
+        now = time.time()
+        with _isolated_step_exec_lock:
+            last_started = _isolated_step_exec_started_at.get(step_id, 0.0)
+            if now - last_started < 1.5:
+                logger.info(
+                    "Workflow step execute deduped: workflow_id=%s step_id=%s delta=%.3fs",
+                    workflow_id,
+                    step_id,
+                    now - last_started,
+                )
+                return JSONResponse({"success": True, "message": "Step execution already in progress."})
+            _isolated_step_exec_started_at[step_id] = now
+
         def _run():
             try:
                 from distr.core.workflow.dispatcher import StepDispatcher
                 dispatcher = StepDispatcher()
+                logger.info(
+                    "Workflow step execute started: workflow_id=%s step_id=%s",
+                    workflow_id,
+                    step_id,
+                )
                 dispatcher.run_isolated(step_id)
+                logger.info(
+                    "Workflow step execute finished: workflow_id=%s step_id=%s",
+                    workflow_id,
+                    step_id,
+                )
             except Exception as exc:
                 logger.error("Background step execution failed for step %s: %s", step_id, exc, exc_info=True)
+            finally:
+                # Keep timestamp for a short debounce window only.
+                try:
+                    with _isolated_step_exec_lock:
+                        started = _isolated_step_exec_started_at.get(step_id, 0.0)
+                        if started and (time.time() - started) > 10.0:
+                            _isolated_step_exec_started_at.pop(step_id, None)
+                except Exception:
+                    pass
 
         loop = asyncio.get_running_loop()
         loop.run_in_executor(None, _run)
@@ -648,11 +702,9 @@ def register_routes(router, templates):
 
     @router.post("/workflows/{workflow_id}/steps/{step_id}/stop")
     async def workflow_stop_step(workflow_id: int, step_id: int):
-        """Stop a running/waiting step: cancel playback, stop TTS/player, cancel the active run, reset the step."""
+        """Stop a running/waiting step without cancelling the full run."""
         try:
-            from distr.core.workflow.dispatcher import cancel_step, cancel_run
-            from distr.core.db import get_session as _get_session
-            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep as _Step
+            from distr.core.workflow.dispatcher import cancel_step
 
             # Stop any recording playback via the action playback service
             try:
@@ -673,15 +725,6 @@ def register_routes(router, templates):
 
             # Cancel the step itself
             cancel_step(step_id)
-
-            # Also cancel the active run for this workflow
-            with _get_session() as db:
-                run = db.query(AutoWorkflowRun).filter(
-                    AutoWorkflowRun.workflow_id == workflow_id,
-                    AutoWorkflowRun.status.in_(["running", "waiting"])
-                ).first()
-                if run:
-                    cancel_run(run.id)
 
             return JSONResponse({"success": True})
         except Exception as e:

@@ -175,6 +175,26 @@ class ShortcutSettings(BaseModel):
     oracle_size_hotkey_decrease_key: str = "left_bracket"
     oracle_size_hotkey_increase_modifier: str = "option_command"
     oracle_size_hotkey_increase_key: str = "right_bracket"
+    recording_hotkey_enabled: bool = True
+    recording_hotkey_modifier: str = "option_command"
+    recording_hotkey_key: str = "s"
+    skin_nav_hotkey_previous_modifier: str = "option_command"
+    skin_nav_hotkey_previous_key: str = "left_arrow"
+    skin_nav_hotkey_next_modifier: str = "option_command"
+    skin_nav_hotkey_next_key: str = "right_arrow"
+    skin_select_hotkey_modifier: str = "option_command"
+    web_hotkey_chat_modifier: str = "option_command"
+    web_hotkey_chat_key: str = "c"
+    web_hotkey_projects_modifier: str = "option_command"
+    web_hotkey_projects_key: str = "j"
+    web_hotkey_actions_modifier: str = "option_command"
+    web_hotkey_actions_key: str = "a"
+    web_hotkey_snippets_modifier: str = "option_command"
+    web_hotkey_snippets_key: str = "n"
+    web_hotkey_workflows_modifier: str = "option_command"
+    web_hotkey_workflows_key: str = "w"
+    web_hotkey_preferences_modifier: str = "option_command"
+    web_hotkey_preferences_key: str = "grave"
 
 
 class AudioSettings(BaseModel):

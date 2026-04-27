@@ -135,6 +135,24 @@ class EventHookDispatcher(QObject):
         logger.info("[Dispatcher] force_revert: %s → %s", self._current_hook, self._previous_hook)
         self._do_revert()
 
+    def force_idle(self, reason: str = "") -> None:
+        """Force hook state to idle even if a priority hook is active.
+
+        Used as a safety recovery path when external state indicates PTT is no
+        longer active but the UI hook was not reverted correctly.
+        """
+        old_hook = self._current_hook
+        if old_hook == "idle":
+            return
+        self._thinking_timer.stop()
+        self._current_hook = "idle"
+        self._previous_hook = "idle"
+        if reason:
+            logger.warning("[Dispatcher] force_idle(%s): %s → idle", reason, old_hook)
+        else:
+            logger.warning("[Dispatcher] force_idle: %s → idle", old_hook)
+        self.event_hook_fired.emit("idle", old_hook)
+
     def _do_revert(self) -> None:
         old_hook = self._current_hook
         self._current_hook = self._previous_hook

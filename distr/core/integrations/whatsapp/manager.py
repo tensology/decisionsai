@@ -74,12 +74,18 @@ class WhatsAppWebSocketManager(QObject):
 
     def __init__(self, server_url: str = "wss://www.decisionsai.net/ws/whatsapp"):
         super().__init__()
+        use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
 
         # Allow env override
         env_url = os.environ.get("DECISIONSAI_WA_WS_URL")
         if env_url:
             self.server_url = env_url
-        elif os.environ.get("DEBUG", "").upper() == "TRUE":
+        elif use_local_relay:
             self.server_url = "ws://localhost:8090/ws/whatsapp"
         else:
             self.server_url = server_url
@@ -88,7 +94,7 @@ class WhatsAppWebSocketManager(QObject):
         self.api_base = os.environ.get(
             "DECISIONSAI_WA_API_BASE",
             "https://www.decisionsai.net/api/whatsapp"
-            if not os.environ.get("DEBUG", "").upper() == "TRUE"
+            if not use_local_relay
             else "http://localhost:8090/api/whatsapp",
         )
 

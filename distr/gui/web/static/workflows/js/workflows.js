@@ -17,6 +17,7 @@
     var activeRunsScope = "all";
     var wfContextMenuEl = null;
     var wfContextMenuId = null;
+    var workflowRuntimeStateById = {};
 
     // Inline SVG icons (14x14, currentColor)
     var SVG_PLAY = '<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polygon points="5 3 19 12 5 21 5 3"/></svg>';
@@ -76,6 +77,76 @@
         if (okBtn) okBtn.addEventListener("click", function () {
             closeModal();
             onConfirm();
+        });
+    }
+
+    function showInputModal(opts) {
+        opts = opts || {};
+        var title = opts.title || "Input";
+        var message = opts.message || "";
+        var placeholder = opts.placeholder || "";
+        var confirmLabel = opts.confirmLabel || "Submit";
+        var initialValue = opts.initialValue || "";
+        var onConfirm = opts.onConfirm || function () {};
+
+        var existing = document.getElementById("wf-input-modal");
+        if (existing) existing.remove();
+        var html = '' +
+            '<div id="wf-input-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">' +
+                '<div class="w-full max-w-xl mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl p-4 shadow-2xl">' +
+                    '<h3 class="text-white text-sm font-semibold mb-2">' + esc(title) + '</h3>' +
+                    '<p class="text-sm text-gray-300 mb-3">' + esc(message) + '</p>' +
+                    '<textarea class="wf-input-textarea w-full min-h-[120px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 resize-y" placeholder="' + esc(placeholder) + '">' + esc(initialValue) + '</textarea>' +
+                    '<div class="mt-4 flex items-center justify-end gap-2">' +
+                        '<button type="button" class="wf-input-cancel px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
+                        '<button type="button" class="wf-input-ok px-3 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">' + esc(confirmLabel) + '</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        var modal = document.getElementById("wf-input-modal");
+        if (!modal) return;
+        var textarea = modal.querySelector(".wf-input-textarea");
+        function closeModal() { modal.remove(); }
+        modal.addEventListener("click", function (evt) {
+            if (evt.target === modal) closeModal();
+        });
+        var cancelBtn = modal.querySelector(".wf-input-cancel");
+        var okBtn = modal.querySelector(".wf-input-ok");
+        if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
+        if (okBtn) okBtn.addEventListener("click", function () {
+            var value = textarea ? textarea.value : "";
+            closeModal();
+            onConfirm(value);
+        });
+        if (textarea) {
+            textarea.focus();
+            textarea.selectionStart = textarea.selectionEnd = textarea.value.length;
+        }
+    }
+
+    function deleteWorkflowById(workflowId) {
+        if (!workflowId) return;
+        showConfirmModal({
+            title: "Delete workflow",
+            message: "Delete this workflow? This cannot be undone.",
+            confirmLabel: "Delete",
+            onConfirm: function () {
+                api("DELETE", "/workflows/" + workflowId)
+                    .then(function () {
+                        snack("Workflow deleted");
+                        if (currentWorkflowId === workflowId) {
+                            currentWorkflowId = null;
+                            currentWorkflow = null;
+                            expandedStepId = null;
+                            document.getElementById("wf-detail").classList.add("hidden");
+                            document.getElementById("wf-empty").classList.remove("hidden");
+                            syncWorkflowFooterActionsVisibility();
+                        }
+                        loadList();
+                    })
+                    .catch(function () { snack("Failed to delete workflow", "error"); });
+            }
         });
     }
 
@@ -141,21 +212,7 @@
                     return;
                 }
                 if (action === "delete") {
-                    if (!confirm("Delete this workflow? This cannot be undone.")) return;
-                    api("DELETE", "/workflows/" + workflowId)
-                        .then(function () {
-                            snack("Workflow deleted");
-                            if (currentWorkflowId === workflowId) {
-                                currentWorkflowId = null;
-                                currentWorkflow = null;
-                                expandedStepId = null;
-                                document.getElementById("wf-detail").classList.add("hidden");
-                                document.getElementById("wf-empty").classList.remove("hidden");
-                                syncWorkflowFooterActionsVisibility();
-                            }
-                            loadList();
-                        })
-                        .catch(function () { snack("Failed to delete workflow", "error"); });
+                    deleteWorkflowById(workflowId);
                 }
             });
         });
@@ -185,11 +242,18 @@
                 el.innerHTML = data.map(function (w) {
                     var active = currentWorkflowId === w.id ? " border-[#f97316] bg-white/10" : " border-transparent hover:bg-white/5";
                     var badge = w.schedule_enabled ? '<span class="text-xs px-1.5 py-0.5 rounded bg-blue-600/40 text-blue-300 ml-auto">' + esc(w.schedule_preset || "sched") + "</span>" : "";
+                    var state = workflowRuntimeStateById[w.id] || {};
+                    var dotClass = "bg-gray-500";
+                    if (state.status === "waiting") dotClass = "bg-yellow-400";
+                    else if (state.status === "running") dotClass = "bg-blue-400";
                     return '<div class="flex items-center gap-2 rounded border px-3 py-2 cursor-pointer' + active + '" data-id="' + w.id + '">' +
-                        '<span class="w-2 h-2 rounded-full bg-gray-500 flex-shrink-0"></span>' +
+                        '<span class="w-2 h-2 rounded-full ' + dotClass + ' flex-shrink-0"></span>' +
                         '<span class="text-sm text-white truncate">' + esc(w.name) + '</span>' +
-                        '<span class="text-xs text-gray-500 ml-1">' + (w.step_count || 0) + '</span>' +
-                        badge + '</div>';
+                        '<span class="ml-auto inline-flex items-center gap-1.5">' +
+                            badge +
+                            '<span class="text-xs text-gray-500">' + (w.step_count || 0) + '</span>' +
+                        '</span>' +
+                        '</div>';
                 }).join("");
                 el.querySelectorAll("[data-id]").forEach(function (row) {
                     row.addEventListener("click", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
@@ -244,30 +308,14 @@
         api("GET", "/workflows/" + currentWorkflowId).then(function (data) {
             currentWorkflow = data;
             var steps = data.steps || [];
-            // Update step header badges
+            // Full re-render keeps button/active-step/routing transitions in sync.
+            renderSteps(steps);
+            renderRuns(data.runs || []);
+            // Update live card state so buttons/highlights follow active step.
             steps.forEach(function (s) {
+                applyLiveStepCardState(s, steps);
                 var card = document.querySelector('.step-card[data-step-id="' + s.id + '"]');
                 if (!card) return;
-                var badge = card.querySelector(".step-status-badge");
-                if (badge) {
-                    badge.textContent = s.status;
-                    badge.className = "step-status-badge text-xs px-1.5 py-0.5 rounded " + statusBadgeClass(s.status);
-                }
-                // Update result indicator if expanded
-                var resultEl = card.querySelector(".sf-goto-history");
-                if (resultEl && s.result) {
-                    var wrap = card.querySelector(".sf-result-wrap");
-                    if (shouldSuppressCancelledText(s.status, s.result)) {
-                        if (wrap) wrap.classList.add("hidden");
-                    } else {
-                        var preview = s.result.length > 80 ? s.result.substring(0, 80) + '…' : s.result;
-                        resultEl.textContent = 'ℹ️ ' + preview;
-                        if (wrap) wrap.classList.remove("hidden");
-                    }
-                } else if (!s.result || !s.result.trim()) {
-                    var w = card.querySelector(".sf-result-wrap");
-                    if (w) w.classList.add("hidden");
-                }
                 // Refresh history tab if it's currently visible
                 if (expandedStepId === s.id && activeStepTab[s.id] === "history") {
                     var histContainer = card.querySelector(".sf-history-tab-list");
@@ -303,6 +351,45 @@
         return s + "s";
     }
 
+    function colorForBoard(boardId, index) {
+        var palette = ["#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#ef4444", "#14b8a6"];
+        var n = parseInt(boardId, 10);
+        if (!isNaN(n) && isFinite(n)) return palette[Math.abs(n) % palette.length];
+        return palette[index % palette.length];
+    }
+
+    function renderBoardConsumers(activeRuns) {
+        var el = document.getElementById("wf-board-consumers");
+        if (!el) return;
+        var runs = Array.isArray(activeRuns) ? activeRuns : [];
+        var scoped = runs.filter(function (r) {
+            return currentWorkflowId && String(r.workflow_id) === String(currentWorkflowId);
+        });
+        var seen = {};
+        var boards = [];
+        scoped.forEach(function (r) {
+            var bid = r && r.board_id;
+            if (!bid || seen[bid]) return;
+            seen[bid] = true;
+            boards.push({
+                id: bid,
+                name: r.board_name || ("Board #" + bid)
+            });
+        });
+        if (!boards.length) {
+            el.classList.add("hidden");
+            el.innerHTML = "";
+            return;
+        }
+        var dots = boards.slice(0, 6).map(function (b, idx) {
+            var color = colorForBoard(b.id, idx);
+            return '<span title="' + esc(b.name) + '" class="inline-block w-2.5 h-2.5 rounded-full border border-black/20" style="background:' + color + ';"></span>';
+        }).join("");
+        var extra = boards.length > 6 ? ('<span class="text-[10px] text-gray-300">+' + (boards.length - 6) + '</span>') : "";
+        el.className = "inline-flex items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5";
+        el.innerHTML = '<span class="text-[10px] text-gray-300">Boards</span>' + dots + extra + '<span class="text-[10px] text-white/90 ml-0.5">' + boards.length + '</span>';
+    }
+
     function loadActiveRuns() {
         var listEl = document.getElementById("wf-active-runs-list");
         var emptyEl = document.getElementById("wf-active-runs-empty");
@@ -312,6 +399,23 @@
             query += "&workflow_id=" + encodeURIComponent(currentWorkflowId);
         }
         api("GET", query).then(function (runs) {
+            var stateByWorkflow = {};
+            (runs || []).forEach(function (r) {
+                if (!r || !r.workflow_id) return;
+                var prev = stateByWorkflow[r.workflow_id];
+                // waiting outranks running for stronger attention signal
+                if (!prev || prev === "running" || r.status === "waiting") {
+                    if (r.status === "waiting" || r.status === "running") {
+                        stateByWorkflow[r.workflow_id] = r.status;
+                    }
+                }
+            });
+            workflowRuntimeStateById = Object.keys(stateByWorkflow).reduce(function (acc, k) {
+                acc[k] = { status: stateByWorkflow[k] };
+                return acc;
+            }, {});
+            loadList();
+            renderBoardConsumers(runs || []);
             if (!runs.length) {
                 listEl.innerHTML = "";
                 emptyEl.classList.remove("hidden");
@@ -324,6 +428,7 @@
                 var phase = r.phase ? String(r.phase) : "planning";
                 var boardText = r.board_name || (r.board_id ? ("Board #" + r.board_id) : "No board");
                 var ticketText = r.ticket_title || (r.ticket_id ? ("Ticket #" + r.ticket_id) : "No ticket");
+                var projectText = r.project_name || (r.project_id ? ("Project #" + r.project_id) : "No project");
                 var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
                 var workflowText = r.workflow_name || ("Workflow #" + r.workflow_id);
                 var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
@@ -337,6 +442,7 @@
                     '<div class="grid grid-cols-1 md:grid-cols-2 gap-1 text-xs">' +
                         '<div><span class="text-gray-500">Board:</span> <span class="text-gray-200">' + esc(boardText) + '</span></div>' +
                         '<div><span class="text-gray-500">Ticket:</span> <span class="text-gray-200">' + esc(ticketText) + '</span></div>' +
+                        '<div><span class="text-gray-500">Project:</span> <span class="text-gray-200">' + esc(projectText) + '</span></div>' +
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
                     '</div>' +
@@ -357,6 +463,100 @@
         if (status !== "cancelled") return false;
         var normalized = String(text || "").trim().toLowerCase();
         return normalized === "cancelled by user" || normalized === "canceled by user";
+    }
+
+    function stepCardClass(status, isOpen) {
+        var base = "step-card border rounded-lg";
+        var open = isOpen ? " expanded" : "";
+        if (status === "running") return base + " border-green-500/60 shadow-[0_0_0_1px_rgba(34,197,94,0.35)]" + open;
+        if (status === "waiting") return base + " border-amber-500/60 shadow-[0_0_0_1px_rgba(245,158,11,0.35)]" + open;
+        return base + " border-white/20" + open;
+    }
+
+    function headerButtonsHtml(step) {
+        if (step.status === "waiting") {
+            return '<button type="button" class="sh-continue-waiting inline-flex items-center justify-center w-6 h-6 rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/20" data-step-id="' + step.id + '" title="Continue">' + SVG_FORWARD + '</button>' +
+                '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + step.id + '" title="Cancel">' + SVG_CANCEL + '</button>' +
+                '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + step.id + '" title="Delete step">' + SVG_TRASH + '</button>';
+        }
+        if (step.status === "running") {
+            return '<button type="button" class="sh-stop inline-flex items-center justify-center w-6 h-6 rounded border border-orange-500/50 text-orange-400 hover:bg-orange-500/20" data-step-id="' + step.id + '" title="Stop Step">' + SVG_STOP + '</button>' +
+                '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + step.id + '" title="Delete step">' + SVG_TRASH + '</button>';
+        }
+        return '<button type="button" class="sh-run-isolated inline-flex items-center justify-center w-6 h-6 rounded border border-blue-500/50 text-blue-400 hover:bg-blue-500/20" data-step-id="' + step.id + '" title="Run Isolated">' + SVG_PLAY + '</button>' +
+            '<button type="button" class="sh-run-continue inline-flex items-center justify-center w-6 h-6 rounded border border-green-500/50 text-green-400 hover:bg-green-500/20" data-step-id="' + step.id + '" title="Continue From Here">' + SVG_FORWARD + '</button>' +
+            '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + step.id + '" title="Delete step">' + SVG_TRASH + '</button>';
+    }
+
+    function bindStepHeaderActionHandlers(scopeEl) {
+        if (!scopeEl) return;
+        scopeEl.querySelectorAll(".sh-run-isolated").forEach(function (btn) {
+            btn.addEventListener("click", function (e) { e.stopPropagation(); executeStep(parseInt(btn.dataset.stepId, 10)); });
+        });
+        scopeEl.querySelectorAll(".sh-run-continue").forEach(function (btn) {
+            btn.addEventListener("click", function (e) { e.stopPropagation(); runFromStep(parseInt(btn.dataset.stepId, 10)); });
+        });
+        scopeEl.querySelectorAll(".sh-cancel").forEach(function (btn) {
+            btn.addEventListener("click", function (e) { e.stopPropagation(); cancelStep(parseInt(btn.dataset.stepId, 10)); });
+        });
+        scopeEl.querySelectorAll(".sh-stop").forEach(function (btn) {
+            btn.addEventListener("click", function (e) { e.stopPropagation(); stopStep(parseInt(btn.dataset.stepId, 10)); });
+        });
+        scopeEl.querySelectorAll(".sh-continue-waiting").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                continueWaitingRun();
+            });
+        });
+        scopeEl.querySelectorAll(".sh-delete").forEach(function (btn) {
+            btn.addEventListener("click", function (e) {
+                e.stopPropagation();
+                var stepId = parseInt(btn.dataset.stepId, 10);
+                confirmDeleteStep(stepId);
+            });
+        });
+    }
+
+    function applyLiveStepCardState(step, steps) {
+        var card = document.querySelector('.step-card[data-step-id="' + step.id + '"]');
+        if (!card) return;
+
+        var isOpen = expandedStepId === step.id;
+        card.className = stepCardClass(step.status, isOpen);
+
+        var badge = card.querySelector(".step-status-badge");
+        if (step.status && step.status !== "pending") {
+            if (!badge) {
+                badge = document.createElement("span");
+                badge.className = "step-status-badge text-xs px-1.5 py-0.5 rounded";
+                var typePill = card.querySelector(".step-header .text-xs.bg-white\\/10");
+                if (typePill && typePill.parentNode) typePill.parentNode.insertBefore(badge, typePill);
+            }
+            badge.textContent = step.status;
+            badge.className = "step-status-badge text-xs px-1.5 py-0.5 rounded " + statusBadgeClass(step.status);
+        } else if (badge) {
+            badge.remove();
+        }
+
+        var actionsWrap = card.querySelector(".step-header-actions");
+        if (actionsWrap) {
+            actionsWrap.innerHTML = headerButtonsHtml(step);
+            bindStepHeaderActionHandlers(actionsWrap);
+        }
+    }
+
+    function markStepAsRunningLocally(stepId) {
+        if (!currentWorkflow || !currentWorkflow.steps) return;
+        var found = false;
+        currentWorkflow.steps.forEach(function (s) {
+            if (s.id === stepId) {
+                s.status = "running";
+                found = true;
+            } else if (s.status === "running" || s.status === "waiting") {
+                s.status = "pending";
+            }
+        });
+        if (found) renderSteps(currentWorkflow.steps || []);
     }
 
     function startPolling() {
@@ -469,7 +669,90 @@
                 runBar.innerHTML = "";
                 stopPolling();
             }
+            loadActiveRuns();
         }).catch(function () {});
+    }
+
+    function reorderStepsLocally(steps, draggedId, targetId) {
+        if (!Array.isArray(steps)) return null;
+        if (!draggedId || !targetId || draggedId === targetId) return null;
+        var draggedIndex = steps.findIndex(function (s) { return s.id === draggedId; });
+        var targetIndex = steps.findIndex(function (s) { return s.id === targetId; });
+        if (draggedIndex < 0 || targetIndex < 0) return null;
+        var reordered = steps.slice();
+        var moved = reordered.splice(draggedIndex, 1)[0];
+        reordered.splice(targetIndex, 0, moved);
+        reordered.forEach(function (s, idx) { s.position = idx; });
+        return reordered;
+    }
+
+    function persistStepOrder(workflowId, steps) {
+        var orderedIds = (steps || []).map(function (s) { return s.id; });
+        return api("PATCH", "/workflows/" + workflowId + "/steps/reorder", { step_ids: orderedIds });
+    }
+
+    function enableStepDragAndDrop(steps) {
+        var listEl = document.getElementById("wf-steps-list");
+        if (!listEl) return;
+
+        var draggingStepId = null;
+        var cards = listEl.querySelectorAll(".step-card");
+        cards.forEach(function (card) {
+            var stepId = parseInt(card.dataset.stepId, 10);
+            var header = card.querySelector(".step-header");
+            if (!header || !stepId) return;
+
+            header.setAttribute("draggable", "true");
+            header.classList.add("step-drag-handle");
+
+            header.addEventListener("dragstart", function (evt) {
+                draggingStepId = stepId;
+                card.classList.add("step-card-dragging");
+                if (evt.dataTransfer) {
+                    evt.dataTransfer.effectAllowed = "move";
+                    evt.dataTransfer.setData("text/plain", String(stepId));
+                }
+            });
+
+            header.addEventListener("dragend", function () {
+                draggingStepId = null;
+                listEl.querySelectorAll(".step-card-drop-target").forEach(function (el) {
+                    el.classList.remove("step-card-drop-target");
+                });
+                listEl.querySelectorAll(".step-card-dragging").forEach(function (el) {
+                    el.classList.remove("step-card-dragging");
+                });
+            });
+
+            card.addEventListener("dragover", function (evt) {
+                if (!draggingStepId || draggingStepId === stepId) return;
+                evt.preventDefault();
+                card.classList.add("step-card-drop-target");
+                if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
+            });
+
+            card.addEventListener("dragleave", function () {
+                card.classList.remove("step-card-drop-target");
+            });
+
+            card.addEventListener("drop", function (evt) {
+                evt.preventDefault();
+                card.classList.remove("step-card-drop-target");
+                if (!draggingStepId || draggingStepId === stepId) return;
+                var reordered = reorderStepsLocally(steps, draggingStepId, stepId);
+                if (!reordered) return;
+                if (currentWorkflow) currentWorkflow.steps = reordered;
+                renderSteps(reordered);
+                persistStepOrder(currentWorkflowId, reordered)
+                    .then(function () {
+                        snack("Step order updated");
+                    })
+                    .catch(function (e) {
+                        snack(e.message || "Failed to reorder steps", "error");
+                        loadDetail(currentWorkflowId);
+                    });
+            });
+        });
     }
 
     // ── Steps accordion ──
@@ -481,32 +764,18 @@
         }
         el.innerHTML = steps.map(function (s) {
             var isOpen = expandedStepId === s.id;
-            var typeLabel = { agent_instruction: "Agent", play_recording: "Recording", run_command: "Command", http_request: "HTTP", execute_code: "Code", playwright: "Playwright" }[s.action_type] || s.action_type;
+            var typeLabel = { agent_instruction: "Agent", play_recording: "Recording", run_command: "Command", send_to_project_cli: "Project CLI", http_request: "HTTP", execute_code: "Code", playwright: "Playwright" }[s.action_type] || s.action_type;
             var chevronCls = isOpen ? "chevron open" : "chevron";
             var statusCls = statusBadgeClass(s.status);
             var showStepStatusBadge = !!s.status && s.status !== "pending";
-            var headerBtns = '';
-            if (s.status === "waiting") {
-                headerBtns = '<button type="button" class="sh-continue-waiting inline-flex items-center justify-center w-6 h-6 rounded border border-amber-500/50 text-amber-400 hover:bg-amber-500/20" data-step-id="' + s.id + '" title="Continue">' + SVG_FORWARD + '</button>' +
-                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel">' + SVG_CANCEL + '</button>' +
-                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
-            } else if (s.status === "running") {
-                headerBtns = '<button type="button" class="sh-stop inline-flex items-center justify-center w-6 h-6 rounded border border-orange-500/50 text-orange-400 hover:bg-orange-500/20" data-step-id="' + s.id + '" title="Stop">' + SVG_STOP + '</button>' +
-                    '<button type="button" class="sh-cancel inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Cancel run">' + SVG_STOP + '</button>' +
-                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
-            } else {
-                headerBtns = '<button type="button" class="sh-run-isolated inline-flex items-center justify-center w-6 h-6 rounded border border-blue-500/50 text-blue-400 hover:bg-blue-500/20" data-step-id="' + s.id + '" title="Run Isolated">' + SVG_PLAY + '</button>' +
-                    '<button type="button" class="sh-run-continue inline-flex items-center justify-center w-6 h-6 rounded border border-green-500/50 text-green-400 hover:bg-green-500/20" data-step-id="' + s.id + '" title="Continue From Here">' + SVG_FORWARD + '</button>' +
-                    '<button type="button" class="sh-delete inline-flex items-center justify-center w-6 h-6 rounded border border-red-500/40 text-red-300 hover:bg-red-500/20" data-step-id="' + s.id + '" title="Delete step">' + SVG_TRASH + '</button>';
-            }
-            return '<div class="step-card border border-white/20 rounded-lg' + (isOpen ? " expanded" : "") + '" data-step-id="' + s.id + '">' +
+            return '<div class="' + stepCardClass(s.status, isOpen) + '" data-step-id="' + s.id + '">' +
                 '<div class="step-header flex items-center gap-3 px-4 py-3" data-step-id="' + s.id + '">' +
                     '<span class="' + chevronCls + ' text-gray-400 text-xs">▶</span>' +
                     '<span class="text-xs text-gray-500">#' + (parseInt(s.position, 10) + 1) + '</span>' +
                     '<span class="text-sm font-medium text-white flex-1 truncate">' + esc(s.name) + '</span>' +
                     (showStepStatusBadge ? ('<span class="step-status-badge text-xs px-1.5 py-0.5 rounded ' + statusCls + '">' + esc(s.status) + '</span>') : '') +
                     '<span class="text-xs px-1.5 py-0.5 rounded bg-white/10 text-gray-400">' + esc(typeLabel) + '</span>' +
-                    headerBtns +
+                    '<span class="step-header-actions inline-flex items-center gap-1">' + headerButtonsHtml(s) + '</span>' +
                 '</div>' +
                 '<div class="step-body' + (isOpen ? "" : " hidden") + '" id="step-body-' + s.id + '"></div>' +
             '</div>';
@@ -519,31 +788,8 @@
         });
 
         // Header action buttons (stopPropagation so they don't toggle accordion)
-        el.querySelectorAll(".sh-run-isolated").forEach(function (btn) {
-            btn.addEventListener("click", function (e) { e.stopPropagation(); executeStep(parseInt(btn.dataset.stepId, 10)); });
-        });
-        el.querySelectorAll(".sh-run-continue").forEach(function (btn) {
-            btn.addEventListener("click", function (e) { e.stopPropagation(); runFromStep(parseInt(btn.dataset.stepId, 10)); });
-        });
-        el.querySelectorAll(".sh-cancel").forEach(function (btn) {
-            btn.addEventListener("click", function (e) { e.stopPropagation(); cancelStep(parseInt(btn.dataset.stepId, 10)); });
-        });
-        el.querySelectorAll(".sh-stop").forEach(function (btn) {
-            btn.addEventListener("click", function (e) { e.stopPropagation(); stopStep(parseInt(btn.dataset.stepId, 10)); });
-        });
-        el.querySelectorAll(".sh-continue-waiting").forEach(function (btn) {
-            btn.addEventListener("click", function (e) {
-                e.stopPropagation();
-                continueWaitingRun();
-            });
-        });
-        el.querySelectorAll(".sh-delete").forEach(function (btn) {
-            btn.addEventListener("click", function (e) {
-                e.stopPropagation();
-                var stepId = parseInt(btn.dataset.stepId, 10);
-                confirmDeleteStep(stepId);
-            });
-        });
+        bindStepHeaderActionHandlers(el);
+        enableStepDragAndDrop(steps);
 
         if (expandedStepId) {
             var openStep = steps.find(function (s) { return s.id === expandedStepId; });
@@ -593,6 +839,7 @@
             '<option value="agent_instruction"' + (step.action_type === "agent_instruction" ? " selected" : "") + '>Agent Instruction</option>' +
             '<option value="play_recording"' + (step.action_type === "play_recording" ? " selected" : "") + '>Play Recording</option>' +
             '<option value="run_command"' + (step.action_type === "run_command" ? " selected" : "") + '>Run Command</option>' +
+            '<option value="send_to_project_cli"' + (step.action_type === "send_to_project_cli" ? " selected" : "") + '>Send to Project CLI</option>' +
             '<option value="http_request"' + (step.action_type === "http_request" ? " selected" : "") + '>HTTP Request</option>' +
             '<option value="execute_code"' + (step.action_type === "execute_code" ? " selected" : "") + '>Execute Code</option>' +
             '<option value="playwright"' + (step.action_type === "playwright" ? " selected" : "") + '>Playwright</option>' +
@@ -761,16 +1008,6 @@
         html += '<button type="button" class="sf-clear-history px-2 py-1 rounded border border-red-500/50 text-red-300 text-xs hover:bg-red-500/20">Clear audit history</button>';
         html += '</div>';
         html += '</div>';
-
-        // ── Compact result indicator (click to jump to History tab)
-        var hasResult = step.result && step.result.trim();
-        if (hasResult) {
-            var suppressCancelledResult = shouldSuppressCancelledText(step.status, step.result);
-            var resultPreview = step.result.length > 80 ? step.result.substring(0, 80) + '…' : step.result;
-            html += '<div class="sf-result-wrap border-t border-white/10 pt-2 mt-1' + (suppressCancelledResult ? ' hidden' : '') + '">';
-            html += '<p class="text-xs text-gray-400 cursor-pointer hover:text-white sf-goto-history">ℹ️ ' + esc(resultPreview) + '</p>';
-            html += '</div>';
-        }
 
         // ── Bottom bar: Save + Delete ──
         html += '<div class="flex items-center gap-2 pt-3 border-t border-white/10">';
@@ -1031,14 +1268,6 @@
         container.querySelector(".sf-save").addEventListener("click", function () { saveStep(step.id, container); });
         // Delete
         container.querySelector(".sf-delete").addEventListener("click", function () { confirmDeleteStep(step.id); });
-        // Result indicator click -> jump to History tab
-        var gotoHist = container.querySelector(".sf-goto-history");
-        if (gotoHist) {
-            gotoHist.addEventListener("click", function () {
-                activeStepTab[step.id] = "history";
-                buildStepForm(step, allSteps);
-            });
-        }
 
         // Recording
         var recordBtn = container.querySelector(".sf-record");
@@ -1162,12 +1391,14 @@
     }
 
     function executeStep(stepId) {
+        markStepAsRunningLocally(stepId);
         api("POST", "/workflows/" + currentWorkflowId + "/steps/" + stepId + "/execute")
             .then(function () { snack("Step execution started"); startPolling(); loadDetail(currentWorkflowId); })
             .catch(function (e) { snack(e.message || "Execute failed", "error"); });
     }
 
     function runFromStep(stepId) {
+        markStepAsRunningLocally(stepId);
         // Start a full workflow run starting from the given step
         api("POST", "/workflows/" + currentWorkflowId + "/run", { start_step_id: stepId })
             .then(function () { snack("Workflow started from this step"); startPolling(); loadDetail(currentWorkflowId); })
@@ -1567,15 +1798,8 @@
         var deleteBtn = document.getElementById("wf-delete-btn");
         if (deleteBtn) {
             deleteBtn.addEventListener("click", function () {
-                if (!currentWorkflowId || !confirm("Delete this workflow? This cannot be undone.")) return;
-                api("DELETE", "/workflows/" + currentWorkflowId)
-                    .then(function () {
-                        snack("Workflow deleted"); currentWorkflowId = null; currentWorkflow = null; expandedStepId = null;
-                        document.getElementById("wf-detail").classList.add("hidden");
-                        document.getElementById("wf-empty").classList.remove("hidden");
-                        syncWorkflowFooterActionsVisibility();
-                        loadList();
-                    }).catch(function () { snack("Failed to delete workflow", "error"); });
+                if (!currentWorkflowId) return;
+                deleteWorkflowById(currentWorkflowId);
             });
         }
 
@@ -1741,16 +1965,26 @@
         if (genStepsBtn) {
             genStepsBtn.addEventListener("click", function () {
                 if (!currentWorkflowId) return;
-                var instruction = prompt("Describe the steps to generate:");
-                if (!instruction || !instruction.trim()) return;
-                genStepsBtn.disabled = true;
-                api("POST", "/workflows/" + currentWorkflowId + "/generate-steps", { instruction: instruction.trim() })
-                    .then(function () {
-                        snack("Steps generated");
-                        loadDetail(currentWorkflowId);
-                    })
-                    .catch(function (e) { snack(e.message || "Step generation failed", "error"); })
-                    .finally(function () { genStepsBtn.disabled = false; });
+                showInputModal({
+                    title: "Add Steps from AI",
+                    message: "Describe the outcome and AI will append generated steps to this workflow.",
+                    placeholder: "Example: Open admin dashboard, export last 7 days of tickets, and attach the CSV to the run history.",
+                    confirmLabel: "Generate",
+                    onConfirm: function (instruction) {
+                        if (!instruction || !instruction.trim()) {
+                            snack("Please describe the steps to generate", "error");
+                            return;
+                        }
+                        genStepsBtn.disabled = true;
+                        api("POST", "/workflows/" + currentWorkflowId + "/generate-steps", { instruction: instruction.trim() })
+                            .then(function () {
+                                snack("Steps generated");
+                                loadDetail(currentWorkflowId);
+                            })
+                            .catch(function (e) { snack(e.message || "Step generation failed", "error"); })
+                            .finally(function () { genStepsBtn.disabled = false; });
+                    }
+                });
             });
         }
 

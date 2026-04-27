@@ -122,6 +122,48 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 )
                 return (False, msg, False)
 
+            # Deterministic Gmail routing guard:
+            # If the query is clearly about Gmail/email, always route to
+            # google_workspace when available instead of fuzzy fallback.
+            gmail_query_tokens = ("gmail", "email", "inbox", "google workspace")
+            if any(token in qlow for token in gmail_query_tokens):
+                gw_tool = self._tools_dict.get("google_workspace")
+                if gw_tool is not None:
+                    msg = (
+                        "For Gmail and email requests, use 'google_workspace' directly. "
+                        "It is already available in your active set."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="google_workspace",
+                        model_name=_mn,
+                        injection_performed=False,
+                        message=msg,
+                    )
+                    return (True, msg, False)
+
+                cached_gw_tool = _tool_cache.get("google_workspace")
+                if cached_gw_tool is not None:
+                    self._tools.append(cached_gw_tool)
+                    self._tools_dict[cached_gw_tool.name] = cached_gw_tool
+                    if not hasattr(self, "_sticky_tool_names"):
+                        self._sticky_tool_names = set()
+                    self._sticky_tool_names.add(cached_gw_tool.name)
+                    msg = (
+                        "Tool 'google_workspace' is now available. "
+                        "Please retry your Gmail/email request."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="google_workspace",
+                        model_name=_mn,
+                        injection_performed=True,
+                        message=msg,
+                    )
+                    return (True, msg, True)
+
             # Score against registry keys and description values
             scores: list[tuple[str, int]] = []
             for class_name in TOOL_REGISTRY:
@@ -186,6 +228,9 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
                 self._tools.append(matched_tool)
                 self._tools_dict[matched_tool.name] = matched_tool
+                if not hasattr(self, "_sticky_tool_names"):
+                    self._sticky_tool_names = set()
+                self._sticky_tool_names.add(matched_tool.name)
 
                 log_request_tool_event(
                     query=qnorm,
@@ -239,14 +284,19 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             retrieved = [self._tools_dict[n] for n in names if n in self._tools_dict]
             retrieved_names = {t.name for t in retrieved}
 
-            # Sticky: only preserve tools that were injected via RequestToolTool
-            # (i.e. tools on self._tools that are NOT in the original tool cache
-            # and NOT already in the retrieved set).
-            from distr.core.agent.tools.loader import _tool_cache
-            sticky = [
-                t for t in self._tools
-                if t.name not in retrieved_names and t.name not in _tool_cache
-            ]
+            sticky_names = set(getattr(self, "_sticky_tool_names", set()))
+            sticky = [t for t in self._tools if t.name not in retrieved_names and t.name in sticky_names]
+
+            # Gmail/email exposure repair:
+            # If user intent is Gmail-related and google_workspace is active in
+            # this session, force-expose it even when semantic retrieval missed it.
+            qlow = (last_user_message or "").lower()
+            gmail_keywords = ("gmail", "email", "inbox", "google workspace")
+            if any(k in qlow for k in gmail_keywords) and "google_workspace" in self._tools_dict:
+                gw_tool = self._tools_dict["google_workspace"]
+                if gw_tool.name not in retrieved_names:
+                    retrieved.append(gw_tool)
+                    retrieved_names.add(gw_tool.name)
             return retrieved + sticky
         except Exception as e:
             logger.debug("_get_filtered_tools fallback: %s", e)
@@ -858,7 +908,10 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
     def _setup_system_prompt(self, system_prompt=None):
         """Initialize the system prompt template and build the first system message."""
         from distr.core.agent.services.llm.prompt import load_system_prompt_template
-        self._default_template_raw = load_system_prompt_template()
+        self._default_template_raw = load_system_prompt_template(
+            model_name=getattr(self, "_model_name", None),
+            provider_name=self._get_provider_name() if hasattr(self, "_get_provider_name") else None,
+        )
         self._persona = system_prompt if system_prompt else None
 
         system_msg = self._build_system_message(
@@ -1344,10 +1397,24 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
         try:
             history = self.chat_manager.get_chat_history(current_chat_id)
-            conversation_messages = [
-                msg for msg in history
-                if msg.get('role') != 'system' and msg.get('content', '').strip()
-            ]
+            conversation_messages = []
+            for msg in history:
+                role = msg.get('role')
+                content = (msg.get('content') or '').strip()
+                if role == 'system' or not content:
+                    continue
+                # Guard against stale/noisy welcome/system-like assistant text
+                # polluting the next welcome summary.
+                if role == 'assistant':
+                    content_lower = content.lower()
+                    is_welcome_like = (
+                        'welcome back' in content_lower
+                        or "i'm your ai assistant" in content_lower
+                        or "what would you like to talk about or do today" in content_lower
+                    )
+                    if is_welcome_like:
+                        continue
+                conversation_messages.append(msg)
 
             if not conversation_messages:
                 return default_welcome

@@ -27,8 +27,12 @@ class GlobalPttHotkeyListener:
         get_combo: Callable[[], Set[str]],
         get_size_down_combo: Optional[Callable[[], Tuple[str, str]]] = None,
         get_size_up_combo: Optional[Callable[[], Tuple[str, str]]] = None,
+        get_record_toggle_combo: Optional[Callable[[], Tuple[str, str]]] = None,
+        get_action_combos: Optional[Callable[[], dict[str, Tuple[str, str]]]] = None,
         on_size_down: Optional[Callable[[], None]] = None,
         on_size_up: Optional[Callable[[], None]] = None,
+        on_record_toggle: Optional[Callable[[], None]] = None,
+        on_hotkey_action: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._on_combo_pressed = on_combo_pressed
         self._on_combo_released = on_combo_released
@@ -36,8 +40,12 @@ class GlobalPttHotkeyListener:
         self._get_combo = get_combo
         self._get_size_down_combo = get_size_down_combo
         self._get_size_up_combo = get_size_up_combo
+        self._get_record_toggle_combo = get_record_toggle_combo
+        self._get_action_combos = get_action_combos
         self._on_size_down = on_size_down
         self._on_size_up = on_size_up
+        self._on_record_toggle = on_record_toggle
+        self._on_hotkey_action = on_hotkey_action
         self._pressed_modifiers: Set[str] = set()
         self._pressed_keys: Set[str] = set()
         self._combo_active = False
@@ -102,10 +110,13 @@ class GlobalPttHotkeyListener:
         emit_combo_released = False
         emit_size_down = False
         emit_size_up = False
+        emit_record_toggle = False
+        emit_action_names: list[str] = []
 
         with self._lock:
             down_combo = self._get_size_down_combo() if self._get_size_down_combo else None
             up_combo = self._get_size_up_combo() if self._get_size_up_combo else None
+            record_combo = self._get_record_toggle_combo() if self._get_record_toggle_combo else None
             if down_combo and len(down_combo) == 2 and self._on_size_down:
                 down_modifier, down_key = down_combo
                 down_modifiers = self._modifier_tokens(down_modifier)
@@ -116,6 +127,19 @@ class GlobalPttHotkeyListener:
                 up_modifiers = self._modifier_tokens(up_modifier)
                 if up_modifiers.issubset(self._pressed_modifiers) and normalized_key == up_key:
                     emit_size_up = True
+            if record_combo and len(record_combo) == 2 and self._on_record_toggle:
+                record_modifier, record_key = record_combo
+                record_modifiers = self._modifier_tokens(record_modifier)
+                if record_modifiers.issubset(self._pressed_modifiers) and normalized_key == record_key:
+                    emit_record_toggle = True
+            if self._get_action_combos and self._on_hotkey_action:
+                for action_name, combo in (self._get_action_combos() or {}).items():
+                    if not combo or len(combo) != 2:
+                        continue
+                    action_modifier, action_key = combo
+                    action_modifiers = self._modifier_tokens(action_modifier)
+                    if action_modifiers.issubset(self._pressed_modifiers) and normalized_key == action_key:
+                        emit_action_names.append(action_name)
 
             if not mod:
                 # Non-modifier key press handled only for option+bracket shortcuts.
@@ -150,6 +174,10 @@ class GlobalPttHotkeyListener:
             self._on_size_down()
         if emit_size_up:
             self._on_size_up()
+        if emit_record_toggle:
+            self._on_record_toggle()
+        for action_name in emit_action_names:
+            self._on_hotkey_action(action_name)
         if emit_combo_pressed:
             self._on_combo_pressed()
         if emit_combo_released:
@@ -192,6 +220,29 @@ class GlobalPttHotkeyListener:
         key_char = str(getattr(key, "char", "") or "")
         key_char = key_char.lower()
 
+        # macOS Option/Alt modified glyphs (with or without Command pressed)
+        # should still map back to the intended base shortcut key.
+        option_glyph_map = {
+            "å": "a",
+            "ç": "c",
+            "∆": "j",
+            "∂": "j",
+            "ñ": "n",
+            "ß": "s",
+            "∑": "w",
+            "¡": "1",
+            "™": "2",
+            "£": "3",
+            "¢": "4",
+            "∞": "5",
+            "§": "6",
+            "¶": "7",
+            "•": "8",
+            "ª": "9",
+        }
+        if key_char in option_glyph_map:
+            return option_glyph_map[key_char]
+
         if key_char in {"[", "{"}:
             return "left_bracket"
         if key_char in {"]", "}"}:
@@ -200,6 +251,14 @@ class GlobalPttHotkeyListener:
             return "minus"
         if key_char in {"=", "+"}:
             return "equal"
+        if key_char in {"`", "~"}:
+            return "grave"
+        if key_char in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+            return key_char
+        if key_char == "s":
+            return "s"
+        if key_char in {"a", "c", "j", "n", "w"}:
+            return key_char
 
         # Some environments encode key codes in repr.
         key_str = str(key).lower()
@@ -229,6 +288,16 @@ class GlobalPttHotkeyListener:
             return "minus"
         if "equal" in key_name:
             return "equal"
+        if key_name in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+            return key_name
+        if key_name in {"a", "c", "j", "n", "s", "w"}:
+            return key_name
+        if key_name in {"left", "left_arrow"} or "left arrow" in key_name:
+            return "left_arrow"
+        if key_name in {"right", "right_arrow"} or "right arrow" in key_name:
+            return "right_arrow"
+        if "grave" in key_name:
+            return "grave"
         return None
 
     @staticmethod

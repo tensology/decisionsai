@@ -63,6 +63,14 @@ class WorkflowOrchestrationMixin:
     def _run_workflow_scheduled(self):
         """Periodic scheduler tick — fires due scheduled workflows."""
         try:
+            # Priority rule: board-driven check-ins should claim workflows first
+            # when both board scheduler and workflow scheduler are due together.
+            from distr.core.kanban.scheduler import check_kanban_schedules
+            check_kanban_schedules()
+        except Exception as e:
+            logger.error("Ticket Board scheduler error: %s", e, exc_info=True)
+
+        try:
             from distr.core.workflow.scheduler import (
                 get_due_scheduled_workflows,
                 run_scheduled_workflow,
@@ -85,12 +93,6 @@ class WorkflowOrchestrationMixin:
                 )
         except Exception as e:
             logger.error("Workflow scheduler error: %s", e, exc_info=True)
-
-        try:
-            from distr.core.kanban.scheduler import check_kanban_schedules
-            check_kanban_schedules()
-        except Exception as e:
-            logger.error("Ticket Board scheduler error: %s", e, exc_info=True)
 
     # ── Signal handlers ─────────────────────────────────────────────
 
@@ -562,17 +564,11 @@ class WorkflowOrchestrationMixin:
                 def _run_dispatched():
                     try:
                         dispatcher = StepDispatcher()
-                        result = dispatcher.run_in_workflow(step_id, run_id)
-                        output = result.get("output", result.get("message", "Step completed."))
-                        passed = result.get("passed", result.get("success", False))
-                        QTimer.singleShot(
-                            0,
-                            lambda: self._on_step_completed(
-                                workflow_id=workflow_id,
-                                response_text=output or "Step completed.",
-                                passed=passed,
-                            ),
-                        )
+                        dispatcher.run_in_workflow(step_id, run_id)
+                        # Do NOT call _on_step_completed() here.
+                        # StepDispatcher already records result and routes to the next step;
+                        # invoking orchestration completion in parallel causes duplicate
+                        # progression and can execute steps twice.
                     except Exception as exc:
                         logger.error(
                             "Workflow: StepDispatcher failed for step %d: %s",
@@ -1139,7 +1135,7 @@ class WorkflowOrchestrationMixin:
         if retry_count == 0:
             retry_prompt = (
                 f"Step failed: {error}\n\n"
-                "Take a screenshot to assess the current state, then retry the step."
+                "Assess the current state and retry the step."
             )
         else:
             retry_prompt = (

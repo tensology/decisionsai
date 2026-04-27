@@ -2,6 +2,18 @@
 
 ---
 
+## [2.7.11] - 2026-04-27
+
+### Workflow Responsiveness, Shortcut Expansion, and Recording UX Improvements
+
+Enhanced workflow editing and runtime responsiveness with drag-and-drop step reordering in the Web UI, clearer run/status feedback, and safer migration handling during startup.
+
+Expanded global shortcut support with editable Web UI launcher hotkeys, skin navigation shortcuts (next/previous and direct skin index selection), and improved macOS key normalization so Option+Command combinations resolve reliably.
+
+Improved recording stop behavior by adding a consistent confirmation/name input popup flow when recordings are saved, so users can immediately confirm or rename actions without losing context.
+
+---
+
 ## [2.7.10] - 2026-04-26
 
 ### Workflow UI Simplification and Context Unification

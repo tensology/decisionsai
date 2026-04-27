@@ -405,21 +405,18 @@ class ActionRecorderHost(QObject):
                     action = session.query(Action).get(action_id)
                     if action:
                         title = (action.title or "").strip()
-                        is_auto = title and _word_to_number(title.lower()) is not None
-                        if not title or is_auto:
-                            self.waiting_for_action_name_id = action_id
-                            signal_manager.waiting_for_action_name.emit(action_id)
-                            speak_text_directly_event_queue("Recording saved. What would you like to name this action?")
+                        # Always prompt for confirmation/name on stop recording so the
+                        # user can keep or update the action name immediately.
+                        self.waiting_for_action_name_id = action_id
+                        signal_manager.waiting_for_action_name.emit(action_id)
+                        if title:
+                            speak_text_directly_event_queue(
+                                f"Recording saved. Current name is {title}. Confirm or provide a new name."
+                            )
                         else:
-                            self.waiting_for_action_name_id = None
-                            trigger_words = []
-                            if action.additional_trigger_words:
-                                try:
-                                    trigger_words = json.loads(action.additional_trigger_words)
-                                except (json.JSONDecodeError, ValueError):
-                                    pass
-                            msg = f"Recording saved. You can run this action by saying 'run action {', '.join(trigger_words[:3])}'" if trigger_words else f"Recording saved. You can run this action by saying 'run action {title}'"
-                            speak_text_directly_event_queue(msg)
+                            speak_text_directly_event_queue(
+                                "Recording saved. What would you like to name this action?"
+                            )
             except Exception as e:
                 logger.error(f"Error after stop recording: {e}", exc_info=True)
                 self.waiting_for_action_name_id = None

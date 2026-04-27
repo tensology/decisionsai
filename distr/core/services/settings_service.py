@@ -115,12 +115,18 @@ def save_general_settings(data) -> None:
 
 def save_shortcut_settings(data) -> None:
     """Persist shortcut-related settings with validation."""
-    valid_modifiers = {"option", "command", "control", "shift"}
-    valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+    valid_ptt_modifiers = {"option", "command", "control", "shift"}
+    valid_chord_modifiers = {"option", "command", "control", "shift", "option_command"}
+    valid_keys = {
+        "left_bracket", "right_bracket", "minus", "equal",
+        "left_arrow", "right_arrow",
+        "a", "c", "j", "n", "s", "w",
+        "grave",
+    }
 
     def _norm_modifier(value: str, default: str = "option") -> str:
         v = str(value or default).strip().lower()
-        return v if v in valid_modifiers else default
+        return v if v in valid_chord_modifiers else default
 
     def _norm_key(value: str, default: str = "left_bracket") -> str:
         v = str(value or default).strip().lower()
@@ -128,13 +134,42 @@ def save_shortcut_settings(data) -> None:
 
     primary = _norm_modifier(getattr(data, "global_ptt_hotkey_primary", "option"), "option")
     secondary = _norm_modifier(getattr(data, "global_ptt_hotkey_secondary", "command"), "command")
+    if primary not in valid_ptt_modifiers:
+        primary = "option"
+    if secondary not in valid_ptt_modifiers:
+        secondary = "command"
     if primary == secondary:
         secondary = "command" if primary != "command" else "option"
 
-    down_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_decrease_modifier", "option"), "option")
-    up_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_increase_modifier", "option"), "option")
+    down_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_decrease_modifier", "option_command"), "option_command")
+    up_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_increase_modifier", "option_command"), "option_command")
+    if down_modifier not in valid_chord_modifiers:
+        down_modifier = "option_command"
+    if up_modifier not in valid_chord_modifiers:
+        up_modifier = "option_command"
     down_key = _norm_key(getattr(data, "oracle_size_hotkey_decrease_key", "left_bracket"), "left_bracket")
     up_key = _norm_key(getattr(data, "oracle_size_hotkey_increase_key", "right_bracket"), "right_bracket")
+    record_modifier = _norm_modifier(getattr(data, "recording_hotkey_modifier", "option_command"), "option_command")
+    record_key = _norm_key(getattr(data, "recording_hotkey_key", "s"), "s")
+    if record_modifier not in valid_chord_modifiers:
+        record_modifier = "option_command"
+    skin_prev_modifier = _norm_modifier(getattr(data, "skin_nav_hotkey_previous_modifier", "option_command"), "option_command")
+    skin_prev_key = _norm_key(getattr(data, "skin_nav_hotkey_previous_key", "left_arrow"), "left_arrow")
+    skin_next_modifier = _norm_modifier(getattr(data, "skin_nav_hotkey_next_modifier", "option_command"), "option_command")
+    skin_next_key = _norm_key(getattr(data, "skin_nav_hotkey_next_key", "right_arrow"), "right_arrow")
+    skin_select_modifier = _norm_modifier(getattr(data, "skin_select_hotkey_modifier", "option_command"), "option_command")
+    web_chat_modifier = _norm_modifier(getattr(data, "web_hotkey_chat_modifier", "option_command"), "option_command")
+    web_chat_key = _norm_key(getattr(data, "web_hotkey_chat_key", "c"), "c")
+    web_projects_modifier = _norm_modifier(getattr(data, "web_hotkey_projects_modifier", "option_command"), "option_command")
+    web_projects_key = _norm_key(getattr(data, "web_hotkey_projects_key", "j"), "j")
+    web_actions_modifier = _norm_modifier(getattr(data, "web_hotkey_actions_modifier", "option_command"), "option_command")
+    web_actions_key = _norm_key(getattr(data, "web_hotkey_actions_key", "a"), "a")
+    web_snippets_modifier = _norm_modifier(getattr(data, "web_hotkey_snippets_modifier", "option_command"), "option_command")
+    web_snippets_key = _norm_key(getattr(data, "web_hotkey_snippets_key", "n"), "n")
+    web_workflows_modifier = _norm_modifier(getattr(data, "web_hotkey_workflows_modifier", "option_command"), "option_command")
+    web_workflows_key = _norm_key(getattr(data, "web_hotkey_workflows_key", "w"), "w")
+    web_preferences_modifier = _norm_modifier(getattr(data, "web_hotkey_preferences_modifier", "option_command"), "option_command")
+    web_preferences_key = _norm_key(getattr(data, "web_hotkey_preferences_key", "grave"), "grave")
 
     if down_modifier == up_modifier and down_key == up_key:
         up_key = "right_bracket" if down_key != "right_bracket" else "left_bracket"
@@ -147,6 +182,26 @@ def save_shortcut_settings(data) -> None:
     settings["oracle_size_hotkey_decrease_key"] = down_key
     settings["oracle_size_hotkey_increase_modifier"] = up_modifier
     settings["oracle_size_hotkey_increase_key"] = up_key
+    settings["recording_hotkey_enabled"] = bool(getattr(data, "recording_hotkey_enabled", True))
+    settings["recording_hotkey_modifier"] = record_modifier
+    settings["recording_hotkey_key"] = record_key
+    settings["skin_nav_hotkey_previous_modifier"] = skin_prev_modifier
+    settings["skin_nav_hotkey_previous_key"] = skin_prev_key
+    settings["skin_nav_hotkey_next_modifier"] = skin_next_modifier
+    settings["skin_nav_hotkey_next_key"] = skin_next_key
+    settings["skin_select_hotkey_modifier"] = skin_select_modifier
+    settings["web_hotkey_chat_modifier"] = web_chat_modifier
+    settings["web_hotkey_chat_key"] = web_chat_key
+    settings["web_hotkey_projects_modifier"] = web_projects_modifier
+    settings["web_hotkey_projects_key"] = web_projects_key
+    settings["web_hotkey_actions_modifier"] = web_actions_modifier
+    settings["web_hotkey_actions_key"] = web_actions_key
+    settings["web_hotkey_snippets_modifier"] = web_snippets_modifier
+    settings["web_hotkey_snippets_key"] = web_snippets_key
+    settings["web_hotkey_workflows_modifier"] = web_workflows_modifier
+    settings["web_hotkey_workflows_key"] = web_workflows_key
+    settings["web_hotkey_preferences_modifier"] = web_preferences_modifier
+    settings["web_hotkey_preferences_key"] = web_preferences_key
     save_settings_to_db(settings)
 
 

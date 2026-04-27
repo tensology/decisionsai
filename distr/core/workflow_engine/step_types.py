@@ -1,7 +1,7 @@
 """Step type definitions and Pydantic configuration models for workflows.
 
-Defines the five supported step types (Run Command, Play Recording, HTTP Request,
-Execute Code, Playwright) and their typed configuration schemas. The 'Set Variable'
+Defines the supported step types (Run Command, Play Recording, HTTP Request,
+Execute Code, Playwright, Send to Project CLI) and their typed configuration schemas. The 'Set Variable'
 type has been removed.
 """
 
@@ -18,6 +18,7 @@ class StepType(str, Enum):
     HTTP_REQUEST = "http_request"
     EXECUTE_CODE = "execute_code"
     PLAYWRIGHT = "playwright"
+    SEND_TO_PROJECT_CLI = "send_to_project_cli"
 
 
 class RunCommandConfig(BaseModel):

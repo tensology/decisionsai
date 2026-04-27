@@ -561,6 +561,9 @@ def _cmd_push_to_talk_start(session, params):
     if hasattr(session, 'tts_service') and session.tts_service:
         if hasattr(session.tts_service, '_cancelled'):
             session.tts_service._cancelled = True
+            if hasattr(session.tts_service, '_cancelled_since'):
+                import time as _time
+                session.tts_service._cancelled_since = _time.monotonic()
         if hasattr(session.tts_service, '_text_buffer'):
             session.tts_service._text_buffer = ""
 
@@ -615,6 +618,9 @@ def _cmd_interrupt_tts(session, params):
     if hasattr(session, 'tts_service') and session.tts_service:
         if hasattr(session.tts_service, '_cancelled'):
             session.tts_service._cancelled = True
+            if hasattr(session.tts_service, '_cancelled_since'):
+                import time as _time
+                session.tts_service._cancelled_since = _time.monotonic()
             if hasattr(session.tts_service, '_text_buffer'):
                 session.tts_service._text_buffer = ""
 

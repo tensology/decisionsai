@@ -121,7 +121,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         self._username = self._get_username()
 
         # Build system prompt
-        self._default_template_raw = load_system_prompt_template()
+        self._default_template_raw = load_system_prompt_template(
+            model_name=self._model_name,
+            provider_name="ollama",
+        )
         self._persona = system_prompt if system_prompt else None
         current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
         system_message = self._build_system_message(chat_id=current_chat_id)

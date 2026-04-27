@@ -136,3 +136,73 @@ def test_empty_query_short_circuits_without_crash(request_tool_harness_factory) 
     rtt = harness._tools_dict["request_tool"]
     out = rtt._run(text="   ")
     assert "provide" in out.lower() or "description" in out.lower()
+
+
+def test_gmail_query_injects_google_workspace_without_fuzzy_match(
+    request_tool_harness_factory,
+    warm_real_tool_cache,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    gw_tool = get_cached_tool("google_workspace")
+    if gw_tool is None:
+        pytest.skip("google_workspace tool is not available in cache")
+
+    harness = request_tool_harness_factory(exclude_names=frozenset({"google_workspace"}))
+    assert "google_workspace" not in harness._tools_dict
+
+    caplog.set_level(logging.INFO, logger="distr.core.agent.tool_telemetry")
+    rtt = harness._tools_dict["request_tool"]
+    msg = rtt._run(text="count my gmail emails from snuza")
+
+    assert "google_workspace" in harness._tools_dict
+    assert harness._tools_dict["google_workspace"] is gw_tool
+    assert "gmail" in msg.lower() or "email" in msg.lower()
+
+    payload = None
+    for r in reversed(caplog.records):
+        if r.name == "distr.core.agent.tool_telemetry" and "TOOL_TELEMETRY {" in r.getMessage():
+            payload = json.loads(r.getMessage().split(" ", 1)[1])
+            break
+    assert payload is not None
+    assert payload["event"] == "request_tool"
+    assert payload["success"] is True
+    assert payload.get("injected_tool_name") == "google_workspace"
+    assert payload.get("injection_performed") is True
+
+
+def test_gmail_query_uses_existing_google_workspace_when_already_active(
+    request_tool_harness_factory,
+    warm_real_tool_cache,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    from distr.core.agent.tools.loader import get_cached_tool
+
+    gw_tool = get_cached_tool("google_workspace")
+    if gw_tool is None:
+        pytest.skip("google_workspace tool is not available in cache")
+
+    harness = request_tool_harness_factory()
+    if "google_workspace" not in harness._tools_dict:
+        harness._tools.append(gw_tool)
+        harness._tools_dict[gw_tool.name] = gw_tool
+    n_tools = len(harness._tools)
+
+    caplog.set_level(logging.INFO, logger="distr.core.agent.tool_telemetry")
+    rtt = harness._tools_dict["request_tool"]
+    msg = rtt._run(text="gmail inbox count for django errors")
+
+    assert len(harness._tools) == n_tools
+    assert "already" in msg.lower() and "google_workspace" in msg.lower()
+
+    payload = None
+    for r in reversed(caplog.records):
+        if r.name == "distr.core.agent.tool_telemetry" and "TOOL_TELEMETRY {" in r.getMessage():
+            payload = json.loads(r.getMessage().split(" ", 1)[1])
+            break
+    assert payload is not None
+    assert payload["event"] == "request_tool"
+    assert payload["success"] is True
+    assert payload.get("injected_tool_name") == "google_workspace"
+    assert payload.get("injection_performed") is False

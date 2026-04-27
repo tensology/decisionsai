@@ -57,6 +57,7 @@ class KokoroTTSService(TTSService):
         self._frame_id_counter = 10000
         self._stt_service = stt_service
         self._cancelled = False
+        self._cancelled_since = 0.0  # monotonic timestamp when cancellation was last set
         self._is_hands_free = False  # Track hands-free mode state
         self._ptt_active = False  # Track PTT state
         self.event_queue = event_queue  # Queue to send events back to main process
@@ -402,6 +403,7 @@ class KokoroTTSService(TTSService):
                 return
             # CancelFrame is still handled for backwards compatibility, but PTT now uses InterruptionFrame
             self._cancelled = True
+            self._cancelled_since = time.monotonic()
             self._text_buffer = ""  # Clear any buffered text
             logger.warning(f"TTS: CancelFrame received - FORCE cancelling TTS (hands_free={self._is_hands_free}, ptt_active={self._ptt_active})")
             logger.debug("TTS: _cancelled=True, clearing text buffer. All subsequent TextFrames will be DROPPED")
@@ -445,6 +447,7 @@ class KokoroTTSService(TTSService):
             logger.debug("TTS: InterruptionFrame received - stopping playback")
             # CRITICAL: KILL audio immediately - set cancelled flag FIRST
             self._cancelled = True
+            self._cancelled_since = time.monotonic()
             self._text_buffer = ""  # Clear any buffered text
             logger.debug("TTS: _cancelled=True, clearing text buffer. All subsequent TextFrames will be DROPPED")
             
@@ -505,13 +508,28 @@ class KokoroTTSService(TTSService):
             # CRITICAL: If cancelled (e.g., by CancelFrame from PTT), DROP all TextFrames
             # Do NOT reset cancelled state - only LLMFullResponseStartFrame should do that
             if self._cancelled:
-                logger.warning(
-                    "TTS: TextFrame DROPPED while _cancelled=True (no audio for this chunk). "
-                    "preview=%r — if UI still streamed text, check interrupt_tts race or welcome cancel.",
-                    (frame.text or "")[:120],
-                )
-                # Don't process, don't accumulate, just drop it
-                return
+                # Recovery guard: stale cancellation can race ahead of a new
+                # response and leave TTS muted while chat tokens still stream.
+                # If no active PTT interruption is happening, auto-clear stale
+                # cancelled state after a short grace window.
+                _cancel_age = time.monotonic() - float(getattr(self, "_cancelled_since", 0.0) or 0.0)
+                if not self._ptt_active and _cancel_age > 1.5:
+                    logger.warning(
+                        "TTS: Auto-clearing stale _cancelled state before TextFrame "
+                        "(age=%.2fs, ptt_active=%s)",
+                        _cancel_age,
+                        self._ptt_active,
+                    )
+                    self._cancelled = False
+                    self._cancelled_since = 0.0
+                else:
+                    logger.warning(
+                        "TTS: TextFrame DROPPED while _cancelled=True (no audio for this chunk). "
+                        "preview=%r — if UI still streamed text, check interrupt_tts race or welcome cancel.",
+                        (frame.text or "")[:120],
+                    )
+                    # Don't process, don't accumulate, just drop it
+                    return
             
             # CRITICAL: Check and store telegram_request flag EARLY when TextFrame arrives
             # This ensures it's available even if no sentences are processed (e.g., "Done" messages)
@@ -805,6 +823,7 @@ class KokoroTTSService(TTSService):
             self._session_text = ""
             self._text_buffer = ""
             self._cancelled = False  # Reset cancelled state to allow new audio generation
+            self._cancelled_since = 0.0
             self._processed_sentences.clear()  # Clear processed sentences for new response
             
             # Start new TTS session - reset duration accumulator and mark session as active
@@ -1042,10 +1061,10 @@ class KokoroTTSService(TTSService):
                     
                     # Deduplication: Check if we've already sent this exact message
                     import hashlib
-                    import time
+                    import time as _time_mod
                     message_content = f"{session_text_normalized}|{is_done}"
                     message_hash = hashlib.md5(message_content.encode()).hexdigest()
-                    current_time = time.time()
+                    current_time = _time_mod.time()
                     
                     # Prevent duplicate sends within 2 seconds
                     if message_hash == self._last_telegram_send_hash and (current_time - self._last_telegram_send_time) < 2.0:

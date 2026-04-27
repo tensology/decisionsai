@@ -75,12 +75,18 @@ class TelegramWebSocketManager(
 
     def __init__(self, server_url: str = "wss://www.decisionsai.net/ws/telegram"):
         super().__init__()
+        use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
         # Allow env override: DECISIONSAI_WS_URL=ws://localhost:8090/ws/telegram
-        # When DEBUG=TRUE and no explicit override, default to local server
+        # Local relay mode is controlled independently from DEBUG.
         env_url = os.environ.get("DECISIONSAI_WS_URL")
         if env_url:
             self.server_url = env_url
-        elif os.environ.get("DEBUG", "").upper() == "TRUE":
+        elif use_local_relay:
             self.server_url = "ws://localhost:8090/ws/telegram"
         else:
             self.server_url = server_url

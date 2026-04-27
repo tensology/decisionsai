@@ -265,7 +265,7 @@ function startStartupWatcher(outputChannel, context) {
  * Parse decisions-meta comment from ticket file contents.
  * Format: <!-- decisions-meta: {"run_id": 42, "step_id": 7, "workflow_id": 5, "api_base": "http://localhost:5555"} -->
  * @param {string} fileContents
- * @returns {{ run_id: number, step_id: number, workflow_id: number, api_base: string } | null}
+ * @returns {{ run_id: number, step_id: number, workflow_id: number, api_base: string, callback_url?: string, callback_payload_type?: string, context_type?: string } | null}
  */
 function parseDecisionsMeta(fileContents) {
 	try {
@@ -282,16 +282,76 @@ function parseDecisionsMeta(fileContents) {
 }
 
 /**
- * Call the CONTINUE endpoint to signal that Cursor has finished processing a ticket.
- * POST {api_base}/api/workflows/{workflow_id}/runs/{run_id}/continue
- * @param {{ run_id: number, step_id: number, workflow_id: number, api_base: string }} meta
+ * Parse optional ticket dispatch controls from YAML frontmatter.
+ * Supported controls:
+ * - mode: append
+ * - append_to_current_session: true
+ * - continue_current_ticket: true
+ * - do_not_start_new_ticket: true
+ * @param {string} fileContents
+ * @returns {{ appendToCurrentSession: boolean, body: string }}
+ */
+function parseTicketDispatchControl(fileContents) {
+	try {
+		const frontmatterMatch = fileContents.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
+		if (!frontmatterMatch) {
+			return { appendToCurrentSession: false, body: fileContents };
+		}
+
+		const rawFrontmatter = frontmatterMatch[1] || '';
+		const body = fileContents.slice(frontmatterMatch[0].length);
+		const controlMap = {};
+
+		rawFrontmatter.split('\n').forEach((line) => {
+			const trimmed = line.trim();
+			if (!trimmed || trimmed.startsWith('#')) return;
+			const idx = trimmed.indexOf(':');
+			if (idx <= 0) return;
+			const key = trimmed.slice(0, idx).trim().toLowerCase();
+			const value = trimmed.slice(idx + 1).trim().toLowerCase();
+			controlMap[key] = value;
+		});
+
+		const isTrue = (v) => ['true', '1', 'yes', 'y', 'on'].includes(String(v || '').toLowerCase());
+		const appendToCurrentSession =
+			(controlMap.mode === 'append') ||
+			isTrue(controlMap.append_to_current_session) ||
+			isTrue(controlMap.continue_current_ticket) ||
+			isTrue(controlMap.do_not_start_new_ticket);
+
+		return { appendToCurrentSession, body: body || fileContents };
+	} catch (e) {
+		return { appendToCurrentSession: false, body: fileContents };
+	}
+}
+
+/**
+ * Post callback payload to explicit callback_url if present.
+ * Falls back to workflow continue endpoint for legacy metadata.
+ * @param {{ run_id: number, step_id: number, workflow_id: number, api_base: string, callback_url?: string, callback_payload_type?: string, context_type?: string }} meta
+ * @param {{ event_type: string, status: string, input: string, filename: string }} payload
  * @param {vscode.OutputChannel} outputChannel
  */
-function callContinueEndpoint(meta, outputChannel) {
+function callTicketCallback(meta, payload, outputChannel) {
 	try {
 		const wfId = meta.workflow_id || 0;
-		const url = `${meta.api_base}/api/workflows/${wfId}/runs/${meta.run_id}/continue`;
-		const body = JSON.stringify({ input: 'Cursor processing completed' });
+		const fallbackUrl = `${meta.api_base}/api/workflows/${wfId}/runs/${meta.run_id}/continue`;
+		const url = meta.callback_url || fallbackUrl;
+		const callbackType = (meta.callback_payload_type || '').toLowerCase();
+		const bodyObj = (callbackType === 'workflow_continue')
+			? { input: payload.input }
+			: {
+				event_type: payload.event_type,
+				status: payload.status,
+				context_type: meta.context_type || 'unknown',
+				run_id: meta.run_id || null,
+				step_id: meta.step_id || null,
+				workflow_id: meta.workflow_id || null,
+				filename: payload.filename || '',
+				input: payload.input || '',
+				ts: new Date().toISOString(),
+			};
+		const body = JSON.stringify(bodyObj);
 		const parsedUrl = new URL(url);
 		const transport = parsedUrl.protocol === 'https:' ? https : http;
 
@@ -310,19 +370,19 @@ function callContinueEndpoint(meta, outputChannel) {
 			let data = '';
 			res.on('data', (chunk) => { data += chunk; });
 			res.on('end', () => {
-				outputChannel.appendLine(`CONTINUE callback response (${res.statusCode}): ${data}`);
+				outputChannel.appendLine(`Callback response (${res.statusCode}): ${data}`);
 			});
 		});
 
 		req.on('error', (err) => {
-			outputChannel.appendLine(`⚠ CONTINUE callback failed: ${err.message}`);
+			outputChannel.appendLine(`⚠ Callback failed: ${err.message}`);
 		});
 
 		req.write(body);
 		req.end();
-		outputChannel.appendLine(`Sent CONTINUE callback to ${url}`);
+		outputChannel.appendLine(`Sent callback to ${url}`);
 	} catch (err) {
-		outputChannel.appendLine(`⚠ CONTINUE callback error: ${err.message}`);
+		outputChannel.appendLine(`⚠ Callback error: ${err.message}`);
 	}
 }
 
@@ -403,6 +463,17 @@ function startTicketWatcher(outputChannel, context) {
 				if (decisionsMeta) {
 					outputChannel.appendLine(`Found decisions-meta: run_id=${decisionsMeta.run_id}, step_id=${decisionsMeta.step_id}, api_base=${decisionsMeta.api_base}`);
 				}
+
+				// Parse dispatch controls to decide whether to append to current session
+				const dispatchControl = parseTicketDispatchControl(fileContents);
+				let ticketPayload = fileContents;
+				if (dispatchControl.appendToCurrentSession) {
+					outputChannel.appendLine('Dispatch mode: append to current running ticket/session');
+					ticketPayload =
+						'[APPEND MODE]\n' +
+						'Continue the CURRENT running ticket/session. Do NOT start a new ticket, new task, or new session.\n\n' +
+						(dispatchControl.body || '').trim();
+				}
 				
 				// Log to extension console
 				outputChannel.appendLine(`\n=== Processing Ticket File ===`);
@@ -420,13 +491,18 @@ function startTicketWatcher(outputChannel, context) {
 				outputChannel.appendLine(`Deleted ticket file: ${filename}`);
 				
 				// Insert ticket contents and images into agent input textbox
-				await submitTicketContents(fileContents, imageFiles, outputChannel);
+				await submitTicketContents(ticketPayload, imageFiles, outputChannel);
 				
 				outputChannel.appendLine('Chat submission completed.');
 				
-				// After Cursor finishes processing, call CONTINUE endpoint if meta was present
+				// Post callback if metadata was present (workflow or custom callback URL).
 				if (decisionsMeta) {
-					callContinueEndpoint(decisionsMeta, outputChannel);
+					callTicketCallback(decisionsMeta, {
+						event_type: 'cursor_ticket_submitted',
+						status: 'submitted',
+						filename: filename,
+						input: 'Cursor ticket submitted from VS extension',
+					}, outputChannel);
 				}
 			} catch (error) {
 				outputChannel.appendLine(`Error processing file ${filename}: ${error.message}`);

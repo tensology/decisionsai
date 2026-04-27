@@ -43,6 +43,8 @@ class _RunContext:
 
 _active_runs: Dict[int, _RunContext] = {}
 _runs_lock = threading.Lock()
+_isolated_step_lock = threading.Lock()
+_isolated_steps_in_progress: set[int] = set()
 
 
 def _cleanup_run(run_id: int) -> None:
@@ -149,6 +151,8 @@ def start_workflow_run(
         sorted_steps = sorted(wf.steps, key=lambda s: s.position)
         for step in sorted_steps:
             if step.action_type == "agent_instruction" and not (step.instruction or "").strip():
+                return {"error": f"Step '{step.name}' (#{step.position}) has no instruction"}
+            if step.action_type == "send_to_project_cli" and not (step.instruction or "").strip():
                 return {"error": f"Step '{step.name}' (#{step.position}) has no instruction"}
             if step.action_type == "run_command" and not (step.instruction or "").strip() and not (step.code or "").strip() and not (json.loads(step.config) if step.config else {}).get("command", ""):
                 return {"error": f"Step '{step.name}' (#{step.position}) has no command configured"}
@@ -284,7 +288,40 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         step_id = step.id
 
     router = StepRouter()
-    return router.resume_from_feedback(step_id, run_id, optional_input)
+    decision = router.resume_from_feedback(step_id, run_id, optional_input)
+
+    # Resume must continue execution, not only update run state.
+    action = (decision or {}).get("action")
+    if action == "next_step":
+        next_step_id = decision.get("step_id")
+        wait_before = int(decision.get("wait_before_next") or 0)
+        if next_step_id:
+            try:
+                if wait_before > 0:
+                    import time
+                    time.sleep(wait_before)
+                os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(next_step_id)
+                dispatcher = StepDispatcher()
+                dispatch_result = dispatcher.run_in_workflow(int(next_step_id), int(run_id))
+                return {
+                    "success": True,
+                    "action": "next_step",
+                    "step_id": int(next_step_id),
+                    "dispatch": dispatch_result,
+                }
+            except Exception as e:
+                logger.error("continue_waiting_step dispatch failed: %s", e, exc_info=True)
+                try:
+                    complete_run(run_id, "failed")
+                except Exception:
+                    pass
+                return {"error": f"Failed to dispatch next step: {e}", "status_code": 500}
+    elif action == "end_run":
+        status = decision.get("status", "completed")
+        complete_run(run_id, status)
+        return {"success": True, "action": "end_run", "status": status}
+
+    return decision
 
 
 def complete_run(run_id: int, status: str = "completed") -> bool:
@@ -327,24 +364,72 @@ class StepDispatcher:
 
     def run_isolated(self, step_id: int) -> Dict[str, Any]:
         """Execute one step in isolation. No routing afterwards."""
+        with _isolated_step_lock:
+            if step_id in _isolated_steps_in_progress:
+                logger.warning("run_isolated deduped: step_id=%s already in progress", step_id)
+                return {"error": "Step execution already in progress"}
+            _isolated_steps_in_progress.add(step_id)
+
         step_data = self._load_step(step_id)
-        if "error" in step_data:
-            return step_data
-        errors = self._validate_before_dispatch(step_data)
-        if errors:
-            self._fail_step(step_id, f"Validation failed: {errors}")
-            return {"error": errors}
-        self._set_status(step_id, "running")
-        result = self._execute(step_data, run_id=None)
-        if result.get("async"):
-            return {"success": True, "message": result.get("message", "Step dispatched.")}
-        self._record_result(step_id, run_id=None,
-                            result_text=result.get("output", ""),
-                            passed=result.get("passed", False))
-        return {"success": True, "status": "passed" if result.get("passed") else "failed"}
+        try:
+            if "error" in step_data:
+                return step_data
+            logger.info("run_isolated: starting step_id=%s action_type=%s", step_id, step_data.get("action_type"))
+            errors = self._validate_before_dispatch(step_data)
+            if errors:
+                error_text = f"Validation failed: {errors}"
+                self._fail_step(step_id, error_text)
+                self._notify_isolated_step_result(
+                    step_data=step_data,
+                    passed=False,
+                    result_text=error_text,
+                )
+                return {"error": errors}
+            self._set_status(step_id, "running")
+            result = self._execute(step_data, run_id=None)
+            if result.get("async"):
+                return {"success": True, "message": result.get("message", "Step dispatched.")}
+            self._record_result(
+                step_id,
+                run_id=None,
+                result_text=result.get("output", ""),
+                passed=result.get("passed", False),
+                skip_wait=result.get("skip_wait", False),
+            )
+            self._notify_isolated_step_result(
+                step_data=step_data,
+                passed=bool(result.get("passed", False)),
+                result_text=result.get("output", "") or ("Step completed." if result.get("passed", False) else "Step failed with no output."),
+            )
+            logger.info(
+                "run_isolated: finished step_id=%s status=%s",
+                step_id,
+                "passed" if result.get("passed") else "failed",
+            )
+            return {"success": True, "status": "passed" if result.get("passed") else "failed"}
+        finally:
+            with _isolated_step_lock:
+                _isolated_steps_in_progress.discard(step_id)
 
     def run_in_workflow(self, step_id: int, run_id: int) -> Dict[str, Any]:
         """Execute step within a workflow run, then hand off to StepRouter."""
+        # Idempotency guard: if this exact run/step is already actively executing,
+        # treat duplicate dispatches as no-ops (UI double-click, duplicate callback,
+        # or concurrent orchestration paths).
+        try:
+            with get_session() as db:
+                step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if step and run and run.current_step_id == step_id and step.status == "running":
+                    logger.warning(
+                        "run_in_workflow deduped: run_id=%s step_id=%s already running",
+                        run_id,
+                        step_id,
+                    )
+                    return {"success": True, "message": "Step already in progress.", "deduped": True}
+        except Exception:
+            logger.debug("run_in_workflow dedupe check failed", exc_info=True)
+
         step_data = self._load_step(step_id)
         if "error" in step_data:
             return step_data
@@ -362,6 +447,7 @@ class StepDispatcher:
             run_id=run_id,
             result_text=result.get("output", ""),
             passed=result.get("passed", False),
+            skip_wait=result.get("skip_wait", False),
         )
         # If step entered waiting state, return early — routing handled by wait state
         with get_session() as db:
@@ -480,6 +566,8 @@ class StepDispatcher:
         if action_type in ("execute_code", "playwright"):
             config.setdefault("code", step_data.get("code", ""))
             config.setdefault("instruction", step_data.get("instruction", ""))
+        elif action_type == "send_to_project_cli":
+            config.setdefault("instruction", step_data.get("instruction", ""))
         elif action_type == "play_recording":
             if not config.get("recording_name") and step_data.get("recording_filename"):
                 config["recording_name"] = step_data["recording_filename"]
@@ -499,6 +587,7 @@ class StepDispatcher:
             "run_command": lambda: self._run_command(config, run_id=run_id),
             "http_request": lambda: self._run_http(config),
             "play_recording": lambda: self._run_recording(step_data, config, run_id=run_id),
+            "send_to_project_cli": lambda: self._run_send_to_project_cli(step_data, config, run_id=run_id),
             "agent_instruction": lambda: self._run_agent(step_data, run_id),
         }
         handler = handlers.get(action_type)
@@ -599,6 +688,75 @@ class StepDispatcher:
                     "passed": 200 <= resp.status_code < 400}
         except Exception as e:
             return {"output": f"HTTP request failed: {e}", "passed": False}
+
+    def _run_send_to_project_cli(
+        self,
+        step_data: Dict[str, Any],
+        config: dict,
+        run_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Send step instruction to a project's CLI session.
+
+        Project resolution order:
+        1) step.linked_project_id
+        2) run.run_data.project_id (ticket-board context)
+        """
+        instruction = (config.get("instruction") or step_data.get("instruction") or "").strip()
+        if not instruction:
+            return {"output": "No instruction provided for Send to Project CLI", "passed": False}
+
+        project_id = step_data.get("linked_project_id")
+        project_folder = None
+
+        try:
+            from distr.core.db.projects import Project
+            with get_session() as db:
+                step_obj = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_data["id"]).first()
+                if step_obj and step_obj.linked_project_id:
+                    project_id = step_obj.linked_project_id
+
+                if not project_id and run_id:
+                    run_obj = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                    if run_obj and run_obj.run_data:
+                        try:
+                            run_data = json.loads(run_obj.run_data or "{}")
+                            run_project_id = run_data.get("project_id")
+                            if run_project_id is not None and str(run_project_id).strip():
+                                project_id = int(run_project_id)
+                        except (ValueError, TypeError, json.JSONDecodeError):
+                            pass
+
+                if project_id:
+                    project = db.query(Project).filter(Project.id == int(project_id)).first()
+                    if project and project.folder_location:
+                        project_folder = project.folder_location
+        except Exception as e:
+            return {"output": f"Failed resolving project context: {e}", "passed": False}
+
+        if not project_id or not project_folder:
+            return {
+                "output": "Bypassed: no linked project context available for Send to Project CLI.",
+                "passed": True,
+                "skip_wait": True,
+            }
+
+        try:
+            from distr.core import terminal as terminal_runtime
+            session = asyncio.run(
+                terminal_runtime.get_or_create_session(
+                    project_id=int(project_id),
+                    cwd=project_folder,
+                    command="pi",
+                )
+            )
+            session.write(instruction + "\n")
+            return {
+                "output": f"Sent to project CLI (project_id={project_id}): {instruction[:600]}",
+                "passed": True,
+                "skip_wait": True,
+            }
+        except Exception as e:
+            return {"output": f"Failed sending to project CLI: {e}", "passed": False}
 
     def _run_recording(self, step_data: Dict[str, Any], config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Play a recorded action. Async — completes via signal callback.
@@ -935,6 +1093,16 @@ class StepDispatcher:
             continuation_input=continuation_input,
         )
 
+        logger.info(
+            "_build_agent_prompt: step_id=%s run_id=%s prior_results=%d context_rules_len=%d workflow_input_len=%d feedback_len=%d",
+            step_id,
+            run_id,
+            len(prior_results),
+            len(context_rules or ""),
+            len(workflow_input_context or ""),
+            len(continuation_input or ""),
+        )
+
         return prompt
 
     def _resolve_recording_name(self, step_data: Dict[str, Any], config: dict) -> Optional[str]:
@@ -1092,15 +1260,21 @@ class StepDispatcher:
         """Mark step as failed with error message."""
         self._set_status(step_id, "failed", result=error_msg)
 
-    def _record_result(self, step_id: int, run_id: Optional[int],
-                       result_text: str, passed: bool) -> None:
+    def _record_result(
+        self,
+        step_id: int,
+        run_id: Optional[int],
+        result_text: str,
+        passed: bool,
+        skip_wait: bool = False,
+    ) -> None:
         """Run verification, store result, update step status, push websocket."""
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
             if not step:
                 return
             # Check wait_for_continue before finalizing
-            if step.wait_for_continue:
+            if step.wait_for_continue and not skip_wait:
                 if self._enter_wait_state(step_id, result_text, passed, run_id=run_id):
                     return
             verified_passed = _run_verification(step, result_text, passed)
@@ -1121,8 +1295,14 @@ class StepDispatcher:
         # Thread lock for _routed_steps access
         self._routed_lock = threading.Lock()
 
-    def _record_result_and_route(self, step_id: int, run_id: Optional[int],
-                                  result_text: str, passed: bool) -> None:
+    def _record_result_and_route(
+        self,
+        step_id: int,
+        run_id: Optional[int],
+        result_text: str,
+        passed: bool,
+        skip_wait: bool = False,
+    ) -> None:
         """Record result AND route to the next step (for async step completion).
 
         This is the critical fix: when an async step (agent_instruction, recording)
@@ -1144,7 +1324,7 @@ class StepDispatcher:
             try:
                 from distr.core.workflow.router import StepRouter
                 router = StepRouter()
-                decision = router.route(step_id, result_text, passed, run_id)
+                decision = router.route(step_id, result_text, passed, run_id, skip_wait=skip_wait)
                 self._append_workflow_step_audit(step_id, run_id, result_text, passed)
 
                 if decision.get("action") == "next_step":
@@ -1217,6 +1397,38 @@ class StepDispatcher:
                 )
         except Exception:
             logger.debug("Failed to append workflow step audit", exc_info=True)
+
+    def _notify_isolated_step_result(self, step_data: Dict[str, Any], passed: bool, result_text: str) -> None:
+        """Notify bridge/voice agent when an isolated step finishes.
+
+        Isolated runs (triggered from the Workflows UI "Run step") do not create
+        workflow run records, so they never hit the normal completion bridge path.
+        This keeps isolated-step outcomes visible to the orchestrator and spoken
+        feedback loop, including success cases.
+        """
+        try:
+            from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge
+
+            workflow_id = step_data.get("workflow_id")
+            if workflow_id is None:
+                return
+            step_title = (step_data.get("name") or "").strip() or f"Step {step_data.get('id')}"
+            safe_result = (result_text or ("Step completed." if passed else "Step failed with no details.")).strip()[:2000]
+
+            run_result = {
+                "session_id": workflow_id,
+                "run_id": None,
+                "success": passed,
+                "cancelled": False,
+                "steps_summary": [{
+                    "title": step_title,
+                    "status": "passed" if passed else "failed",
+                    "result": safe_result,
+                }],
+            }
+            WorkflowAgentBridge().on_workflow_completed(workflow_id, run_result)
+        except Exception:
+            logger.debug("Could not notify isolated step result", exc_info=True)
 
     def _enter_wait_state(
         self,

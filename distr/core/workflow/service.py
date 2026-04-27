@@ -372,13 +372,47 @@ def update_step(step_id: int, **kwargs) -> bool:
         return True
 
 
-def delete_step(step_id: int) -> bool:
+def delete_step(step_id: int, workflow_id: Optional[int] = None) -> bool:
     with get_session() as db:
-        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        query = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id)
+        if workflow_id is not None:
+            query = query.filter(AutoWorkflowStep.workflow_id == workflow_id)
+        step = query.first()
         if not step:
             return False
+
+        deleted_step_info = {
+            "id": step.id,
+            "workflow_id": step.workflow_id,
+            "name": step.name or "",
+            "position": step.position,
+            "status": step.status or "",
+        }
+        deleted_history_count = (
+            db.query(AutoWorkflowStepResult)
+            .filter(AutoWorkflowStepResult.step_id == step.id)
+            .count()
+        )
+
+        # Remove dependent history rows first to avoid ORM trying to null
+        # AutoWorkflowStepResult.step_id (NOT NULL).
+        if deleted_history_count:
+            db.query(AutoWorkflowStepResult).filter(
+                AutoWorkflowStepResult.step_id == step.id
+            ).delete(synchronize_session=False)
+
         db.delete(step)
         db.commit()
+        increment_workflow_updated()
+        logger.info(
+            "[WORKFLOW] Step deleted workflow_id=%s step_id=%s name=%r position=%s status=%s history_rows=%s",
+            deleted_step_info["workflow_id"],
+            deleted_step_info["id"],
+            deleted_step_info["name"],
+            deleted_step_info["position"],
+            deleted_step_info["status"],
+            deleted_history_count,
+        )
         return True
 
 
@@ -431,6 +465,8 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 "ticket_id": r.ticket_id,
                 "phase": (_safe_json_loads(r.run_data) or {}).get("phase"),
                 "source_type": (_safe_json_loads(r.run_data) or {}).get("source_type"),
+                "project_id": (_safe_json_loads(r.run_data) or {}).get("project_id"),
+                "project_name": (_safe_json_loads(r.run_data) or {}).get("project_name"),
             }
             for r in rows
         ]
@@ -492,6 +528,8 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "board_name": run_data.get("board_name") or board_name_by_id.get(r.board_id),
                 "ticket_id": r.ticket_id,
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
+                "project_id": run_data.get("project_id"),
+                "project_name": run_data.get("project_name"),
                 "source_type": run_data.get("source_type"),
                 "phase": run_data.get("phase"),
             })
@@ -566,14 +604,35 @@ def reset_workflow_steps(workflow_id: int) -> Dict[str, Any]:
 
     Use when the user wants to stop everything and start fresh.
     """
+    # Gather IDs/counts while attached to a session (avoid detached lazy-load errors)
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return {"error": "Workflow not found"}
 
-        # Cancel any active runs
-        cancelled_runs = 0
-        active_runs = (
+        active_run_ids = [
+            r.id
+            for r in db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                AutoWorkflowRun.status.in_(["running", "waiting"]),
+            )
+            .all()
+        ]
+        step_ids = [s.id for s in wf.steps]
+
+    # Prefer dispatcher cancel path so run contexts/sub-agents are cleaned up too.
+    cancelled_runs = 0
+    for run_id in active_run_ids:
+        try:
+            if cancel_run(int(run_id)):
+                cancelled_runs += 1
+        except Exception:
+            logger.exception("reset_workflow_steps: cancel_run failed for run_id=%s", run_id)
+
+    # Ensure DB is normalized even if dispatcher cancellation missed anything.
+    with get_session() as db:
+        lingering = (
             db.query(AutoWorkflowRun)
             .filter(
                 AutoWorkflowRun.workflow_id == workflow_id,
@@ -581,22 +640,23 @@ def reset_workflow_steps(workflow_id: int) -> Dict[str, Any]:
             )
             .all()
         )
-        for run in active_runs:
+        for run in lingering:
             run.status = "cancelled"
             run.completed_at = datetime.utcnow()
             cancelled_runs += 1
 
-        # Reset all steps to pending
-        for step in wf.steps:
-            step.status = "pending"
-            step.result = None
+        if step_ids:
+            steps = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id.in_(step_ids)).all()
+            for step in steps:
+                step.status = "pending"
+                step.result = None
         db.commit()
 
     return {
         "success": True,
         "workflow_id": workflow_id,
         "cancelled_runs": cancelled_runs,
-        "steps_reset": len(wf.steps) if wf else 0,
+        "steps_reset": len(step_ids),
     }
 
 

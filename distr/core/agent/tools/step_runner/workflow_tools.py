@@ -770,14 +770,39 @@ class GetActiveWorkflowRunsTool(BaseTool):
                 runs = [r for r in runs if str(r.get("status", "")).lower() == status_l]
             if not runs:
                 return "No active workflow runs found."
-            lines = ["Active workflow runs:"]
+            # Sort waiting first so "continue" follow-ups naturally target the
+            # run that needs user input before pure running states.
+            runs = sorted(
+                runs,
+                key=lambda r: (0 if str(r.get("status", "")).lower() == "waiting" else 1, -(int(r.get("id") or 0))),
+            )
+
+            lines = [f"Active workflow run count: {len(runs)}"]
             for r in runs:
                 wf_name = r.get("workflow_name") or f"Workflow {r.get('workflow_id')}"
                 step_name = r.get("current_step_name") or "unknown step"
                 run_status = r.get("status") or "unknown"
-                lines.append(
-                    f"- Run {r.get('id')}: {wf_name} ({run_status}) on '{step_name}'"
+                run_id = r.get("id")
+                board_name = r.get("board_name") or (f"Board {r.get('board_id')}" if r.get("board_id") else None)
+                ticket_title = r.get("ticket_title") or (f"Ticket {r.get('ticket_id')}" if r.get("ticket_id") else None)
+                project_name = r.get("project_name") or (f"Project {r.get('project_id')}" if r.get("project_id") else None)
+                elapsed = int(r.get("elapsed_seconds") or 0)
+
+                line = (
+                    f"- run_id={run_id}; workflow='{wf_name}'; status={run_status}; "
+                    f"current_step='{step_name}'; elapsed_seconds={elapsed}"
                 )
+                if board_name:
+                    line += f"; board='{board_name}'"
+                if ticket_title:
+                    line += f"; ticket='{ticket_title}'"
+                if project_name:
+                    line += f"; project='{project_name}'"
+                lines.append(line)
+
+            waiting_run = next((r for r in runs if str(r.get("status", "")).lower() == "waiting"), None)
+            if waiting_run:
+                lines.append(f"Recommended continue target: run_id={waiting_run.get('id')}")
             # Store latest visible run context to improve follow-up disambiguation.
             top = runs[0]
             _remember_workflow_context(
