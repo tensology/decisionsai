@@ -2,10 +2,10 @@
 // VOLLMERS BOT — Cloudflare Worker
 // ================================================================
 
-const TG_TOKEN   = 'REDACTED_TELEGRAM_BOT_TOKEN';
-const TG_CHAT_ID = '-1003810685872';
-const BB_KEY     = 'REDACTED_BYBIT_KEY';
-const BB_SECRET  = 'REDACTED_BYBIT_SECRET';
+const TG_TOKEN   = (typeof process !== 'undefined' && process.env?.TG_TOKEN) || globalThis.TG_TOKEN || '';
+const TG_CHAT_ID = (typeof process !== 'undefined' && process.env?.TG_CHAT_ID) || globalThis.TG_CHAT_ID || '';
+const BB_KEY     = (typeof process !== 'undefined' && process.env?.BB_KEY) || globalThis.BB_KEY || '';
+const BB_SECRET  = (typeof process !== 'undefined' && process.env?.BB_SECRET) || globalThis.BB_SECRET || '';
 const BB_BASE    = 'https://api.bybit.com'; // Use https://api-demo.bybit.com for demo
 const TG_BASE    = `https://api.telegram.org/bot${TG_TOKEN}`;
 
