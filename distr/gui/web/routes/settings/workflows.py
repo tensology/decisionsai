@@ -160,6 +160,22 @@ def register_routes(router, templates):
         except Exception:
             return JSONResponse({"version": 0})
 
+    @router.get("/workflows/events")
+    async def get_workflow_events_since(since: int = 0):
+        """Return workflow events logged after *since* version.
+
+        Clients reconnecting after a WebSocket gap call this to check whether
+        they missed updates, then refresh their state if the returned list
+        is non-empty.
+        """
+        from distr.gui.web.workflow_events import get_events_since, get_workflow_update_counter
+        events = get_events_since(since)
+        return JSONResponse({
+            "current_version": get_workflow_update_counter(),
+            "missed": len(events),
+            "events": events,
+        })
+
     @router.get("/workflows/llm-settings")
     async def get_workflow_llm_settings():
         """Return the workflow engine's dedicated LLM provider and model."""

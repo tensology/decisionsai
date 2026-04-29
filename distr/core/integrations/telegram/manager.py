@@ -39,11 +39,13 @@ from distr.core.integrations.telegram.utils import hash_channel_id
 from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
 from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
+from distr.core.integrations.base import IntegrationReconnectMixin
 
 class TelegramWebSocketManager(
     TelegramMessagesMixin,
     TelegramSenderMixin,
     TelegramRemoteControlMixin,
+    IntegrationReconnectMixin,
     QObject,
 ):
     """
@@ -153,6 +155,7 @@ class TelegramWebSocketManager(
         self._reconnect_delay_current_ms = 3000  # current delay (grows with backoff)
         self._reconnect_attempts = 0
         self._active_disconnect = False  # True if we intentionally disconnected
+        self._init_reconnect_state(initial_delay_ms=3000, max_delay_ms=60000)
 
         # Rate Limiting & Dedup
         self._last_send_time = 0
@@ -654,9 +657,7 @@ class TelegramWebSocketManager(
 
         self.connection_status_changed.emit(True, "Connected")
 
-        self._reconnect_timer.stop()
-        self._reconnect_attempts = 0
-        self._reconnect_delay_current_ms = self._reconnect_delay_ms  # reset backoff
+        self._reset_reconnect_state("Telegram")
         self._is_auto_reconnecting = False  # Reset flag after connection
 
         # Send Subscribe Message
@@ -723,18 +724,7 @@ class TelegramWebSocketManager(
         self._last_connection_status = None
 
         if not self._active_disconnect:
-            # Only schedule a reconnect if one isn't already pending (e.g. from _on_error)
-            if not self._reconnect_timer.isActive():
-                # Exponential backoff
-                self._reconnect_delay_current_ms = min(
-                    self._reconnect_delay_current_ms * 2,
-                    self._reconnect_delay_max_ms,
-                )
-                logger.info(
-                    "[Telegram] 🔄 Scheduling reconnect in %dms (attempt #%d)",
-                    self._reconnect_delay_current_ms, self._reconnect_attempts + 1,
-                )
-                self._reconnect_timer.start(self._reconnect_delay_current_ms)
+            self._schedule_reconnect("Telegram")
 
     def _on_error(self, error_code):
         """Handle socket errors."""

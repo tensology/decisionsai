@@ -5,7 +5,7 @@ import asyncio
 
 from fastapi.responses import JSONResponse
 
-from ._shared import logger, OllamaPullRequest, route_handler
+from ._shared import logger, OllamaPullRequest, LLMSettings, route_handler
 
 
 def register_routes(router, templates):
@@ -65,13 +65,13 @@ def register_routes(router, templates):
 
     @router.post("/llms")
     @route_handler("save LLMs settings")
-    async def save_llms_settings(settings_data: dict):
+    async def save_llms_settings(settings_data: LLMSettings):
         """Save LLMs settings to DB."""
         from distr.core.settings import load_settings_from_db, save_settings_to_db
 
         settings = load_settings_from_db()
 
-        _stt = (settings_data.get("stt_model") or "whisper").strip().lower()
+        _stt = (settings_data.stt_model or "whisper").strip().lower()
         _stt_map_to_full = {
             "vosk": "Vosk (Local & Offline)",
             "whisper": "Whisper.cpp (Local & Offline)",
@@ -79,27 +79,27 @@ def register_routes(router, templates):
             "openai_whisper": "OpenAI Whisper (whisper-1)",
         }
         settings["transcription_model"] = _stt_map_to_full.get(_stt, "Whisper.cpp (Local & Offline)")
-        settings["conversational_llm_provider"] = (settings_data.get("conversational_provider") or "ollama").strip()
-        settings["conversational_llm_model"] = (settings_data.get("conversational_model") or "").strip()
+        settings["conversational_llm_provider"] = (settings_data.conversational_provider or "ollama").strip()
+        settings["conversational_llm_model"] = (settings_data.conversational_model or "").strip()
         # Sync legacy fields
         settings["llm_provider"] = settings["conversational_llm_provider"]
         settings["llm_model"] = settings["conversational_llm_model"]
         settings["agent_provider"] = settings["conversational_llm_provider"]
         settings["agent_model"] = settings["conversational_llm_model"]
-        settings["coding_llm_provider"] = (settings_data.get("coding_provider") or "ollama").strip()
-        settings["coding_llm_model"] = (settings_data.get("coding_model") or "").strip()
-        settings["vision_llm_provider"] = (settings_data.get("vision_provider") or "ollama").strip()
-        settings["vision_llm_model"] = (settings_data.get("vision_model") or "").strip()
-        settings["image_llm_provider"] = (settings_data.get("image_provider") or "ollama").strip()
-        settings["image_llm_model"] = (settings_data.get("image_model") or "").strip()
-        workflow_provider = (settings_data.get("workflow_provider") or "").strip()
-        workflow_model = (settings_data.get("workflow_model") or "").strip()
+        settings["coding_llm_provider"] = (settings_data.coding_provider or "ollama").strip()
+        settings["coding_llm_model"] = (settings_data.coding_model or "").strip()
+        settings["vision_llm_provider"] = (settings_data.vision_provider or "ollama").strip()
+        settings["vision_llm_model"] = (settings_data.vision_model or "").strip()
+        settings["image_llm_provider"] = (settings_data.image_provider or "ollama").strip()
+        settings["image_llm_model"] = (settings_data.image_model or "").strip()
+        workflow_provider = (settings_data.workflow_provider or "").strip()
+        workflow_model = (settings_data.workflow_model or "").strip()
         settings["workflow_llm_provider"] = workflow_provider
         settings["workflow_llm_model"] = workflow_model
-        settings["computer_use_provider"] = (settings_data.get("computer_use_provider") or "").strip()
-        settings["computer_use_model"] = (settings_data.get("computer_use_model") or "").strip()
-        settings["kanban_agent_orchestrator_provider"] = (settings_data.get("kanban_provider") or "").strip()
-        settings["kanban_agent_orchestrator_model"] = (settings_data.get("kanban_model") or "").strip()
+        settings["computer_use_provider"] = (settings_data.computer_use_provider or "").strip()
+        settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
+        settings["kanban_agent_orchestrator_provider"] = (settings_data.kanban_provider or "").strip()
+        settings["kanban_agent_orchestrator_model"] = (settings_data.kanban_model or "").strip()
 
         save_settings_to_db(settings)
         return JSONResponse({"success": True, "message": "LLMs settings saved"})

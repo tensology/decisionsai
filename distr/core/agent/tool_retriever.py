@@ -295,6 +295,12 @@ class ToolRetriever:
             return None
 
         if not self.is_ready():
+            from distr.core.agent.tools.loader import _tool_cache
+            all_tools = list(_tool_cache.values())
+            logger.warning(
+                "ToolRetriever: index not available — returning all %d tools (token cost may be elevated)",
+                len(all_tools),
+            )
             return None
 
         # Micro tier — always-on only

@@ -43,7 +43,14 @@ def _push_ws_update(version: int, board_id: Optional[int], event_type: str, payl
         try:
             if loop and not loop.is_closed():
                 fut = asyncio.run_coroutine_threadsafe(ws.send_text(body), loop)
-                fut.add_done_callback(lambda f: f.exception() if f.done() else None)
+
+                def _on_done(f, _ws=ws):
+                    if f.done() and not f.cancelled():
+                        exc = f.exception()
+                        if exc is not None:
+                            logger.debug("kanban WS send failed (removing stale connection): %s", exc)
+                            unregister_kb_websocket(_ws)
+                fut.add_done_callback(_on_done)
         except Exception as e:
             logger.debug("kanban WS push failed: %s", e)
 

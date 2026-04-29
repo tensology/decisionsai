@@ -36,8 +36,10 @@ except ImportError:
 
 logger = logging.getLogger(__name__)
 
+from distr.core.integrations.base import IntegrationReconnectMixin
 
-class WhatsAppWebSocketManager(QObject):
+
+class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
     """
     Manages WebSocket connection to the DecisionsAI WhatsApp relay server.
 
@@ -123,6 +125,7 @@ class WhatsAppWebSocketManager(QObject):
         self._reconnect_delay_max_ms = 60000
         self._reconnect_delay_current_ms = 3000
         self._reconnect_attempts = 0
+        self._init_reconnect_state(initial_delay_ms=3000, max_delay_ms=60000)
 
         # Message stats
         self._last_message_time = time.time()
@@ -332,9 +335,7 @@ class WhatsAppWebSocketManager(QObject):
         """Called when WebSocket connection is established."""
         logger.info("WhatsApp: Connected to relay server")
         self._connected = True
-        self._reconnect_timer.stop()
-        self._reconnect_attempts = 0
-        self._reconnect_delay_current_ms = self._reconnect_delay_ms
+        self._reset_reconnect_state("WhatsApp")
         self.connection_status_changed.emit(True, "Connected")
 
         # Initialize authenticated desktop subscription session.
@@ -359,12 +360,7 @@ class WhatsAppWebSocketManager(QObject):
 
         if not self._active_disconnect:
             logger.warning("WhatsApp: Disconnected unexpectedly, scheduling reconnect")
-            # Only schedule if no reconnect already pending (e.g. from _on_error)
-            if not self._reconnect_timer.isActive():
-                self._reconnect_delay_current_ms = min(
-                    self._reconnect_delay_current_ms * 2, self._reconnect_delay_max_ms
-                )
-                self._reconnect_timer.start(self._reconnect_delay_current_ms)
+            self._schedule_reconnect("WhatsApp")
             self.connection_status_changed.emit(False, "Reconnecting...")
         else:
             self.connection_status_changed.emit(False, "Disconnected")

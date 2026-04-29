@@ -19,6 +19,7 @@ import json
 import logging
 import dataclasses
 import threading
+import time
 import uuid
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
@@ -95,6 +96,9 @@ class InitiativeService:
         self._cycle_running = False
         self._stopped = False
         self._started = False
+        self._last_cycle_error: Optional[str] = None
+        self._last_cycle_at: Optional[float] = None  # Unix timestamp
+        self._cycle_count: int = 0
         # Run settings migration on init
         try:
             from distr.core.utils import load_settings_from_db
@@ -170,6 +174,16 @@ class InitiativeService:
         if removed:
             logger.info("InitiativeService: draft %s rejected and removed", draft_id)
         return removed
+
+    def get_status(self) -> dict:
+        """Return observable cycle status for the settings UI."""
+        return {
+            "running": self._cycle_running if hasattr(self, '_cycle_running') else False,
+            "cycle_count": self._cycle_count,
+            "last_cycle_at": self._last_cycle_at,
+            "last_cycle_ago_s": round(time.time() - self._last_cycle_at, 1) if self._last_cycle_at else None,
+            "last_error": self._last_cycle_error,
+        }
 
     # ------------------------------------------------------------------
     # Timer callbacks
@@ -255,6 +269,8 @@ class InitiativeService:
     def _run_initiative_cycle(self, trigger_source: str) -> None:
         logger.debug("InitiativeService: cycle started (trigger=%s)", trigger_source)
         try:
+            self._last_cycle_at = time.time()
+            self._cycle_count += 1
             from distr.core.utils import load_settings_from_db
             from distr.core.initiative.policy import evaluate, migrate_initiative_level, PolicyDecision
 
@@ -307,8 +323,11 @@ class InitiativeService:
                         decision, action.action_type)
 
             self._dispatch_action(action, settings, decision)
+            self._last_cycle_error = None  # clear previous error on success
 
         except Exception:
+            import traceback
+            self._last_cycle_error = traceback.format_exc()
             logger.error("InitiativeService: unhandled exception in cycle", exc_info=True)
         finally:
             with self._cycle_lock:

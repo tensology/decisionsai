@@ -293,7 +293,7 @@ class WebMPlayer(QObject):
                 )
                 out = out.scaled(
                     physical_size,
-                    Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                     Qt.TransformationMode.SmoothTransformation,
                 )
             px = QPixmap.fromImage(out)

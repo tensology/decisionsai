@@ -2,7 +2,7 @@
 Ticket Board database models.
 Supports local (database) boards with full CRUD, plus read-only Trello/Jira board viewing.
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from . import Base
 from datetime import datetime
@@ -94,6 +94,12 @@ class KanbanTicket(Base):
     whatsapp_message_id = Column(Integer, nullable=True)  # FK to whatsapp_messages.id
     whatsapp_message_wa_id = Column(String, nullable=True)  # WhatsApp's own message ID
 
+    # Workflow execution status — mirrors the latest linked AutoWorkflowRun status
+    workflow_status = Column(String, nullable=True)  # None | running | completed | failed | cancelled | waiting
+
+    # Subagent hierarchy — parent ticket that spawned this one (if any)
+    parent_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
+
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -102,6 +108,12 @@ class KanbanTicket(Base):
     links = relationship("KanbanTicketLink", back_populates="ticket", cascade="all, delete-orphan")
     todos = relationship("KanbanTicketTodo", back_populates="ticket", cascade="all, delete-orphan",
                          order_by="KanbanTicketTodo.position")
+
+
+# Indexes for high-frequency query patterns on the kanban board agent
+Index('ix_kanban_tickets_lane_id', KanbanTicket.lane_id)
+Index('ix_kanban_tickets_position', KanbanTicket.position)
+Index('ix_kanban_lanes_board_id', KanbanLane.board_id)
 
 
 class KanbanTicketFile(Base):

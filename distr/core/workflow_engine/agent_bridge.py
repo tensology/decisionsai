@@ -7,7 +7,7 @@ so the Voice Agent can react.
 
 import logging
 import queue
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -61,15 +61,31 @@ class WorkflowAgentBridge:
         )
 
     @staticmethod
-    def get_pending_reports() -> List[Dict[str, Any]]:
-        """Drain the queue and return all pending reports."""
-        reports: List[Dict[str, Any]] = []
+    def get_pending_reports(session_id: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Drain the queue and return pending reports.
+
+        If *session_id* is provided, only reports for that session are returned;
+        non-matching reports are put back so other sessions can consume them.
+        This prevents cross-session contamination when multiple workflows run
+        concurrently.
+        """
+        all_items: List[Dict[str, Any]] = []
         while True:
             try:
-                reports.append(_agent_report_queue.get_nowait())
+                all_items.append(_agent_report_queue.get_nowait())
             except queue.Empty:
                 break
-        return reports
+
+        if session_id is None:
+            return all_items
+
+        matching: List[Dict[str, Any]] = []
+        for item in all_items:
+            if item.get("session_id") == session_id:
+                matching.append(item)
+            else:
+                _agent_report_queue.put(item)  # return to queue for the correct consumer
+        return matching
 
     @staticmethod
     def _generate_report(run_result: dict) -> str:

@@ -85,8 +85,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         self.settings = load_settings_from_db()
         
-        # Initialize size from settings
-        self.content_size = self.settings.get('sphere_size', 120)  # Default to 120px
+        # Initialize size from settings — normalise legacy slider-scale values
+        # (4–10) that were stored before the pixel-value fix.
+        _raw_size = self.settings.get('sphere_size', 120)
+        if _raw_size <= 10:
+            _raw_size = _raw_size * 20  # slider-scale → pixels
+        self.content_size = max(80, min(400, _raw_size))  # clamp to sane range
         self.shadow_size = int(self.content_size * 0.022)  # ~3px at 120px
         self.stroke_width = int(self.content_size * 0.033)  # ~4px at 120px
         
@@ -366,6 +370,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Set up renderer
         self._render_strategy = create_renderer(self._skin_config)
 
+        # Restore per-skin saved size on startup (the per-skin store tracks
+        # the last size the user chose for each skin independently).
+        try:
+            from distr.core.db.skin_sizes import get_skin_size
+            saved_size = get_skin_size(migrated)
+            if saved_size != self.content_size:
+                self.content_size = saved_size
+                settings = load_settings_from_db()
+                settings['sphere_size'] = saved_size
+                save_settings_to_db(settings)
+        except Exception:
+            pass
+
         # Apply geometry (padding, mask, container shape) for the skin type
         self._apply_skin_geometry()
 
@@ -383,6 +400,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Handle skin change from settings — reload config and recreate components."""
         logger.info("Direct oracle change to skin: %s", skin_name)
         migrated = migrate_selected_oracle(skin_name)
+
+        # Track whether the skin folder is actually changing so we only
+        # apply the per-skin saved size when switching to a *different* skin.
+        # Re-selecting the same skin (e.g. after changing its animation in
+        # settings) should preserve the user's current working size.
+        previous_skin_folder = self._skin_folder
+        skin_changed = (migrated != self._skin_folder)
+        logger.info("Direct oracle change: skin_changed=%s previous=%s content_size=%d",
+                       skin_changed, previous_skin_folder, self.content_size)
+
         self._skin_folder = migrated
 
         # Persist active skin selection immediately (hotkeys/settings both route here).
@@ -401,17 +428,30 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         _folder, config = result
         self._skin_config = config
 
-        # Restore the saved size for this skin
-        try:
-            from distr.core.db.skin_sizes import get_skin_size
-            saved_size = get_skin_size(migrated)
-            if saved_size != self.content_size:
-                self.content_size = saved_size
-                settings = load_settings_from_db()
-                settings['sphere_size'] = saved_size
-                save_settings_to_db(settings)
-        except Exception:
-            pass
+        # Restore the saved size — only when actually switching to a different
+        # skin.  Applying the per-skin size on re-select of the same skin
+        # unexpectedly resizes the window (e.g. oracle per-skin size of 80px
+        # overriding the current 180px working size).
+        #
+        # Also persist the *previous* skin's size before switching away so the
+        # per-skin store stays up-to-date with the user's last chosen size.
+        if skin_changed:
+            try:
+                from distr.core.db.skin_sizes import set_skin_size
+                if previous_skin_folder:
+                    set_skin_size(previous_skin_folder, self.content_size)
+            except Exception:
+                pass
+            try:
+                from distr.core.db.skin_sizes import get_skin_size
+                saved_size = get_skin_size(migrated)
+                if saved_size != self.content_size:
+                    self.content_size = saved_size
+                    settings = load_settings_from_db()
+                    settings['sphere_size'] = saved_size
+                    save_settings_to_db(settings)
+            except Exception:
+                pass
 
         # Recreate renderer
         self._render_strategy = create_renderer(self._skin_config)
@@ -503,6 +543,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _on_skin_frame_ready(self, pixmap):
         """Receive a frame from the AnimationPlayer and display it."""
         if pixmap.isNull() or self.content_size <= 0:
+            logger.warning("_on_skin_frame_ready: skipped — isNull=%s content_size=%s",
+                           pixmap.isNull(), self.content_size)
             return
 
         scale = 1.0
@@ -514,26 +556,34 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             offset_x = r.image_offset_x
             offset_y = r.image_offset_y
 
+        # pixmap.scaled() and copy() work in physical pixels.
+        # content_size is in logical pixels, so multiply by DPR for correct sizing
+        # on HiDPI / Retina displays (DPR=2 → physical = 2×logical).
+        dpr = max(1.0, pixmap.devicePixelRatio())
+        content_phys = int(self.content_size * dpr)
+
         if scale <= 1.0:
             fitted = pixmap.scaled(
-                self.content_size, self.content_size,
+                content_phys, content_phys,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatio,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
+            fitted.setDevicePixelRatio(dpr)
             self.gif_label.setPixmap(fitted)
         else:
-            scaled_size = int(self.content_size + (self.content_size * (scale - 1.0)))
+            scaled_size = int(content_phys + (content_phys * (scale - 1.0)))
             scaled = pixmap.scaled(
                 scaled_size, scaled_size,
                 QtCore.Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 QtCore.Qt.TransformationMode.SmoothTransformation,
             )
             center = scaled.rect().center()
-            center += QtCore.QPoint(offset_x, offset_y)
-            target_rect = QtCore.QRect(0, 0, self.content_size, self.content_size)
+            center += QtCore.QPoint(int(offset_x * dpr), int(offset_y * dpr))
+            target_rect = QtCore.QRect(0, 0, content_phys, content_phys)
             target_rect.moveCenter(center)
             target_rect = target_rect.intersected(scaled.rect())
             cropped = scaled.copy(target_rect)
+            cropped.setDevicePixelRatio(dpr)
             self.gif_label.setPixmap(cropped)
 
 
@@ -590,6 +640,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Extract frames at the scaled size so downscaling (not upscaling) happens
         # in _on_skin_frame_ready, avoiding pixelation
         extract_size = int(self.content_size * max(image_scale, 1.0))
+        logger.info("_play_animation: anim=%s content_size=%d image_scale=%.2f extract_size=%d dpr=%.2f",
+                     response.animation, self.content_size, image_scale, extract_size, self.devicePixelRatioF())
         self._animation_player.set_size(extract_size, extract_size)
         self._animation_player.set_device_pixel_ratio(self.devicePixelRatioF())
         self._animation_player.load(
@@ -624,6 +676,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.stroke_width = 0
 
         self.total_size = self.content_size + 2 * (self.shadow_size + self.stroke_width)
+
+        logger.debug("_apply_skin_geometry: content_size=%d total_size=%d border=%s shadow=%s round=%s",
+                     self.content_size, self.total_size, has_border, has_shadow, is_round)
 
         # Resize window
         self.setFixedSize(self.total_size, self.total_size)
@@ -1033,7 +1088,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         except ValueError:
             next_file = anim_files[0]
 
-        logger.info("cycle_oracle: %s → %s (%d files total)", current_file, next_file, len(anim_files))
+        logger.info("cycle_oracle: %s → %s (%d files total) — content_size=%d skin_folder=%s",
+                       current_file, next_file, len(anim_files), self.content_size, self._skin_folder)
 
         # Update all events in the config to use the new animation file
         for hook in self._skin_config.events:
@@ -1045,8 +1101,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         with open(skin_json_path, "w", encoding="utf-8") as f:
             f.write(to_json(self._skin_config))
 
-        # Trigger reload
-        self._on_direct_oracle_change("oracle")
+        # Do not reload skin geometry here; only swap animation file in-place.
+        # Reload churn can momentarily desync frame/render sizing on rapid cycling.
+        current_hook = self._event_dispatcher.get_current_hook() or "idle"
+        response = self._skin_config.events.get(current_hook) or self._skin_config.events.get("idle")
+        if response:
+            self._play_animation(response)
+        self.update()
 
     def cycle_oracle_previous(self):
         """Cycle to the previous oracle animation file."""
@@ -1079,7 +1140,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         with open(skin_json_path, "w", encoding="utf-8") as f:
             f.write(to_json(self._skin_config))
 
-        self._on_direct_oracle_change("oracle")
+        # Do not reload skin geometry here; only swap animation file in-place.
+        current_hook = self._event_dispatcher.get_current_hook() or "idle"
+        response = self._skin_config.events.get(current_hook) or self._skin_config.events.get("idle")
+        if response:
+            self._play_animation(response)
+        self.update()
         logging.debug(f"Cycled oracle previous to: {prev_file}")
 
 

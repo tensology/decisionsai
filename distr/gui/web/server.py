@@ -367,7 +367,13 @@ def create_app() -> FastAPI:
         speed = max(0.5, min(2.0, speed))
 
         try:
-            wav_path = await asyncio.to_thread(generate_tts_audio, overview, None, None, speed)
+            wav_path = await asyncio.wait_for(
+                asyncio.to_thread(generate_tts_audio, overview, None, None, speed),
+                timeout=30.0,
+            )
+        except asyncio.TimeoutError:
+            logger.warning("Skill overview TTS timed out after 30s — returning text-only response")
+            return JSONResponse({"overview": overview, "audio_base64": None, "audio_type": "mp3"})
         except Exception as exc:
             logger.error("Skill overview TTS failed: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Could not synthesize speech for the overview.")
@@ -375,7 +381,10 @@ def create_app() -> FastAPI:
         from pathlib import Path as Pth
 
         mp3_path = Pth(wav_path).with_suffix(".mp3")
-        await asyncio.to_thread(wav_to_mp3, wav_path, str(mp3_path))
+        await asyncio.wait_for(
+            asyncio.to_thread(wav_to_mp3, wav_path, str(mp3_path)),
+            timeout=15.0,
+        )
         if not mp3_path.exists():
             raise HTTPException(status_code=500, detail="MP3 conversion failed.")
 

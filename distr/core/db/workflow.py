@@ -6,7 +6,7 @@ sequence of steps. Each step IS a single action with validation and routing.
 
 Named "Auto" to avoid conflict with the existing Workflow model (template/job card system).
 """
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, Boolean
+from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKey, Boolean
 from sqlalchemy.orm import relationship
 from . import Base
 from datetime import datetime
@@ -155,8 +155,9 @@ class AutoWorkflowRun(Base):
 
     id = Column(Integer, primary_key=True)
     workflow_id = Column(Integer, ForeignKey('auto_workflows.id'), nullable=False)
-    board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=True)  # Board this run belongs to
-    ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)  # Ticket this run belongs to
+    board_id = Column(Integer, ForeignKey('kanban_boards.id'), nullable=True)
+    ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
+    parent_run_id = Column(Integer, ForeignKey('auto_workflow_runs.id'), nullable=True)  # Subagent hierarchy
     started_at = Column(DateTime, default=datetime.utcnow)
     completed_at = Column(DateTime, nullable=True)
     status = Column(String, default='running')  # running, completed, failed, cancelled, waiting
@@ -166,3 +167,10 @@ class AutoWorkflowRun(Base):
     variable_values = Column(Text, nullable=True)  # JSON: variable values at end
 
     workflow = relationship("AutoWorkflow", back_populates="runs")
+
+
+# Indexes for high-frequency query patterns (must appear after class definitions)
+Index('ix_autoworkflowrun_workflow_id', AutoWorkflowRun.workflow_id)
+Index('ix_autoworkflowrun_ticket_id', AutoWorkflowRun.ticket_id)
+Index('ix_autoworkflowrun_board_id', AutoWorkflowRun.board_id)
+Index('ix_autoworkflowrun_status', AutoWorkflowRun.status)

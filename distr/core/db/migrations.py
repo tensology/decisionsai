@@ -1778,6 +1778,60 @@ def run_migrations():
                 if "duplicate column" not in str(e).lower():
                     logger.warning(f"Could not add {_wcol} column to settings: {e}")
 
+    # ── Audit fixes: new columns ────────────────────────────────────────────────
+    # KanbanTicket: workflow_status mirrors latest run status; parent_ticket_id for subagent hierarchy
+    for _wcol, _wtype, _wdef in [
+        ("workflow_status", "VARCHAR", "NULL"),
+        ("parent_ticket_id", "INTEGER", "NULL"),
+    ]:
+        try:
+            with Session() as s:
+                s.execute(text(f"SELECT {_wcol} FROM kanban_tickets LIMIT 1"))
+        except Exception:
+            try:
+                with engine.connect() as conn:
+                    conn.execute(text(f"ALTER TABLE kanban_tickets ADD COLUMN {_wcol} {_wtype} DEFAULT {_wdef}"))
+                    conn.commit()
+                    logger.info(f"Added {_wcol} column to kanban_tickets table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.warning(f"Could not add {_wcol} to kanban_tickets: {e}")
+
+    # AutoWorkflowRun: parent_run_id for subagent run hierarchy
+    try:
+        with Session() as s:
+            s.execute(text("SELECT parent_run_id FROM auto_workflow_runs LIMIT 1"))
+    except Exception:
+        try:
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE auto_workflow_runs ADD COLUMN parent_run_id INTEGER DEFAULT NULL"))
+                conn.commit()
+                logger.info("Added parent_run_id column to auto_workflow_runs table")
+        except Exception as e:
+            if "duplicate column" not in str(e).lower():
+                logger.warning(f"Could not add parent_run_id to auto_workflow_runs: {e}")
+
+    # ── Indexes for high-frequency query patterns ───────────────────────────────
+    _index_ddl = [
+        "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_lane_id ON kanban_tickets (lane_id)",
+        "CREATE INDEX IF NOT EXISTS ix_kanban_tickets_position ON kanban_tickets (position)",
+        "CREATE INDEX IF NOT EXISTS ix_kanban_lanes_board_id ON kanban_lanes (board_id)",
+        "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_workflow_id ON auto_workflow_runs (workflow_id)",
+        "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_ticket_id ON auto_workflow_runs (ticket_id)",
+        "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_board_id ON auto_workflow_runs (board_id)",
+        "CREATE INDEX IF NOT EXISTS ix_autoworkflowrun_status ON auto_workflow_runs (status)",
+    ]
+    try:
+        with engine.connect() as conn:
+            for _ddl in _index_ddl:
+                try:
+                    conn.execute(text(_ddl))
+                    conn.commit()
+                except Exception as _ie:
+                    logger.debug("Index migration skipped: %s", _ie)
+    except Exception as _idx_err:
+        logger.warning("Index migration block failed: %s", _idx_err)
+
     # ── BUG-4: Add board_id and ticket_id to AutoWorkflowRun for concurrency ──
     for _wcol, _wtype, _wdef in [
         ("board_id", "INTEGER", "NULL"),

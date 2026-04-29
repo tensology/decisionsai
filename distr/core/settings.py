@@ -105,6 +105,27 @@ DEFAULT_SETTINGS = {
     'web_hotkey_preferences_key': 'grave',
 }
 
+_oracle_migration_run = False
+
+
+def _migrate_legacy_oracle_setting(settings: dict) -> dict:
+    global _oracle_migration_run
+    if _oracle_migration_run:
+        return settings
+    selected = settings.get('selected_oracle')
+    if isinstance(selected, str) and re.match(r'^\d+\.gif$', selected):
+        from distr.core.skin_migration import migrate_selected_oracle
+        from distr.core.utils import save_settings_to_db as core_save_settings
+        settings['selected_oracle'] = migrate_selected_oracle(selected)
+        try:
+            core_save_settings(settings)
+            logging.info("Migrated selected_oracle from '%s' to '%s'", selected, settings['selected_oracle'])
+        except Exception as exc:
+            logging.error("Failed to persist migrated selected_oracle: %s", exc)
+    _oracle_migration_run = True
+    return settings
+
+
 def load_settings_from_db() -> Dict[str, Any]:
     """
     Load settings from the database.
@@ -126,16 +147,8 @@ def load_settings_from_db() -> Dict[str, Any]:
         # IMPORTANT: settings from DB take precedence over defaults
         merged_settings = {**DEFAULT_SETTINGS, **settings}
 
-        # Migrate legacy GIF filename values for selected_oracle
-        selected = merged_settings.get('selected_oracle')
-        if isinstance(selected, str) and re.match(r'^\d+\.gif$', selected):
-            from distr.core.skin_migration import migrate_selected_oracle
-            merged_settings['selected_oracle'] = migrate_selected_oracle(selected)
-            try:
-                core_save_settings(merged_settings)
-                logging.info(f"Migrated selected_oracle from '{selected}' to '{merged_settings['selected_oracle']}'")
-            except Exception as exc:
-                logging.error(f"Failed to persist migrated selected_oracle: {exc}")
+        # Migrate legacy GIF filename values for selected_oracle (runs at most once per process)
+        merged_settings = _migrate_legacy_oracle_setting(merged_settings)
 
         # Log EULA status for debugging
         if 'accepted_eula' in merged_settings:

@@ -379,9 +379,15 @@ def update_oracle_position(position: str) -> str:
 
 
 def update_oracle_size(sphere_size: int) -> int:
-    """Persist and emit oracle size. Returns pixel size."""
+    """Persist and emit oracle size. Returns pixel size.
+
+    The slider sends a scale value (4–10) which we convert to a pixel value
+    (80–200) before persisting.  Storing the pixel value ensures the oracle
+    window always reads a usable size even if the Qt signal (which also
+    carries the pixel value) is delayed or dropped.
+    """
     actual_size = sphere_size * 20
-    update_setting("sphere_size", sphere_size,
+    update_setting("sphere_size", actual_size,
                    signal=signal_manager.oracle_size_changed,
                    signal_args=(actual_size,),
                    signal_label="oracle_size_changed")

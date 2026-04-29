@@ -18,6 +18,7 @@ from ._shared import (
     validate_safe_outbound_url,
     rate_limiter,
     route_handler,
+    AdvancedSettings,
 )
 
 # In-memory store for OAuth state tokens
@@ -58,14 +59,13 @@ def register_routes(router, templates):
 
     @router.post("/advanced")
     @route_handler("save advanced settings")
-    async def save_advanced_settings(settings_data: dict):
+    async def save_advanced_settings(settings_data: AdvancedSettings):
         """Save advanced settings (indexed_folders + excluded_files, same as native advanced tab)."""
         from distr.core.settings import load_settings_from_db, save_settings_to_db
 
         settings = load_settings_from_db()
-        settings["excluded_files"] = (settings_data.get("exclude_types") or "").strip()
-        folders = settings_data.get("indexed_folders")
-        settings["indexed_folders"] = folders if isinstance(folders, list) else []
+        settings["excluded_files"] = (settings_data.exclude_types or "").strip()
+        settings["indexed_folders"] = settings_data.indexed_folders
         save_settings_to_db(settings)
 
         return JSONResponse({"success": True, "message": "Advanced settings saved"})

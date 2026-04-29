@@ -3,6 +3,7 @@ Initiative routes — /initiative
 """
 import logging
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +24,15 @@ DEFAULTS = {
     "initiative_ask_file_changes": True,
     "initiative_ask_sensitive": True,
 }
+
+
+class _InitiativePayload(BaseModel):
+    initiative_level: str = "assist"
+    initiative_allow_telegram: bool = False
+    initiative_allow_routine_tasks: bool = False
+    initiative_ask_external_comms: bool = True
+    initiative_ask_file_changes: bool = True
+    initiative_ask_sensitive: bool = True
 
 
 def register_routes(router, templates):
@@ -48,14 +58,11 @@ def register_routes(router, templates):
             return JSONResponse(DEFAULTS)
 
     @router.post("/initiative")
-    async def save_initiative_settings(payload: dict):
+    async def save_initiative_settings(payload: _InitiativePayload):
         """Save initiative/proactivity settings."""
         try:
             from distr.core.settings import save_settings_to_db
-            data = {}
-            for key in INITIATIVE_FIELDS:
-                if key in payload:
-                    data[key] = payload[key]
+            data = payload.model_dump()
             save_settings_to_db(data)
             return JSONResponse({"success": True})
         except Exception as e:
@@ -107,3 +114,17 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error(f"Failed to reject draft: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.get("/initiative/status")
+    async def get_initiative_status():
+        """Return current initiative service cycle status (for debugging)."""
+        try:
+            from PyQt6.QtWidgets import QApplication
+            app = QApplication.instance()
+            svc = getattr(app, "initiative_service", None)
+            if svc is None:
+                return JSONResponse({"running": False, "cycle_count": 0, "last_error": None})
+            return JSONResponse(svc.get_status())
+        except Exception as e:
+            logger.error(f"Failed to get initiative status: {e}", exc_info=True)
+            return JSONResponse({"running": False, "cycle_count": 0, "last_error": str(e)})

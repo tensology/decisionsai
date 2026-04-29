@@ -221,6 +221,7 @@ def warm_tool_cache(
     )
 
     with _cache_lock:
+        _failed_tools: list = []
         for tool_name, kwargs in tool_definitions:
             try:
                 tool_class = _get_tool_class(tool_name)
@@ -228,8 +229,9 @@ def warm_tool_cache(
                 _tool_cache[tool.name] = tool
                 logger.debug("Cached %s: %s", tool_name, tool.name)
             except Exception as e:
+                _failed_tools.append(tool_name)
                 logger.error("FAILED to cache %s: %s", tool_name, e, exc_info=True)
-                # Continue — do not raise
+                # Continue — missing tool is excluded from cache; LLM will not see it
 
         # Accessibility tree tools (sidecar-powered, optional)
         _accessibility_tools = [
@@ -270,7 +272,14 @@ def warm_tool_cache(
     # Trigger background embedding index build
     from distr.core.agent.tool_retriever import build_index_async
     build_index_async(list(_tool_cache.values()))
-    logger.info("warm_tool_cache complete — %d tools cached, index build started", len(_tool_cache))
+    if _failed_tools:
+        logger.warning(
+            "warm_tool_cache: %d tool(s) failed to initialise and will be UNAVAILABLE: %s",
+            len(_failed_tools),
+            ", ".join(_failed_tools),
+        )
+    logger.info("warm_tool_cache complete — %d tools cached, %d failed, index build started",
+                len(_tool_cache), len(_failed_tools))
 
 
 # Registry: (module_path, class_name) for each tool

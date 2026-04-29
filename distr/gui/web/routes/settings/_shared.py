@@ -213,6 +213,42 @@ class PlayVoiceRequest(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Pydantic models — LLMs / Advanced / Initiative
+# ---------------------------------------------------------------------------
+
+class LLMSettings(BaseModel):
+    stt_model: str = "whisper"
+    conversational_provider: str = "ollama"
+    conversational_model: str = ""
+    coding_provider: str = "ollama"
+    coding_model: str = ""
+    vision_provider: str = "ollama"
+    vision_model: str = ""
+    image_provider: str = "ollama"
+    image_model: str = ""
+    workflow_provider: str = ""
+    workflow_model: str = ""
+    computer_use_provider: str = ""
+    computer_use_model: str = ""
+    kanban_provider: str = ""
+    kanban_model: str = ""
+
+
+class AdvancedSettings(BaseModel):
+    exclude_types: str = ""
+    indexed_folders: List[str] = Field(default_factory=list)
+
+
+class InitiativeSettings(BaseModel):
+    initiative_level: str = "assist"
+    initiative_allow_telegram: bool = False
+    initiative_allow_routine_tasks: bool = False
+    initiative_ask_external_comms: bool = True
+    initiative_ask_file_changes: bool = True
+    initiative_ask_sensitive: bool = True
+
+
+# ---------------------------------------------------------------------------
 # Pydantic models — Skins
 # ---------------------------------------------------------------------------
 

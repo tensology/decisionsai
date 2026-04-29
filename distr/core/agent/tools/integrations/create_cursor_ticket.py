@@ -585,9 +585,11 @@ Cleaned ticket:"""
         Checks DECISIONS_WORKFLOW_RUN_ID and DECISIONS_WORKFLOW_STEP_ID env vars
         set by the workflow service. Returns empty string if not in a workflow context.
         """
-        run_id = os.environ.get("DECISIONS_WORKFLOW_RUN_ID")
-        step_id = os.environ.get("DECISIONS_WORKFLOW_STEP_ID")
-        workflow_id = os.environ.get("DECISIONS_WORKFLOW_ID")
+        from distr.core.workflow.dispatcher import get_current_workflow_env
+        _wenv = get_current_workflow_env()
+        run_id = _wenv.get("run_id")
+        step_id = _wenv.get("step_id")
+        workflow_id = _wenv.get("workflow_id")
         if not run_id:
             return ""
         try:
