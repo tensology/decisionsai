@@ -819,7 +819,9 @@ class ScreenshotAnalyzerTool(BaseTool):
                     except Exception:
                         pass
                     smooth_move_to(int(element_match["x"] / sf), int(element_match["y"] / sf))
-            return json.dumps(result_data)
+            d = result_data.get("description") or ""
+            s = result_data.get("summary") or ""
+            return " ".join(p for p in (d.strip(), s.strip()) if p).strip() or "Located an element on screen."
 
         # 2. pytesseract OCR direct match
         if ocr_locate_result:
@@ -845,7 +847,9 @@ class ScreenshotAnalyzerTool(BaseTool):
                     except Exception:
                         pass
                     smooth_move_to(int(loc["x"] / sf), int(loc["y"] / sf))
-            return json.dumps(result_data)
+            d = result_data.get("description") or ""
+            s = result_data.get("summary") or ""
+            return " ".join(p for p in (d.strip(), s.strip()) if p).strip() or "Located text on screen via OCR."
 
         return None  # Fall through to vision LLM
 
@@ -1265,7 +1269,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                     "ambiguous": bool(ambiguous),
                     "ambiguity_reason": ambiguity_reason or "",
                 }
-                result += f"\nPOINTER_RESULT: {json.dumps(pointer_payload, ensure_ascii=True)}"
+                logger.debug("screenshot_analyzer pointer_payload: %s", pointer_payload)
 
             # Informational reports (error, notification, state, count, app, comparison, multi-screen)
             elif result_type in ('error_report', 'notification_report', 'state_report',

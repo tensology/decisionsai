@@ -5,12 +5,11 @@ Provides explicit read/clear operations for shared computer-use memory so
 agent and subagent flows can coordinate step-by-step UI actions.
 """
 
-import json
-
 from langchain_core.tools import BaseTool
 
 from distr.core.agent.services.computer_use_context import (
     clear_context,
+    format_context_snapshot_for_agent,
     get_context_snapshot,
 )
 
@@ -29,7 +28,7 @@ class ComputerUseContextTool(BaseTool):
             clear_context()
             return "Computer-use context cleared."
         snapshot = get_context_snapshot()
-        return json.dumps(snapshot, ensure_ascii=True)
+        return format_context_snapshot_for_agent(snapshot)
 
     async def _arun(self, action: str = "get", **kwargs) -> str:
         return self._run(action=action, **kwargs)

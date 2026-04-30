@@ -85,6 +85,72 @@ def get_context_snapshot() -> dict[str, Any]:
         return deepcopy(_context_state)
 
 
+def format_context_snapshot_for_agent(snapshot: dict[str, Any]) -> str:
+    """Turn snapshot dict into readable text for chat, TTS, and LLM tool results.
+
+    Avoids dumping raw JSON to the user while preserving coordinates and status.
+    """
+    lines: list[str] = []
+
+    tgt = snapshot.get("last_candidate_target")
+    if isinstance(tgt, dict) and any(tgt.get(k) is not None for k in ("x", "y", "description")):
+        desc = (tgt.get("description") or "target").strip() or "target"
+        x, y = tgt.get("x"), tgt.get("y")
+        scr = tgt.get("screen")
+        conf = tgt.get("confidence")
+        bit = f"Last UI target: {desc}"
+        if x is not None and y is not None:
+            bit += f" at ({x}, {y})"
+        if scr is not None:
+            bit += f" on screen {scr}"
+        if conf is not None:
+            bit += (
+                f" (confidence {conf:.2f})"
+                if isinstance(conf, (float, int))
+                else f" (confidence {conf})"
+            )
+        st = (tgt.get("status") or "").strip()
+        if st:
+            bit += f" — status: {st}"
+        lines.append(bit)
+
+    act = snapshot.get("last_action")
+    if isinstance(act, dict) and act.get("action"):
+        details = act.get("details")
+        detail_brief = ""
+        if isinstance(details, dict) and details:
+            detail_brief = str(details)
+            if len(detail_brief) > 300:
+                detail_brief = detail_brief[:300] + "…"
+        action_name = act.get("action") or "unknown"
+        st = (act.get("status") or "").strip()
+        line = f"Last action: {action_name}"
+        if st:
+            line += f" — {st}"
+        if detail_brief:
+            line += f". Detail: {detail_brief}"
+        lines.append(line)
+
+    obs = snapshot.get("last_observation")
+    if isinstance(obs, dict):
+        src = obs.get("source") or "observation"
+        lines.append(f"Last observation source: {src}")
+        details = obs.get("details")
+        if details is not None:
+            brief = details if isinstance(details, str) else str(details)
+            if len(brief) > 500:
+                brief = brief[:500] + "…"
+            lines.append(f"Observation detail: {brief}")
+
+    updated = snapshot.get("updated_at")
+    if updated:
+        lines.append(f"Context updated: {updated}")
+
+    if not lines:
+        return "No computer-use context has been recorded yet."
+    return "\n".join(lines)
+
+
 def clear_context() -> None:
     """Clear all stored computer-use context."""
     with _context_lock:

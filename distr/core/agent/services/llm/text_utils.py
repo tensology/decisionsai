@@ -3,7 +3,7 @@
 import json
 import re
 import logging
-from typing import List, Dict
+from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +19,9 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     if not text:
         return ""
         
+    # Strip machine-only suffixes from vision tools (avoid JSON-ish noise in chat/TTS).
+    text = re.sub(r'\nPOINTER_RESULT:.*', '', text, flags=re.DOTALL)
+
     # CRITICAL FIX: Remove hallucinated Chain-of-Thought or Prompt Leakage
     text = re.sub(r'Your tool output was:.*?Your response should be:\s*', '', text, flags=re.IGNORECASE | re.DOTALL)
     text = re.sub(r'^Your response should be:\s*', '', text, flags=re.IGNORECASE)
@@ -103,6 +106,68 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     # text = inject_prosody_hints(text)
 
     return text
+
+
+def humanize_silent_navigation_json(result: str) -> Optional[str]:
+    """Turn legacy open_page JSON into conversational text.
+
+    Previously ``open_page`` returned ``{"status","page","url","silent"}``. That string was
+    shown in chat and passed through TTS cleaning, which replaces ``https://`` with
+    ``a web link`` and corrupts the JSON. Parse and return a plain sentence instead.
+    """
+    s = (result or "").strip()
+    if not s.startswith("{") or '"silent"' not in s:
+        return None
+    try:
+        d = json.loads(s)
+    except (json.JSONDecodeError, TypeError, ValueError):
+        return None
+    if not isinstance(d, dict) or not d.get("silent") or d.get("status") != "success":
+        return None
+    page = (d.get("page") or "").strip().lower()
+    url = (d.get("url") or "").strip()
+    path = ""
+    try:
+        from urllib.parse import urlparse
+
+        parsed = urlparse(url)
+        path = parsed.path or ""
+        if parsed.fragment:
+            path = f"{path}#{parsed.fragment}"
+    except Exception:
+        pass
+    # Mirror open_page routes (labels may be fuzzy matched keys)
+    if "kanban" in page or page in ("board", "ticket board", "ticketboard"):
+        return "I've opened the Ticket Board in your browser."
+    if "chat" in page or page in ("new chat", "new conversation", "chats"):
+        return "I've opened Chat in your browser."
+    if "project" in page:
+        return "I've opened Projects in your browser."
+    if "workflow" in page:
+        return "I've opened Workflows in your browser."
+    if page == "actions":
+        return "I've opened Actions in your browser."
+    if page in ("skills", "snippets"):
+        return "I've opened Skills in your browser."
+    if "doc" in page:
+        return "I've opened the API documentation in your browser."
+    if "/kanban" in path:
+        return "I've opened the Ticket Board in your browser."
+    if "/chat" in path:
+        return "I've opened Chat in your browser."
+    if "/projects" in path:
+        return "I've opened Projects in your browser."
+    if "/workflows" in path:
+        return "I've opened Workflows in your browser."
+    if "/actions" in path:
+        return "I've opened Actions in your browser."
+    if "/skills" in path:
+        return "I've opened Skills in your browser."
+    if "/docs" in path:
+        return "I've opened the API documentation in your browser."
+    if "/settings" in path:
+        return "I've opened Settings in your browser."
+    return "I've opened that page in your browser."
 
 
 def normalize_text(text: str) -> str:
