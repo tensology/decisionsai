@@ -206,8 +206,11 @@ class FastActionMixin:
         else:
             response_text = "Done"
             if result and isinstance(result, str) and not is_error:
-                if len(result) < 100 and "pasted" not in result.lower() and "Playing" in result:
-                    response_text = result
+                r = result.strip()
+                if getattr(tool, "name", None) == "open_page" and not r.startswith("{"):
+                    response_text = r
+                elif len(r) < 100 and "pasted" not in r.lower() and "Playing" in r:
+                    response_text = r
 
         if is_silent and not is_error:
             # Tool requested silence — push end frame without speaking so the

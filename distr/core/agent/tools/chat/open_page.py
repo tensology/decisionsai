@@ -6,7 +6,6 @@ to the correct web URL and opens it in the default browser — exactly like the
 tray context-menu items do.
 """
 
-import json
 import logging
 import urllib.request
 import webbrowser
@@ -86,6 +85,45 @@ _KNOWN_PAGES = ", ".join(sorted({
     "workflows", "ticket board", "docs/api docs",
     "activity log", "about",
 }))
+
+
+def _confirmation_for_path(path: str) -> str:
+    """Short conversational confirmation for chat/TTS (no URLs — TTS strips http links)."""
+    if not path:
+        return "I've opened that page in your browser."
+    if "/chat" in path or path.startswith("/chat"):
+        return "I've opened Chat in your browser."
+    if "/kanban" in path:
+        return "I've opened the Ticket Board in your browser."
+    if "/projects" in path:
+        return "I've opened Projects in your browser."
+    if "/workflows" in path:
+        return "I've opened Workflows in your browser."
+    if "/actions" in path:
+        return "I've opened Actions in your browser."
+    if "/skills" in path:
+        return "I've opened Skills in your browser."
+    if "/docs" in path:
+        return "I've opened the API documentation in your browser."
+    if "/settings" in path:
+        frag = ""
+        if "#" in path:
+            frag = path.split("#", 1)[1].lower()
+        section = {
+            "general": "General",
+            "initiative": "Initiative",
+            "audio": "Audio",
+            "thirdparty": "Third-party integrations",
+            "llms": "Language models",
+            "skins": "Skins",
+            "advanced": "Advanced",
+            "logs": "Activity log",
+            "about": "About",
+        }.get(frag, "")
+        if section:
+            return f"I've opened Settings ({section}) in your browser."
+        return "I've opened Settings in your browser."
+    return "I've opened that page in your browser."
 
 
 class OpenPageInput(BaseModel):
@@ -174,7 +212,9 @@ class OpenPageTool(BaseTool):
                 except Exception as e:
                     logger.warning(f"OpenPageTool: Could not capture screenshot: {e}")
 
-            return json.dumps({"status": "success", "page": label, "url": url, "silent": True})
+            # Return plain language for chat + TTS. JSON with URLs was shown verbatim and
+            # clean_text_for_tts replaces https://... with "a web link", corrupting JSON.
+            return _confirmation_for_path(path)
         except Exception as e:
             logger.error(f"OpenPageTool: Error opening page: {e}", exc_info=True)
             return f"Error opening page: {e}"
@@ -217,17 +257,10 @@ class OpenPageTool(BaseTool):
                 chat_id = self._chat_manager.create_chat("New Conversation", is_new=True)
                 logger.info(f"OpenPageTool: Created new chat {chat_id}")
 
-            # Open the chat page
             result = self._open_url("/chat/", "new chat")
-
-            # Merge chat_id into the response
-            try:
-                data = json.loads(result)
-                if chat_id:
-                    data["chat_id"] = chat_id
-                return json.dumps(data)
-            except (json.JSONDecodeError, TypeError):
+            if result.startswith("Error"):
                 return result
+            return "I've started a new conversation and opened Chat in your browser."
         except Exception as e:
             logger.error(f"OpenPageTool: Error creating new chat: {e}", exc_info=True)
             return f"Error creating new chat: {e}"

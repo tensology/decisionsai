@@ -1306,7 +1306,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         if r.startswith("Error") or "error" in r.lower() or "failed" in r.lower():
                             display_result = r[:200]
                         elif r.startswith("{") and '"silent"' in r:
-                            display_result = ""  # Silent tool
+                            display_result = ""  # Silent tool (legacy JSON)
+                        elif getattr(tool, "name", "") == "open_page" and not r.startswith("{"):
+                            display_result = r
                         # Otherwise just "Done"
 
                     if self.chat_manager and current_chat_id and display_result:

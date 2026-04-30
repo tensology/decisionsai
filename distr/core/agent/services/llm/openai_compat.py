@@ -928,7 +928,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """Send TTS response after tool execution, using tool results when meaningful. Returns True (end_frame sent)."""
         import json as _json
 
-        # Check if the last tool result requested silence (e.g. open_page returns {"silent": True})
+        from distr.core.agent.services.llm.text_utils import humanize_silent_navigation_json
+
+        # Check if the last tool result requested silence (e.g. legacy open_page JSON with silent)
         is_silent = False
         tool_result_text = None
         action_tool_spoke_directly = False
@@ -938,13 +940,18 @@ class OpenAICompatibleLLMService(BaseLLMService):
             if msg.get("role") == "tool":
                 tool_name = (msg.get("name") or "").strip()
                 content = msg.get("content", "")
+                effective = content
                 if content:
-                    try:
-                        parsed = _json.loads(content)
-                        if isinstance(parsed, dict) and parsed.get("silent"):
-                            is_silent = True
-                    except (ValueError, TypeError):
-                        pass
+                    human_nav = humanize_silent_navigation_json(content)
+                    if human_nav:
+                        effective = human_nav
+                    else:
+                        try:
+                            parsed = _json.loads(content)
+                            if isinstance(parsed, dict) and parsed.get("silent"):
+                                is_silent = True
+                        except (ValueError, TypeError):
+                            pass
                 # Some action tools already announce status via speak_text_directly_event_queue.
                 # Suppress LLM fallback speech for those acknowledgements to avoid repeats.
                 if tool_name in action_tool_names and isinstance(content, str):
@@ -952,8 +959,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     if lowered.startswith(action_ack_prefixes):
                         action_tool_spoke_directly = True
                 # Collect the last meaningful tool result for TTS/history
-                if content and len(content) > 5 and "[ACTION REQUIRED" not in content:
-                    tool_result_text = content[:2000]  # Cap at 2000 chars
+                if effective and len(effective) > 5 and "[ACTION REQUIRED" not in effective:
+                    tool_result_text = effective[:2000]  # Cap at 2000 chars
                 break  # Only check the most recent tool result
 
         if getattr(self, '_is_telegram_request', False):

@@ -14,7 +14,9 @@ import time
 
 from distr.core.agent.services.llm.prompt import build_tools_description
 from distr.core.agent.services.llm.text_utils import (
-    clean_text_for_tts, parse_tool_calls_from_content,
+    clean_text_for_tts,
+    humanize_silent_navigation_json,
+    parse_tool_calls_from_content,
 )
 from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
 from distr.core.signals import signal_manager
@@ -463,7 +465,12 @@ class OllamaResponseMixin:
                 self._messages.append({"role": "tool", "content": result, "name": name})
 
             else:
-                self._messages.append({"role": "tool", "content": result, "name": name})
+                store = result
+                if name == "open_page":
+                    h = humanize_silent_navigation_json(str(result))
+                    if h:
+                        store = h
+                self._messages.append({"role": "tool", "content": store, "name": name})
 
         # --- decide what to say after tool execution ---
         if clipboard_tool_called:
@@ -777,6 +784,9 @@ class OllamaResponseMixin:
         # Fall back to None (no text) only if there's truly nothing to say.
         for result in tool_results:
             result_str = str(result) if result else ""
+            human = humanize_silent_navigation_json(result_str)
+            if human:
+                result_str = human
             if result_str and len(result_str) > 2 and not result_str.startswith("Error"):
                 # Truncate long results for TTS
                 if len(result_str) > 500:
