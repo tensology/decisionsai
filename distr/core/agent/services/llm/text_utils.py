@@ -8,6 +8,9 @@ from typing import List, Dict
 logger = logging.getLogger(__name__)
 
 
+
+
+
 def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     """
     Clean text for Text-to-Speech processing.
@@ -32,6 +35,9 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     text = re.sub(r'<think>\s*.*?\s*</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<tool_call>.*', '', text, flags=re.DOTALL)
     text = re.sub(r'<think>.*', '', text, flags=re.DOTALL)
+
+    # Strip leaked Instruction tags from workflow reports that may surface in LLM output
+    text = re.sub(r'\[Instruction:.*?\]', '', text, flags=re.IGNORECASE | re.DOTALL)
 
     # Normalize smart/curly quotes
     text = re.sub(r"[\u2018\u2019\u0060\u00B4]", "'", text)
@@ -89,7 +95,13 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
             text = '\n'.join(lines)
         else:
             text = text.strip()
-    
+
+    # Inject natural pause markers for speech rhythm
+    # DISABLED: newline-based pause hints cause espeak-ng phonemizer (used by Kokoro)
+    # to drop whitespace at utterance boundaries, producing merged words like
+    # "Hello.World" instead of "Hello. World".
+    # text = inject_prosody_hints(text)
+
     return text
 
 

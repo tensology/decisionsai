@@ -33,6 +33,43 @@ class WorkflowInput:
 
 
 @dataclass
+class WorkflowRunContext:
+    """Structured context passed from the parent session into a workflow run.
+
+    Carries the conversational context the subagent needs to make informed
+    decisions: the last few turns from the parent session, a summary of the
+    user's intent, the active project, and any ticket/board linkage.
+
+    This replaces the previous free-form ``context: Optional[str]`` pattern
+    with a typed schema that downstream consumers can rely on.
+    """
+
+    last_conversation_turns: List[Dict[str, str]] = field(default_factory=list)
+    user_intent_summary: str = ""
+    active_project_id: Optional[int] = None
+    active_project_path: Optional[str] = None
+    ticket_id: Optional[int] = None
+    board_id: Optional[int] = None
+
+    def as_context_string(self) -> str:
+        """Build a human-readable context string for injection into agent prompts."""
+        parts: List[str] = []
+        if self.user_intent_summary:
+            parts.append(f"User intent: {self.user_intent_summary}")
+        if self.active_project_path:
+            parts.append(f"Active project: {self.active_project_path}")
+        if self.last_conversation_turns:
+            recent = self.last_conversation_turns[-5:]
+            lines = []
+            for turn in recent:
+                role = turn.get("role", "?")
+                content = (turn.get("content", "") or "")[:200]
+                lines.append(f"  [{role}] {content}")
+            parts.append("Recent conversation:\n" + "\n".join(lines))
+        return "\n".join(parts)
+
+
+@dataclass
 class StepInputContext:
     """The assembled input context for a single step execution."""
 

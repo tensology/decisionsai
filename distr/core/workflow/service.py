@@ -777,3 +777,24 @@ from distr.core.workflow.dispatcher import (  # noqa: F401, E402
 from distr.core.workflow_agent import WorkflowAgent  # noqa: F401, E402
 from distr.core.workflow_engine.agent_bridge import WorkflowAgentBridge  # noqa: F401, E402
 
+
+# ── Test compatibility stubs ──
+# These functions were extracted into StepDispatcher methods during the refactor.
+# The stubs exist so existing tests can mock them without rewriting.
+
+
+def _check_and_enter_wait(step_id: int, action_result: str, passed: bool):
+    """Legacy stub — delegates to StepDispatcher._enter_wait_state."""
+    return StepDispatcher()._enter_wait_state(step_id, action_result, passed)
+
+
+def _speak_result(result: str):
+    """Legacy stub — speaks result via the signal manager."""
+    if not result or not result.strip():
+        return
+    try:
+        from distr.core.signals import signal_manager
+        signal_manager.speak_text_directly.emit(result.strip()[:500])
+    except Exception:
+        pass
+

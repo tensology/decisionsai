@@ -16,11 +16,13 @@ asks the LLM to propose ONE action, evaluates it against the policy gate,
 and dispatches accordingly.
 """
 import json
+import hashlib
 import logging
 import dataclasses
 import threading
 import time
 import uuid
+from collections import deque
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
 
@@ -99,6 +101,10 @@ class InitiativeService:
         self._last_cycle_error: Optional[str] = None
         self._last_cycle_at: Optional[float] = None  # Unix timestamp
         self._cycle_count: int = 0
+        # Proposal dedup: track (action_type, payload_hash, timestamp) so the
+        # same action is not repeatedly proposed within cooldown_seconds.
+        self._recent_proposals: deque = deque()
+        self._proposal_cooldown_s: float = 300.0  # 5 minutes
         # Run settings migration on init
         try:
             from distr.core.utils import load_settings_from_db
@@ -240,6 +246,38 @@ class InitiativeService:
         self._surface_draft_queue(chat_id)
 
     # ------------------------------------------------------------------
+    # Proposal dedup helpers
+    # ------------------------------------------------------------------
+
+    def _proposal_key(self, action) -> tuple:
+        """Build a dedup key from the action type and a hash of the payload."""
+        payload = getattr(action, "payload", None) or {}
+        payload_hash = hashlib.sha256(
+            json.dumps(payload, sort_keys=True, default=str).encode()
+            ).hexdigest()[:16]
+        return (action.action_type, payload_hash)
+
+    def _prune_expired_proposals(self) -> None:
+        """Remove proposals that have exceeded the cooldown window."""
+        now = time.time()
+        cutoff = now - self._proposal_cooldown_s
+        while self._recent_proposals and self._recent_proposals[0][1] < cutoff:
+            self._recent_proposals.popleft()
+
+    def _is_duplicate_proposal(self, action) -> bool:
+        """Return True if *action* matches any recent proposal."""
+        key = self._proposal_key(action)
+        for existing_key, _ in self._recent_proposals:
+            if existing_key == key:
+                return True
+        return False
+
+    def _record_proposal(self, action) -> None:
+        """Record *action* in the proposal history."""
+        key = self._proposal_key(action)
+        self._recent_proposals.append((key, time.time()))
+
+    # ------------------------------------------------------------------
     # Cycle dispatch
     # ------------------------------------------------------------------
 
@@ -318,7 +356,20 @@ class InitiativeService:
                 "initiative_ask_file_changes": settings.get("initiative_ask_file_changes", True),
                 "initiative_ask_sensitive": settings.get("initiative_ask_sensitive", True),
             }
-            decision = evaluate(action, level, boundaries)
+            # Evaluate policy — inject duplicate_recent flag if the proposal
+            # matches a recent one within the cooldown window.
+            policy_context: dict[str, Any] = {}
+            self._prune_expired_proposals()
+            if self._is_duplicate_proposal(action):
+                logger.info(
+                    "InitiativeService: duplicate proposal detected (type=%s, desc=%s) — marking as duplicate_recent",
+                    action.action_type, action.description,
+                )
+                policy_context["duplicate_recent"] = True
+            else:
+                self._record_proposal(action)
+
+            decision = evaluate(action, level, boundaries, policy_context=policy_context)
             logger.info("InitiativeService: policy decision=%s for action_type=%s",
                         decision, action.action_type)
 

@@ -6,6 +6,11 @@ from distr.core.signals import signal_manager
 from distr.core.skin_config import SkinConfig
 from distr.core.skin_discovery import get_skin_by_name
 from distr.core.skin_migration import migrate_selected_oracle
+from distr.core.hotkeys import (
+    CHORD_MODIFIERS,
+    VALID_HOTKEY_KEYS,
+    DEFAULTS as HOTKEY_DEFAULTS,
+)
 from distr.gui.oracle.animation_player import AnimationPlayer
 from distr.gui.oracle.chat_bubble import ChatBubbleWidget
 from distr.gui.oracle.event_dispatcher import EventHookDispatcher
@@ -1234,12 +1239,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             current_settings = load_settings_from_db()
         except Exception:
             current_settings = self.settings
-        primary = str(current_settings.get("global_ptt_hotkey_primary", "option")).strip().lower()
-        secondary = str(current_settings.get("global_ptt_hotkey_secondary", "command")).strip().lower()
+        primary = str(current_settings.get("global_ptt_hotkey_primary", HOTKEY_DEFAULTS["global_ptt_hotkey_primary"])).strip().lower()
+        secondary = str(current_settings.get("global_ptt_hotkey_secondary", HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"])).strip().lower()
         if primary not in valid:
-            primary = "option"
+            primary = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
         if secondary not in valid:
-            secondary = "command"
+            secondary = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
         if primary == secondary:
             secondary = "command" if primary != "command" else "option"
         return {primary, secondary}
@@ -1253,35 +1258,35 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.stop_hold_to_talk()
 
     def _get_oracle_size_down_hotkey_combo(self):
-        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
-        valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+        valid_modifiers = CHORD_MODIFIERS
+        valid_keys = VALID_HOTKEY_KEYS
         try:
             current_settings = load_settings_from_db()
         except Exception:
             current_settings = self.settings
 
-        modifier = str(current_settings.get("oracle_size_hotkey_decrease_modifier", "option_command")).strip().lower()
-        key = str(current_settings.get("oracle_size_hotkey_decrease_key", "left_bracket")).strip().lower()
+        modifier = str(current_settings.get("oracle_size_hotkey_decrease_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"])).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_decrease_key", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"])).strip().lower()
         if modifier not in valid_modifiers:
-            modifier = "option_command"
+            modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]
         if key not in valid_keys:
-            key = "left_bracket"
+            key = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]
         return (modifier, key)
 
     def _get_oracle_size_up_hotkey_combo(self):
-        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
-        valid_keys = {"left_bracket", "right_bracket", "minus", "equal"}
+        valid_modifiers = CHORD_MODIFIERS
+        valid_keys = VALID_HOTKEY_KEYS
         try:
             current_settings = load_settings_from_db()
         except Exception:
             current_settings = self.settings
 
-        modifier = str(current_settings.get("oracle_size_hotkey_increase_modifier", "option_command")).strip().lower()
-        key = str(current_settings.get("oracle_size_hotkey_increase_key", "right_bracket")).strip().lower()
+        modifier = str(current_settings.get("oracle_size_hotkey_increase_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"])).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_increase_key", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"])).strip().lower()
         if modifier not in valid_modifiers:
-            modifier = "option_command"
+            modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]
         if key not in valid_keys:
-            key = "right_bracket"
+            key = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]
         return (modifier, key)
 
     def _normalize_oracle_scale(self, raw_size):
@@ -1338,19 +1343,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return bool(self.settings.get("recording_hotkey_enabled", True))
 
     def _get_recording_hotkey_combo(self):
-        valid_modifiers = {"option", "option_command", "command", "control", "shift"}
-        valid_keys = {"s"}
+        valid_modifiers = CHORD_MODIFIERS
+        valid_keys = VALID_HOTKEY_KEYS
         try:
             current_settings = load_settings_from_db()
         except Exception:
             current_settings = self.settings
 
-        modifier = str(current_settings.get("recording_hotkey_modifier", "option_command")).strip().lower()
-        key = str(current_settings.get("recording_hotkey_key", "s")).strip().lower()
+        modifier = str(current_settings.get("recording_hotkey_modifier", HOTKEY_DEFAULTS["recording_hotkey_modifier"])).strip().lower()
+        key = str(current_settings.get("recording_hotkey_key", HOTKEY_DEFAULTS["recording_hotkey_key"])).strip().lower()
         if modifier not in valid_modifiers:
-            modifier = "option_command"
+            modifier = HOTKEY_DEFAULTS["recording_hotkey_modifier"]
         if key not in valid_keys:
-            key = "s"
+            key = HOTKEY_DEFAULTS["recording_hotkey_key"]
         return (modifier, key)
 
     def _on_global_recording_toggle(self):
@@ -1374,39 +1379,39 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
 
         combos = {
             "skin_prev": (
-                str(current_settings.get("skin_nav_hotkey_previous_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("skin_nav_hotkey_previous_key", "left_arrow")).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_previous_modifier", HOTKEY_DEFAULTS["skin_nav_hotkey_previous_modifier"])).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_previous_key", HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"])).strip().lower(),
             ),
             "skin_next": (
-                str(current_settings.get("skin_nav_hotkey_next_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("skin_nav_hotkey_next_key", "right_arrow")).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_next_modifier", HOTKEY_DEFAULTS["skin_nav_hotkey_next_modifier"])).strip().lower(),
+                str(current_settings.get("skin_nav_hotkey_next_key", HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"])).strip().lower(),
             ),
             "open_chat": (
-                str(current_settings.get("web_hotkey_chat_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_chat_key", "c")).strip().lower(),
+                str(current_settings.get("web_hotkey_chat_modifier", HOTKEY_DEFAULTS["web_hotkey_chat_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_chat_key", HOTKEY_DEFAULTS["web_hotkey_chat_key"])).strip().lower(),
             ),
             "open_projects": (
-                str(current_settings.get("web_hotkey_projects_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_projects_key", "j")).strip().lower(),
+                str(current_settings.get("web_hotkey_projects_modifier", HOTKEY_DEFAULTS["web_hotkey_projects_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_projects_key", HOTKEY_DEFAULTS["web_hotkey_projects_key"])).strip().lower(),
             ),
             "open_actions": (
-                str(current_settings.get("web_hotkey_actions_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_actions_key", "a")).strip().lower(),
+                str(current_settings.get("web_hotkey_actions_modifier", HOTKEY_DEFAULTS["web_hotkey_actions_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_actions_key", HOTKEY_DEFAULTS["web_hotkey_actions_key"])).strip().lower(),
             ),
             "open_snippets": (
-                str(current_settings.get("web_hotkey_snippets_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_snippets_key", "n")).strip().lower(),
+                str(current_settings.get("web_hotkey_snippets_modifier", HOTKEY_DEFAULTS["web_hotkey_snippets_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_snippets_key", HOTKEY_DEFAULTS["web_hotkey_snippets_key"])).strip().lower(),
             ),
             "open_workflows": (
-                str(current_settings.get("web_hotkey_workflows_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_workflows_key", "w")).strip().lower(),
+                str(current_settings.get("web_hotkey_workflows_modifier", HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"])).strip().lower(),
             ),
             "open_preferences": (
-                str(current_settings.get("web_hotkey_preferences_modifier", "option_command")).strip().lower(),
-                str(current_settings.get("web_hotkey_preferences_key", "grave")).strip().lower(),
+                str(current_settings.get("web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"])).strip().lower(),
+                str(current_settings.get("web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"])).strip().lower(),
             ),
         }
-        skin_select_modifier = str(current_settings.get("skin_select_hotkey_modifier", "option_command")).strip().lower()
+        skin_select_modifier = str(current_settings.get("skin_select_hotkey_modifier", HOTKEY_DEFAULTS["skin_select_hotkey_modifier"])).strip().lower()
         for idx in range(1, 10):
             combos[f"skin_select_{idx}"] = (skin_select_modifier, str(idx))
         return combos

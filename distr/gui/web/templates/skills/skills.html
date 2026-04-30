@@ -9,9 +9,9 @@
             <div class="mb-6 pb-4 border-b border-white/20 grid grid-cols-1 md:grid-cols-2 gap-4 md:gap-8 md:items-center">
                 <div class="min-w-0">
                     <h2 class="text-xl font-semibold text-white mb-1">Skills</h2>
-                    <p class="text-sm text-gray-400">86 provider-agnostic skills. Click any card to read it, then push to a project.</p>
+                    <p class="text-sm text-gray-400">92 provider-agnostic skills. Click any card to read it, then push to a project.</p>
                 </div>
-                <!-- Col 2: playback controls + search, one row, vertically centered -->
+                <!-- Col 2: playback controls + create button + search, one row, vertically centered -->
                 <div class="flex min-w-0 flex-row flex-wrap items-center justify-end gap-2 sm:gap-3">
                     <div id="skills-tts-controls" class="flex items-center justify-end gap-2 shrink-0" aria-live="polite">
                         <span id="skills-tts-spinner" class="hidden inline-flex h-10 w-10 items-center justify-center rounded-md border border-white/20 bg-[#152054] text-[#fb923c]" title="Generating overview…">
@@ -24,6 +24,10 @@
                             <svg class="w-5 h-5 ml-0.5" fill="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg>
                         </button>
                     </div>
+                    <button type="button" id="skills-create-btn" class="h-10 shrink-0 px-3 rounded-md border border-[#f97316]/40 bg-[#f97316]/10 text-[#fb923c] hover:bg-[#f97316]/20 text-sm font-medium flex items-center gap-1.5 transition-colors" title="Create a new skill">
+                        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"/></svg>
+                        Create
+                    </button>
                     <input type="text" id="skills-search" placeholder="Search by name, tag, or description…" class="min-w-0 flex-1 basis-[12rem] px-3 py-2 rounded-lg bg-[#152054] border border-white/20 text-sm text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none md:max-w-md">
                 </div>
             </div>
@@ -99,6 +103,52 @@
 </div>
 
 {% endblock %}
+
+<!-- Skill editor modal (create / edit) -->
+<div id="skill-editor-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" role="dialog" aria-modal="true">
+    <div class="bg-[#1a1f3a] border border-white/20 rounded-lg w-full max-w-3xl max-h-[90vh] flex flex-col shadow-xl">
+        <div class="flex items-center justify-between p-6 border-b border-white/20">
+            <h3 class="text-lg font-semibold text-white" id="skill-editor-title">Create Skill</h3>
+            <button type="button" id="skill-editor-close" class="p-2 rounded-md text-gray-400 hover:text-white hover:bg-white/10 transition-colors">
+                <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"/></svg>
+            </button>
+        </div>
+
+        <div class="flex-1 overflow-y-auto p-6 space-y-4">
+            <div>
+                <label for="skill-editor-name" class="block text-xs text-gray-400 mb-1">Skill Name</label>
+                <input type="text" id="skill-editor-name" placeholder="e.g. my-custom-auditor" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+                <p class="text-xs text-gray-500 mt-1">Lowercase, dashes for spaces. ID is auto-derived from name.</p>
+            </div>
+
+            <div>
+                <label for="skill-editor-description" class="block text-xs text-gray-400 mb-1">Description</label>
+                <input type="text" id="skill-editor-description" placeholder="Brief description of what this skill does and when to use it" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+            </div>
+
+            <div>
+                <label for="skill-editor-content" class="block text-xs text-gray-400 mb-1">Content (Markdown)</label>
+                <textarea id="skill-editor-content" rows="16" placeholder="# My Skill&#10;&#10;Write your skill instructions in markdown here…" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm font-mono resize-y"></textarea>
+                <p class="text-xs text-gray-500 mt-1">Frontmatter (name, description) is added automatically. Write the body content only.</p>
+            </div>
+        </div>
+
+        <div class="p-4 border-t border-white/20 flex items-center justify-between gap-3">
+            <div id="skill-editor-status" class="text-xs text-gray-500"></div>
+            <div class="flex gap-2">
+                <button type="button" id="skill-editor-delete" class="hidden px-4 py-2 rounded border border-red-500/40 bg-red-500/10 text-red-400 hover:bg-red-500/20 text-sm font-medium transition-colors">
+                    Delete
+                </button>
+                <button type="button" id="skill-editor-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm transition-colors">
+                    Cancel
+                </button>
+                <button type="button" id="skill-editor-save" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium transition-colors">
+                    Save Skill
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 
 {% block extra_scripts %}
 <script src="/skills/static/js/skills.js"></script>

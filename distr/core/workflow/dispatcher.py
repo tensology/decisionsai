@@ -17,6 +17,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
+from distr.core.workflow_engine.context_assembly import WorkflowRunContext
 from distr.core.db.workflow import (
     AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun,
     AutoWorkflowStepResult,
@@ -43,6 +44,7 @@ class _RunContext:
     event_loop: asyncio.AbstractEventLoop
     thread: threading.Thread
     context_prefix: str = ""
+    run_ctx: Optional["WorkflowRunContext"] = None
 
 
 _active_runs: Dict[int, _RunContext] = {}
@@ -181,6 +183,7 @@ def _clear_workflow_env() -> None:
 def start_workflow_run(
     workflow_id: int,
     context: Optional[str] = None,
+    run_ctx: Optional["WorkflowRunContext"] = None,
     start_step_id: Optional[int] = None,
     board_id: Optional[int] = None,
     ticket_id: Optional[int] = None,
@@ -189,6 +192,11 @@ def start_workflow_run(
     """Start a full workflow run.
 
     Creates a run record, spins up a WorkflowAgent, and dispatches the first step.
+
+    Args:
+        context: Free-form context string (legacy — prefer ``run_ctx``).
+        run_ctx: Structured context from the parent session, including
+                 recent conversation, user intent, and project linkage.
     """
     from distr.core.workflow_agent import WorkflowAgent
 
@@ -270,6 +278,7 @@ def start_workflow_run(
                 event_loop=agent_loop,
                 thread=agent_thread,
                 context_prefix=context or "",
+                run_ctx=run_ctx,
             )
 
         run.current_step_id = first_step.id

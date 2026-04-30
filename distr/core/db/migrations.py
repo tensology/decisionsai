@@ -9,6 +9,7 @@ import json
 from sqlalchemy import text, inspect
 from . import engine, Session, Base, Settings
 from datetime import datetime
+from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def run_migrations():
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_modifier VARCHAR DEFAULT 'option_command'"))
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_modifier VARCHAR DEFAULT '{HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier']}'"))
                 conn.commit()
                 logger.info("Added oracle_size_hotkey_decrease_modifier column to settings table")
             except Exception as e:
@@ -111,7 +112,7 @@ def run_migrations():
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_key VARCHAR DEFAULT 'left_bracket'"))
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN oracle_size_hotkey_decrease_key VARCHAR DEFAULT '{HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_key']}'"))
                 conn.commit()
                 logger.info("Added oracle_size_hotkey_decrease_key column to settings table")
             except Exception as e:
@@ -123,7 +124,7 @@ def run_migrations():
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_modifier VARCHAR DEFAULT 'option_command'"))
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_modifier VARCHAR DEFAULT '{HOTKEY_DEFAULTS['oracle_size_hotkey_increase_modifier']}'"))
                 conn.commit()
                 logger.info("Added oracle_size_hotkey_increase_modifier column to settings table")
             except Exception as e:
@@ -135,7 +136,7 @@ def run_migrations():
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_key VARCHAR DEFAULT 'right_bracket'"))
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN oracle_size_hotkey_increase_key VARCHAR DEFAULT '{HOTKEY_DEFAULTS['oracle_size_hotkey_increase_key']}'"))
                 conn.commit()
                 logger.info("Added oracle_size_hotkey_increase_key column to settings table")
             except Exception as e:
@@ -1590,6 +1591,28 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"Workflow unification migration (auto_workflows): {e}")
 
+    # auto_workflows: safety_mode, safety_frozen_scope, pre_chain, post_chain, verification_template
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='auto_workflows'"))
+            if result.fetchone():
+                for col, col_def in [
+                    ("safety_mode", "VARCHAR"),
+                    ("safety_frozen_scope", "VARCHAR"),
+                    ("pre_chain", "TEXT"),
+                    ("post_chain", "TEXT"),
+                    ("verification_template", "VARCHAR"),
+                ]:
+                    try:
+                        conn.execute(text(f"ALTER TABLE auto_workflows ADD COLUMN {col} {col_def}"))
+                        conn.commit()
+                        logger.info(f"Added {col} column to auto_workflows table")
+                    except Exception as e:
+                        if "duplicate column" not in str(e).lower():
+                            logger.warning(f"Could not add {col} column to auto_workflows: {e}")
+    except Exception as e:
+        logger.debug(f"Safety and skill-chaining migration (auto_workflows): {e}")
+
     # auto_workflow_steps: verification, step_type, config, tool_used, routing_path
     try:
         with engine.connect() as conn:
@@ -1628,13 +1651,13 @@ def run_migrations():
     # Recording shortcut settings
     for _col_name, _col_type in [
         ("recording_hotkey_enabled", "BOOLEAN DEFAULT 1"),
-        ("recording_hotkey_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("recording_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['recording_hotkey_modifier']}'"),
         ("recording_hotkey_key", "VARCHAR DEFAULT 's'"),
-        ("skin_nav_hotkey_previous_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("skin_nav_hotkey_previous_key", "VARCHAR DEFAULT 'left_arrow'"),
-        ("skin_nav_hotkey_next_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("skin_nav_hotkey_next_key", "VARCHAR DEFAULT 'right_arrow'"),
-        ("skin_select_hotkey_modifier", "VARCHAR DEFAULT 'option_command'"),
+        ("skin_nav_hotkey_previous_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier']}'"),
+        ("skin_nav_hotkey_previous_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key']}'"),
+        ("skin_nav_hotkey_next_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier']}'"),
+        ("skin_nav_hotkey_next_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_next_key']}'"),
+        ("skin_select_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_select_hotkey_modifier']}'"),
         ("web_hotkey_chat_modifier", "VARCHAR DEFAULT 'option_command'"),
         ("web_hotkey_chat_key", "VARCHAR DEFAULT 'c'"),
         ("web_hotkey_projects_modifier", "VARCHAR DEFAULT 'option_command'"),
@@ -1659,6 +1682,36 @@ def run_migrations():
                     logger.info("Added %s column to settings table", _col_name)
                 except Exception as e:
                     logger.warning("Could not add %s column: %s", _col_name, e)
+
+    # Update existing settings rows to new default skin/size hotkeys:
+    # - skin navigation: Control+Command + Left/Right
+    # - size controls: Control+Command + Down/Up
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "UPDATE settings "
+                "SET skin_nav_hotkey_previous_modifier = :mod, skin_nav_hotkey_previous_key = :prev_key "
+                "WHERE skin_nav_hotkey_previous_modifier = 'option_command' AND skin_nav_hotkey_previous_key = 'left_arrow'"
+            ), {"mod": HOTKEY_DEFAULTS["skin_nav_hotkey_previous_modifier"], "prev_key": HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"]})
+            conn.execute(text(
+                "UPDATE settings "
+                "SET skin_nav_hotkey_next_modifier = :mod, skin_nav_hotkey_next_key = :next_key "
+                "WHERE skin_nav_hotkey_next_modifier = 'option_command' AND skin_nav_hotkey_next_key = 'right_arrow'"
+            ), {"mod": HOTKEY_DEFAULTS["skin_nav_hotkey_next_modifier"], "next_key": HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"]})
+            conn.execute(text(
+                "UPDATE settings "
+                "SET oracle_size_hotkey_decrease_modifier = :mod, oracle_size_hotkey_decrease_key = :down_key "
+                "WHERE oracle_size_hotkey_decrease_modifier = 'option_command' AND oracle_size_hotkey_decrease_key = 'left_bracket'"
+            ), {"mod": HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"], "down_key": HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]})
+            conn.execute(text(
+                "UPDATE settings "
+                "SET oracle_size_hotkey_increase_modifier = :mod, oracle_size_hotkey_increase_key = :up_key "
+                "WHERE oracle_size_hotkey_increase_modifier = 'option_command' AND oracle_size_hotkey_increase_key = 'right_bracket'"
+            ), {"mod": HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"], "up_key": HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]})
+            conn.commit()
+            logger.info("Updated existing shortcut rows to new Control+Command arrow defaults")
+    except Exception as e:
+        logger.warning("Could not update existing shortcut rows to new defaults: %s", e)
 
     # Handle database migration for whatsapp_messages table
     try:

@@ -26,6 +26,7 @@ from typing import Optional
 
 from distr.core.signals import signal_manager
 from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+from distr.core.agent.services.llm.reflection import SelfReflectionMixin
 from .mixins.voice import VoiceDictationMixin
 from .mixins.fast_actions import FastActionMixin
 from .mixins.telegram import TelegramMixin
@@ -33,8 +34,9 @@ from .mixins.telegram import TelegramMixin
 logger = logging.getLogger(__name__)
 
 
-class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
+class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, TelegramMixin):
     MAX_DROPPED_ITEMS_IN_PROMPT = 30
+    _MAX_CONTEXT_TURNS: int = 40
     """
     Mixin providing shared utility methods for LLM services.
 
@@ -803,6 +805,14 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
 
         persona = getattr(self, '_persona', None)
         content = f"{persona}\n\n{template}" if persona else template
+
+        # Append recent tool reflection context so the LLM is aware of prior
+        # tool outcomes (failures, loop patterns) when composing its response.
+        if hasattr(self, 'get_session_reflection'):
+            reflection = self.get_session_reflection()
+            if reflection:
+                content = f"{content}\n\n{reflection}"
+
         return {"role": "system", "content": content}
 
     @staticmethod
@@ -955,6 +965,7 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             new_messages = [msg for msg in history if msg.get('role') != 'system']
             validated = self._validate_messages(new_messages) if hasattr(self, '_validate_messages') else new_messages
             self._messages = [system_prompt] + validated if validated else [system_prompt]
+            self._apply_context_window()
             logger.debug("%s: Loaded %d messages for chat %s", self._get_provider_name(), len(validated), chat_id)
         except Exception as e:
             logger.error("Error loading chat history: %s", e, exc_info=True)
@@ -979,7 +990,35 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
             self._messages = [system_prompt]
 
     # ------------------------------------------------------------------ #
-    #  process_chat_input                                                 #
+    #  Context window management                                         #
+    # ------------------------------------------------------------------ #
+
+    def _apply_context_window(self) -> None:
+        """Truncate _messages to system prompt + last _MAX_CONTEXT_TURNS * 2.
+
+        Keeps the system message intact. For all non-system messages, only the
+        most recent `_MAX_CONTEXT_TURNS` conversational turns (user + assistant
+        pairs) are retained. Older turns are dropped to prevent context-window
+        overruns and degraded LLM coherence in long sessions.
+
+        Run after any mutation to self._messages that adds non-system content.
+        """
+        if not self._messages:
+            return
+        # Separate system message(s) from conversation
+        system_msgs = [m for m in self._messages if m.get("role") == "system"]
+        conv_msgs = [m for m in self._messages if m.get("role") != "system"]
+        max_conv = self._MAX_CONTEXT_TURNS * 2  # user + assistant per turn
+        if len(conv_msgs) > max_conv:
+            trimmed = conv_msgs[-max_conv:]
+            self._messages = system_msgs + trimmed
+            logger.info(
+                "%s: context window trimmed from %d to %d messages (%d turns)",
+                self._get_provider_name(),
+                len(conv_msgs),
+                len(trimmed),
+                self._MAX_CONTEXT_TURNS,
+            )                                                 #
     # ------------------------------------------------------------------ #
 
     async def process_chat_input(self, text: str, is_telegram: bool = False,
@@ -1369,6 +1408,7 @@ class LLMSharedMixin(VoiceDictationMixin, FastActionMixin, TelegramMixin):
                 logger.error("Failed to push LLMFullResponseEndFrame in welcome: %s", e)
 
         self._messages.append({"role": "assistant", "content": full_message})
+        self._apply_context_window()
 
     async def _build_welcome_sentences(self, agent_name: str) -> list:
         """Build welcome sentences, including conversation summary if available."""

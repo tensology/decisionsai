@@ -13,7 +13,7 @@ logger = logging.getLogger(__name__)
 
 # Module-level thread-safe queue for agent reports.
 # Reports are drained by the agent when it is ready to process them.
-_agent_report_queue: queue.Queue = queue.Queue()
+_agent_report_queue: queue.Queue = queue.Queue(maxsize=500)
 
 
 class WorkflowAgentBridge:
@@ -129,5 +129,5 @@ class WorkflowAgentBridge:
             f"Workflow run {status_label} "
             f"(session {session_id}, run {run_id})\n"
             f"Steps ({total}):\n{steps_block}\n\n"
-            f"[Instruction: {speak_instruction}]"
+            f"{speak_instruction}"
         )

@@ -22,13 +22,24 @@ class AutoWorkflow(Base):
     status = Column(String, default='draft')  # draft, active, paused, archived
 
     # Workflow type (replaces StepRunnerSession.session_type)
-    workflow_type = Column(String, default='manual')  # manual, instruction, scheduled, audit
+    workflow_type = Column(String, default='manual')  # manual, instruction, scheduled, audit, retro, review, deploy
     # Chat link (replaces StepRunnerSession.chat_id)
     chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
     # Context rules (replaces StepRunnerSession.context_rules)
     context_rules = Column(Text, nullable=True)
     # Workflow input (replaces StepRunnerSession.workflow_input)
     workflow_input = Column(Text, nullable=True)
+
+    # Safety mode — auto-activated when workflow starts
+    safety_mode = Column(String, nullable=True)  # null (off), careful, freeze, guard
+    safety_frozen_scope = Column(String, nullable=True)  # directory path for freeze/guard
+
+    # Skill chaining — pre/post execution skills
+    pre_chain = Column(Text, nullable=True)  # JSON: ["ceo-scope-review", "pre-flight-review"]
+    post_chain = Column(Text, nullable=True)  # JSON: ["session-retro"]
+
+    # Structured verification — replaces free-text verification field
+    verification_template = Column(String, nullable=True)  # named template: "web_app", "api", "cli", "security"
 
     # Scheduling
     schedule_enabled = Column(Boolean, default=False)

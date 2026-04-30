@@ -478,6 +478,135 @@ def create_app() -> FastAPI:
             "message": msg,
         }
 
+    # ── Skill Creator / Editor ────────────────────────────────────
+    @app.post("/api/skills/create")
+    async def create_skill(request: Request):
+        """Create a new skill from the web UI."""
+        import json as _json
+        import re
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        description = (body.get("description") or "").strip()
+        content = (body.get("content") or "").strip()
+
+        if not name:
+            raise HTTPException(status_code=400, detail="Skill name is required")
+        if not content:
+            raise HTTPException(status_code=400, detail="Skill content is required")
+
+        # Generate ID from name: lowercase, spaces→dashes, remove special chars
+        skill_id = re.sub(r"[^a-z0-9-]", "", name.lower().replace(" ", "-"))
+        if not skill_id:
+            raise HTTPException(status_code=400, detail="Could not derive skill ID from name")
+
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if skill_dir.exists():
+            raise HTTPException(status_code=409, detail=f"Skill '{skill_id}' already exists")
+
+        # Build frontmatter
+        frontmatter = f"---\nname: {name}\ndescription: \"{description}\"\n---\n\n{content}"
+
+        skill_dir.mkdir(parents=True, exist_ok=True)
+        (skill_dir / "SKILL.md").write_text(frontmatter, encoding="utf-8")
+
+        # Update registry
+        registry_file = skills_root / "skills_registry.json"
+        if registry_file.exists():
+            registry = _json.loads(registry_file.read_text())
+        else:
+            registry = []
+
+        registry.append({
+            "id": skill_id,
+            "name": name,
+            "description": description,
+            "path": skill_id,
+        })
+        registry_file.write_text(_json.dumps(registry, indent=2), encoding="utf-8")
+
+        # Auto-push to pi skills
+        pi_skills_dir = project_root / ".pi" / "skills" / skill_id
+        pi_skills_dir.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(skill_dir / "SKILL.md", pi_skills_dir / "SKILL.md")
+
+        return {
+            "success": True,
+            "skill_id": skill_id,
+            "skill_name": name,
+            "message": f"Created skill '{name}' ({skill_id}). Available as /skill:{skill_id}"
+        }
+
+    @app.put("/api/skills/{skill_id}/save")
+    async def save_skill(skill_id: str, request: Request):
+        """Save/update an existing skill from the web UI."""
+        import json as _json
+        body = await request.json()
+        name = (body.get("name") or "").strip()
+        description = (body.get("description") or "").strip()
+        content = (body.get("content") or "").strip()
+
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if not skill_dir.exists() or not skill_dir.is_dir():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+        if name or description or content:
+            # Rebuild frontmatter (preserve existing if fields are empty)
+            existing = ""
+            skill_file = skill_dir / "SKILL.md"
+            if skill_file.exists():
+                existing = skill_file.read_text(encoding="utf-8")
+
+            if name:
+                # Update name in registry
+                frontmatter = f"---\nname: {name}\ndescription: \"{description}\"\n---\n\n{content}"
+                skill_file.write_text(frontmatter, encoding="utf-8")
+
+                # Update registry entry
+                registry_file = skills_root / "skills_registry.json"
+                if registry_file.exists():
+                    registry = _json.loads(registry_file.read_text())
+                    for entry in registry:
+                        if entry.get("id") == skill_id:
+                            entry["name"] = name
+                            entry["description"] = description or entry.get("description", "")
+                            break
+                    registry_file.write_text(_json.dumps(registry, indent=2), encoding="utf-8")
+
+        # Auto-push to pi skills
+        pi_skills_dir = project_root / ".pi" / "skills" / skill_id
+        pi_skills_dir.mkdir(parents=True, exist_ok=True)
+        skill_file = skill_dir / "SKILL.md"
+        if skill_file.exists():
+            shutil.copy2(skill_file, pi_skills_dir / "SKILL.md")
+
+        return {
+            "success": True,
+            "skill_id": skill_id,
+            "message": f"Saved skill '{skill_id}'"
+        }
+
+    @app.delete("/api/skills/{skill_id}")
+    async def delete_skill(skill_id: str):
+        """Delete a skill (user-created skills only)."""
+        import shutil as _shutil
+        skills_root = project_root / "skills"
+        skill_dir = skills_root / skill_id
+        if not skill_dir.exists():
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
+
+        _shutil.rmtree(skill_dir)
+
+        # Remove from registry
+        registry_file = skills_root / "skills_registry.json"
+        if registry_file.exists():
+            registry = __import__("json").loads(registry_file.read_text())
+            registry = [e for e in registry if e.get("id") != skill_id]
+            registry_file.write_text(__import__("json").dumps(registry, indent=2), encoding="utf-8")
+
+        return {"success": True, "message": f"Deleted skill '{skill_id}'"}
+
     @app.get("/projects/", response_class=HTMLResponse)
     async def projects_page(request: Request):
         return page_templates.TemplateResponse(request, "projects/projects.html", _template_context(request, "/projects"))

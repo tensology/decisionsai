@@ -8,6 +8,7 @@ from pathlib import Path
 import json
 import logging
 import os
+from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 
 from fastapi import HTTPException
 from fastapi.responses import JSONResponse
@@ -169,32 +170,32 @@ class GeneralSettings(BaseModel):
 
 class ShortcutSettings(BaseModel):
     global_ptt_hotkey_enabled: bool = True
-    global_ptt_hotkey_primary: str = "option"
-    global_ptt_hotkey_secondary: str = "command"
-    oracle_size_hotkey_decrease_modifier: str = "option_command"
-    oracle_size_hotkey_decrease_key: str = "left_bracket"
-    oracle_size_hotkey_increase_modifier: str = "option_command"
-    oracle_size_hotkey_increase_key: str = "right_bracket"
+    global_ptt_hotkey_primary: str = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
+    global_ptt_hotkey_secondary: str = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
+    oracle_size_hotkey_decrease_modifier: str = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]
+    oracle_size_hotkey_decrease_key: str = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]
+    oracle_size_hotkey_increase_modifier: str = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]
+    oracle_size_hotkey_increase_key: str = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]
     recording_hotkey_enabled: bool = True
-    recording_hotkey_modifier: str = "option_command"
-    recording_hotkey_key: str = "s"
-    skin_nav_hotkey_previous_modifier: str = "option_command"
-    skin_nav_hotkey_previous_key: str = "left_arrow"
-    skin_nav_hotkey_next_modifier: str = "option_command"
-    skin_nav_hotkey_next_key: str = "right_arrow"
-    skin_select_hotkey_modifier: str = "option_command"
-    web_hotkey_chat_modifier: str = "option_command"
-    web_hotkey_chat_key: str = "c"
-    web_hotkey_projects_modifier: str = "option_command"
-    web_hotkey_projects_key: str = "j"
-    web_hotkey_actions_modifier: str = "option_command"
-    web_hotkey_actions_key: str = "a"
-    web_hotkey_snippets_modifier: str = "option_command"
-    web_hotkey_snippets_key: str = "n"
-    web_hotkey_workflows_modifier: str = "option_command"
-    web_hotkey_workflows_key: str = "w"
-    web_hotkey_preferences_modifier: str = "option_command"
-    web_hotkey_preferences_key: str = "grave"
+    recording_hotkey_modifier: str = HOTKEY_DEFAULTS["recording_hotkey_modifier"]
+    recording_hotkey_key: str = HOTKEY_DEFAULTS["recording_hotkey_key"]
+    skin_nav_hotkey_previous_modifier: str = HOTKEY_DEFAULTS["skin_nav_hotkey_previous_modifier"]
+    skin_nav_hotkey_previous_key: str = HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"]
+    skin_nav_hotkey_next_modifier: str = HOTKEY_DEFAULTS["skin_nav_hotkey_next_modifier"]
+    skin_nav_hotkey_next_key: str = HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"]
+    skin_select_hotkey_modifier: str = HOTKEY_DEFAULTS["skin_select_hotkey_modifier"]
+    web_hotkey_chat_modifier: str = HOTKEY_DEFAULTS["web_hotkey_chat_modifier"]
+    web_hotkey_chat_key: str = HOTKEY_DEFAULTS["web_hotkey_chat_key"]
+    web_hotkey_projects_modifier: str = HOTKEY_DEFAULTS["web_hotkey_projects_modifier"]
+    web_hotkey_projects_key: str = HOTKEY_DEFAULTS["web_hotkey_projects_key"]
+    web_hotkey_actions_modifier: str = HOTKEY_DEFAULTS["web_hotkey_actions_modifier"]
+    web_hotkey_actions_key: str = HOTKEY_DEFAULTS["web_hotkey_actions_key"]
+    web_hotkey_snippets_modifier: str = HOTKEY_DEFAULTS["web_hotkey_snippets_modifier"]
+    web_hotkey_snippets_key: str = HOTKEY_DEFAULTS["web_hotkey_snippets_key"]
+    web_hotkey_workflows_modifier: str = HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"]
+    web_hotkey_workflows_key: str = HOTKEY_DEFAULTS["web_hotkey_workflows_key"]
+    web_hotkey_preferences_modifier: str = HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]
+    web_hotkey_preferences_key: str = HOTKEY_DEFAULTS["web_hotkey_preferences_key"]
 
 
 class AudioSettings(BaseModel):

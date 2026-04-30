@@ -198,6 +198,41 @@ class BaseLLMService(LLMSharedMixin, LLMService):
             tool = self._tools_dict.get(tool_name) or next((t for t in self._tools if t.name == tool_name), None)
             if tool:
                 try:
+                    # Self-reflection: check for failure loops before re-issuing
+                    reflection_prompt = None
+                    if hasattr(self, 'check_before_tool_call'):
+                        try:
+                            reflection_prompt = self.check_before_tool_call(tool_name, tool_args)
+                        except RuntimeError as re:
+                            # Loop-break: too many identical failures — escalate
+                            logger.warning("Tool loop-break triggered: %s", re)
+                            loop = asyncio.get_running_loop()
+                            result = await loop.run_in_executor(
+                                None, lambda t=tool, a=tool_args: {
+                                    "output": f"Stopped: {re}", "passed": False
+                                } if hasattr(t, '_run') else f"Stopped: {re}"
+                            )
+                            results.append({
+                                "role": "tool",
+                                "tool_call_id": tool_call["id"],
+                                "name": tool_name,
+                                "content": str(result)
+                            })
+                            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                            from distr.core.agent.tool_audit import record_tool_execution
+                            record_tool_execution(chat_id, tool_name, str(result), "failed", event_queue=self.event_queue)
+                            # Record the loop-break outcome for reflection tracking
+                            if hasattr(self, 'record_tool_attempt'):
+                                self.record_tool_attempt(tool_name, tool_args, "failure", str(result))
+                            continue
+
+                    # Inject reflection context if the LLM should reconsider
+                    if reflection_prompt and hasattr(self, '_messages') and self._messages:
+                        self._messages.append({
+                            "role": "system",
+                            "content": reflection_prompt,
+                        })
+
                     loop = asyncio.get_running_loop()
                     result = await loop.run_in_executor(
                         None, lambda t=tool, a=tool_args: t._run(**a)
@@ -211,6 +246,9 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                     chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, str(result), "completed", event_queue=self.event_queue)
+                    # Record successful execution for self-reflection
+                    if hasattr(self, 'record_tool_attempt'):
+                        self.record_tool_attempt(tool_name, tool_args, "success", str(result))
                 except Exception as e:
                     logger.error("Error executing tool %s: %s", tool_name, e, exc_info=True)
                     err_content = f"Error: {str(e)}"
@@ -223,6 +261,9 @@ class BaseLLMService(LLMSharedMixin, LLMService):
                     chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                     from distr.core.agent.tool_audit import record_tool_execution
                     record_tool_execution(chat_id, tool_name, err_content, "failed", event_queue=self.event_queue)
+                    # Record failed execution for self-reflection
+                    if hasattr(self, 'record_tool_attempt'):
+                        self.record_tool_attempt(tool_name, tool_args, "failure", err_content)
             else:
                 logger.warning("Tool not found: %s", tool_name)
                 results.append({

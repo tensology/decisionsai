@@ -189,13 +189,26 @@ class StepExecutorMixin:
 
         try:
             from distr.core import terminal as terminal_runtime
-            session = asyncio.run(
-                terminal_runtime.get_or_create_session(
+            import concurrent.futures
+
+            async def _get_session():
+                return await terminal_runtime.get_or_create_session(
                     project_id=int(project_id),
                     cwd=project_folder,
                     command="pi",
                 )
-            )
+
+            # asyncio.run() raises RuntimeError if called from within a running
+            # event loop (e.g. inside an async workflow dispatched from FastAPI).
+            # Fall back to a thread-bound loop when that happens.
+            try:
+                session = asyncio.run(_get_session())
+            except RuntimeError:
+                def _thread_runner():
+                    return asyncio.run(_get_session())
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    session = pool.submit(_thread_runner).result(timeout=30)
+
             session.write(instruction + "\n")
             return {
                 "output": f"Sent to project CLI (project_id={project_id}): {instruction[:600]}",
@@ -511,9 +524,21 @@ class StepExecutorMixin:
             try:
                 from distr.core.workflow.dispatcher import _runs_lock, _active_runs
                 with _runs_lock:
-                    run_ctx = _active_runs.get(run_id)
-                if run_ctx and (run_ctx.context_prefix or "").strip():
-                    workflow_input_context = run_ctx.context_prefix.strip()
+                    run_ctx_obj = _active_runs.get(run_id)
+                if run_ctx_obj:
+                    # Legacy free-form context string
+                    if (run_ctx_obj.context_prefix or "").strip():
+                        workflow_input_context = run_ctx_obj.context_prefix.strip()
+                    # Structured WorkflowRunContext — inject parent session data
+                    if run_ctx_obj.run_ctx is not None:
+                        structured = run_ctx_obj.run_ctx.as_context_string()
+                        if structured:
+                            if workflow_input_context:
+                                workflow_input_context = (
+                                    workflow_input_context + "\n\n" + structured
+                                )
+                            else:
+                                workflow_input_context = structured
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed to load run context prefix: %s", e)
 

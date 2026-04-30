@@ -13,8 +13,10 @@ logger = logging.getLogger(__name__)
 class GlobalPttHotkeyListener:
     @staticmethod
     def _modifier_tokens(modifier: str) -> Set[str]:
-        if modifier == "option_command":
-            return {"option", "command"}
+        if not modifier:
+            return set()
+        if "_" in modifier:
+            return {token for token in modifier.split("_") if token}
         return {modifier}
 
     """Listen for a two-modifier combo and emit press/release callbacks."""
@@ -249,16 +251,29 @@ class GlobalPttHotkeyListener:
             return "right_bracket"
         if key_char in {"-", "_"}:
             return "minus"
-        if key_char in {"=", "+"}:
+        if key_char == "+":
+            return "plus"
+        if key_char == "=":
             return "equal"
         if key_char in {"`", "~"}:
             return "grave"
-        if key_char in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+        if key_char in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}:
             return key_char
-        if key_char == "s":
-            return "s"
-        if key_char in {"a", "c", "j", "n", "w"}:
+        if key_char in {"a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m",
+                        "n", "o", "p", "q", "r", "s", "t", "u", "v", "w", "x", "y", "z"}:
             return key_char
+        if key_char == ",":
+            return "comma"
+        if key_char == ".":
+            return "period"
+        if key_char == "/":
+            return "slash"
+        if key_char == ";":
+            return "semicolon"
+        if key_char == "'":
+            return "quote"
+        if key_char == "\\":
+            return "backslash"
 
         # Some environments encode key codes in repr.
         key_str = str(key).lower()
@@ -288,14 +303,32 @@ class GlobalPttHotkeyListener:
             return "minus"
         if "equal" in key_name:
             return "equal"
-        if key_name in {"1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+        if key_name in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}:
             return key_name
-        if key_name in {"a", "c", "j", "n", "s", "w"}:
+        if len(key_name) == 1 and key_name in "abcdefghijklmnopqrstuvwxyz":
             return key_name
+        if key_name in {"plus"}:
+            return "plus"
+        if key_name in {"comma"}:
+            return "comma"
+        if key_name in {"period", "dot"}:
+            return "period"
+        if key_name in {"slash", "forward_slash"}:
+            return "slash"
+        if key_name in {"semicolon"}:
+            return "semicolon"
+        if key_name in {"quote", "apostrophe"}:
+            return "quote"
+        if key_name in {"backslash"}:
+            return "backslash"
         if key_name in {"left", "left_arrow"} or "left arrow" in key_name:
             return "left_arrow"
         if key_name in {"right", "right_arrow"} or "right arrow" in key_name:
             return "right_arrow"
+        if key_name in {"up", "up_arrow"} or "up arrow" in key_name:
+            return "up_arrow"
+        if key_name in {"down", "down_arrow"} or "down arrow" in key_name:
+            return "down_arrow"
         if "grave" in key_name:
             return "grave"
         return None

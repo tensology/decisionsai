@@ -537,22 +537,32 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
         List of tool instances (mix of BaseActionTool and specialized tools)
     """
     # --- Retrieval path: when user_message is provided and cache is warm ---
-    if user_message and _tool_cache:
+    # The cache path returns tools from the warm cache. Sidecar and accessibility
+    # tools are already populated in the cache by warm_tool_cache(). When a
+    # user_message is present, semantic retrieval narrows the set to the most
+    # relevant tools; otherwise all cached tools are returned.  This single
+    # unified path eliminates the dual code-path gap where sidecar tools could
+    # be silently absent.
+    if _tool_cache:
         from distr.core.agent.tool_retriever import get_tool_retriever
 
-        names = get_tool_retriever().retrieve(user_message, model_name or "")
-        if names is None:
-            # Kill switch active or index not ready — fall back to all cached tools
+        if user_message:
+            names = get_tool_retriever().retrieve(user_message, model_name or "")
+            if names is None:
+                # Kill switch active or index not ready — fall back to all cached tools
+                return list(_tool_cache.values())
+            resolved: List = []
+            for name in names:
+                tool = get_cached_tool(name)
+                if tool is not None:
+                    resolved.append(tool)
+                else:
+                    logger.error("Retriever returned tool name %r but it is not in the cache — skipping", name)
+            return resolved
+        else:
             return list(_tool_cache.values())
-        # Resolve retrieved names to cached instances
-        resolved: List = []
-        for name in names:
-            tool = get_cached_tool(name)
-            if tool is not None:
-                resolved.append(tool)
-            else:
-                logger.error("Retriever returned tool name %r but it is not in the cache — skipping", name)
-        return resolved
+
+    # --- Cold path: only reached when warm_tool_cache has not run yet ---
 
     tools = []
     navigation_tools_count = 0

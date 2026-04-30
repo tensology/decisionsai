@@ -7,6 +7,7 @@ import hashlib
 import os
 import logging
 from distr.core.paths import DB_DIR
+from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
 from datetime import datetime
 import atexit
 
@@ -128,32 +129,32 @@ class Settings(Base):
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)
     global_ptt_hotkey_enabled = Column(Boolean, default=True)
-    global_ptt_hotkey_primary = Column(String, default='option')
-    global_ptt_hotkey_secondary = Column(String, default='command')
-    oracle_size_hotkey_decrease_modifier = Column(String, default='option_command')
-    oracle_size_hotkey_decrease_key = Column(String, default='left_bracket')
-    oracle_size_hotkey_increase_modifier = Column(String, default='option_command')
-    oracle_size_hotkey_increase_key = Column(String, default='right_bracket')
+    global_ptt_hotkey_primary = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_primary'])
+    global_ptt_hotkey_secondary = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_secondary'])
+    oracle_size_hotkey_decrease_modifier = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier'])
+    oracle_size_hotkey_decrease_key = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_key'])
+    oracle_size_hotkey_increase_modifier = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_modifier'])
+    oracle_size_hotkey_increase_key = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_key'])
     recording_hotkey_enabled = Column(Boolean, default=True)
-    recording_hotkey_modifier = Column(String, default='option_command')
-    recording_hotkey_key = Column(String, default='s')
-    skin_nav_hotkey_previous_modifier = Column(String, default='option_command')
-    skin_nav_hotkey_previous_key = Column(String, default='left_arrow')
-    skin_nav_hotkey_next_modifier = Column(String, default='option_command')
-    skin_nav_hotkey_next_key = Column(String, default='right_arrow')
-    skin_select_hotkey_modifier = Column(String, default='option_command')
-    web_hotkey_chat_modifier = Column(String, default='option_command')
-    web_hotkey_chat_key = Column(String, default='c')
-    web_hotkey_projects_modifier = Column(String, default='option_command')
-    web_hotkey_projects_key = Column(String, default='j')
-    web_hotkey_actions_modifier = Column(String, default='option_command')
-    web_hotkey_actions_key = Column(String, default='a')
-    web_hotkey_snippets_modifier = Column(String, default='option_command')
-    web_hotkey_snippets_key = Column(String, default='n')
-    web_hotkey_workflows_modifier = Column(String, default='option_command')
-    web_hotkey_workflows_key = Column(String, default='w')
-    web_hotkey_preferences_modifier = Column(String, default='option_command')
-    web_hotkey_preferences_key = Column(String, default='grave')
+    recording_hotkey_modifier = Column(String, default=HOTKEY_DEFAULTS['recording_hotkey_modifier'])
+    recording_hotkey_key = Column(String, default=HOTKEY_DEFAULTS['recording_hotkey_key'])
+    skin_nav_hotkey_previous_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier'])
+    skin_nav_hotkey_previous_key = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key'])
+    skin_nav_hotkey_next_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier'])
+    skin_nav_hotkey_next_key = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_next_key'])
+    skin_select_hotkey_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_select_hotkey_modifier'])
+    web_hotkey_chat_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_chat_modifier'])
+    web_hotkey_chat_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_chat_key'])
+    web_hotkey_projects_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_projects_modifier'])
+    web_hotkey_projects_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_projects_key'])
+    web_hotkey_actions_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_actions_modifier'])
+    web_hotkey_actions_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_actions_key'])
+    web_hotkey_snippets_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_snippets_modifier'])
+    web_hotkey_snippets_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_snippets_key'])
+    web_hotkey_workflows_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_workflows_modifier'])
+    web_hotkey_workflows_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_workflows_key'])
+    web_hotkey_preferences_modifier = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_preferences_modifier'])
+    web_hotkey_preferences_key = Column(String, default=HOTKEY_DEFAULTS['web_hotkey_preferences_key'])
 
     voice_provider = Column(String, default='kokoro')
     kokoro_voice = Column(String, default='af_heart')
@@ -726,32 +727,32 @@ def init_db():
                 last_listening_state=True,
                 hands_free_mode=False,  # Default to push-to-talk mode
                 global_ptt_hotkey_enabled=True,
-                global_ptt_hotkey_primary='option',
-                global_ptt_hotkey_secondary='command',
-                oracle_size_hotkey_decrease_modifier='option_command',
-                oracle_size_hotkey_decrease_key='left_bracket',
-                oracle_size_hotkey_increase_modifier='option_command',
-                oracle_size_hotkey_increase_key='right_bracket',
+                global_ptt_hotkey_primary=HOTKEY_DEFAULTS['global_ptt_hotkey_primary'],
+                global_ptt_hotkey_secondary=HOTKEY_DEFAULTS['global_ptt_hotkey_secondary'],
+                oracle_size_hotkey_decrease_modifier=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier'],
+                oracle_size_hotkey_decrease_key=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_key'],
+                oracle_size_hotkey_increase_modifier=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_modifier'],
+                oracle_size_hotkey_increase_key=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_key'],
                 recording_hotkey_enabled=True,
-                recording_hotkey_modifier='option_command',
-                recording_hotkey_key='s',
-                skin_nav_hotkey_previous_modifier='option_command',
-                skin_nav_hotkey_previous_key='left_arrow',
-                skin_nav_hotkey_next_modifier='option_command',
-                skin_nav_hotkey_next_key='right_arrow',
-                skin_select_hotkey_modifier='option_command',
-                web_hotkey_chat_modifier='option_command',
-                web_hotkey_chat_key='c',
-                web_hotkey_projects_modifier='option_command',
-                web_hotkey_projects_key='j',
-                web_hotkey_actions_modifier='option_command',
-                web_hotkey_actions_key='a',
-                web_hotkey_snippets_modifier='option_command',
-                web_hotkey_snippets_key='n',
-                web_hotkey_workflows_modifier='option_command',
-                web_hotkey_workflows_key='w',
-                web_hotkey_preferences_modifier='option_command',
-                web_hotkey_preferences_key='grave',
+                recording_hotkey_modifier=HOTKEY_DEFAULTS['recording_hotkey_modifier'],
+                recording_hotkey_key=HOTKEY_DEFAULTS['recording_hotkey_key'],
+                skin_nav_hotkey_previous_modifier=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier'],
+                skin_nav_hotkey_previous_key=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key'],
+                skin_nav_hotkey_next_modifier=HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier'],
+                skin_nav_hotkey_next_key=HOTKEY_DEFAULTS['skin_nav_hotkey_next_key'],
+                skin_select_hotkey_modifier=HOTKEY_DEFAULTS['skin_select_hotkey_modifier'],
+                web_hotkey_chat_modifier=HOTKEY_DEFAULTS['web_hotkey_chat_modifier'],
+                web_hotkey_chat_key=HOTKEY_DEFAULTS['web_hotkey_chat_key'],
+                web_hotkey_projects_modifier=HOTKEY_DEFAULTS['web_hotkey_projects_modifier'],
+                web_hotkey_projects_key=HOTKEY_DEFAULTS['web_hotkey_projects_key'],
+                web_hotkey_actions_modifier=HOTKEY_DEFAULTS['web_hotkey_actions_modifier'],
+                web_hotkey_actions_key=HOTKEY_DEFAULTS['web_hotkey_actions_key'],
+                web_hotkey_snippets_modifier=HOTKEY_DEFAULTS['web_hotkey_snippets_modifier'],
+                web_hotkey_snippets_key=HOTKEY_DEFAULTS['web_hotkey_snippets_key'],
+                web_hotkey_workflows_modifier=HOTKEY_DEFAULTS['web_hotkey_workflows_modifier'],
+                web_hotkey_workflows_key=HOTKEY_DEFAULTS['web_hotkey_workflows_key'],
+                web_hotkey_preferences_modifier=HOTKEY_DEFAULTS['web_hotkey_preferences_modifier'],
+                web_hotkey_preferences_key=HOTKEY_DEFAULTS['web_hotkey_preferences_key'],
                 accepted_eula=False,
                 elevenlabs_enabled=False,
                 elevenlabs_key='',

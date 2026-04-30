@@ -226,6 +226,10 @@
       html += '  <p class="text-xs text-gray-400 leading-relaxed">' + esc(shortDesc) + "</p>";
       html +=
         '  <div class="flex gap-2 mt-3">' +
+        '    <button type="button" class="edit-skill-btn inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Edit this skill">' +
+        '      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>' +
+        '      <span class="truncate leading-tight">Edit</span>' +
+        "    </button>" +
         '    <button type="button" class="push-project-btn flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Push skill to project">' +
         '      <svg class="w-4 h-4 shrink-0 text-[#fb923c]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>' +
         '      <span class="truncate leading-tight">Push to project</span>' +
@@ -254,6 +258,14 @@
           e.stopPropagation();
           var skillId = card.getAttribute("data-id");
           openSkillPushModal(skillId);
+        });
+      }
+      var editBtn = card.querySelector(".edit-skill-btn");
+      if (editBtn) {
+        editBtn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          var skillId = card.getAttribute("data-id");
+          openSkillEditor(skillId);
         });
       }
       var overviewBtn = card.querySelector(".overview-read-btn");
@@ -540,8 +552,181 @@
     });
   }
 
+  // ── Skill Editor ────────────────────────────────────────────────
+  var editingSkillId = null;
+
+  function openSkillEditor(skillId) {
+    stopSkillsOverviewPlayback();
+    editingSkillId = skillId || null;
+
+    var title = document.getElementById("skill-editor-title");
+    var nameField = document.getElementById("skill-editor-name");
+    var descField = document.getElementById("skill-editor-description");
+    var contentField = document.getElementById("skill-editor-content");
+    var deleteBtn = document.getElementById("skill-editor-delete");
+    var statusEl = document.getElementById("skill-editor-status");
+
+    statusEl.textContent = "";
+
+    if (skillId) {
+      // Edit mode
+      title.textContent = "Edit Skill";
+      deleteBtn.classList.remove("hidden");
+      var skill = allSkills.find(function (s) { return s.id === skillId; });
+      if (skill) {
+        nameField.value = skill.name || "";
+        descField.value = skill.description || "";
+      }
+      // Fetch content
+      fetch("/api/skills/" + skillId)
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var raw = data.content || "";
+          // Strip frontmatter for editing
+          if (raw.startsWith("---")) {
+            var end = raw.indexOf("---", 3);
+            if (end > 0) raw = raw.substring(end + 3).trim();
+          }
+          contentField.value = raw;
+        })
+        .catch(function () {
+          contentField.value = "";
+        });
+    } else {
+      // Create mode
+      title.textContent = "Create Skill";
+      deleteBtn.classList.add("hidden");
+      nameField.value = "";
+      descField.value = "";
+      contentField.value = "";
+    }
+
+    document.getElementById("skill-editor-modal").classList.remove("hidden");
+    nameField.focus();
+  }
+
+  function closeSkillEditor() {
+    document.getElementById("skill-editor-modal").classList.add("hidden");
+    editingSkillId = null;
+  }
+
+  function saveSkill() {
+    var nameField = document.getElementById("skill-editor-name");
+    var descField = document.getElementById("skill-editor-description");
+    var contentField = document.getElementById("skill-editor-content");
+    var statusEl = document.getElementById("skill-editor-status");
+    var saveBtn = document.getElementById("skill-editor-save");
+
+    var name = nameField.value.trim();
+    var description = descField.value.trim();
+    var content = contentField.value.trim();
+
+    if (!name) {
+      statusEl.textContent = "Name is required.";
+      statusEl.className = "text-xs text-red-400";
+      return;
+    }
+    if (!content) {
+      statusEl.textContent = "Content is required.";
+      statusEl.className = "text-xs text-red-400";
+      return;
+    }
+
+    statusEl.textContent = editingSkillId ? "Saving…" : "Creating…";
+    statusEl.className = "text-xs text-gray-400";
+    saveBtn.disabled = true;
+    saveBtn.classList.add("opacity-50");
+
+    var url = editingSkillId
+      ? "/api/skills/" + editingSkillId + "/save"
+      : "/api/skills/create";
+    var method = editingSkillId ? "PUT" : "POST";
+
+    fetch(url, {
+      method: method,
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name, description: description, content: content })
+    })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        saveBtn.disabled = false;
+        saveBtn.classList.remove("opacity-50");
+        if (data.success) {
+          statusEl.textContent = "\u2705 " + data.message;
+          statusEl.className = "text-xs text-green-400";
+          // Reload skills to pick up new/edited skill
+          setTimeout(function () {
+            closeSkillEditor();
+            loadSkills();
+          }, 800);
+        } else {
+          statusEl.textContent = "\u274c " + (data.detail || "Save failed");
+          statusEl.className = "text-xs text-red-400";
+        }
+      })
+      .catch(function (err) {
+        saveBtn.disabled = false;
+        saveBtn.classList.remove("opacity-50");
+        statusEl.textContent = "\u274c " + err.message;
+        statusEl.className = "text-xs text-red-400";
+      });
+  }
+
+  function deleteSkill() {
+    if (!editingSkillId) return;
+    var statusEl = document.getElementById("skill-editor-status");
+    if (!confirm("Delete skill '" + editingSkillId + "'? This cannot be undone.")) return;
+
+    statusEl.textContent = "Deleting…";
+    statusEl.className = "text-xs text-gray-400";
+
+    fetch("/api/skills/" + editingSkillId, { method: "DELETE" })
+      .then(function (r) { return r.json(); })
+      .then(function (data) {
+        if (data.success) {
+          closeSkillEditor();
+          loadSkills();
+          showSnackbar(data.message, "success");
+        } else {
+          statusEl.textContent = "\u274c " + (data.detail || "Delete failed");
+          statusEl.className = "text-xs text-red-400";
+        }
+      })
+      .catch(function (err) {
+        statusEl.textContent = "\u274c " + err.message;
+        statusEl.className = "text-xs text-red-400";
+      });
+  }
+
   // ── Event bindings ───────────────────────────────────────────────
   function bindEvents() {
+    // Create button
+    document.getElementById("skills-create-btn").addEventListener("click", function () {
+      openSkillEditor(null);
+    });
+
+    // Editor modal
+    document.getElementById("skill-editor-close").addEventListener("click", closeSkillEditor);
+    document.getElementById("skill-editor-cancel").addEventListener("click", closeSkillEditor);
+    document.getElementById("skill-editor-save").addEventListener("click", saveSkill);
+    document.getElementById("skill-editor-delete").addEventListener("click", deleteSkill);
+    document.getElementById("skill-editor-modal").addEventListener("click", function (e) {
+      if (e.target === this) closeSkillEditor();
+    });
+    // Ctrl+S / Cmd+S in editor
+    document.getElementById("skill-editor-content").addEventListener("keydown", function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        saveSkill();
+      }
+    });
+    document.getElementById("skill-editor-name").addEventListener("keydown", function (e) {
+      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+        e.preventDefault();
+        saveSkill();
+      }
+    });
+
     // Search
     var searchInput = document.getElementById("skills-search");
     var searchTimeout;
