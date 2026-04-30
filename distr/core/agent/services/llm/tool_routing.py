@@ -36,7 +36,8 @@ def _build_tool_triggers() -> frozenset:
 
     voice_triggers = {
         'copy', 'cut', 'paste', 'clipboard', 'click', 'right click', 'double click',
-        'scroll', 'drag', 'press', 'open', 'quit', 'exit', 'play', 'pause', 'mute',
+        'scroll', 'drag', 'press', 'open', 'focus', 'switch', 'bring', 'activate',
+        'quit', 'exit', 'play', 'pause', 'mute',
         'volume', 'screenshot', 'snippet', 'snip it', 'snipit',
         'list files', 'show files', 'create file', 'read file', 'delete file',
         'open file', 'copy file', 'move file',

@@ -570,6 +570,18 @@ class FastActionDetector:
             (re.compile(r'^(exit|quit|goodbye|bye|close)\s*(app|application|decisions)?\.?$', re.IGNORECASE), 
              ActionType.EXIT_APP, "exit_app", {}, False, "llm_response"),
             
+            # === FOCUS / SWITCH APP (smart_open — always-on in tool retrieval) ===
+            # Polite phrasing must not hit conversational_patterns ("can you ...") without these rows.
+            # Note: no bare "switch to X" here — collides with mode_control ("switch to continuous", "switch to PTT").
+            (re.compile(
+                r'^\s*(?:can\s+you\s+|could\s+you\s+|would\s+you\s+|please\s+)?'
+                r'(?:focus\s+(?:on\s+)?|bring\s+(?:up\s+)?(?:the\s+)?|activate\s+)'
+                r'(.+?)(?:\s+please)?\s*[.?!]?\s*$',
+                re.IGNORECASE),
+             ActionType.OPEN_WINDOW, "smart_open",
+             # text must be the app name too — SmartOpenTool._open_application prefers text over target.
+             {"target": "__FOCUS_APP_NAME__", "text": "__FOCUS_APP_NAME__"}, False, "done"),
+            
             # === OPEN WINDOW/APP (fast detection for common apps) ===
             # Gmail
             (re.compile(r'\bopen\s+gmail\.?$', re.IGNORECASE), 
@@ -1096,6 +1108,10 @@ class FastActionDetector:
                         if fmt == "word":
                             fmt = "docx"
                         final_args[key] = fmt
+                    elif value == "__FOCUS_APP_NAME__":
+                        # Captured app/window name from focus/switch/bring patterns; strip trailing punctuation.
+                        raw = (match.group(1) or "").strip()
+                        final_args[key] = raw.rstrip("?.!,;:").strip()
                 
                 logger.info(f"FastActionDetector: MATCHED '{text}' -> {action_type.value} (tool: {tool_name}, copy_first: {needs_copy})")
                 
@@ -1219,6 +1235,8 @@ class FastActionDetector:
                     'copy', 'cut', 'paste', 'read', 'explain', 'elaborate',
                     'summarize', 'rewrite', 'reword', 'create', 'clear', 'exit',
                     'run', 'play', 'execute', 'start', 'stop', 'recording',
+                    # Window / app focus (otherwise "Can you focus Brave?" is swallowed as conversational)
+                    'focus', 'switch', 'bring', 'activate', 'launch',
                     'see', 'look', 'analyze', 'check', 'examine', 'screen', 'display', 'monitor',
                     'move', 'click', 'hover', 'drag', 'scroll', 'mouse', 'cursor', 'mask',
                     # File / document operations

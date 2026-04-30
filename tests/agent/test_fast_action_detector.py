@@ -668,6 +668,12 @@ T("Open my mind to new possibilities", "llm",
 T("Open Gmail", "fast_action", "OPEN_WINDOW",
   description="Clear app open command")
 
+T("Can you focus on brave?", "fast_action", "OPEN_WINDOW",
+  description="Polite focus/focus-on-app must not be swallowed as conversational")
+
+T("Please bring up Safari", "fast_action", "OPEN_WINDOW",
+  description="Bring up application routes to smart_open")
+
 T("Show me how to create a React component", "llm",
   category="ambiguous",
   description="'Show me how' is educational")
