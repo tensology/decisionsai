@@ -701,31 +701,47 @@
   // ── Event bindings ───────────────────────────────────────────────
   function bindEvents() {
     // Create button
-    document.getElementById("skills-create-btn").addEventListener("click", function () {
-      openSkillEditor(null);
-    });
+    var createBtn = document.getElementById("skills-create-btn");
+    if (createBtn) {
+      createBtn.addEventListener("click", function () {
+        openSkillEditor(null);
+      });
+    }
 
     // Editor modal
-    document.getElementById("skill-editor-close").addEventListener("click", closeSkillEditor);
-    document.getElementById("skill-editor-cancel").addEventListener("click", closeSkillEditor);
-    document.getElementById("skill-editor-save").addEventListener("click", saveSkill);
-    document.getElementById("skill-editor-delete").addEventListener("click", deleteSkill);
-    document.getElementById("skill-editor-modal").addEventListener("click", function (e) {
-      if (e.target === this) closeSkillEditor();
-    });
+    var editorClose = document.getElementById("skill-editor-close");
+    var editorCancel = document.getElementById("skill-editor-cancel");
+    var editorSave = document.getElementById("skill-editor-save");
+    var editorDelete = document.getElementById("skill-editor-delete");
+    var editorModal = document.getElementById("skill-editor-modal");
+    if (editorClose) editorClose.addEventListener("click", closeSkillEditor);
+    if (editorCancel) editorCancel.addEventListener("click", closeSkillEditor);
+    if (editorSave) editorSave.addEventListener("click", saveSkill);
+    if (editorDelete) editorDelete.addEventListener("click", deleteSkill);
+    if (editorModal) {
+      editorModal.addEventListener("click", function (e) {
+        if (e.target === this) closeSkillEditor();
+      });
+    }
     // Ctrl+S / Cmd+S in editor
-    document.getElementById("skill-editor-content").addEventListener("keydown", function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        saveSkill();
-      }
-    });
-    document.getElementById("skill-editor-name").addEventListener("keydown", function (e) {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
-        e.preventDefault();
-        saveSkill();
-      }
-    });
+    var editorContent = document.getElementById("skill-editor-content");
+    var editorName = document.getElementById("skill-editor-name");
+    if (editorContent) {
+      editorContent.addEventListener("keydown", function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+          e.preventDefault();
+          saveSkill();
+        }
+      });
+    }
+    if (editorName) {
+      editorName.addEventListener("keydown", function (e) {
+        if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+          e.preventDefault();
+          saveSkill();
+        }
+      });
+    }
 
     // Search
     var searchInput = document.getElementById("skills-search");
