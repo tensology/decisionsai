@@ -118,7 +118,7 @@ class ClipboardActionTool(BaseTool):
             "what's in the clipboard", "what is in the clipboard",
             "get the clipboard", "get clipboard", "show clipboard",
             "read my clipboard", "read the clipboard", 
-            "see what's in", "see what is in", "see my clipboard"
+            "see my clipboard"
         ]
     
     def _run(self, action: str = "", text: str = "", **kwargs) -> str:
@@ -151,7 +151,7 @@ class ClipboardActionTool(BaseTool):
                 elif "read" in text_lower and "this" in text_lower:
                     action = "read"
                     logger.info("Detected: read")
-                elif any(phrase in text_lower for phrase in ["what's in the clipboard", "what is in the clipboard", "get the clipboard", "get clipboard", "get what's in", "get what is in", "go get", "go get what", "go get what's", "go get what is", "show clipboard", "show me clipboard", "what's on the clipboard", "read my clipboard", "read the clipboard", "see what's in", "see what is in", "see my clipboard"]):
+                elif any(phrase in text_lower for phrase in ["what's in the clipboard", "what is in the clipboard", "get the clipboard", "get clipboard", "get what's in", "get what is in", "go get", "go get what", "go get what's", "go get what is", "show clipboard", "show me clipboard", "what's on the clipboard", "read my clipboard", "read the clipboard", "see my clipboard"]):
                     action = "get"
                     logger.info("Detected: get clipboard")
                 elif "get" in text_lower and "clipboard" in text_lower:

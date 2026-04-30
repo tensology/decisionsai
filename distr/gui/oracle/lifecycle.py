@@ -38,6 +38,33 @@ def _quit_confirmation_icon_path():
 class LifecycleMixin:
     """Restart and exit handling for OracleWindow."""
 
+    def _position_dialog_on_oracle_screen(self, dialog: QtWidgets.QDialog) -> None:
+        """Center a dialog on the same screen as the oracle window."""
+        try:
+            target_screen = None
+            # Prefer the screen backing this window handle.
+            if self.windowHandle() is not None:
+                target_screen = self.windowHandle().screen()
+            # Fallback to the widget's screen.
+            if target_screen is None:
+                target_screen = self.screen()
+            # Final fallback: detect screen from oracle center point.
+            if target_screen is None:
+                center = self.frameGeometry().center()
+                target_screen = QApplication.screenAt(center)
+            if target_screen is None:
+                return
+
+            geom = target_screen.availableGeometry()
+            # Ensure the dialog has a real size before centering.
+            dialog.adjustSize()
+            dialog.move(
+                geom.x() + (geom.width() - dialog.width()) // 2,
+                geom.y() + (geom.height() - dialog.height()) // 2,
+            )
+        except Exception as e:
+            logger.debug("[EXIT] Failed positioning quit dialog on oracle screen: %s", e)
+
     def _force_hide_oracle_for_exit(self):
         """Hide avatar/oracle immediately (not deferred) before shutdown steps."""
         try:
@@ -147,7 +174,7 @@ class LifecycleMixin:
 
     def exit_app(self, confirm: bool = True):
         if confirm:
-            msg = QtWidgets.QMessageBox(None)
+            msg = QtWidgets.QMessageBox(self)
             msg.setWindowTitle("Quit")
             msg.setText("Quit DecisionsAI?")
             msg.setIcon(QtWidgets.QMessageBox.Icon.NoIcon)
@@ -168,6 +195,7 @@ class LifecycleMixin:
                 | QtWidgets.QMessageBox.StandardButton.No
             )
             msg.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+            self._position_dialog_on_oracle_screen(msg)
             if msg.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
                 return
 
