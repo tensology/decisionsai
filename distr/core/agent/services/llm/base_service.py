@@ -74,7 +74,9 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._load_tools(chat_manager, tts_service, model_name, event_queue, command_queue, confirmation_results_dict)
 
         if self.chat_manager:
+            self.chat_manager.on("current_chat_changed", self.on_chat_changed)
             self.chat_manager.on("chat_deleted", self.on_chat_deleted)
+            self.chat_manager.on("chat_cleared", self.on_chat_cleared)
             try:
                 signal_manager.chat_cleared.connect(self.on_chat_cleared)
             except RuntimeError:
@@ -92,6 +94,14 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._processed_fast_actions = set()
         self._generation_requested_at = 0.0
         self._background_chain = None
+
+        # Initialize message context from the currently selected chat so the first
+        # post-restart utterance has real history instead of a fresh-session view.
+        if self.chat_manager:
+            try:
+                self.on_chat_changed(self.chat_manager.get_current_chat())
+            except Exception as e:
+                logger.warning("%s: Failed to initialize chat context: %s", self.SERVICE_NAME, e)
 
         logger.info("%s initialized with model: %s", self.SERVICE_NAME, self._model_name)
 

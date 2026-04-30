@@ -1606,7 +1606,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.about_window.activateWindow()
 
 
-    def show_settings_web(self):
+    def show_settings_web(self, _retry_count=0, _max_retries=6):
         """Open the web-based settings page in the default browser"""
         try:
             from distr.gui.web.server import get_unified_server
@@ -1618,19 +1618,26 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 webbrowser.open(settings_url)
                 logger.info(f"Opened web settings at {settings_url}")
             else:
+                if _retry_count < _max_retries:
+                    if _retry_count == 0:
+                        logger.info("Unified server not ready yet; retrying settings open...")
+                    QTimer.singleShot(
+                        500,
+                        lambda: self.show_settings_web(_retry_count=_retry_count + 1, _max_retries=_max_retries),
+                    )
+                    return
                 logger.warning("Unified server is not ready, cannot open web settings")
-                # Show error message to user
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(
                     self,
                     "Server Not Ready",
-                    "The web server is not ready yet. Please try again in a moment.",
+                    "The web server is still starting. Please try again in a moment.",
                     QMessageBox.StandardButton.Ok
                 )
         except Exception as e:
             logger.error(f"Failed to open web settings: {e}", exc_info=True)
 
-    def _open_web_url(self, path):
+    def _open_web_url(self, path, _retry_count=0, _max_retries=6):
         """Open a path on the unified web server in the default browser."""
         try:
             from distr.gui.web.server import get_unified_server
@@ -1641,12 +1648,20 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 webbrowser.open(url)
                 logger.info(f"Opened {url}")
             else:
+                if _retry_count < _max_retries:
+                    if _retry_count == 0:
+                        logger.info("Unified server not ready yet; retrying URL open: %s", path)
+                    QTimer.singleShot(
+                        500,
+                        lambda: self._open_web_url(path, _retry_count=_retry_count + 1, _max_retries=_max_retries),
+                    )
+                    return
                 logger.warning("Unified server is not ready, cannot open web URL")
                 from PyQt6.QtWidgets import QMessageBox
                 QMessageBox.warning(
                     self,
                     "Server Not Ready",
-                    "The web server is not ready yet. Please try again in a moment.",
+                    "The web server is still starting. Please try again in a moment.",
                     QMessageBox.StandardButton.Ok
                 )
         except Exception as e:

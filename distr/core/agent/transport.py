@@ -495,7 +495,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             # Schedule playback_finished on full response end
             if self.event_queue and isinstance(frame, (LLMFullResponseEndFrame, EndFrame)):
                 if self._total_output_bytes <= 0:
-                    logger.warning("Transport: No audio produced, finishing immediately")
+                    # Common when a response is interrupted before any audio is emitted.
+                    if self._pipeline_cut or self._state == AudioPlaybackState.IDLE:
+                        logger.debug("Transport: No audio produced after interruption, finishing immediately")
+                    else:
+                        logger.warning("Transport: No audio produced, finishing immediately")
                     if self._aec_ref_buf is not None:
                         self._aec_ref_buf.set_active(False)
                     await self._transition_to(AudioPlaybackState.COMPLETED)

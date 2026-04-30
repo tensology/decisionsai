@@ -8,6 +8,7 @@ people lookups, and general queries. Plays a search sound when searching.
 import logging
 import os
 import platform
+import re
 import subprocess
 from typing import Optional, Any
 
@@ -289,6 +290,14 @@ class WebSearchTool(BaseTool):
     def _extract_news_topic(self, query: str) -> str:
         """Extract topic from a news query."""
         query_lower = query.lower()
+
+        # Generic "top news today" style questions should stay generic.
+        if (
+            "news" in query_lower
+            and ("top" in query_lower or "headline" in query_lower or "happening" in query_lower)
+            and not re.search(r"\babout\s+\w+|\bon\s+\w+", query_lower)
+        ):
+            return "top news headlines today"
         
         # Remove common news-related words to get the topic
         remove_words = ['news', 'latest', 'headlines', 'breaking', 'about', 'on', 'the', 
@@ -336,6 +345,15 @@ class WebSearchTool(BaseTool):
                 topic = self._extract_news_topic(query)
                 logger.info(f"WebSearch: Searching news for '{topic}'")
                 results = search_news(topic)
+                if not results:
+                    # News endpoints can fail (403/timeout/decode). Fall back to general
+                    # search so users still get something actionable.
+                    fallback_query = query.strip() or f"{topic} news"
+                    logger.warning(
+                        "WebSearch: News provider returned no results; falling back to web search for '%s'",
+                        fallback_query,
+                    )
+                    results = search_web(f"{fallback_query} latest")
                 response = format_news_results(results, topic)
                 
             else:

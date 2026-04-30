@@ -46,6 +46,22 @@ class OllamaResponseMixin:
             return current_chat_id, False, ""
 
         try:
+            # Recovery path for restarted agent processes: if in-memory context has
+            # only system + current turn, reload persisted chat history.
+            non_system_count = sum(1 for m in self._messages if m.get('role') != 'system')
+            if non_system_count <= 1 and self.chat_manager:
+                try:
+                    persisted = self.chat_manager.get_chat_history(current_chat_id)
+                    persisted_conv = [m for m in persisted if m.get('role') != 'system']
+                    if len(persisted_conv) > non_system_count:
+                        self._messages = [self._messages[0]] + persisted_conv if self._messages else persisted
+                        logger.info(
+                            "LLM: Rehydrated chat history after restart (%d messages)",
+                            len(persisted_conv),
+                        )
+                except Exception as rehydrate_err:
+                    logger.debug("LLM: history rehydrate skipped: %s", rehydrate_err)
+
             # Determine last user content for tool filtering
             last_user_content = ""
             for msg in reversed(self._messages):

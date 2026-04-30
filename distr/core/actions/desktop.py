@@ -9,6 +9,7 @@ import platform
 import subprocess
 import logging
 import time
+import re
 
 import pyautogui
 pyautogui.FAILSAFE = False
@@ -94,8 +95,24 @@ def open_app(name: str):
     logger.info("open_app: request='%s'", speech)
 
     # 1. URL shortcut?
+    # Require explicit phrase/word-boundary matches so single-letter shortcuts
+    # like "x" don't accidentally match unrelated text (e.g. "text editor").
+    speech_tokens = set(re.findall(r"[a-z0-9]+", speech))
     for shortcut, url in URL_SHORTCUTS.items():
-        if shortcut in speech or speech in shortcut:
+        shortcut_norm = shortcut.lower().strip()
+        shortcut_tokens = re.findall(r"[a-z0-9]+", shortcut_norm)
+        is_single_token_shortcut = len(shortcut_tokens) == 1
+
+        if is_single_token_shortcut:
+            token = shortcut_tokens[0]
+            if token and token in speech_tokens:
+                logger.info("open_app: matched URL shortcut %s -> %s", shortcut, url)
+                return open_url(url)
+            continue
+
+        # Multi-word shortcut: match whole phrase boundaries.
+        phrase_pattern = r"\b" + re.escape(shortcut_norm) + r"\b"
+        if re.search(phrase_pattern, speech):
             logger.info("open_app: matched URL shortcut %s -> %s", shortcut, url)
             return open_url(url)
 

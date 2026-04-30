@@ -447,6 +447,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 if not full_response and not _tc:
                     logger.error("LLM: [small-path] returned empty response. Emitting fallback message.")
                     full_response = "I'm having trouble connecting right now. Please try again in a moment."
+                    # _process_stream emits TTS frames from streamed tokens.
+                    # This fallback is assigned after streaming, so push it explicitly.
+                    if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
+                        await self.push_frame(TextFrame(text=full_response))
                     try:
                         signal_manager.typing_indicator_changed.emit(True)
                     except RuntimeError:
@@ -699,6 +703,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if not full_response and not tool_calls:
                 logger.error("LLM: All attempts returned empty. Emitting fallback message.")
                 full_response = "I'm having trouble connecting right now. Please try again in a moment."
+                # _process_stream emits TTS frames from streamed tokens.
+                # This fallback is assigned after streaming, so push it explicitly.
+                if self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
+                    await self.push_frame(TextFrame(text=full_response))
                 try:
                     signal_manager.typing_indicator_changed.emit(True)
                 except RuntimeError:

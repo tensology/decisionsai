@@ -155,7 +155,10 @@ class WhisperSTTService(BaseSTTService):
                     except Exception as e:
                         logger.error(f"STT: Error pushing frame: {e}", exc_info=True)
                 if frame_count == 0:
-                    logger.warning("STT: run_stt() did not yield any frames!")
+                    if not self._is_hands_free:
+                        logger.debug("STT: run_stt() yielded no frames in PTT mode (likely silence/artifact)")
+                    else:
+                        logger.warning("STT: run_stt() did not yield any frames!")
                     # CRITICAL: Even if STT produces no frames, we should still try to send an empty TranscriptionFrame
                     # This allows the LLM to check for "change mode" even if transcription fails
                     # Only do this in PTT mode to allow mode switching
@@ -229,7 +232,7 @@ class WhisperSTTService(BaseSTTService):
                 if not self._is_hands_free:
                     # PTT mode: send most transcriptions to LLM, but still filter obvious audio artifacts
                     if not is_change_mode_command and text_lower in self._audio_artifacts:
-                        logger.warning(f"🚫 STT Rejected (audio artifact in PTT mode): '{text}'")
+                        logger.debug(f"STT: Rejected audio artifact in PTT mode: '{text}'")
                     else:
                         logger.debug(f"STT: PTT mode - sending transcription to LLM: '{text}'")
                         frame = TranscriptionFrame(text=text, user_id="", timestamp=time.time())

@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
@@ -50,6 +50,7 @@ class KanbanTicketTool(BaseTool):
 
     ACTIONS (pass as the 'action' parameter):
       list_boards        — list all boards
+      get_active_board   — show which board is currently active/in use
       create_board       — create a new board (requires board_name)
       delete_board       — delete a board (requires board_id or board_name)
       list_lanes         — list lanes for a board (requires board_id or board_name)
@@ -106,6 +107,7 @@ class KanbanTicketTool(BaseTool):
         "Full CRUD for Ticket boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
+        "Use action='get_active_board' to see the active local board in use. "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
         "Use action='create_board' with board_name to create a new board. "
         "Use action='activate_board' with board_name to set a board as the active/default board. "
@@ -155,6 +157,8 @@ class KanbanTicketTool(BaseTool):
             "create a ticket board ticket", "ticket board ticket",
             "add to board", "add to the board",
             "list boards", "show boards", "my boards",
+            "active board", "current board", "board in use", "in use board",
+            "which board is active", "what is the active board",
             "list tickets", "show tickets",
         ]
 
@@ -221,18 +225,58 @@ class KanbanTicketTool(BaseTool):
                     return {"id": b.id, "name": b.name, "description": b.description or "",
                             "default_project_id": b.default_project_id}
             else:
-                # No board specified — use the in_use board
-                b = s.query(KanbanBoard).filter(KanbanBoard.in_use == True).first()
-                if b:
-                    return {"id": b.id, "name": b.name, "description": b.description or "",
-                            "default_project_id": b.default_project_id}
-                # Fall back to single board if only one exists
-                boards = s.query(KanbanBoard).all()
-                if len(boards) == 1:
-                    b = boards[0]
-                    return {"id": b.id, "name": b.name, "description": b.description or "",
-                            "default_project_id": b.default_project_id}
+                active_board, _was_recovered = self._get_active_board(auto_recover=True)
+                if active_board:
+                    return active_board
         return None
+
+    def _get_active_board(self, auto_recover: bool = False) -> tuple[Optional[Dict], bool]:
+        """Return active board and whether it was auto-recovered."""
+        from distr.core.db.kanban import KanbanBoard
+        with self._get_session() as s:
+            active = (
+                s.query(KanbanBoard)
+                .filter(KanbanBoard.in_use == True)
+                .order_by(KanbanBoard.modified_date.desc(), KanbanBoard.id.desc())
+                .first()
+            )
+            if active:
+                return ({
+                    "id": active.id,
+                    "name": active.name,
+                    "description": active.description or "",
+                    "default_project_id": active.default_project_id,
+                }, False)
+
+            boards = (
+                s.query(KanbanBoard)
+                .filter(KanbanBoard.archived == False)
+                .order_by(KanbanBoard.modified_date.desc(), KanbanBoard.id.desc())
+                .all()
+            )
+            if not boards:
+                return (None, False)
+
+            # Keep behavior deterministic for callers even when no active board exists.
+            candidate = boards[0]
+            if not auto_recover:
+                return ({
+                    "id": candidate.id,
+                    "name": candidate.name,
+                    "description": candidate.description or "",
+                    "default_project_id": candidate.default_project_id,
+                }, False)
+
+            # Self-heal: enforce one active board so "in use" queries remain consistent.
+            s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
+            candidate.in_use = True
+            s.commit()
+            return ({
+                "id": candidate.id,
+                "name": candidate.name,
+                "description": candidate.description or "",
+                "default_project_id": candidate.default_project_id,
+            }, True)
 
     def _get_lanes(self, board_id: int) -> List[Dict]:
         from distr.core.db.kanban import KanbanLane
@@ -498,8 +542,27 @@ class KanbanTicketTool(BaseTool):
             logger.info("KanbanTicketTool: action=%s board_name=%s board_id=%s title=%s",
                         action, board_name, board_id, title[:50] if title else "")
 
+            # If the model routes to list_boards for an active-board question,
+            # force a concise active-board response instead of dumping all boards.
+            text_norm = (text or "").strip().lower()
+            if action == "list_boards" and any(
+                phrase in text_norm
+                for phrase in (
+                    "which board is active",
+                    "what is the active board",
+                    "what's the active board",
+                    "active board",
+                    "current board",
+                    "board in use",
+                    "in use board",
+                )
+            ):
+                return self._action_get_active_board()
+
             if action == "list_boards":
                 return self._action_list_boards()
+            elif action in ("get_active_board", "active_board", "which_board_is_active", "current_board"):
+                return self._action_get_active_board()
             elif action == "create_board":
                 return self._action_create_board(board_name or text)
             elif action == "delete_board":
@@ -590,7 +653,7 @@ class KanbanTicketTool(BaseTool):
                 return self._action_whatsapp_send_message(jid=jid, jid_phone=jid_phone, text=text or description or title)
             else:
                 return (
-                    f"Unknown action '{action}'. Valid actions: list_boards, create_board, delete_board, "
+                    f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
                     "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
@@ -607,10 +670,13 @@ class KanbanTicketTool(BaseTool):
     # ── Action implementations ────────────────────────────────────────────
 
     def _action_list_boards(self) -> str:
+        active_board, _ = self._get_active_board(auto_recover=True)
+        active_id = active_board["id"] if active_board else None
         boards = self._all_boards()
         lines = []
         for b in boards:
-            lines.append(f"Board '{b['name']}' (ID {b['id']}, local)")
+            marker = ", ACTIVE" if active_id is not None and b["id"] == active_id else ""
+            lines.append(f"Board '{b['name']}' (ID {b['id']}, local{marker})")
 
         # Also fetch external boards
         try:
@@ -625,6 +691,14 @@ class KanbanTicketTool(BaseTool):
         if not lines:
             return "No Ticket boards found. You can create one in the Board UI."
         return "Available boards:\n" + "\n".join(lines)
+
+    def _action_get_active_board(self) -> str:
+        board, was_recovered = self._get_active_board(auto_recover=True)
+        if not board:
+            return "No local Ticket boards found."
+        if was_recovered:
+            return f"No board was previously marked active. I set '{board['name']}' (ID {board['id']}) as active."
+        return f"Active board is '{board['name']}' (ID {board['id']})."
 
     def _fetch_external_boards(self) -> Dict:
         """Fetch Trello and Jira boards from connected accounts."""
