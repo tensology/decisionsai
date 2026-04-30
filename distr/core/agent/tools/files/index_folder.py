@@ -135,7 +135,7 @@ class IndexFolderTool(BaseTool):
             try:
                 from distr.core.settings import load_settings_from_db
                 settings = load_settings_from_db()
-                model_name = settings.get('agent_model', 'qwen3:8b') or 'qwen3:8b'
+                model_name = settings.get('agent_model', 'deepseek-v4-pro:cloud') or 'deepseek-v4-pro:cloud'
                 exclude_text = settings.get('excluded_files', '')
                 exclude_extensions = None
                 if exclude_text:
@@ -146,7 +146,7 @@ class IndexFolderTool(BaseTool):
                     ]
             except Exception as e:
                 logger.warning(f"Could not load settings, using defaults: {e}")
-                model_name = 'qwen3:8b'
+                model_name = 'deepseek-v4-pro:cloud'
                 exclude_extensions = None
             
             # Index the folder

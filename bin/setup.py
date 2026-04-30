@@ -422,7 +422,7 @@ def setup(skip_model_pull=False, install_optional=False):
     except Exception as _e:
         print(f"Could not detect RAM ({_e}), using defaults for 16 GB")
         ram_gb = 16.0
-        rec = {"conversational": "minimax-m2.5:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
+        rec = {"conversational": "deepseek-v4-pro:cloud", "coding": "glm-5.1:cloud", "vision": "qwen3-vl:235b-cloud"}
 
     # Write recommended models to a file so the DB can pick them up on first creation
     try:
@@ -475,103 +475,102 @@ def setup(skip_model_pull=False, install_optional=False):
         for model_name, label in default_models:
             print(f"Skipping automatic model pull for {model_name} ({label})")
             print_manual_pull_instructions(model_name)
-        return
+    else:
+        for model_name, label in default_models:
+            if not check_model_status(model_name):
+                print(f"Pulling {label}: {model_name}...")
+                print("This may take a while depending on your internet connection.")
+                print("")
 
-    for model_name, label in default_models:
-        if not check_model_status(model_name):
-            print(f"Pulling {label}: {model_name}...")
-            print("This may take a while depending on your internet connection.")
-            print("")
-            
-            # Pull model with progress indication
-            current_progress = None
-            current_layer = None
-            manifest_started = False
-            last_update_time = datetime.now()
-            
-            try:
-                print("Downloading model manifest (usually takes 1-5 seconds)...", end='', flush=True)
-                
-                for progress in ollama.pull(model_name, stream=True):
-                    last_update_time = datetime.now()
-                    
-                    if 'status' in progress:
-                        status = progress['status']
-                        
-                        if status == 'pulling manifest':
-                            if not manifest_started:
-                                manifest_started = True
-                                print("")  # New line after manifest message
-                                print("Downloading model manifest...", end='', flush=True)
-                        elif status == 'downloading':
-                            if manifest_started:
-                                print("")  # New line after manifest completes
-                                manifest_started = False
-                            
-                            if 'digest' in progress:
-                                layer_digest = progress['digest'][:12]  # Short hash
-                                if layer_digest != current_layer:
-                                    if current_progress:
-                                        current_progress.close()
-                                    current_layer = layer_digest
-                                    current_progress = tqdm(
-                                        desc=f"Downloading layer {layer_digest}",
-                                        unit='iB',
-                                        unit_scale=True,
-                                        unit_divisor=1024,
-                                        leave=False
-                                    )
-                                
-                                if 'total' in progress and 'completed' in progress:
-                                    total = progress['total']
-                                    completed = progress['completed']
-                                    if current_progress:
-                                        current_progress.total = total
-                                        current_progress.n = completed
-                                        current_progress.refresh()
-                        elif status == 'verifying sha256 digest':
-                            if current_progress:
-                                current_progress.set_description("Verifying layer integrity")
-                                current_progress.refresh()
-                        elif status == 'writing manifest':
-                            if current_progress:
-                                current_progress.close()
-                                current_progress = None
-                            print("\nWriting model manifest...")
-                        elif status == 'success':
-                            if current_progress:
-                                current_progress.close()
-                            print(f"✓ {label}: {model_name} downloaded successfully!")
-                            print("")
-                            break
-                    
-                    # Check for timeout (if no progress for 30 seconds, show warning)
-                    if (datetime.now() - last_update_time).total_seconds() > 30:
-                        print("\n⚠ Warning: No progress update for 30 seconds. This might indicate a network issue.")
-                        print("   The download will continue, but you may want to check your internet connection.")
-                        print("   If it continues to hang, press Ctrl+C and run with --skip-model-pull to do it manually.")
-                        last_update_time = datetime.now()  # Reset timer
-                        
-            except KeyboardInterrupt:
-                if current_progress:
-                    current_progress.close()
-                print("\n\nDownload interrupted by user.")
-                print("")
-                print("To download the remaining models manually, run:")
-                for mn, _, _ in default_models:
-                    print(f"  ollama pull {mn}")
-                print("")
-                raise
-            except Exception as e:
-                if current_progress:
-                    current_progress.close()
-                print(f"\n✗ Error pulling {model_name}: {e}")
-                print(f"  You can pull it manually later: ollama pull {model_name}")
-                print("")
-                # Continue with next model instead of failing entirely
-                continue
-        else:
-            print(f"✓ {label}: {model_name} is already installed and up to date.")
+                # Pull model with progress indication
+                current_progress = None
+                current_layer = None
+                manifest_started = False
+                last_update_time = datetime.now()
+
+                try:
+                    print("Downloading model manifest (usually takes 1-5 seconds)...", end='', flush=True)
+
+                    for progress in ollama.pull(model_name, stream=True):
+                        last_update_time = datetime.now()
+
+                        if 'status' in progress:
+                            status = progress['status']
+
+                            if status == 'pulling manifest':
+                                if not manifest_started:
+                                    manifest_started = True
+                                    print("")  # New line after manifest message
+                                    print("Downloading model manifest...", end='', flush=True)
+                            elif status == 'downloading':
+                                if manifest_started:
+                                    print("")  # New line after manifest completes
+                                    manifest_started = False
+
+                                if 'digest' in progress:
+                                    layer_digest = progress['digest'][:12]  # Short hash
+                                    if layer_digest != current_layer:
+                                        if current_progress:
+                                            current_progress.close()
+                                        current_layer = layer_digest
+                                        current_progress = tqdm(
+                                            desc=f"Downloading layer {layer_digest}",
+                                            unit='iB',
+                                            unit_scale=True,
+                                            unit_divisor=1024,
+                                            leave=False
+                                        )
+
+                                    if 'total' in progress and 'completed' in progress:
+                                        total = progress['total']
+                                        completed = progress['completed']
+                                        if current_progress:
+                                            current_progress.total = total
+                                            current_progress.n = completed
+                                            current_progress.refresh()
+                            elif status == 'verifying sha256 digest':
+                                if current_progress:
+                                    current_progress.set_description("Verifying layer integrity")
+                                    current_progress.refresh()
+                            elif status == 'writing manifest':
+                                if current_progress:
+                                    current_progress.close()
+                                    current_progress = None
+                                print("\nWriting model manifest...")
+                            elif status == 'success':
+                                if current_progress:
+                                    current_progress.close()
+                                print(f"✓ {label}: {model_name} downloaded successfully!")
+                                print("")
+                                break
+
+                        # Check for timeout (if no progress for 30 seconds, show warning)
+                        if (datetime.now() - last_update_time).total_seconds() > 30:
+                            print("\n⚠ Warning: No progress update for 30 seconds. This might indicate a network issue.")
+                            print("   The download will continue, but you may want to check your internet connection.")
+                            print("   If it continues to hang, press Ctrl+C and run with --skip-model-pull to do it manually.")
+                            last_update_time = datetime.now()  # Reset timer
+
+                except KeyboardInterrupt:
+                    if current_progress:
+                        current_progress.close()
+                    print("\n\nDownload interrupted by user.")
+                    print("")
+                    print("To download the remaining models manually, run:")
+                    for mn, _, _ in default_models:
+                        print(f"  ollama pull {mn}")
+                    print("")
+                    raise
+                except Exception as e:
+                    if current_progress:
+                        current_progress.close()
+                    print(f"\n✗ Error pulling {model_name}: {e}")
+                    print(f"  You can pull it manually later: ollama pull {model_name}")
+                    print("")
+                    # Continue with next model instead of failing entirely
+                    continue
+            else:
+                print(f"✓ {label}: {model_name} is already installed and up to date.")
 
     os.makedirs("assets/tmp", exist_ok=True)
 
@@ -617,6 +616,11 @@ if __name__ == "__main__":
         help='Skip automatic Ollama model pull and show manual instructions instead'
     )
     parser.add_argument(
+        '--pull-models',
+        action='store_true',
+        help='Opt in to automatic Ollama model pulls during setup (disabled by default)'
+    )
+    parser.add_argument(
         '--manual-model',
         action='store_true',
         help='Alias for --skip-model-pull (shows manual pull instructions)'
@@ -628,7 +632,9 @@ if __name__ == "__main__":
     )
     
     args = parser.parse_args()
-    skip_pull = args.skip_model_pull or args.manual_model
+    # Default behavior: do not auto-pull Ollama models during setup.
+    # This avoids downloading local models unless the user explicitly opts in.
+    skip_pull = (not args.pull_models) or args.skip_model_pull or args.manual_model
 
     setup(
         skip_model_pull=skip_pull,

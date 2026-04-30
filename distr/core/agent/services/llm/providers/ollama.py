@@ -69,7 +69,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 from distr.core.system_resources import recommend_model
                 model_name = recommend_model()
             except Exception:
-                model_name = "qwen3:0.6b"  # absolute fallback — smallest model
+                model_name = "deepseek-v4-pro:cloud"  # absolute fallback — cloud default
 
         # --- Common state ---
         self._model_name = model_name

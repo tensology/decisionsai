@@ -606,38 +606,13 @@ else
     echo -e "${GREEN}✓${NC} Playwright Chromium already installed"
 fi
 
-# Check for Ollama and pull default model if needed
+# Check for Ollama availability (no automatic model pulls)
 check_ollama() {
     if command -v ollama &> /dev/null; then
         echo -e "${GREEN}✓${NC} Ollama found"
-        
-        # Detect system RAM and pick the right default model
-        TOTAL_RAM_GB=$("$VENV_DIR/bin/python" -c "
-from distr.core.system_resources import get_total_ram_gb, recommend_model
-ram = get_total_ram_gb()
-print(f'{ram:.0f}')
-" 2>/dev/null || echo "16")
-        
-        DEFAULT_MODEL=$("$VENV_DIR/bin/python" -c "
-from distr.core.system_resources import get_total_ram_gb, recommend_model
-print(recommend_model())
-" 2>/dev/null || echo "qwen3:8b")
-        
-        echo -e "Detected ${TOTAL_RAM_GB} GB RAM → default model: ${DEFAULT_MODEL}"
-        
-        # Check if default conversational model is installed
-        if ollama list 2>/dev/null | grep -q "$DEFAULT_MODEL"; then
-            echo -e "${GREEN}✓${NC} Ollama model $DEFAULT_MODEL is available"
-        else
-            echo -e "${YELLOW}Ollama model $DEFAULT_MODEL not found. Pulling...${NC}"
-            echo -e "${YELLOW}(This may take several minutes depending on your connection)${NC}"
-            if ollama pull "$DEFAULT_MODEL"; then
-                echo -e "${GREEN}✓${NC} Ollama model $DEFAULT_MODEL installed"
-            else
-                echo -e "${YELLOW}Warning: Failed to pull $DEFAULT_MODEL model.${NC}"
-                echo -e "${YELLOW}You can manually install it later with: ollama pull $DEFAULT_MODEL${NC}"
-            fi
-        fi
+        echo -e "Default conversational model: deepseek-v4-pro:cloud"
+        echo -e "${GREEN}✓${NC} Skipping automatic local Ollama model download"
+        echo -e "${YELLOW}Optional local models can be installed manually if needed${NC}"
     else
         echo -e "${YELLOW}Note: Ollama not found. For local LLM support, install Ollama:${NC}"
         if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -645,7 +620,7 @@ print(recommend_model())
         else
             echo "  curl -fsSL https://ollama.com/install.sh | sh"
         fi
-        echo -e "${YELLOW}Then run: ollama pull qwen3:8b${NC}"
+        echo -e "${YELLOW}No local model is required for the default cloud setup.${NC}"
     fi
 }
 

@@ -1374,12 +1374,12 @@ def run_migrations():
             settings = session.query(Settings).first()
             if settings:
                 changed = False
-                # Conversational: old local models -> minimax-m2.5:cloud
+                # Conversational: old local models -> deepseek-v4-pro:cloud
                 old_conv = ('qwen3:8b', 'qwen3:4b', 'qwen3:1.7b', 'qwen3:0.6b', 'gemma4:e2b')
                 if settings.conversational_llm_model in old_conv or settings.llm_model in old_conv or settings.agent_model in old_conv:
-                    settings.conversational_llm_model = 'minimax-m2.5:cloud'
-                    settings.llm_model = 'minimax-m2.5:cloud'
-                    settings.agent_model = 'minimax-m2.5:cloud'
+                    settings.conversational_llm_model = 'deepseek-v4-pro:cloud'
+                    settings.llm_model = 'deepseek-v4-pro:cloud'
+                    settings.agent_model = 'deepseek-v4-pro:cloud'
                     changed = True
                 # Coding: old local models -> glm-5.1:cloud
                 old_code_prefixes = ('qwen2.5-coder:', 'codegemma')
@@ -1389,7 +1389,7 @@ def run_migrations():
                     changed = True
                 if changed:
                     session.commit()
-                    logger.info("Migrated default models to cloud versions (minimax-m2.5:cloud for chat, glm-5.1:cloud for coding)")
+                    logger.info("Migrated default models to cloud versions (deepseek-v4-pro:cloud for chat, glm-5.1:cloud for coding)")
     except Exception as e:
         logger.debug(f"Cloud model migration: {e}")
 

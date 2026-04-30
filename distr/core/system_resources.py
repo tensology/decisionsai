@@ -15,23 +15,17 @@ logger = logging.getLogger(__name__)
 # Each entry: (min_ram_gb, model_name, approx_vram_gb, label)
 # NOTE: min_ram_gb accounts for ~5 GB app overhead (PyQt, pipecat, whisper, torch).
 OLLAMA_MODEL_TIERS = [
-    (0,   "minimax-m2.5:cloud", 0, "cloud — no local RAM needed"),
-    (10,  "qwen3:4b",    3.5,  "local — fits 10-11 GB RAM"),
-    (12,  "qwen3:8b",    6.0,  "local — needs 12+ GB RAM"),
+    (0,   "deepseek-v4-pro:cloud", 0, "cloud — no local RAM needed"),
 ]
 
 # Vision model tiers
 OLLAMA_VISION_TIERS = [
     (0,   "qwen3-vl:235b-cloud",  0, "cloud — no local RAM needed"),
-    (12,  "qwen3-vl:2b",          1.5, "local — light"),
-    (16,  "qwen3-vl:8b",          5.0, "local — default"),
 ]
 
 # Coding model tiers
 OLLAMA_CODING_TIERS = [
     (0,   "glm-5.1:cloud",       0, "cloud — no local RAM needed"),
-    (10,  "qwen2.5-coder:3b",   2.5, "local — light"),
-    (12,  "qwen2.5-coder:7b",   5.0, "local — default"),
 ]
 
 
