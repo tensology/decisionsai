@@ -1207,6 +1207,20 @@ class FastActionDetector:
         # Very short inputs are likely commands
         if len(text.split()) <= 2:
             return False
+
+        # Questions about the assistant's identity/capabilities must reach the LLM as a normal
+        # user turn — not the generic r'^(can you|…)' conversational shortcut (otherwise the
+        # model often emits bogus tool_calls and the UI shows nothing useful).
+        _assistant_meta = re.compile(
+            r"\b(?:"
+            r"what\s+do\s+you\s+do|who\s+are\s+you|what\s+can\s+you\s+do|what\s+are\s+your\s+capabilities|"
+            r"how\s+can\s+you\s+help|tell\s+me\s+about\s+yourself|tell\s+me\s+what\s+you\s+do|"
+            r"can\s+you\s+tell\s+me\s+what\s+you\s+do|help\s+me\s+with\s+you"
+            r")\b",
+            re.IGNORECASE,
+        )
+        if _assistant_meta.search(text):
+            return False
         
         # Exclude action commands from being marked as conversational
         action_command_patterns = [

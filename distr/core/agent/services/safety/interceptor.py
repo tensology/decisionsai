@@ -10,6 +10,7 @@ import re
 import time
 from typing import List, Tuple, Optional, Dict
 from distr.core.files.safety import get_file_safety, OperationType
+from distr.core.files.user_library_guard import is_protected_library_root
 from distr.gui.dialogs.file_operation import confirm_file_operations_with_plan
 from distr.gui.dialogs.rename_preview import show_rename_preview, extract_renames_from_code
 
@@ -449,20 +450,38 @@ def check_and_confirm_code_execution(
         ask_file_changes = settings.get('initiative_ask_file_changes', True)
         logger.debug(f"[FILE SAFETY] initiative_ask_file_changes setting: {ask_file_changes}")
         
-        # If user has disabled confirmations, auto-approve all operations
+        # If user has disabled confirmations, auto-approve low-impact operations only.
+        # Never auto-approve destructive code — that bypass wiped user folders when the model mis-routed.
         if not ask_file_changes:
-            logger.debug("[FILE SAFETY] File operation confirmations disabled in initiative settings - auto-approving")
-            file_safety.log_operation('bypassed_confirmation_disabled', {
-                'code': code[:500],
-                'language': language,
-                'task': task,
-                'operation_type': op_type.value
-            })
-            return (True, quick_plan or {
-                'intent': intent,
-                'operations': operations,
-                'auto_approved': True
-            })
+            if file_safety.cannot_bypass_file_confirmation(
+                plan=quick_plan,
+                classified_operation_type=op_type,
+            ):
+                logger.warning(
+                    "[FILE SAFETY] initiative_ask_file_changes is False but operation is destructive/high-impact — "
+                    "confirmation is still required"
+                )
+                file_safety.log_operation('mandatory_confirmation_enforced', {
+                    'code': code[:500],
+                    'language': language,
+                    'task': task,
+                    'classification': op_type.value,
+                    'reason': 'destructive_or_bulk_requires_dialog',
+                })
+                # Fall through to confirmation UI below
+            else:
+                logger.debug("[FILE SAFETY] File operation confirmations disabled — auto-approving low-impact operation")
+                file_safety.log_operation('bypassed_confirmation_disabled', {
+                    'code': code[:500],
+                    'language': language,
+                    'task': task,
+                    'operation_type': op_type.value
+                })
+                return (True, quick_plan or {
+                    'intent': intent,
+                    'operations': operations,
+                    'auto_approved': True
+                })
     except Exception as e:
         logger.warning(f"[FILE SAFETY] Could not check initiative_ask_file_changes setting: {e}")
         logger.debug("[FILE SAFETY] Defaulting to require confirmation (setting check failed)")
@@ -790,9 +809,42 @@ def check_and_confirm_direct_file_operation(
         'plan': plan,
         'task': task
     })
+
+    # Hard deny: never delete standard library folder roots (Downloads, Documents, …) via tooling.
+    if operation_type == 'DELETE':
+        try:
+            resolved_root = os.path.realpath(source_path)
+        except OSError:
+            resolved_root = source_path
+        if is_protected_library_root(resolved_root):
+            logger.error(
+                "[GUARDRAIL] Blocked DELETE on protected library/home root: %s",
+                resolved_root,
+            )
+            file_safety.log_operation('blocked_protected_library_root', {
+                'operation_type': operation_type,
+                'source_path': source_path,
+                'resolved_path': resolved_root,
+                'originating_pathway': originating_pathway,
+            })
+            return (False, plan)
+
+        try:
+            if os.path.isdir(source_path):
+                logger.error(
+                    "[GUARDRAIL] Blocked DELETE on directory (bulk delete policy): %s",
+                    source_path,
+                )
+                file_safety.log_operation('blocked_directory_bulk_delete', {
+                    'operation_type': operation_type,
+                    'source_path': source_path,
+                    'originating_pathway': originating_pathway,
+                })
+                return (False, plan)
+        except OSError:
+            pass
     
-    # Check if always_confirm_file_operations is enabled
-    # Respect user's preference - if disabled, auto-approve all operations
+    # Respect user's preference to skip *routine* prompts — never for DELETE or bulk/high-risk plans.
     try:
         from distr.core.settings import load_settings_from_db
         settings = load_settings_from_db()
@@ -800,13 +852,38 @@ def check_and_confirm_direct_file_operation(
         logger.debug(f"[GUARDRAIL] initiative_ask_file_changes setting: {ask_file_changes}")
         
         if not ask_file_changes:
-            logger.debug(f"[GUARDRAIL] File operation confirmations disabled in initiative settings - auto-approving {operation_type}")
-            file_safety.log_operation('bypassed_confirmation_disabled', {
-                'operation_type': operation_type,
-                'source_path': source_path,
-                'plan': plan
-            })
-            return (True, plan)
+            if file_safety.cannot_bypass_file_confirmation(
+                operation_type=operation_type,
+                plan=plan,
+            ):
+                logger.warning(
+                    "[GUARDRAIL] initiative_ask_file_changes is False but %s on %s requires explicit confirmation "
+                    "(destructive or bulk) — showing dialog or denying if no GUI",
+                    operation_type,
+                    source_path,
+                )
+                file_safety.log_operation('mandatory_confirmation_enforced', {
+                    'operation_type': operation_type,
+                    'source_path': source_path,
+                    'plan_summary': {
+                        'intent': plan.get('intent'),
+                        'file_count': plan.get('file_count'),
+                        'will_delete': plan.get('will_delete'),
+                        'high_risk': plan.get('high_risk'),
+                    },
+                    'reason': 'destructive_or_bulk_requires_dialog',
+                })
+                # Fall through — must confirm or deny safely below
+            else:
+                logger.debug(
+                    f"[GUARDRAIL] File confirmations disabled — auto-approving low-impact {operation_type}"
+                )
+                file_safety.log_operation('bypassed_confirmation_disabled', {
+                    'operation_type': operation_type,
+                    'source_path': source_path,
+                    'plan': plan
+                })
+                return (True, plan)
     except Exception as e:
         logger.warning(f"[GUARDRAIL] Could not check initiative_ask_file_changes setting: {e}")
         logger.debug(f"[GUARDRAIL] Defaulting to require confirmation (setting check failed)")

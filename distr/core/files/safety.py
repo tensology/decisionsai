@@ -521,6 +521,52 @@ class FileOperationSafety:
                     reasons.append("Will overwrite existing files (paths determined at runtime)")
         
         return len(reasons) > 0, reasons
+
+    def cannot_bypass_file_confirmation(
+        self,
+        *,
+        operation_type: Optional[str] = None,
+        plan: Optional[Dict] = None,
+        classified_operation_type: Optional[OperationType] = None,
+    ) -> bool:
+        """
+        When True, the user must see an explicit confirmation dialog even if
+        ``initiative_ask_file_changes`` is turned off.
+
+        Turning off routine prompts must never silently approve mass deletes,
+        recursive wipes of library folders, or other catastrophic filesystem ops.
+        """
+        if classified_operation_type == OperationType.DESTRUCTIVE:
+            return True
+
+        ot = (operation_type or "").strip().upper()
+        if ot == "DELETE":
+            return True
+
+        if not plan:
+            return False
+
+        if plan.get("will_delete"):
+            return True
+        if plan.get("high_risk"):
+            return True
+
+        threshold = self.MAX_FILES_WITHOUT_EXTRA_CONFIRMATION
+        fc = int(plan.get("file_count") or 0)
+        if fc > threshold:
+            return True
+
+        for key in (
+            "files_to_delete",
+            "files_to_move",
+            "files_to_copy",
+            "files_to_modify",
+            "files_to_create",
+        ):
+            if int(plan.get(key) or 0) > threshold:
+                return True
+
+        return False
     
     def generate_plan(self, operations: List[Dict], task: str = "") -> Dict[str, any]:
         """

@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -1668,12 +1669,13 @@ class KanbanTicketTool(BaseTool):
             for m in msgs:
                 m.processed = True
                 m.snapshot_group = snapshot_group
-                if m.media_local_path and os.path.exists(m.media_local_path):
-                    safe_name = os.path.basename(m.media_local_path)
+                wa_disk = resolve_whatsapp_media_disk_path(m.media_local_path or "")
+                if wa_disk and os.path.exists(wa_disk):
+                    safe_name = os.path.basename(wa_disk)
                     s.add(KanbanTicketFile(
                         ticket_id=ticket.id,
                         filename=safe_name,
-                        file_path=m.media_local_path,
+                        file_path=wa_disk,
                         description=f"WhatsApp {m.media_type or 'media'}: {safe_name}",
                     ))
 

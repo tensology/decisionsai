@@ -17,6 +17,10 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.core.integrations.whatsapp.paths import (
+    media_path_for_database,
+    resolve_whatsapp_media_disk_path,
+)
 from distr.core.db import get_session, WhatsAppMessage
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, KanbanTicketFile
 from distr.gui.web.security import is_allowed_local_origin
@@ -331,9 +335,10 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             msg = s.query(WhatsAppMessage).get(message_id)
             if not msg:
                 raise HTTPException(404, "Message not found")
-            if msg.media_local_path and os.path.exists(msg.media_local_path):
+            disk_path = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
+            if disk_path and os.path.exists(disk_path):
                 try:
-                    os.remove(msg.media_local_path)
+                    os.remove(disk_path)
                 except Exception:
                     pass
             s.delete(msg)
@@ -345,9 +350,10 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         with get_session() as s:
             msgs = s.query(WhatsAppMessage).filter(WhatsAppMessage.jid_phone == jid_phone).all()
             for msg in msgs:
-                if msg.media_local_path and os.path.exists(msg.media_local_path):
+                disk_path = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
+                if disk_path and os.path.exists(disk_path):
                     try:
-                        os.remove(msg.media_local_path)
+                        os.remove(disk_path)
                     except Exception:
                         pass
             count = len(msgs)
@@ -362,9 +368,10 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             msgs = s.query(WhatsAppMessage).all()
             chat_ids = {m.jid_phone for m in msgs if m.jid_phone}
             for msg in msgs:
-                if msg.media_local_path and os.path.exists(msg.media_local_path):
+                disk_path = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
+                if disk_path and os.path.exists(disk_path):
                     try:
-                        os.remove(msg.media_local_path)
+                        os.remove(disk_path)
                     except Exception:
                         pass
             deleted = len(msgs)
@@ -449,11 +456,12 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             msg = s.query(WhatsAppMessage).get(message_id)
             if not msg:
                 raise HTTPException(404, "Message not found")
-            local_path = (msg.media_local_path or "").strip()
-            if not local_path:
+            stored_path = (msg.media_local_path or "").strip()
+            if not stored_path:
                 raise HTTPException(409, "Media not cached yet. Open/download the media first.")
 
-            if not os.path.exists(local_path):
+            local_path = resolve_whatsapp_media_disk_path(stored_path)
+            if not local_path or not os.path.exists(local_path):
                 raise HTTPException(404, "Media file not found on disk")
 
             media_type = msg.media_type or ""
@@ -539,13 +547,6 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         if os.environ.get("DEBUG", "").upper() == "TRUE":
             relay_base = "http://localhost:8090/api/whatsapp"
 
-        def _resolve_local_media_path(raw_path: str) -> str:
-            media_dir = os.path.realpath(os.path.join(DB_DIR, "whatsapp_media"))
-            basename = os.path.basename(raw_path or "")
-            if not basename:
-                return ""
-            return os.path.realpath(os.path.join(media_dir, basename))
-
         def _hints_from_raw(msg_row: WhatsAppMessage) -> tuple[str, str]:
             """Return (whatsapp_message_id, relay_media_path) from row + raw_data JSON."""
             wa = (msg_row.message_id or "").strip()
@@ -590,7 +591,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         # ── M4A format request (Safari/iOS) ──────────────────────────────
         if format == "m4a" and msg_media_local_path:
             # Look for M4A transcode alongside the OGG file
-            ogg_path = _resolve_local_media_path(msg_media_local_path)
+            ogg_path = resolve_whatsapp_media_disk_path(msg_media_local_path)
             m4a_path = os.path.splitext(ogg_path)[0] + ".m4a"
             if os.path.exists(m4a_path):
                 return FileResponse(m4a_path, media_type="audio/mp4")
@@ -617,7 +618,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
 
             if not msg_media_local_path:
                 raise HTTPException(404, "Media not available yet — open the message once to cache audio")
-            local_src = _resolve_local_media_path(msg_media_local_path)
+            local_src = resolve_whatsapp_media_disk_path(msg_media_local_path)
             if not local_src or not os.path.exists(local_src):
                 raise HTTPException(404, "Media file not found")
             mp3_path = os.path.splitext(local_src)[0] + ".wa.mp3"
@@ -642,7 +643,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
 
         if msg_media_local_path:
             media_dir = os.path.realpath(os.path.join(DB_DIR, "whatsapp_media"))
-            full_path = _resolve_local_media_path(msg_media_local_path)
+            full_path = resolve_whatsapp_media_disk_path(msg_media_local_path)
             if not full_path:
                 raise HTTPException(404, "Media path is empty")
             if not full_path.startswith(media_dir):
@@ -723,7 +724,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             with get_session() as upd_s:
                 db_msg = upd_s.query(WhatsAppMessage).get(message_id)
                 if db_msg:
-                    db_msg.media_local_path = dest
+                    db_msg.media_local_path = media_path_for_database(dest)
                     db_msg.media_file_length = len(media_bytes)
                     if not db_msg.media_filename:
                         db_msg.media_filename = filename
@@ -823,12 +824,13 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             s.add(ticket)
             msg.processed = True
             msg.processed_date = datetime.utcnow()
-            if msg.media_local_path and os.path.exists(msg.media_local_path):
-                safe_name = os.path.basename(msg.media_local_path)
+            wa_disk = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
+            if wa_disk and os.path.exists(wa_disk):
+                safe_name = os.path.basename(wa_disk)
                 ticket_file = KanbanTicketFile(
                     ticket_id=ticket.id if ticket.id else 0,
                     filename=safe_name,
-                    file_path=msg.media_local_path,
+                    file_path=wa_disk,
                     description=f"WhatsApp {msg.media_type}: {safe_name}" if msg.media_type else safe_name,
                 )
                 s.flush()

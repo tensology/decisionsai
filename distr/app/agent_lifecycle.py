@@ -40,7 +40,12 @@ class AgentLifecycleMixin:
                     f.write(f"{time.strftime('%Y-%m-%d %H:%M:%S')} Agent process died (exitcode={exitcode})\n")
             except Exception as e:
                 logger.debug("Could not write agent crash log: %s", e)
-            self.reload_agent_session(skip_welcome=True)
+            # Let welcome/TTS run after recovery. skip_welcome=True left users with no audio after a
+            # failed first boot (e.g. missing API key) even once the next process starts cleanly.
+            logger.info(
+                "Reloading agent after unexpected exit; welcome/greet will run if enabled in settings."
+            )
+            self.reload_agent_session(skip_welcome=False)
         else:
             logger.debug("[HEALTH CHECK] Agent process is healthy")
 

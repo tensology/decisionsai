@@ -14,6 +14,11 @@ import platform
 
 logger = logging.getLogger(__name__)
 
+# Incremented when every decrypt key candidate fails MAC; reset in load_settings_from_db.
+_mac_validation_failure_count = 0
+# Avoid spamming logs: load_settings_from_db is called many times per session.
+_mac_decrypt_bulk_warning_logged = False
+
 SETTINGS_DIR = os.path.join(MODELS_DIR, "settings")
 ENCRYPTION_PREFIX = "enc:v1:"
 SECRET_SETTINGS_FIELDS = {
@@ -38,12 +43,42 @@ CONNECTED_ACCOUNT_SECRET_FIELDS = {
 }
 
 
-def _settings_key_bytes() -> bytes:
-    """Derive a stable local encryption key with optional environment override."""
+def _primary_settings_key_material() -> str:
+    """Key material used when encrypting new secrets (matches legacy single-key behavior)."""
     key_material = (os.getenv("DECISIONSAI_SETTINGS_SECRET") or "").strip()
     if not key_material:
         key_material = f"{os.path.expanduser('~')}|{platform.node()}|decisionsai-settings"
-    return hashlib.sha256(key_material.encode("utf-8")).digest()
+    return key_material
+
+
+def _primary_settings_key_bytes() -> bytes:
+    return hashlib.sha256(_primary_settings_key_material().encode("utf-8")).digest()
+
+
+def _iter_decrypt_key_bytes() -> list[bytes]:
+    """Ordered unique keys to try when decrypting (migration / hostname / secret changes)."""
+    seen: set[bytes] = set()
+    keys: list[bytes] = []
+
+    def add_material(material: str) -> None:
+        if not material:
+            return
+        digest = hashlib.sha256(material.encode("utf-8")).digest()
+        if digest not in seen:
+            seen.add(digest)
+            keys.append(digest)
+
+    env = (os.getenv("DECISIONSAI_SETTINGS_SECRET") or "").strip()
+    if env:
+        add_material(env)
+    add_material(f"{os.path.expanduser('~')}|{platform.node()}|decisionsai-settings")
+    legacy_secret = (os.getenv("DECISIONSAI_SETTINGS_LEGACY_SECRET") or "").strip()
+    if legacy_secret:
+        add_material(legacy_secret)
+    legacy_node = (os.getenv("DECISIONSAI_SETTINGS_LEGACY_NODE") or "").strip()
+    if legacy_node:
+        add_material(f"{os.path.expanduser('~')}|{legacy_node}|decisionsai-settings")
+    return keys
 
 
 def _stream_xor(data: bytes, key: bytes, nonce: bytes) -> bytes:
@@ -62,7 +97,7 @@ def _encrypt_secret(value: str) -> str:
         return ""
     if raw.startswith(ENCRYPTION_PREFIX):
         return raw
-    key = _settings_key_bytes()
+    key = _primary_settings_key_bytes()
     nonce = os.urandom(16)
     plaintext = raw.encode("utf-8")
     ciphertext = _stream_xor(plaintext, key, nonce)
@@ -72,6 +107,7 @@ def _encrypt_secret(value: str) -> str:
 
 
 def _decrypt_secret(value: str) -> str:
+    global _mac_validation_failure_count
     raw = (value or "").strip()
     if not raw:
         return ""
@@ -84,13 +120,13 @@ def _decrypt_secret(value: str) -> str:
         nonce = payload[:16]
         mac = payload[-32:]
         ciphertext = payload[16:-32]
-        key = _settings_key_bytes()
-        expected_mac = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()
-        if not hmac.compare_digest(mac, expected_mac):
-            logger.warning("Settings secret MAC validation failed")
-            return ""
-        plaintext = _stream_xor(ciphertext, key, nonce).decode("utf-8")
-        return plaintext
+        for key in _iter_decrypt_key_bytes():
+            expected_mac = hmac.new(key, nonce + ciphertext, hashlib.sha256).digest()
+            if hmac.compare_digest(mac, expected_mac):
+                return _stream_xor(ciphertext, key, nonce).decode("utf-8")
+        _mac_validation_failure_count += 1
+        logger.debug("Settings secret MAC validation failed for one field")
+        return ""
     except Exception as exc:
         logger.warning("Failed to decrypt settings secret: %s", exc)
         return ""
@@ -178,6 +214,8 @@ def save_settings_to_db(settings_dict: Dict[str, Any]) -> None:
 
 def load_settings_from_db() -> Dict[str, Any]:
     """Load settings from database and return as dictionary"""
+    global _mac_validation_failure_count, _mac_decrypt_bulk_warning_logged
+    _mac_validation_failure_count = 0
     with Session() as session:
         # Query settings directly - each new session gets fresh data from database
         # Avoid session.refresh() as it can cause SQLAlchemy recursion errors with complex annotations
@@ -235,7 +273,28 @@ def load_settings_from_db() -> Dict[str, Any]:
                 logger.info("Migrated legacy plaintext settings secrets to encrypted format")
             except Exception as exc:
                 logger.warning("Failed to migrate settings secrets: %s", exc)
-                
+
+        failures = _mac_validation_failure_count
+        _mac_validation_failure_count = 0
+        if failures:
+            if not _mac_decrypt_bulk_warning_logged:
+                _mac_decrypt_bulk_warning_logged = True
+                logger.warning(
+                    "Could not decrypt %s encrypted setting field(s) (MAC mismatch). "
+                    "Typical causes: copied database from another machine, hostname change, or "
+                    "DECISIONSAI_SETTINGS_SECRET mismatch. Fix: set DECISIONSAI_SETTINGS_LEGACY_NODE "
+                    "to the old computer name, or DECISIONSAI_SETTINGS_LEGACY_SECRET to the prior "
+                    "secret string, then restart — or re-enter API keys in Settings.",
+                    failures,
+                )
+            else:
+                logger.debug(
+                    "Encrypted settings still unreadable (%s field(s)); see earlier MAC warning.",
+                    failures,
+                )
+        else:
+            _mac_decrypt_bulk_warning_logged = False
+
         return settings_dict
 
 

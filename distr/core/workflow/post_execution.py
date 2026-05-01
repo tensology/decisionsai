@@ -173,8 +173,12 @@ class PostExecutionMixin:
             workflow_id = step_data.get("workflow_id")
             if workflow_id is None:
                 return
+            from distr.core.workflow.context_limits import truncate_step_result
+
             step_title = (step_data.get("name") or "").strip() or f"Step {step_data.get('id')}"
-            safe_result = (result_text or ("Step completed." if passed else "Step failed with no details.")).strip()[:2000]
+            safe_result = truncate_step_result(
+                result_text or ("Step completed." if passed else "Step failed with no details.")
+            )
 
             run_result = {
                 "session_id": workflow_id,

@@ -429,7 +429,10 @@ class StepExecutorMixin:
         results, user feedback from wait_for_continue steps, step position,
         variable resolution, and step description.
         """
-        from distr.core.workflow_engine.context_assembly import assemble_step_context
+        from distr.core.workflow.context_limits import (
+            extract_artifact_paths_from_result,
+            truncate_step_result,
+        )
         from distr.core.workflow.planning import build_step_context_prompt
 
         step_id = step_data["id"]
@@ -467,17 +470,6 @@ class StepExecutorMixin:
                             step_index = i
                             break
 
-                # Use shared context assembly while session is still open.
-                if wf and step_obj:
-                    try:
-                        step_input_ctx = assemble_step_context(
-                            session=wf,
-                            step=step_obj,
-                            prior_results=prior_results,
-                        )
-                        context_rules = step_input_ctx.workflow_rules or context_rules
-                    except Exception as ce:
-                        logger.debug("_build_agent_prompt: assemble_step_context failed: %s", ce)
         except Exception as e:
             logger.debug("_build_agent_prompt: failed to load workflow/step objects: %s", e)
 
@@ -498,11 +490,16 @@ class StepExecutorMixin:
                         title = s.name if s else f"Step {sr.step_id}"
                         result = (sr.agent_response or "").strip()
                         if result:
-                            prior_results.append({
+                            truncated = truncate_step_result(result)
+                            paths = extract_artifact_paths_from_result(result)
+                            entry: Dict[str, Any] = {
                                 "title": title,
-                                "result": result[:2000],
+                                "result": truncated,
                                 "step_type": s.action_type if s else "agent_instruction",
-                            })
+                            }
+                            if paths:
+                                entry["artifact_paths"] = paths
+                            prior_results.append(entry)
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed to load prior results: %s", e)
 

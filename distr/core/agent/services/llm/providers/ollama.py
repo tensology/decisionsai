@@ -435,7 +435,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     small_stream = await self._ollama_client.chat(**small_chat_kwargs)
                     t_small = time.time()
                     full_response, _tc, _fm = await self._process_stream(
-                        small_stream, current_chat_id, False, is_processing_tool_result, start_time,
+                        small_stream,
+                        current_chat_id,
+                        False,
+                        is_processing_tool_result,
+                        start_time,
+                        last_user_message,
                     )
                     logger.info("LLM: [small-path] stream done: %.3fs (%d chars)", time.time() - t_small, len(full_response))
                 except Exception as _small_err:
@@ -633,7 +638,12 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # 6. Process streaming chunks
             t4 = time.time()
             full_response, tool_calls, final_message = await self._process_stream(
-                stream, current_chat_id, allow_tools, is_processing_tool_result, start_time,
+                stream,
+                current_chat_id,
+                allow_tools,
+                is_processing_tool_result,
+                start_time,
+                last_user_message,
             )
             logger.info("LLM: [6] stream done: %.3fs (%d chars, %d tool_calls)",
                         time.time() - t4, len(full_response), len(tool_calls))
@@ -651,6 +661,19 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 elif 'clear' in full_response.lower():
                     tool_calls = [{'function': {'name': 'clear_chat', 'arguments': {'confirm': True}}}]
                     full_response = ""
+
+            # 7b. Models often emit spurious mouse/oracle tools on "what do you do" — strip before execute.
+            if (
+                tool_calls
+                and allow_tools
+                and last_user_message
+                and self._should_drop_tool_calls_for_meta_question(last_user_message, tool_calls)
+            ):
+                logger.info(
+                    "LLM: stripping tool_calls after stream for meta assistant question: %s",
+                    [tc.get("function", {}).get("name") for tc in tool_calls],
+                )
+                tool_calls.clear()
 
             # 8. (Removed) — conversational filtering is handled by the semantic
             #    router in step 3.  No second-guessing needed.
@@ -830,9 +853,15 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
         return model
 
-    async def _process_stream(self, stream, current_chat_id,
-                              allow_tools, is_processing_tool_result,
-                              start_time):
+    async def _process_stream(
+        self,
+        stream,
+        current_chat_id,
+        allow_tools,
+        is_processing_tool_result,
+        start_time,
+        last_user_message=None,
+    ):
         """Consume the Ollama streaming response. Returns (full_response, tool_calls, final_message)."""
         full_response = ""
         tool_calls = []
@@ -874,6 +903,16 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             # If we're processing a prior tool result, ignore new tool calls.
             # If tools aren't allowed (conversational), drop them and keep streaming text.
             if tool_calls and allow_tools and not is_processing_tool_result:
+                if last_user_message and self._should_drop_tool_calls_for_meta_question(
+                    last_user_message, tool_calls
+                ):
+                    logger.info(
+                        "LLM: ignoring tool_calls on meta assistant question (would steal stream): %s",
+                        [tc.get("function", {}).get("name") for tc in tool_calls],
+                    )
+                    tool_calls.clear()
+                    raw_accumulator = ""
+                    continue
                 break
             elif tool_calls and is_processing_tool_result:
                 tool_calls = []

@@ -308,6 +308,39 @@ class OllamaResponseMixin:
     # 5. Intercept / fix hallucinated tool names
     # ------------------------------------------------------------------
 
+    # User is asking what the assistant is / does — only informational tools are acceptable.
+    _META_ASSISTANT_QUESTION_RE = re.compile(
+        r"\b(?:"
+        r"what\s+do\s+you\s+do|who\s+are\s+you|what\s+can\s+you\s+do|what\s+are\s+your\s+capabilities|"
+        r"how\s+can\s+you\s+help|tell\s+me\s+about\s+yourself|tell\s+me\s+what\s+you\s+do|"
+        r"can\s+you\s+tell\s+me\s+what\s+you\s+do|help\s+me\s+with\s+you"
+        r")\b",
+        re.IGNORECASE,
+    )
+    _ALLOWED_TOOLS_FOR_META_ASSISTANT_QUESTION = frozenset({
+        "system_info",
+        "find_skill",
+        "request_tool",
+        "web_search",
+        "web_fetch",
+    })
+
+    def _should_drop_tool_calls_for_meta_question(self, user_msg: str, tool_calls: list) -> bool:
+        """Return True if tool_calls look like spurious computer-use on a meta/about-you question."""
+        if not user_msg or not tool_calls:
+            return False
+        if not self._META_ASSISTANT_QUESTION_RE.search(user_msg):
+            return False
+        names = {
+            (tc.get("function") or {}).get("name", "")
+            for tc in tool_calls
+            if isinstance(tc, dict)
+        }
+        names.discard("")
+        if not names:
+            return False
+        return not names.issubset(self._ALLOWED_TOOLS_FOR_META_ASSISTANT_QUESTION)
+
     def _intercept_tool_calls(self, tool_calls, last_user_message):
         """Fix common LLM tool-name hallucinations in-place."""
         if not tool_calls or not last_user_message:

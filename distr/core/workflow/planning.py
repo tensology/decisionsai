@@ -310,7 +310,11 @@ def build_step_context_prompt(
         for item in prior_results[-5:]:
             title = item.get("title") or "Step"
             result = item.get("result") or "Completed."
-            lines.append(f"- {title}: {result}")
+            paths = item.get("artifact_paths") or []
+            block = f"- {title}: {result}"
+            if paths:
+                block += f"\n  Artifact paths: {', '.join(str(p) for p in paths)}"
+            lines.append(block)
         lines.append("")
     lines.extend(
         [

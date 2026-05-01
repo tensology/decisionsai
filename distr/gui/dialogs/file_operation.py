@@ -31,6 +31,7 @@ class FileOperationConfirmationDialog(QDialog):
         self.require_confirmation_phrase = require_confirmation_phrase
         self.confirmation_phrase = confirmation_phrase.lower()
         self.plan = plan
+        self._operation_type = operation_type
         
         # Set window flags to keep dialog on top
         self.setWindowFlags(
@@ -136,6 +137,20 @@ class FileOperationConfirmationDialog(QDialog):
             }
         """)
         layout.addWidget(self.dont_show_again_checkbox)
+        # Never offer "don't ask again" for deletes or bulk/high-risk plans — that bypass wiped library folders.
+        try:
+            from distr.core.files.safety import get_file_safety
+            if get_file_safety().cannot_bypass_file_confirmation(
+                operation_type=operation_type,
+                plan=plan,
+            ):
+                self.dont_show_again_checkbox.setVisible(False)
+                self.dont_show_again_checkbox.setChecked(False)
+        except Exception as e:
+            logger.debug("Could not evaluate mandatory confirmation for dont-show-again: %s", e)
+            if str(operation_type).upper() == "DELETE":
+                self.dont_show_again_checkbox.setVisible(False)
+                self.dont_show_again_checkbox.setChecked(False)
         
         # Buttons
         button_layout = QHBoxLayout()
@@ -491,14 +506,23 @@ class FileOperationConfirmationDialog(QDialog):
                     logger.warning(f"Please type '{self.confirmation_phrase}' exactly to confirm.")
                 return
         
-        # Save "Don't show again" preference if checked
-        if self.dont_show_again_checkbox.isChecked():
+        # Save "Don't show again" only for low-impact operations (never after DELETE / bulk / high-risk).
+        if self.dont_show_again_checkbox.isVisible() and self.dont_show_again_checkbox.isChecked():
             try:
+                from distr.core.files.safety import get_file_safety
                 from distr.core.settings import load_settings_from_db, save_settings_to_db
-                settings = load_settings_from_db()
-                settings['initiative_ask_file_changes'] = False
-                save_settings_to_db(settings)
-                logger.info("User disabled file operation confirmations")
+                if get_file_safety().cannot_bypass_file_confirmation(
+                    operation_type=getattr(self, "_operation_type", ""),
+                    plan=self.plan,
+                ):
+                    logger.info(
+                        "Ignored 'don't show again': this operation type always requires explicit confirmation"
+                    )
+                else:
+                    settings = load_settings_from_db()
+                    settings['initiative_ask_file_changes'] = False
+                    save_settings_to_db(settings)
+                    logger.info("User disabled routine file operation confirmations (low-impact only)")
             except Exception as e:
                 logger.error(f"Error saving 'don't show again' preference: {e}")
         
@@ -725,21 +749,38 @@ def confirm_file_operations_with_plan(plan: Dict,
     """
     if not plan or not plan.get('operations'):
         return True  # No operations to confirm
-    
-    # Check if user has disabled confirmations in settings
-    # Respect user's preference - if disabled, auto-approve all operations
+
+    has_delete = plan.get('will_delete', False)
+    has_overwrite = plan.get('will_overwrite', False)
+    if has_delete:
+        plan_op_type = "DELETE"
+    elif has_overwrite:
+        plan_op_type = "WRITE"
+    else:
+        plan_op_type = "WRITE"
+
+    # Routine low-impact auto-approve only; never skip dialogs for deletes or bulk/high-risk plans.
     try:
         from distr.core.settings import load_settings_from_db
+        from distr.core.files.safety import get_file_safety
         settings = load_settings_from_db()
         always_confirm = settings.get('initiative_ask_file_changes', True)
-        
-        # If user has disabled confirmations, auto-approve all operations
+
         if not always_confirm:
-            logger.info("File operation confirmations disabled in settings - auto-approving all operations")
-            return True  # Auto-approve if disabled
+            if get_file_safety().cannot_bypass_file_confirmation(
+                operation_type=plan_op_type,
+                plan=plan,
+            ):
+                logger.info(
+                    "File confirmations disabled in settings, but this operation requires a mandatory dialog"
+                )
+            else:
+                logger.info(
+                    "File operation confirmations disabled — auto-approving low-impact operation"
+                )
+                return True
     except Exception as e:
         logger.debug(f"Could not check file operation confirmation setting: {e}")
-        # Continue to show dialog if we can't check the setting (default to requiring confirmation)
     
     try:
         from PyQt6.QtWidgets import QApplication
@@ -759,16 +800,7 @@ def confirm_file_operations_with_plan(plan: Dict,
         # Ensure we're in the main thread and process events before showing dialog
         app_instance.processEvents()
         
-        # Determine operation type from plan
-        has_delete = plan.get('will_delete', False)
-        has_overwrite = plan.get('will_overwrite', False)
-        
-        if has_delete:
-            op_type = "DELETE"
-        elif has_overwrite:
-            op_type = "WRITE"
-        else:
-            op_type = "WRITE"
+        op_type = plan_op_type
         
         # Get all affected files
         all_files = plan.get('files', []) + plan.get('directories', [])

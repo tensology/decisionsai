@@ -92,7 +92,7 @@ class ExecuteCodeTool(BaseTool):
         ""
         "WHEN TO USE THIS (PREFERRED - USE FOR THESE SIMPLE TASKS): "
         "- Opening files (open a file, open file with default app, open file in editor) - THIS IS SIMPLE, USE execute_code "
-        "- Simple file operations (read, write, create, delete, copy, move) "
+        "- Simple file operations (read, write, create; single-file delete only — no folders, no bulk) "
         "- Searching for files (find file by name, search in directories) "
         "- Finding/selecting random files (e.g., pick random file from folder) "
         "- System queries (get paths, check OS, list files, check defaults) "
@@ -313,6 +313,15 @@ Corrected code:"""
             # Execute the code
             result = self._execute_code_once(current_code, description)
             
+            # Do not send hard safety refusals through LLM "fix" retries
+            if (
+                "Blocked for safety" in result
+                or "bulk deletion is disabled" in result.lower()
+                or "File safety interceptor unavailable" in result
+                or "File safety checks are unavailable" in result
+            ):
+                return result
+            
             # Check if execution was successful
             if not result.startswith("Error:"):
                 if attempt > 0:
@@ -348,18 +357,6 @@ Corrected code:"""
         
         # Should never reach here, but just in case
         return f"Error: {last_error}"
-    
-    def _execute_code_once(self, code: str, description: Optional[str] = None) -> str:
-        """
-        Execute Python code once (single attempt, no retries).
-        
-        Args:
-            code: Python code to execute
-            description: Optional description for logging
-            
-        Returns:
-            Execution result or error message
-        """
     
     def _run(self, code: str = "", description: Optional[str] = None, **kwargs) -> str:
         """
@@ -411,6 +408,12 @@ Corrected code:"""
             Execution result or error message
         """
         try:
+            from distr.core.files.user_library_guard import scan_execute_code_forbidden_bulk_delete
+
+            bulk_msg = scan_execute_code_forbidden_bulk_delete(code)
+            if bulk_msg:
+                return f"Error: {bulk_msg}"
+
             # Check for file operations and require confirmation if needed
             try:
                 from distr.core.agent.services.safety.interceptor import check_and_confirm_code_execution
@@ -439,8 +442,12 @@ Corrected code:"""
                         logger.warning("File operations blocked - no plan available")
                         return "File operations were blocked for safety."
             except ImportError:
-                # File safety module not available - log and continue
-                logger.warning("File safety interceptor not available - executing without safety check")
+                logger.warning(
+                    "File safety interceptor not available — blocking execute_code"
+                )
+                return (
+                    "Error: File safety interceptor unavailable — code execution was blocked for safety."
+                )
             except Exception as e:
                 logger.error(f"Error checking file safety: {e}", exc_info=True)
                 # On error, default to blocking for safety

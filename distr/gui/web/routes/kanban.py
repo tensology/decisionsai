@@ -19,6 +19,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from distr.core.db import get_session
 from distr.core.db import WhatsAppMessage
 from distr.core.db.kanban import (
@@ -964,19 +965,20 @@ def create_routes():
             if not msg or not msg.media_local_path:
                 return JSONResponse({"success": True, "attached": False, "reason": "No media"})
 
+            wa_src = resolve_whatsapp_media_disk_path(msg.media_local_path)
             # Check if file exists
-            if not os.path.exists(msg.media_local_path):
+            if not wa_src or not os.path.exists(wa_src):
                 return JSONResponse({"success": True, "attached": False, "reason": "File not found"})
 
             # Add attachment to ticket
             from shutil import copy2
             import uuid
-            ext = os.path.splitext(msg.media_local_path)[1] or ""
+            ext = os.path.splitext(wa_src)[1] or ""
             dest_name = f"wa_{msg.id}_{uuid.uuid4().hex[:8]}{ext}"
             dest_dir = os.path.join(DB_DIR, "ticket_files", str(ticket_id))
             os.makedirs(dest_dir, exist_ok=True)
             dest_path = os.path.join(dest_dir, dest_name)
-            copy2(msg.media_local_path, dest_path)
+            copy2(wa_src, dest_path)
 
             # Add to ticket files
             tf = KanbanTicketFile(

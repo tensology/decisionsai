@@ -123,8 +123,16 @@ def register_routes(router, templates):
             app = QApplication.instance()
             svc = getattr(app, "initiative_service", None)
             if svc is None:
-                return JSONResponse({"running": False, "cycle_count": 0, "last_error": None})
+                return JSONResponse({
+                    "status": "idle",
+                    "running": False,
+                    "cycle_count": 0,
+                    "last_error": None,
+                    "consecutive_failures": 0,
+                    "last_success_at": None,
+                    "last_failure_at": None,
+                })
             return JSONResponse(svc.get_status())
         except Exception as e:
             logger.error(f"Failed to get initiative status: {e}", exc_info=True)
-            return JSONResponse({"running": False, "cycle_count": 0, "last_error": str(e)})
+            return JSONResponse({"status": "error", "running": False, "cycle_count": 0, "last_error": str(e)})

@@ -1,4 +1,5 @@
 from sqlalchemy import create_engine, Column, Integer, String, Float, Text, Boolean, DateTime, ForeignKey, text as sa_text
+from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship, backref
 from sqlalchemy.dialects.sqlite import CHAR
@@ -624,7 +625,18 @@ class SessionContext:
                 if exc_type:
                     self.session.rollback()
                 else:
-                    self.session.commit()
+                    import time
+
+                    backoff_s = (0.1, 0.2, 0.4)
+                    for attempt in range(len(backoff_s) + 1):
+                        try:
+                            self.session.commit()
+                            break
+                        except OperationalError as e:
+                            msg_l = str(e).lower()
+                            if "database is locked" not in msg_l or attempt >= len(backoff_s):
+                                raise
+                            time.sleep(backoff_s[attempt])
             except Exception as e:
                 logging.getLogger(__name__).warning(f"Error during session cleanup: {e}")
             finally:

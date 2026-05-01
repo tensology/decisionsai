@@ -601,7 +601,8 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             return
 
         # Save media to disk (inside project DB_DIR so it's accessible by agent + API)
-        local_path = None
+        abs_saved = ""
+        path_for_db = ""
         try:
             import base64
             from datetime import datetime
@@ -629,9 +630,10 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             with open(dest, "wb") as f:
                 f.write(media_bytes)
 
-            # Store absolute path in DB for backward compat with existing code,
-            # but also compute relative path for the serving endpoint
-            local_path = str(dest)
+            abs_saved = str(dest)
+            from distr.core.integrations.whatsapp.paths import media_path_for_database
+
+            path_for_db = media_path_for_database(abs_saved)
             logger.info(f"WhatsApp: Saved {media_type} ({len(media_bytes)} bytes) → {dest}")
 
             # ── Create M4A transcode for Safari/iOS audio playback ──────
@@ -656,15 +658,15 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             logger.error(f"WhatsApp: Failed to save media: {e}", exc_info=True)
             return
 
-        # Update the existing message record with local path and file length
-        self._update_media_info(message_id, local_path, file_length, duration=data.get("duration"))
+        # Update the existing message record with relative path under DB_DIR when possible (BUG-8)
+        self._update_media_info(message_id, path_for_db, file_length, duration=data.get("duration"))
 
         # -- Transcribe voice notes --------------------------------------------
         voice_transcription = None
-        if media_type in ("voice", "audio", "ptt") and local_path:
+        if media_type in ("voice", "audio", "ptt") and abs_saved:
             try:
                 from distr.core.audio.voice_cloning import transcribe_audio_file
-                voice_transcription = transcribe_audio_file(local_path)
+                voice_transcription = transcribe_audio_file(abs_saved)
                 if voice_transcription:
                     logger.info(f"WhatsApp: Transcribed voice note ({media_type}): {voice_transcription[:100]}")
                     # Store transcription in the message caption field
@@ -679,20 +681,20 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             self._mark_relay_processed_by_message_id(
                 message_id,
                 purge_media=False,  # Don't purge relay media — web UI needs it
-                client_media_local_path=local_path or "",
+                client_media_local_path=abs_saved or "",
             )
 
         # Build agent message
         sender_phone = sender_jid.split("@")[0].split(":")[0] if sender_jid else "Unknown"
         size_str = f"{file_length / 1024:.1f} KB" if file_length < 1024 * 1024 else f"{file_length / 1024 / 1024:.1f} MB"
-        agent_text = f"[WhatsApp: {sender_phone}] Received {media_type}: {Path(local_path).name if local_path else filename} ({size_str})"
+        agent_text = f"[WhatsApp: {sender_phone}] Received {media_type}: {Path(abs_saved).name if abs_saved else filename} ({size_str})"
         if voice_transcription:
             agent_text += f"\n[Voice transcription: {voice_transcription}]"
         if caption:
             agent_text += f" — {caption}"
 
         # Send to agent with image path for vision (photos)
-        image_path = local_path if media_type == "photo" else None
+        image_path = abs_saved if media_type == "photo" else None
 
         # Do NOT auto-route inbound WhatsApp media into agent chat input.
         # Agent actions on WhatsApp must be explicit via tools/user intent.

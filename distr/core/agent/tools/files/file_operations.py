@@ -12,12 +12,28 @@ from typing import Optional, List, Any
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.files.user_library_guard import (
+    REFUSAL_TOOL_DIRECTORY_DELETE,
+    is_protected_library_root,
+    refusal_delete_library_root,
+    refusal_protected_library_root,
+)
+
 logger = logging.getLogger(__name__)
+
+_FILE_SAFETY_UNAVAILABLE = (
+    "File safety checks are unavailable — this operation was blocked for safety."
+)
 
 
 class FileOperationsInput(BaseModel):
     """Input schema for file_operations tool."""
-    operation: str = Field(description="Operation type: 'list', 'create', 'read', 'delete', 'copy', 'move'")
+    operation: str = Field(
+        description=(
+            "Operation type: 'list', 'create', 'read', 'delete' (single files only — "
+            "directories forbidden), 'copy', 'move'"
+        )
+    )
     path: str = Field(description="File or directory path (supports 'my desktop', 'my documents', etc.)")
     content: Optional[str] = Field(default=None, description="Content for create/write operations")
     destination: Optional[str] = Field(default=None, description="Destination path for copy/move operations")
@@ -29,7 +45,8 @@ class FileOperationsTool(BaseTool):
     name: str = "file_operations"
     description: str = (
         "Fast file operations tool for simple file/directory operations. "
-        "Use this for: listing files, creating files, reading files, deleting files, copying files, moving files. "
+        "Use this for: listing files, creating files, reading files, deleting single files only "
+        "(never whole folders), copying files, moving files. "
         "This tool executes directly without LLM, making it much faster for simple operations. "
         "For complex operations requiring code generation, use execute_code instead."
     )
@@ -213,7 +230,10 @@ class FileOperationsTool(BaseTool):
                     
                     logger.info(f"[FILE_OPERATIONS] Create operation confirmed - proceeding: {resolved_path}")
                 except ImportError:
-                    logger.warning("[FILE_OPERATIONS] File safety interceptor not available - proceeding without guardrail check")
+                    logger.warning(
+                        "[FILE_OPERATIONS] File safety interceptor not available — blocking overwrite"
+                    )
+                    return _FILE_SAFETY_UNAVAILABLE
                 except Exception as e:
                     logger.error(f"[FILE_OPERATIONS] Error in guardrail check: {e}", exc_info=True)
                     # On error, default to deny for safety
@@ -298,11 +318,25 @@ class FileOperationsTool(BaseTool):
             return f"Error reading file: {str(e)}"
     
     def _delete_file(self, path: str) -> str:
-        """Delete a file or directory."""
+        """Delete a single file (directories are refused — bulk-delete policy)."""
         try:
             resolved_path = self._resolve_path(path)
             if not os.path.exists(resolved_path):
                 return f"Error: Path does not exist: {resolved_path}"
+
+            if is_protected_library_root(resolved_path):
+                logger.warning(
+                    "[FILE_OPERATIONS] Delete blocked — protected library/home root: %s",
+                    resolved_path,
+                )
+                return refusal_delete_library_root(resolved_path)
+
+            if os.path.isdir(resolved_path):
+                logger.warning(
+                    "[FILE_OPERATIONS] Delete blocked — directory delete disabled (bulk policy): %s",
+                    resolved_path,
+                )
+                return REFUSAL_TOOL_DIRECTORY_DELETE
             
             # GUARDRAIL: Check and confirm before deletion
             logger.info(f"[FILE_OPERATIONS] Delete operation requested: {resolved_path}")
@@ -338,48 +372,31 @@ class FileOperationsTool(BaseTool):
                 
                 logger.info(f"[FILE_OPERATIONS] Delete operation confirmed - proceeding: {resolved_path}")
             except ImportError:
-                logger.warning("[FILE_OPERATIONS] File safety interceptor not available - proceeding without guardrail check")
+                logger.warning(
+                    "[FILE_OPERATIONS] File safety interceptor not available — blocking delete"
+                )
+                return _FILE_SAFETY_UNAVAILABLE
             except Exception as e:
                 logger.error(f"[FILE_OPERATIONS] Error in guardrail check: {e}", exc_info=True)
                 # On error, default to deny for safety
                 return f"File safety check failed - deletion blocked for safety. Error: {str(e)}"
             
-            # Perform the deletion
-            if os.path.isdir(resolved_path):
-                import shutil
-                shutil.rmtree(resolved_path)
-                logger.info(f"[FILE_OPERATIONS] Directory deleted successfully: {resolved_path}")
-                # Log operation completion
-                try:
-                    from distr.core.files.safety import get_file_safety
-                    file_safety = get_file_safety()
-                    file_safety.log_operation('operation_executed', {
-                        'operation_type': 'DELETE',
-                        'target_path': resolved_path,
-                        'originating_pathway': 'file_operations_tool',
-                        'result': 'success',
-                        'was_directory': True
-                    })
-                except Exception:
-                    pass
-                return f"Directory deleted: {resolved_path}"
-            else:
-                os.remove(resolved_path)
-                logger.info(f"[FILE_OPERATIONS] File deleted successfully: {resolved_path}")
-                # Log operation completion
-                try:
-                    from distr.core.files.safety import get_file_safety
-                    file_safety = get_file_safety()
-                    file_safety.log_operation('operation_executed', {
-                        'operation_type': 'DELETE',
-                        'target_path': resolved_path,
-                        'originating_pathway': 'file_operations_tool',
-                        'result': 'success',
-                        'was_directory': False
-                    })
-                except Exception:
-                    pass
-                return f"File deleted: {resolved_path}"
+            # Perform the deletion (files only — directories rejected earlier)
+            os.remove(resolved_path)
+            logger.info(f"[FILE_OPERATIONS] File deleted successfully: {resolved_path}")
+            try:
+                from distr.core.files.safety import get_file_safety
+                file_safety = get_file_safety()
+                file_safety.log_operation('operation_executed', {
+                    'operation_type': 'DELETE',
+                    'target_path': resolved_path,
+                    'originating_pathway': 'file_operations_tool',
+                    'result': 'success',
+                    'was_directory': False
+                })
+            except Exception:
+                pass
+            return f"File deleted: {resolved_path}"
         except Exception as e:
             logger.error(f"Error deleting: {e}", exc_info=True)
             return f"Error deleting: {str(e)}"
@@ -417,7 +434,10 @@ class FileOperationsTool(BaseTool):
                     
                     logger.info(f"[FILE_OPERATIONS] Copy operation confirmed - proceeding: {source_path} -> {dest_path}")
                 except ImportError:
-                    logger.warning("[FILE_OPERATIONS] File safety interceptor not available - proceeding without guardrail check")
+                    logger.warning(
+                        "[FILE_OPERATIONS] File safety interceptor not available — blocking copy overwrite"
+                    )
+                    return _FILE_SAFETY_UNAVAILABLE
                 except Exception as e:
                     logger.error(f"[FILE_OPERATIONS] Error in guardrail check: {e}", exc_info=True)
                     # On error, default to deny for safety
@@ -446,6 +466,13 @@ class FileOperationsTool(BaseTool):
             
             if not os.path.exists(source_path):
                 return f"Error: Source does not exist: {source_path}"
+
+            if is_protected_library_root(source_path):
+                logger.warning(
+                    "[FILE_OPERATIONS] Move blocked — source is protected library/home root: %s",
+                    source_path,
+                )
+                return refusal_protected_library_root(source_path, "move this folder")
             
             # GUARDRAIL: Check and confirm before move (destructive operation)
             logger.info(f"[FILE_OPERATIONS] Move operation requested: {source_path} -> {dest_path}")
@@ -483,7 +510,10 @@ class FileOperationsTool(BaseTool):
                 
                 logger.info(f"[FILE_OPERATIONS] Move operation confirmed - proceeding: {source_path} -> {dest_path}")
             except ImportError:
-                logger.warning("[FILE_OPERATIONS] File safety interceptor not available - proceeding without guardrail check")
+                logger.warning(
+                    "[FILE_OPERATIONS] File safety interceptor not available — blocking move"
+                )
+                return _FILE_SAFETY_UNAVAILABLE
             except Exception as e:
                 logger.error(f"[FILE_OPERATIONS] Error in guardrail check: {e}", exc_info=True)
                 # On error, default to deny for safety

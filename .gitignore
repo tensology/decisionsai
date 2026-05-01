@@ -66,6 +66,7 @@ scripts/
 
 # --- Databases ---
 db/*
+db/whatsapp_media/
 
 # --- Docs (auto-generated / to be rewritten) ---
 docs/*

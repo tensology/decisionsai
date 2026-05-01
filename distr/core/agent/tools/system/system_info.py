@@ -85,10 +85,8 @@ class SystemInfoTool(BaseTool):
             "your configuration",
             "system info",
             "system information",
-            "what can you do",
-            "tutorial",
-            "onboarding",
-            "capabilities"
+            # Not fast-matched: "what can you do", capabilities, tutorial — those belong
+            # in normal LLM turns so answers are conversational (fast matcher would say "Done").
         ]
     
     def _run(self, query: str = "", **kwargs) -> str:

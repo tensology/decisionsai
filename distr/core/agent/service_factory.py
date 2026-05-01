@@ -53,6 +53,27 @@ def _normalize_api_key(raw_key: str) -> str:
     return key
 
 
+def _ollama_fallback_model(prior_engine: str, prior_model: str) -> str:
+    """Pick an Ollama model ID after falling back from a keyed cloud provider with no API key."""
+    from distr.core.llm_factory import is_openai_model, is_anthropic_model, is_gemini_model
+
+    pm = (prior_model or "").strip()
+    default = DEFAULT_MODELS["ollama"]
+    if prior_engine == "kilocode":
+        return default
+    if not pm:
+        return default
+    if "/" in pm:
+        tail = pm.split("/")[-1]
+        if is_openai_model(tail) or is_anthropic_model(tail) or is_gemini_model(tail):
+            return default
+        # Hugging Face / provider bundles — avoid failing startup on a plain Ollama daemon.
+        return default
+    if is_openai_model(pm) or is_anthropic_model(pm) or is_gemini_model(pm):
+        return default
+    return pm
+
+
 def create_llm_service(llm_config, *, role, agent_name, event_queue, is_listening,
                         chat_manager, command_queue, confirmation_results_dict,
                         is_hands_free, voice_enabled, tts_service=None):
@@ -88,7 +109,32 @@ def create_llm_service(llm_config, *, role, agent_name, event_queue, is_listenin
     else:
         api_key = _normalize_api_key(llm_config.get('api_key', ''))
         if not api_key:
-            raise ValueError(f"{label.replace('LLMService', '')} API key is required")
+            label_short = label.replace('LLMService', '')
+            fb_model = _ollama_fallback_model(engine, llm_config.get('model_name', ''))
+            logger.warning(
+                "%s requires an API key but none is configured — falling back to Ollama "
+                "with model %r. Add your key under Settings → LLMs or restore encrypted "
+                "settings (DECISIONSAI_SETTINGS_LEGACY_NODE / DECISIONSAI_SETTINGS_LEGACY_SECRET).",
+                label_short,
+                fb_model,
+            )
+            fb_cfg = dict(llm_config)
+            fb_cfg['engine'] = 'ollama'
+            fb_cfg['api_key'] = ''
+            fb_cfg['model_name'] = fb_model
+            return create_llm_service(
+                fb_cfg,
+                role=role,
+                agent_name=agent_name,
+                event_queue=event_queue,
+                is_listening=is_listening,
+                chat_manager=chat_manager,
+                command_queue=command_queue,
+                confirmation_results_dict=confirmation_results_dict,
+                is_hands_free=is_hands_free,
+                voice_enabled=voice_enabled,
+                tts_service=tts_service,
+            )
         model_name = llm_config.get('model_name', DEFAULT_MODELS.get(engine, ''))
         service = cls(api_key=api_key, model_name=model_name, **common)
 

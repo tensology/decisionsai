@@ -427,7 +427,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "TranscriptionDoctorTool": "Run a health check on transcription backends to see which engines and models are available.",
     "FileConverterTool": "Convert files between formats including audio, video-to-audio, image format conversion, and audio-to-text transcription.",
     # files/
-    "FileOperationsTool": "Perform file system operations: list, create, write, read, delete, copy, move, or rename files and directories on the desktop, documents, downloads, or any folder path.",
+    "FileOperationsTool": "Perform file system operations: list, create, write, read, delete single files only (not folders), copy, move on desktop, documents, downloads, or paths — bulk/recursive delete is disabled.",
     "OpenFileTool": "Find a file by name across common folders using fuzzy matching and open it with the default application.",
     "DocumentExtractorTool": "Extract and read text content from PDFs, Word documents, Excel spreadsheets, ZIP/RAR archives, and plain text files.",
     "PDFPageExtractorTool": "Find a PDF by name and extract text from a specific page number.",

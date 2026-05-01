@@ -101,6 +101,9 @@ class InitiativeService:
         self._last_cycle_error: Optional[str] = None
         self._last_cycle_at: Optional[float] = None  # Unix timestamp
         self._cycle_count: int = 0
+        self._consecutive_cycle_failures: int = 0
+        self._last_cycle_success_at: Optional[float] = None
+        self._last_cycle_failure_at: Optional[float] = None
         # Proposal dedup: track (action_type, payload_hash, timestamp) so the
         # same action is not repeatedly proposed within cooldown_seconds.
         self._recent_proposals: deque = deque()
@@ -183,13 +186,48 @@ class InitiativeService:
 
     def get_status(self) -> dict:
         """Return observable cycle status for the settings UI."""
+        now = time.time()
+        if self._consecutive_cycle_failures >= 3:
+            status = "failing"
+        elif self._consecutive_cycle_failures > 0 or self._cycle_running:
+            status = "degraded"
+        else:
+            status = "healthy"
         return {
+            "status": status,
             "running": self._cycle_running if hasattr(self, '_cycle_running') else False,
             "cycle_count": self._cycle_count,
             "last_cycle_at": self._last_cycle_at,
-            "last_cycle_ago_s": round(time.time() - self._last_cycle_at, 1) if self._last_cycle_at else None,
+            "last_cycle_ago_s": round(now - self._last_cycle_at, 1) if self._last_cycle_at else None,
             "last_error": self._last_cycle_error,
+            "consecutive_failures": self._consecutive_cycle_failures,
+            "last_success_at": self._last_cycle_success_at,
+            "last_failure_at": self._last_cycle_failure_at,
+            "last_success_ago_s": round(now - self._last_cycle_success_at, 1) if self._last_cycle_success_at else None,
+            "last_failure_ago_s": round(now - self._last_cycle_failure_at, 1) if self._last_cycle_failure_at else None,
         }
+
+    def _record_cycle_success(self) -> None:
+        """Reset failure streak after a completed cycle."""
+        previous_failures = self._consecutive_cycle_failures
+        self._consecutive_cycle_failures = 0
+        self._last_cycle_success_at = time.time()
+        if previous_failures > 0:
+            logger.info(
+                "InitiativeService: recovered after %s consecutive cycle failure(s)",
+                previous_failures,
+            )
+
+    def _record_cycle_failure(self) -> None:
+        """Increment streak and log loudly after repeated failures."""
+        self._consecutive_cycle_failures += 1
+        self._last_cycle_failure_at = time.time()
+        if self._consecutive_cycle_failures >= 3:
+            logger.error(
+                "InitiativeService: %s consecutive cycle failures — last_error=%s",
+                self._consecutive_cycle_failures,
+                (self._last_cycle_error or "").split("\n")[0][:500],
+            )
 
     # ------------------------------------------------------------------
     # Timer callbacks
@@ -306,6 +344,7 @@ class InitiativeService:
 
     def _run_initiative_cycle(self, trigger_source: str) -> None:
         logger.debug("InitiativeService: cycle started (trigger=%s)", trigger_source)
+        cycle_ok = False
         try:
             self._last_cycle_at = time.time()
             self._cycle_count += 1
@@ -316,10 +355,12 @@ class InitiativeService:
                 settings = load_settings_from_db()
             except Exception:
                 logger.error("InitiativeService: load_settings_from_db failed", exc_info=True)
+                self._last_cycle_error = "load_settings_from_db failed"
                 return
 
             level = migrate_initiative_level(settings.get("initiative_level", "assist"))
             if level == "observe":
+                cycle_ok = True
                 return
 
             # Expire old drafts
@@ -333,10 +374,12 @@ class InitiativeService:
                 raw = self._call_llm(bundle, settings, level)
             except RuntimeError as e:
                 logger.error("InitiativeService: %s", e)
+                self._last_cycle_error = str(e)
                 self._reset_idle_timer()
                 return
             except Exception as e:
                 logger.error("InitiativeService: LLM call failed — %s: %s", type(e).__name__, e)
+                self._last_cycle_error = f"{type(e).__name__}: {e}"
                 self._reset_idle_timer()
                 return
 
@@ -346,6 +389,8 @@ class InitiativeService:
                         action.action_type, action.description)
 
             if action.action_type == "none":
+                self._last_cycle_error = None
+                cycle_ok = True
                 return
 
             # Evaluate policy
@@ -375,12 +420,17 @@ class InitiativeService:
 
             self._dispatch_action(action, settings, decision)
             self._last_cycle_error = None  # clear previous error on success
+            cycle_ok = True
 
         except Exception:
             import traceback
             self._last_cycle_error = traceback.format_exc()
             logger.error("InitiativeService: unhandled exception in cycle", exc_info=True)
         finally:
+            if cycle_ok:
+                self._record_cycle_success()
+            else:
+                self._record_cycle_failure()
             with self._cycle_lock:
                 self._cycle_running = False
             logger.debug("InitiativeService: cycle finished (trigger=%s)", trigger_source)

@@ -180,6 +180,20 @@ def fast_tool_matcher(transcription: str, tools: List[BaseTool], tools_dict: Dic
     if _CONTEXT_REFS.search(transcription_lower):
         logger.debug("Fast matcher: skipping — contextual reference detected in '%s'", transcription[:80])
         return None
+
+    # Meta / capability / identity questions — never fast-match a keyboard/mouse/oracle tool.
+    _FAST_MATCH_SKIP_META = re.compile(
+        r"\b(?:"
+        r"what\s+(?:can|could)\s+you\s+do|what\s+do\s+you\s+do|who\s+are\s+you|"
+        r"what\s+are\s+your\s+capabilities|how\s+can\s+you\s+help|"
+        r"tell\s+me\s+(?:about\s+yourself|what\s+you\s+do)|"
+        r"can\s+you\s+tell\s+me\s+what\s+you\s+do|help\s+me\s+with\s+you"
+        r")\b",
+        re.IGNORECASE,
+    )
+    if _FAST_MATCH_SKIP_META.search(transcription_lower):
+        logger.debug("Fast matcher: skipping meta question: '%s'", transcription[:80])
+        return None
     
     # Pre-calculate word set for faster lookup
     transcription_words = set(re.findall(r'\w+', transcription_norm))

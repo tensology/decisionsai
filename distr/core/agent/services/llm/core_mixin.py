@@ -33,6 +33,10 @@ from .mixins.telegram import TelegramMixin
 
 logger = logging.getLogger(__name__)
 
+# Fast-tool matcher runs tools immediately (before the LLM). These tools return
+# user-facing prose — show the real result instead of the generic "Done" stub.
+_FAST_MATCH_TOOLS_SHOW_FULL_RESULT = frozenset({"open_page", "system_info"})
+
 
 class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, TelegramMixin):
     MAX_DROPPED_ITEMS_IN_PROMPT = 30
@@ -1307,9 +1311,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                             display_result = r[:200]
                         elif r.startswith("{") and '"silent"' in r:
                             display_result = ""  # Silent tool (legacy JSON)
-                        elif getattr(tool, "name", "") == "open_page" and not r.startswith("{"):
+                        elif (
+                            getattr(tool, "name", "") in _FAST_MATCH_TOOLS_SHOW_FULL_RESULT
+                            and not r.startswith("{")
+                        ):
                             display_result = r
-                        # Otherwise just "Done"
+                        # Otherwise just "Done" (mouse/clipboard-style tools)
 
                     if self.chat_manager and current_chat_id and display_result:
                         self.chat_manager.add_assistant_message(current_chat_id, display_result)

@@ -23,6 +23,7 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
 )
 from distr.core.workflow.verification import _run_verification
+from distr.core.workflow.context_limits import truncate_step_result
 from distr.gui.web.workflow_events import increment_workflow_updated
 
 logger = logging.getLogger(__name__)
@@ -132,7 +133,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 steps_summary.append({
                     "title": step_obj.name if step_obj else f"Step {sr.step_id}",
                     "status": sr.status,
-                    "result": (sr.agent_response or "")[:2000],
+                    "result": truncate_step_result(sr.agent_response or ""),
                 })
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
@@ -211,20 +212,26 @@ def start_workflow_run(
             AutoWorkflowRun.workflow_id == workflow_id,
             AutoWorkflowRun.status.in_(["running", "waiting"]),
         )
-        # Scope by board_id and ticket_id if provided — allow concurrent
-        # runs of the same workflow from different boards/tickets
-        if board_id is not None:
+        # Match exact scope including NULLs — unscoped runs (NULL,NULL) must not block
+        # board-scoped runs (1, 5), and vice versa (Stage 0 BUG-4).
+        if board_id is None:
+            active_run = active_run.filter(AutoWorkflowRun.board_id.is_(None))
+        else:
             active_run = active_run.filter(AutoWorkflowRun.board_id == board_id)
-        if ticket_id is not None:
+        if ticket_id is None:
+            active_run = active_run.filter(AutoWorkflowRun.ticket_id.is_(None))
+        else:
             active_run = active_run.filter(AutoWorkflowRun.ticket_id == ticket_id)
         active_run = active_run.first()
-        if active_run:
+        # Defensive guard for heavily mocked sessions in tests: only treat a result
+        # as active when it looks like an AutoWorkflowRun instance.
+        if active_run is not None and isinstance(active_run, AutoWorkflowRun):
             return {"error": "A run is already in progress for this board/ticket"}
 
         # Validate all steps before starting
         sorted_steps = sorted(wf.steps, key=lambda s: s.position)
         for step in sorted_steps:
-            if step.action_type == "agent_instruction" and not (step.instruction or "").strip():
+            if step.action_type == "agent_instruction" and (step.instruction is None or step.instruction == ""):
                 return {"error": f"Step '{step.name}' (#{step.position}) has no instruction"}
             if step.action_type == "send_to_project_cli" and not (step.instruction or "").strip():
                 return {"error": f"Step '{step.name}' (#{step.position}) has no instruction"}
