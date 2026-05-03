@@ -19,4 +19,8 @@ def __getattr__(name):
         module = importlib.import_module(f"distr.core.{name}")
         globals()[name] = module
         return module
+    if name == "utils":
+        module = importlib.import_module(f"distr.core.{name}")
+        globals()[name] = module
+        return module
     raise AttributeError(f"module 'distr.core' has no attribute '{name}'")

@@ -1,15 +1,21 @@
 #!/usr/bin/env python3
 """
 Test Anthropic API to check for API key issues, quota errors, etc.
+
+Pytest runs ``test_anthropic_api`` only when ``DECISIONS_RUN_ANTHROPIC_API_TEST=1``
+(live network + API key). Otherwise the test is skipped so default suites stay offline.
 """
 import sys
 import os
 import asyncio
 
+import pytest
+
 # Add parent directory to path
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-async def test_anthropic_api():
+
+async def _test_anthropic_api_async():
     """Test Anthropic API"""
     print("=" * 60)
     print("Testing Anthropic API")
@@ -129,6 +135,17 @@ async def test_anthropic_api():
         print("=" * 60)
         return False
 
+
+def test_anthropic_api():
+    """Live Anthropic check — opt-in only (async runner via asyncio.run)."""
+    if os.environ.get("DECISIONS_RUN_ANTHROPIC_API_TEST", "").lower() not in ("1", "true", "yes"):
+        pytest.skip(
+            "Set DECISIONS_RUN_ANTHROPIC_API_TEST=1 to run live Anthropic streaming check"
+        )
+    ok = asyncio.run(_test_anthropic_api_async())
+    assert ok, "Anthropic API check reported failure (see stdout)"
+
+
 if __name__ == "__main__":
-    success = asyncio.run(test_anthropic_api())
+    success = asyncio.run(_test_anthropic_api_async())
     sys.exit(0 if success else 1)

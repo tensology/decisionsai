@@ -109,6 +109,9 @@ def valid_config_for(draw, step_type: str):
                 "code": draw(non_empty_text),
             }
 
+    if step_type == StepType.SEND_TO_PROJECT_CLI.value:
+        return {"instruction": draw(non_empty_text)}
+
     # Should not reach here for known types
     return {}
 

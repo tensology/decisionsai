@@ -308,7 +308,11 @@ def test_flex_row_layout_preserved(row: str) -> None:
 
     # Find the flex row containing this select
     # Parse to find the div with flex items-center gap-4 that contains the select
-    pattern = r'<div\s+class="flex items-center gap-4">\s*.*?' + re.escape(f'id="{select_id}"')
+    # Template may add extra utility classes (e.g. ``llms-row``) on the same div.
+    pattern = (
+        r'<div\s+class="[^"]*\bflex\s+items-center\s+gap-4\b[^"]*"\s*>\s*.*?'
+        + re.escape(f'id="{select_id}"')
+    )
     match = re.search(pattern, html, re.DOTALL)
 
     assert match is not None, (

@@ -43,7 +43,8 @@ def ensure_rpc_session(project_id: int, cwd: str, append_system_prompt: str = ""
 
 def dispatch_to_cli(project_id: int, cwd: str, instruction: str,
                     project_name: str = "project",
-                    append_system_prompt: str = "") -> dict:
+                    append_system_prompt: str = "",
+                    ticket_id: Optional[int] = None) -> dict:
     """Send an instruction to the project's pi CLI.
     
     Returns dict with:
@@ -60,7 +61,11 @@ def dispatch_to_cli(project_id: int, cwd: str, instruction: str,
     rpc = ensure_rpc_session(project_id, cwd, append_system_prompt)
 
     if rpc and rpc.is_alive:
-        success = rpc.send_prompt(instruction, origin="desktop")
+        success = rpc.send_prompt(
+            instruction,
+            origin="desktop",
+            ticket_id_for_writeback=ticket_id,
+        )
         if success:
             logger.info(f"dispatch_to_cli: sent via RPC to project {project_id}")
             return {
@@ -81,6 +86,18 @@ def dispatch_to_cli(project_id: int, cwd: str, instruction: str,
         )
         output = (result.stdout + result.stderr).strip()[:2000]
         logger.info(f"dispatch_to_cli: one-shot for project {project_id}, {len(output)} chars")
+        if ticket_id is not None:
+            try:
+                from distr.core.kanban.ticket_writeback import append_pi_cli_summary_to_ticket
+
+                outcome = "completed" if result.returncode == 0 else "failed"
+                append_pi_cli_summary_to_ticket(
+                    ticket_id,
+                    output or "(no output)",
+                    outcome_status=outcome,
+                )
+            except Exception:
+                logger.debug("dispatch_to_cli: ticket write-back failed", exc_info=True)
         return {
             "success": result.returncode == 0,
             "message": output or "Completed with no output.",
@@ -88,6 +105,13 @@ def dispatch_to_cli(project_id: int, cwd: str, instruction: str,
         }
     except Exception as e:
         logger.error(f"dispatch_to_cli: one-shot failed: {e}")
+        if ticket_id is not None:
+            try:
+                from distr.core.kanban.ticket_writeback import append_pi_cli_summary_to_ticket
+
+                append_pi_cli_summary_to_ticket(ticket_id, str(e), outcome_status="failed")
+            except Exception:
+                logger.debug("dispatch_to_cli: ticket write-back on error failed", exc_info=True)
         return {
             "success": False,
             "message": f"Failed: {e}",

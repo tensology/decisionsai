@@ -256,33 +256,145 @@ var settingsBase = '';
 
 function updateConnectionStatus() {
     fetch(settingsBase + '/api/advanced/connection-status').then(function (r) { return r.json(); }).then(function (data) {
+        /* Shared shell matches advanced.html: flex chip, min width, no shrink (Discord/Slack stay full buttons after fetch). */
+        var shell = 'advanced-integration-btn px-6 py-2.5 rounded-md text-sm font-medium transition-colors';
+        var filledBorder = ' border border-white/15';
+        var connectedClass = shell + ' bg-[#4CAF50] hover:bg-[#45a049] text-white' + filledBorder;
         var googleBtn = document.getElementById('google_connect_btn');
         var telegramBtn = document.getElementById('telegram_connect_btn');
         var trelloBtn = document.getElementById('trello_connect_btn');
         var jiraBtn = document.getElementById('jira_connect_btn');
-        var connectedClass = 'px-6 py-2.5 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium transition-colors';
         if (googleBtn) {
-            googleBtn.className = data.google_connected ? connectedClass : 'px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors';
+            googleBtn.className = data.google_connected ? connectedClass : shell + ' bg-[#007bff] hover:bg-[#0069d9] text-white' + filledBorder;
             googleBtn.innerHTML = data.google_connected ? '✓ Google' : 'Google';
         }
         var whatsappBtn = document.getElementById('whatsapp_connect_btn');
         if (whatsappBtn) {
-            whatsappBtn.className = data.whatsapp_connected ? connectedClass : 'px-6 py-2.5 border border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-md text-sm font-medium transition-colors';
+            whatsappBtn.className = data.whatsapp_connected ? connectedClass : shell + ' border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white';
             whatsappBtn.innerHTML = data.whatsapp_connected ? '\u2713 WhatsApp' : 'WhatsApp';
         }
         if (telegramBtn) {
-            telegramBtn.className = data.telegram_connected ? connectedClass : 'px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors';
+            telegramBtn.className = data.telegram_connected ? connectedClass : shell + ' bg-[#0088cc] hover:bg-[#0077b3] text-white' + filledBorder;
             telegramBtn.innerHTML = data.telegram_connected ? '✓ Telegram' : 'Telegram';
         }
         if (trelloBtn) {
-            trelloBtn.className = data.trello_has_valid ? connectedClass : 'px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors';
+            trelloBtn.className = data.trello_has_valid ? connectedClass : shell + ' bg-[#0079BF] hover:bg-[#026aa7] text-white' + filledBorder;
             trelloBtn.innerHTML = data.trello_has_valid ? '✓ Trello' : 'Trello';
         }
         if (jiraBtn) {
-            jiraBtn.className = data.jira_has_valid ? connectedClass : 'px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors';
+            jiraBtn.className = data.jira_has_valid ? connectedClass : shell + ' bg-[#0052CC] hover:bg-[#0043a8] text-white' + filledBorder;
             jiraBtn.innerHTML = data.jira_has_valid ? '✓ Jira' : 'Jira';
         }
+        var discordBtn = document.getElementById('discord_connect_btn');
+        if (discordBtn) {
+            discordBtn.className = data.discord_bot_configured ? connectedClass : shell + ' bg-[#5865F2] hover:bg-[#4752c4] text-white' + filledBorder;
+            discordBtn.innerHTML = data.discord_bot_configured ? '\u2713 Discord' : 'Discord';
+        }
+        var slackBtn = document.getElementById('slack_connect_btn');
+        if (slackBtn) {
+            var slackOk = !!(data.slack_bot_configured || data.slack_signing_configured);
+            slackBtn.className = slackOk ? connectedClass : shell + ' bg-[#4A154B] hover:bg-[#611f69] text-white' + filledBorder;
+            slackBtn.innerHTML = slackOk ? '\u2713 Slack' : 'Slack';
+        }
     }).catch(function () {});
+}
+
+function loadIntegrationConnectorModal() {
+    var modal = document.getElementById('integration_connectors_modal');
+    if (!modal) return;
+    var statusEl = document.getElementById('integration_connectors_status');
+    if (statusEl) {
+        statusEl.textContent = '';
+        statusEl.className = 'text-sm min-h-[1.25rem]';
+    }
+    fetch(settingsBase + '/api/advanced/integration-connectors').then(function (r) { return r.json(); }).then(function (data) {
+        var dIn = document.getElementById('integration_discord_token');
+        var sbIn = document.getElementById('integration_slack_bot_token');
+        var sgIn = document.getElementById('integration_slack_signing_secret');
+        var hint = document.getElementById('integration_connectors_env_hint');
+        if (dIn) {
+            dIn.value = data.discord_bot_token || '';
+            dIn.disabled = !!data.discord_from_env;
+        }
+        if (sbIn) {
+            sbIn.value = data.slack_bot_token || '';
+            sbIn.disabled = !!data.slack_bot_from_env;
+        }
+        if (sgIn) {
+            sgIn.value = data.slack_signing_secret || '';
+            sgIn.disabled = !!data.slack_signing_from_env;
+        }
+        if (hint) {
+            var parts = [];
+            if (data.discord_from_env) parts.push('Discord: env DECISIONSAI_DISCORD_BOT_TOKEN is set.');
+            if (data.slack_bot_from_env) parts.push('Slack bot: env DECISIONSAI_SLACK_BOT_TOKEN is set.');
+            if (data.slack_signing_from_env) parts.push('Slack signing: env DECISIONSAI_SLACK_SIGNING_SECRET is set.');
+            if (parts.length) {
+                hint.textContent = parts.join(' ');
+                hint.classList.remove('hidden');
+            } else {
+                hint.textContent = '';
+                hint.classList.add('hidden');
+            }
+        }
+    }).catch(function () {
+        if (statusEl) {
+            statusEl.textContent = 'Could not load saved credentials.';
+            statusEl.className = 'text-sm text-red-400 min-h-[1.25rem]';
+        }
+    });
+}
+
+function openIntegrationConnectorsModal() {
+    var modal = document.getElementById('integration_connectors_modal');
+    if (!modal) return;
+    loadIntegrationConnectorModal();
+    modal.classList.remove('hidden');
+    modal.querySelectorAll('.integration_connectors_modal_close').forEach(function (btn) {
+        btn.onclick = function () { modal.classList.add('hidden'); };
+    });
+    var bd = modal.querySelector('.integration_connectors_modal_backdrop');
+    if (bd) bd.onclick = function () { modal.classList.add('hidden'); };
+    var saveBtn = document.getElementById('integration_connectors_save_btn');
+    if (saveBtn) {
+        saveBtn.onclick = function () {
+            var statusEl = document.getElementById('integration_connectors_status');
+            var payload = {
+                discord_bot_token: (document.getElementById('integration_discord_token') || {}).value || '',
+                slack_bot_token: (document.getElementById('integration_slack_bot_token') || {}).value || '',
+                slack_signing_secret: (document.getElementById('integration_slack_signing_secret') || {}).value || ''
+            };
+            if (statusEl) {
+                statusEl.textContent = 'Saving...';
+                statusEl.className = 'text-sm text-[#9ca3af] min-h-[1.25rem]';
+            }
+            fetch(settingsBase + '/api/advanced/integration-connectors', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload)
+            }).then(function (r) { return r.json(); }).then(function (res) {
+                if (res.success) {
+                    if (statusEl) {
+                        statusEl.textContent = res.restart_note || 'Saved.';
+                        statusEl.className = 'text-sm text-green-400 min-h-[1.25rem]';
+                    }
+                    if (typeof window.showNotification === 'function') window.showNotification('Integration settings saved', 'success');
+                    updateConnectionStatus();
+                    loadIntegrationConnectorModal();
+                } else {
+                    if (statusEl) {
+                        statusEl.textContent = res.error || 'Save failed';
+                        statusEl.className = 'text-sm text-red-400 min-h-[1.25rem]';
+                    }
+                }
+            }).catch(function () {
+                if (statusEl) {
+                    statusEl.textContent = 'Save failed';
+                    statusEl.className = 'text-sm text-red-400 min-h-[1.25rem]';
+                }
+            });
+        };
+    }
 }
 
 function connectGoogle() {
@@ -784,6 +896,10 @@ if (document.readyState === 'loading') {
             if (trelloBtn) trelloBtn.addEventListener('click', connectTrello);
             var jiraBtn = document.getElementById('jira_connect_btn');
             if (jiraBtn) jiraBtn.addEventListener('click', connectJira);
+            var discordBtn = document.getElementById('discord_connect_btn');
+            if (discordBtn) discordBtn.addEventListener('click', openIntegrationConnectorsModal);
+            var slackBtn = document.getElementById('slack_connect_btn');
+            if (slackBtn) slackBtn.addEventListener('click', openIntegrationConnectorsModal);
             var reindexBtn = document.getElementById('reindex_button');
             if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
         }
@@ -802,6 +918,10 @@ if (document.readyState === 'loading') {
         if (trelloBtn) trelloBtn.addEventListener('click', connectTrello);
         var jiraBtn = document.getElementById('jira_connect_btn');
         if (jiraBtn) jiraBtn.addEventListener('click', connectJira);
+        var discordBtn = document.getElementById('discord_connect_btn');
+        if (discordBtn) discordBtn.addEventListener('click', openIntegrationConnectorsModal);
+        var slackBtn = document.getElementById('slack_connect_btn');
+        if (slackBtn) slackBtn.addEventListener('click', openIntegrationConnectorsModal);
         var reindexBtn = document.getElementById('reindex_button');
         if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
     }

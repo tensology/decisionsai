@@ -209,6 +209,54 @@
     </div>
 </div>
 
+<!-- Discord & Slack (Advanced → connected_accounts + env override) -->
+<div id="integration_connectors_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
+    <div class="fixed inset-0 bg-black/60 integration_connectors_modal_backdrop"></div>
+    <div class="fixed inset-0 flex items-center justify-center p-4 pointer-events-none overflow-y-auto">
+        <div class="bg-[#1a1f3a] border border-[#565869] rounded-xl shadow-xl max-w-lg w-full pointer-events-auto my-8">
+            <div class="p-5 border-b border-[#565869] flex items-center justify-between">
+                <h2 class="text-lg font-semibold text-white">Discord &amp; Slack</h2>
+                <button type="button" class="integration_connectors_modal_close p-2 rounded-md text-[#ececf1] hover:bg-[#565869] transition-colors" title="Close">&times;</button>
+            </div>
+            <div class="p-5 space-y-5 text-sm text-[#ececf1]">
+                <p id="integration_connectors_env_hint" class="text-xs text-amber-400/90 hidden"></p>
+                <p class="text-[#9ca3af] text-xs leading-relaxed">
+                    Tokens are stored encrypted like other connections. Environment variables
+                    <code class="text-[#ececf1]">DECISIONSAI_DISCORD_BOT_TOKEN</code>,
+                    <code class="text-[#ececf1]">DECISIONSAI_SLACK_BOT_TOKEN</code>, and
+                    <code class="text-[#ececf1]">DECISIONSAI_SLACK_SIGNING_SECRET</code> override saved values when set.
+                    Slack Events URL (web server): <code class="text-[#ececf1]">POST …/hooks/slack/events</code>
+                </p>
+                <div>
+                    <label for="integration_discord_token" class="block text-[#9ca3af] mb-1">Discord bot token</label>
+                    <input type="password" id="integration_discord_token" autocomplete="off"
+                           class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#ececf1]"
+                           placeholder="Bot token from Discord Developer Portal" />
+                </div>
+                <div>
+                    <label for="integration_slack_bot_token" class="block text-[#9ca3af] mb-1">Slack bot token (xoxb-…)</label>
+                    <input type="password" id="integration_slack_bot_token" autocomplete="off"
+                           class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#ececf1]"
+                           placeholder="Bot User OAuth Token for chat.postMessage" />
+                </div>
+                <div>
+                    <label for="integration_slack_signing_secret" class="block text-[#9ca3af] mb-1">Slack signing secret</label>
+                    <input type="password" id="integration_slack_signing_secret" autocomplete="off"
+                           class="w-full bg-[#40414f] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#ececf1]"
+                           placeholder="Signing secret for Events API verification" />
+                </div>
+                <p id="integration_connectors_status" class="text-sm min-h-[1.25rem]"></p>
+                <div class="flex gap-2 pt-1">
+                    <button type="button" id="integration_connectors_save_btn"
+                            class="px-4 py-2 bg-[#4CAF50] hover:bg-[#45a049] text-white rounded-md text-sm font-medium">Save</button>
+                    <button type="button" class="integration_connectors_modal_close px-4 py-2 bg-[#565869] hover:bg-[#6b6b7b] text-white rounded-md text-sm">Cancel</button>
+                </div>
+                <p class="text-xs text-[#9ca3af]">After changing the Discord token, restart the DecisionsAI desktop app so the bot thread reconnects.</p>
+            </div>
+        </div>
+    </div>
+</div>
+
 <!-- Telegram Connect Modal -->
 <div id="telegram_modal" class="fixed inset-0 z-50 hidden" aria-hidden="true">
     <div class="fixed inset-0 bg-black/60 telegram_modal_backdrop"></div>

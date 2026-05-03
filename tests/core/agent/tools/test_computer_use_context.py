@@ -1,5 +1,3 @@
-import json
-
 from distr.core.agent.services.computer_use_context import (
     clear_context,
     get_context_snapshot,
@@ -46,11 +44,12 @@ def test_context_tool_get_and_clear():
     record_candidate_target(source="accessibility_tree", x=42, y=84, screen=1, description="ok")
     tool = ComputerUseContextTool()
 
-    payload = json.loads(tool._run(action="get"))
-    assert payload["last_candidate_target"]["x"] == 42
+    text = tool._run(action="get")
+    assert "(42, 84)" in text
+    assert "ok" in text
 
     clear_result = tool._run(action="clear")
     assert "cleared" in clear_result.lower()
 
-    payload_after_clear = json.loads(tool._run(action="get"))
-    assert payload_after_clear["last_candidate_target"] is None
+    text_after_clear = tool._run(action="get")
+    assert "No computer-use context" in text_after_clear

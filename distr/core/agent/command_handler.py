@@ -684,6 +684,38 @@ def _cmd_interrupt_tts(session, params):
 
 
 
+def _split_text_for_direct_tts(text: str, max_chunk: int = 300) -> list[str]:
+    """Split long strings at sentence/word boundaries for incremental Kokoro TTS (avoids huge buffers)."""
+    import re
+
+    t = (text or "").strip()
+    if not t:
+        return []
+    if len(t) <= max_chunk:
+        return [t]
+    parts: list[str] = []
+    cur = ""
+    for sentence in re.split(r"(?<=[.!?])\s+", t):
+        s = (sentence or "").strip()
+        if not s:
+            continue
+        if len(cur) + len(s) + (1 if cur else 0) <= max_chunk:
+            cur = f"{cur} {s}".strip() if cur else s
+        else:
+            if cur:
+                parts.append(cur)
+            while len(s) > max_chunk:
+                cut = s.rfind(" ", 0, max_chunk)
+                if cut <= 0:
+                    cut = max_chunk
+                parts.append(s[:cut].strip())
+                s = s[cut:].strip()
+            cur = s
+    if cur:
+        parts.append(cur)
+    return parts if parts else [t]
+
+
 def _cmd_speak_text_directly(session, params):
     """Speak text directly via TTS without going through LLM."""
     from .libs import StartFrame, TextFrame, LLMFullResponseStartFrame, LLMFullResponseEndFrame
@@ -691,7 +723,7 @@ def _cmd_speak_text_directly(session, params):
     from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 
     raw_text = params.get('text', '')
-    text = clean_text_for_tts(raw_text)
+    text = clean_text_for_tts(raw_text, spoken_prose=True)
     has_llm = hasattr(session, 'llm_service') and session.llm_service is not None
     has_loop = hasattr(session, 'runner') and session.runner is not None and hasattr(session.runner, '_loop') and session.runner._loop is not None
     session.logger.info(f"_cmd_speak_text_directly called: text_len={len(text)}, has_llm_service={has_llm}, has_event_loop={has_loop}")
@@ -744,11 +776,21 @@ def _cmd_speak_text_directly(session, params):
                     await asyncio.sleep(0.01)
 
                 await session.llm_service.push_frame(LLMFullResponseStartFrame(), pipeline_dir)
-                await session.llm_service.push_frame(TextFrame(text=text), pipeline_dir)
+                chunks = _split_text_for_direct_tts(text)
+                for i, chunk in enumerate(chunks):
+                    if not chunk:
+                        continue
+                    await session.llm_service.push_frame(TextFrame(text=chunk), pipeline_dir)
+                    if i < len(chunks) - 1:
+                        await asyncio.sleep(0.04)
                 await session.llm_service.push_frame(LLMFullResponseEndFrame(), pipeline_dir)
-                session.logger.info("_cmd_speak_text_directly id=%s frames queued to pipeline", direct_tts_id)
+                session.logger.info(
+                    "_cmd_speak_text_directly id=%s queued %d text chunk(s) to pipeline",
+                    direct_tts_id,
+                    len(chunks),
+                )
 
-                # Wait for TTS to process, then restore thread flags
+                # Let the pipeline start synthesis before restoring telegram thread flags
                 await asyncio.sleep(0.5)
                 for t, val in saved_flags.items():
                     try:

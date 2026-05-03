@@ -8,6 +8,11 @@ import sys
 import os
 import time
 import threading
+
+import pytest
+
+pytest.importorskip("pynput")
+
 from PyQt6.QtWidgets import QApplication
 from PyQt6.QtCore import QTimer
 from pynput import keyboard, mouse

@@ -11,6 +11,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Optional
 
 from distr.core.initiative.orchestration_allowlist import normalize_suggested_tool
+from distr.core.initiative.rubric import RubricScore
 
 logger = logging.getLogger(__name__)
 
@@ -28,6 +29,7 @@ class ProposedAction:
     telegram_message: str = ""
     requires_confirmation: bool = False
     suggested_tool: Optional[Dict[str, Any]] = None
+    rubric: Optional[RubricScore] = None
 
 
 def serialize(action: ProposedAction) -> dict:
@@ -38,6 +40,7 @@ def deserialize(data: dict) -> ProposedAction:
     description = data.get("description", "No description provided")
     if not description:
         description = "No description provided"
+    rubric = RubricScore.from_payload(data.get("rubric"))
     return ProposedAction(
         action_type=data.get("action_type", "none"),
         description=description,
@@ -46,6 +49,7 @@ def deserialize(data: dict) -> ProposedAction:
         telegram_message=data.get("telegram_message") or "",
         requires_confirmation=data.get("requires_confirmation", False),
         suggested_tool=data.get("suggested_tool"),
+        rubric=rubric,
     )
 
 

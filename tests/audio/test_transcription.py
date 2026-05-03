@@ -13,6 +13,11 @@ Tests Whisper STT service with various scenarios:
 import asyncio
 import sys
 import os
+
+import pytest
+
+pytest.importorskip("sounddevice")
+
 import numpy as np
 import sounddevice as sd
 import logging
@@ -22,7 +27,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from distr.core.agent.services.whisper import WhisperSTTService
+from distr.core.agent.services.stt.whisper import WhisperSTTService
 from distr.core.agent.session import AgentSession
 from pipecat.frames.frames import AudioRawFrame, TranscriptionFrame
 

@@ -3,6 +3,11 @@ import sys
 import os
 import logging
 from unittest.mock import MagicMock, patch
+
+import pytest
+
+pytest.importorskip("pipecat.pipeline.pipeline")
+
 import numpy as np
 
 # Add project root to path

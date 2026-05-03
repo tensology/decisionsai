@@ -56,10 +56,8 @@
                 <div class="form-group">
                     <label for="{% if modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}">Provider</label>
                     <select id="{% if modal %}voiceProvider{% else %}emptyStateVoiceProvider{% endif %}" class="form-control form-control-select">
-                        <option value="kokoro">Kokoro</option>
-                        <option value="openai">OpenAI TTS</option>
-                        <option value="elevenlabs">ElevenLabs</option>
-                        <option value="coqui">Coqui TTS</option>
+                        {# Same source as Settings > General: populated by chat.js from GET /api/tts/providers #}
+                        <option value="">Loading…</option>
                     </select>
                 </div>
                 <div class="form-group form-group-with-play">

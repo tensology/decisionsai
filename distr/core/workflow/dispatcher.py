@@ -50,6 +50,41 @@ class _RunContext:
 
 _active_runs: Dict[int, _RunContext] = {}
 _runs_lock = threading.Lock()
+
+
+def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_summary: List[dict]) -> None:
+    """Append a bounded workflow completion note to a ticket description.
+
+    Keeps user-visible ticket history without storing unbounded step output.
+    """
+    try:
+        status_label = (status or "unknown").strip().lower()
+        lines = [
+            f"[Workflow Run #{run_id}] Status: {status_label}",
+        ]
+        if steps_summary:
+            lines.append("Step summary:")
+            for s in steps_summary[-5:]:
+                title = (s.get("title") or "Step").strip()
+                st = (s.get("status") or "").strip()
+                result = (s.get("result") or "").strip()
+                snippet = result[:240]
+                if len(result) > 240:
+                    snippet += "..."
+                lines.append(f"- {title}: {st}")
+                if snippet:
+                    lines.append(f"  {snippet}")
+        note = "\n".join(lines).strip()
+        existing = (getattr(ticket, "description", "") or "").strip()
+        if existing:
+            ticket.description = f"{existing}\n\n{note}"
+        else:
+            ticket.description = note
+        # Cap growth to keep ticket text responsive in UI.
+        if len(ticket.description) > 12000:
+            ticket.description = ticket.description[-12000:]
+    except Exception:
+        logger.debug("Could not append workflow summary note to ticket", exc_info=True)
 _isolated_step_lock = threading.Lock()
 _isolated_steps_in_progress: set[int] = set()
 
@@ -158,6 +193,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 ).first()
                 if ticket:
                     ticket.workflow_status = status
+                    _append_workflow_summary_to_ticket(ticket, run_id, status, steps_summary)
                     db.commit()
     except Exception:
         logger.debug("Could not sync workflow_status to ticket for run %d", run_id)
@@ -289,7 +325,9 @@ def start_workflow_run(
             )
 
         run.current_step_id = first_step.id
-        first_step.status = "running"
+        # Keep step at "pending" until StepDispatcher.run_in_workflow runs — otherwise the
+        # run_in_workflow idempotency guard sees running + current_step_id match and skips the
+        # initial dispatch (start_workflow_run always loads DB then dispatches once).
         first_step_id = first_step.id
         # Mark the ticket as "running" immediately so the board reflects in-progress state
         if ticket_id:

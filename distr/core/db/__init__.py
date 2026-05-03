@@ -669,6 +669,8 @@ def init_db():
     from distr.core.db import projects as _projects  # noqa: F401
     from distr.core.db import workflow as _workflow  # noqa: F401
     from distr.core.db import kanban as _kanban  # noqa: F401
+    from distr.core.db import proactive as _proactive  # noqa: F401
+    from distr.core.db import planner_output as _planner_output  # noqa: F401
 
     # Run migrations that need to happen BEFORE create_all (like renaming old tables)
     from distr.core.db.migrations import run_pre_create_migrations
@@ -679,6 +681,14 @@ def init_db():
     # Run all database migrations
     from distr.core.db.migrations import run_migrations
     run_migrations()
+
+    try:
+        from distr.core.db.proactive import ensure_system_proactive_tasks
+
+        with Session() as session:
+            ensure_system_proactive_tasks(session)
+    except Exception as _seed_pt:
+        logging.getLogger(__name__).warning("ensure_system_proactive_tasks failed: %s", _seed_pt)
     
     with Session() as session:
         if not session.query(Settings).first():

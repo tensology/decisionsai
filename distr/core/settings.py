@@ -144,9 +144,11 @@ def load_settings_from_db() -> Dict[str, Any]:
             logging.debug("No settings found in database, using defaults")
             return DEFAULT_SETTINGS.copy()
         
-        # Merge with defaults for any missing values
-        # IMPORTANT: settings from DB take precedence over defaults
-        merged_settings = {**DEFAULT_SETTINGS, **settings}
+        # Merge with defaults for any missing values.
+        # IMPORTANT: settings from DB take precedence over defaults, but SQL NULL
+        # must not clobber defaults (boolean columns often deserialize as None).
+        db_overlay = {k: v for k, v in settings.items() if v is not None}
+        merged_settings = {**DEFAULT_SETTINGS, **db_overlay}
 
         # Migrate legacy GIF filename values for selected_oracle (runs at most once per process)
         merged_settings = _migrate_legacy_oracle_setting(merged_settings)

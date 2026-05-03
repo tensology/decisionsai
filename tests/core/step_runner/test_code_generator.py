@@ -118,24 +118,24 @@ class TestGenerateCode:
         return resp
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_generate_execute_code(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_generate_execute_code(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response("print('hello')")
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response("print('hello')")
 
         svc = CodeGeneratorService()
         result = svc.generate_code("print hello", StepType.EXECUTE_CODE)
 
         assert result == "print('hello')"
-        mock_completion.assert_called_once()
-        call_kwargs = mock_completion.call_args
+        mock_litellm_mod.completion.assert_called_once()
+        call_kwargs = mock_litellm_mod.completion.call_args
         assert "print hello" in call_kwargs.kwargs["messages"][0]["content"]
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_generate_playwright_code(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_generate_playwright_code(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response(
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response(
             "from playwright.sync_api import sync_playwright"
         )
 
@@ -143,28 +143,28 @@ class TestGenerateCode:
         result = svc.generate_code("open google", StepType.PLAYWRIGHT)
 
         assert "playwright" in result
-        call_kwargs = mock_completion.call_args
+        call_kwargs = mock_litellm_mod.completion.call_args
         prompt = call_kwargs.kwargs["messages"][0]["content"]
         assert "Playwright" in prompt
         assert "sync" in prompt.lower()
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_generate_code_with_context(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_generate_code_with_context(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response("code")
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response("code")
 
         svc = CodeGeneratorService()
         svc.generate_code("do stuff", StepType.EXECUTE_CODE, context="some context")
 
-        prompt = mock_completion.call_args.kwargs["messages"][0]["content"]
+        prompt = mock_litellm_mod.completion.call_args.kwargs["messages"][0]["content"]
         assert "some context" in prompt
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_strips_markdown_fences_from_response(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_strips_markdown_fences_from_response(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response(
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response(
             "```python\nprint('hi')\n```"
         )
 
@@ -173,19 +173,20 @@ class TestGenerateCode:
         assert result == "print('hi')"
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_empty_response_raises(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_empty_response_raises(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response("")
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response("")
 
         svc = CodeGeneratorService()
         with pytest.raises(RuntimeError, match="empty response"):
             svc.generate_code("do something", StepType.EXECUTE_CODE)
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion", side_effect=ConnectionError("timeout"))
-    def test_llm_unreachable_raises_descriptive_error(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_llm_unreachable_raises_descriptive_error(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
+        mock_litellm_mod.completion.side_effect = ConnectionError("timeout")
 
         svc = CodeGeneratorService()
         with pytest.raises(RuntimeError, match="Failed to reach the coding LLM"):
@@ -205,10 +206,10 @@ class TestFixCode:
         return resp
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion")
-    def test_fix_code_returns_corrected_code(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_fix_code_returns_corrected_code(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
-        mock_completion.return_value = self._mock_litellm_response("print('fixed')")
+        mock_litellm_mod.completion.return_value = self._mock_litellm_response("print('fixed')")
 
         svc = CodeGeneratorService()
         result = svc.fix_code(
@@ -219,14 +220,15 @@ class TestFixCode:
         )
 
         assert result == "print('fixed')"
-        prompt = mock_completion.call_args.kwargs["messages"][0]["content"]
+        prompt = mock_litellm_mod.completion.call_args.kwargs["messages"][0]["content"]
         assert "SyntaxError" in prompt
         assert "print('broken'" in prompt
 
     @patch(SETTINGS_PATCH)
-    @patch("litellm.completion", side_effect=Exception("network error"))
-    def test_fix_code_llm_error_raises(self, mock_completion, mock_load):
+    @patch("distr.core.workflow_engine.code_generator._litellm_client")
+    def test_fix_code_llm_error_raises(self, mock_litellm_mod, mock_load):
         mock_load.return_value = {"coding_llm_provider": "openai", "coding_llm_model": "gpt-4"}
+        mock_litellm_mod.completion.side_effect = Exception("network error")
 
         svc = CodeGeneratorService()
         with pytest.raises(RuntimeError, match="Failed to reach the coding LLM"):

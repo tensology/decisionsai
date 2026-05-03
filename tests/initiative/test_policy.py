@@ -1,6 +1,7 @@
 import pytest
 from distr.core.initiative.policy import evaluate, migrate_initiative_level, PolicyDecision
 from distr.core.initiative.proposed_action import ProposedAction
+from distr.core.initiative.rubric import RubricScore
 
 
 def make_action(action_type):
@@ -19,16 +20,34 @@ def full_boundaries(allow_telegram=True, allow_routine=True, ask_external=False,
 
 # --- observe level ---
 class TestObserveLevel:
-    def test_observe_any_action_is_skip(self):
+    def test_observe_without_rubric_is_skip(self):
         for at in ["suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"]:
             assert evaluate(make_action(at), "observe", full_boundaries()) == PolicyDecision.SKIP
+
+    def test_observe_with_rubric_13_plus_is_draft(self):
+        action = ProposedAction(
+            action_type="suggestion",
+            description="Important",
+            rubric=RubricScore(3, 3, 3, 2, 2),
+        )
+        assert action.rubric.total == 13
+        assert evaluate(action, "observe", full_boundaries()) == PolicyDecision.DRAFT_AND_ASK
 
 
 # --- assist level ---
 class TestAssistLevel:
-    def test_assist_any_action_is_suggest_only(self):
+    def test_assist_without_rubric_is_suggest_only(self):
         for at in ["suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"]:
             assert evaluate(make_action(at), "assist", full_boundaries()) == PolicyDecision.SUGGEST_ONLY
+
+    def test_assist_with_high_rubric_is_draft_not_execute(self):
+        action = ProposedAction(
+            action_type="suggestion",
+            description="Big deal",
+            rubric=RubricScore(4, 4, 4, 4, 4),
+        )
+        assert action.rubric.total == 20
+        assert evaluate(action, "assist", full_boundaries()) == PolicyDecision.DRAFT_AND_ASK
 
 
 # --- operate level ---
@@ -62,6 +81,30 @@ class TestOperateLevel:
 
     def test_none_is_skip(self):
         assert evaluate(make_action("none"), "operate", full_boundaries()) == PolicyDecision.SKIP
+
+    def test_rubric_downgrades_execute_to_draft(self):
+        action = ProposedAction(
+            action_type="external_comms",
+            description="Low urgency ping",
+            rubric=RubricScore(3, 3, 3, 2, 2),
+        )
+        assert evaluate(action, "operate", full_boundaries(ask_external=False)) == PolicyDecision.DRAFT_AND_ASK
+
+    def test_rubric_skips_when_legacy_would_execute(self):
+        action = ProposedAction(
+            action_type="external_comms",
+            description="Defer",
+            rubric=RubricScore(2, 2, 2, 2, 2),
+        )
+        assert evaluate(action, "operate", full_boundaries(ask_external=False)) == PolicyDecision.SKIP
+
+    def test_rubric_does_not_upgrade_blocked_routine(self):
+        action = ProposedAction(
+            action_type="routine_task",
+            description="Run",
+            rubric=RubricScore(4, 4, 4, 4, 4),
+        )
+        assert evaluate(action, "operate", full_boundaries(allow_routine=False)) == PolicyDecision.SUGGEST_ONLY
 
 
 # --- own level ---

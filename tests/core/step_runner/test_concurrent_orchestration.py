@@ -21,18 +21,15 @@ _mock_qt = MagicMock()
 for mod in ("PyQt6", "PyQt6.QtCore", "PyQt6.QtWidgets", "PyQt6.QtGui"):
     sys.modules.setdefault(mod, _mock_qt)
 
-# sqlalchemy and DB layer
 _mock_sa = MagicMock()
 for mod in ("sqlalchemy", "sqlalchemy.orm", "sqlalchemy.ext", "sqlalchemy.ext.declarative"):
     sys.modules.setdefault(mod, _mock_sa)
 
-# Mock the DB module hierarchy so local imports inside workflow methods work
 _mock_db_pkg = MagicMock()
 sys.modules.setdefault("distr.core.db", _mock_db_pkg)
 sys.modules.setdefault("distr.core.db.step_runner", MagicMock())
 sys.modules.setdefault("distr.core.db.workflow", MagicMock())
 
-# Mock sub-modules used by local imports
 sys.modules.setdefault("distr.core.workflow_engine.context_assembly", MagicMock())
 sys.modules.setdefault("distr.core.workflow_engine.agent_bridge", MagicMock())
 sys.modules.setdefault("distr.core.workflow.service", MagicMock())

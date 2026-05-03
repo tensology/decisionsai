@@ -10,17 +10,19 @@ import threading
 import time
 from unittest.mock import Mock, patch
 
+import pytest
+
 # Add parent directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '../..'))
 
 def test_pynput_in_main_thread():
     """Test pynput listeners in main thread"""
+    pytest.importorskip("pynput")
+    mouse_listener = None
+    keyboard_listener = None
     print("\n=== Test 1: Pynput in Main Thread ===")
     try:
         from pynput import mouse, keyboard
-        
-        mouse_listener = None
-        keyboard_listener = None
         
         def on_move(x, y):
             pass
@@ -50,27 +52,27 @@ def test_pynput_in_main_thread():
         keyboard_listener.stop()
         
         print("✓ Test 1 PASSED")
-        return True
     except Exception as e:
         print(f"❌ Test 1 FAILED: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
     finally:
         if mouse_listener:
             try:
                 mouse_listener.stop()
-            except:
+            except Exception:
                 pass
         if keyboard_listener:
             try:
                 keyboard_listener.stop()
-            except:
+            except Exception:
                 pass
 
 
 def test_pynput_in_background_thread():
     """Test pynput listeners in background thread"""
+    pytest.importorskip("pynput")
     print("\n=== Test 2: Pynput in Background Thread ===")
     result = [None]
     error = [None]
@@ -132,20 +134,19 @@ def test_pynput_in_background_thread():
     
     if error[0]:
         print(f"❌ Test 2 FAILED: {error[0]}")
-        return False
+        raise error[0]
     elif result[0]:
         print("✓ Test 2 PASSED")
-        return True
     else:
-        print("❌ Test 2 FAILED: Thread timed out or didn't complete")
-        return False
+        pytest.fail("Thread timed out or didn't complete")
 
 
 def test_action_recorder_direct():
     """Test ActionRecorder directly"""
+    pytest.importorskip("pynput")
     print("\n=== Test 3: ActionRecorder Direct ===")
     try:
-        from distr.core.action_recorder import ActionRecorder
+        from distr.core.actions.recorder import ActionRecorder
         
         recorder = ActionRecorder(action_id=1, action_title="Test Action")
         print("Recorder created")
@@ -161,23 +162,23 @@ def test_action_recorder_direct():
         print("Recording stopped")
         
         print("✓ Test 3 PASSED")
-        return True
     except Exception as e:
         print(f"❌ Test 3 FAILED: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
 
 def test_action_recorder_in_thread():
     """Test ActionRecorder in background thread"""
+    pytest.importorskip("pynput")
     print("\n=== Test 4: ActionRecorder in Background Thread ===")
     result = [None]
     error = [None]
     
     def run_in_thread():
         try:
-            from distr.core.action_recorder import ActionRecorder
+            from distr.core.actions.recorder import ActionRecorder
             
             recorder = ActionRecorder(action_id=1, action_title="Test Action")
             print("  [Thread] Recorder created")
@@ -204,30 +205,28 @@ def test_action_recorder_in_thread():
     
     if error[0]:
         print(f"❌ Test 4 FAILED: {error[0]}")
-        return False
+        raise error[0]
     elif result[0]:
         print("✓ Test 4 PASSED")
-        return True
     else:
-        print("❌ Test 4 FAILED: Thread timed out or didn't complete")
-        return False
+        pytest.fail("Thread timed out or didn't complete")
 
 
 def test_pynput_with_pyqt6():
     """Test pynput with PyQt6 event loop running"""
+    pytest.importorskip("pynput")
+    pytest.importorskip("PyQt6")
+    mouse_listener = None
+    keyboard_listener = None
     print("\n=== Test 5: Pynput with PyQt6 Event Loop ===")
     try:
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import QTimer
         from pynput import mouse, keyboard
-        import sys
         
         app = QApplication.instance()
         if not app:
             app = QApplication([])
-        
-        mouse_listener = None
-        keyboard_listener = None
         test_result = [False]
         
         def on_move(x, y):
@@ -282,17 +281,13 @@ def test_pynput_with_pyqt6():
         print("Running PyQt6 event loop...")
         app.exec()
         
-        if test_result[0]:
-            print("✓ Test 5 PASSED")
-            return True
-        else:
-            print("❌ Test 5 FAILED: Listeners didn't start")
-            return False
+        assert test_result[0], "Listeners didn't start"
+        print("✓ Test 5 PASSED")
     except Exception as e:
         print(f"❌ Test 5 FAILED: {e}")
         import traceback
         traceback.print_exc()
-        return False
+        raise
 
 
 if __name__ == '__main__':

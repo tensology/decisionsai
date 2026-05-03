@@ -22,6 +22,32 @@ OPENAI_TTS_VOICES = [
 CUSTOM_VOICE_AUDIO_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'db', 'custom_voices'))
 
 
+def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
+    """Third-party TTS gates mirroring /api/llms/available-providers (enabled + non-empty key)."""
+    if provider_id == "openai":
+        return bool(settings.get("openai_enabled")) and bool(
+            str(settings.get("openai_key") or "").strip()
+        )
+    if provider_id == "elevenlabs":
+        return bool(settings.get("elevenlabs_enabled")) and bool(
+            str(settings.get("elevenlabs_key") or "").strip()
+        )
+    return True
+
+
+def _tts_provider_eligible_for_dropdown(
+    settings: dict, provider_meta: dict, voices: list,
+) -> bool:
+    """Omit providers with no usable voices or unverified cloud credentials."""
+    if not voices:
+        return False
+    ptype = (provider_meta.get("type") or "").strip().lower()
+    if ptype == "offline":
+        return True
+    pid = provider_meta.get("id") or ""
+    return _tts_online_provider_verified(settings, pid)
+
+
 def register_routes(router, templates):
 
     _voices_cache: dict = {}       # provider_id -> (voices_list, timestamp)
@@ -116,11 +142,16 @@ def register_routes(router, templates):
     async def get_tts_providers():
         """Return all enabled TTS providers with their voices. Single source of truth for the UI."""
         from distr.core.agent.constants import TTS_PROVIDERS
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
         result = []
         for p in TTS_PROVIDERS:
             if not p["enabled"]:
                 continue
             voices = await _get_voices_for_provider(p["id"])
+            if not _tts_provider_eligible_for_dropdown(settings, p, voices):
+                continue
             entry = {
                 "id": p["id"],
                 "name": p["name"],

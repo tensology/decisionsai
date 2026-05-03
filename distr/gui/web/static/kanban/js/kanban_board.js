@@ -39,11 +39,40 @@
         return /^\d+\s*[wdhm](\s+\d+\s*[wdhm])*$/i.test(v);
     }
 
+    var SOURCE_CHAT_STORAGE_KEY = "decisions_source_chat_id";
+
+    function getSourceChatIdForTickets() {
+        var id = null;
+        try {
+            if (window.DecisionsWebChat && typeof window.DecisionsWebChat.getSourceChatIdForTickets === "function") {
+                id = window.DecisionsWebChat.getSourceChatIdForTickets();
+            }
+            if (id == null || id < 1) {
+                var raw = sessionStorage.getItem(SOURCE_CHAT_STORAGE_KEY);
+                if (raw) {
+                    var n = parseInt(raw, 10);
+                    if (!isNaN(n) && n >= 1) id = n;
+                }
+            }
+        } catch (e) { /* ignore */ }
+        return id != null && id >= 1 ? id : null;
+    }
+
+    /** Mutates obj (plain ticket POST body) to include source_chat_id when known. */
+    function mergeSourceChatIntoPayload(obj) {
+        if (!obj || typeof obj !== "object") return obj;
+        var cid = getSourceChatIdForTickets();
+        if (cid != null) obj.source_chat_id = cid;
+        return obj;
+    }
+
     window.KanbanCommonUtils = {
         esc: esc,
         truncate: truncate,
         stripHtml: stripHtml,
         isValidTimeTrackingValue: isValidTimeTrackingValue,
+        getSourceChatIdForTickets: getSourceChatIdForTickets,
+        mergeSourceChatIntoPayload: mergeSourceChatIntoPayload,
     };
 })();
 
@@ -196,7 +225,16 @@
             if (boardId && currentBoardData && currentBoardData.id == boardId) {
                 populateBoardModal(currentBoardData);
             } else if (boardId) {
-                deps.apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
+                Promise.all([
+                    deps.apiFetch("/api/kanban/boards/" + boardId),
+                    deps.apiFetch("/api/kanban/boards").catch(function() { return []; }),
+                ]).then(function(results) {
+                    var data = results[0] || {};
+                    var list = Array.isArray(results[1]) ? results[1] : [];
+                    var row = list.find(function(b) { return String(b.id) === String(boardId); });
+                    if (row && typeof row.agent_enabled !== "undefined") {
+                        data.agent_enabled = row.agent_enabled;
+                    }
                     populateBoardModal(data);
                 }).catch(function() {});
             } else {
@@ -309,14 +347,19 @@
                 default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value, 10) || 0,
                 default_project_id: parseInt(document.getElementById("kb-board-def-project").value, 10) || 0,
                 color: document.getElementById("kb-board-modal-color").value || "",
-                agent_enabled: document.getElementById("kb-board-modal-agent-enabled").checked,
             };
+            var agentChecked = document.getElementById("kb-board-modal-agent-enabled").checked;
 
             if (deps.getEditingBoardId()) {
                 var boardId = deps.getEditingBoardId();
                 deps.apiFetch("/api/kanban/boards/" + boardId, {
                     method: "PUT", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
+                }).then(function() {
+                    return deps.apiFetch("/api/kanban/boards/" + boardId + "/agent-enabled", {
+                        method: "PUT", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ agent_enabled: agentChecked }),
+                    });
                 }).then(function() {
                     deps.showSnackbar("Board updated");
                     closeBoardModal();
@@ -333,8 +376,14 @@
                         method: "PUT", headers: { "Content-Type": "application/json" },
                         body: JSON.stringify({
                             default_workflow_id: payload.default_workflow_id,
-                            default_project_id: payload.default_project_id
+                            default_project_id: payload.default_project_id,
+                            color: payload.color,
                         })
+                    }).then(function() { return data; });
+                }).then(function(data) {
+                    return deps.apiFetch("/api/kanban/boards/" + data.id + "/agent-enabled", {
+                        method: "PUT", headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ agent_enabled: agentChecked }),
                     }).then(function() { return data; });
                 }).then(function(data) {
                     deps.showSnackbar("Board created");

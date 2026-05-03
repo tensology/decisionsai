@@ -3,11 +3,13 @@
 // Cross-compiles for macOS (arm64/amd64) and Windows (amd64).
 //
 // Build:
-//   macOS:   go build -o decisionsai-sidecar .
-//   Windows: GOOS=windows GOARCH=amd64 go build -o decisionsai-sidecar.exe .
+//
+//	macOS:   go build -o decisionsai-sidecar .
+//	Windows: GOOS=windows GOARCH=amd64 go build -o decisionsai-sidecar.exe .
 //
 // Run:
-//   ./decisionsai-sidecar --server wss://your-relay-server/ws/sidecar --token YOUR_TOKEN
+//
+//	./decisionsai-sidecar --server wss://your-relay-server/ws/sidecar --token YOUR_TOKEN
 package main
 
 import (
@@ -19,32 +21,47 @@ import (
 	"net/url"
 	"os"
 	"os/signal"
-	"strings"
 	"runtime"
+	"sort"
+	"strings"
 	"syscall"
 	"time"
 
 	"github.com/gorilla/websocket"
 )
 
+// Sidecar ↔ relay WebSocket JSON fields use this monotonic int. Bump when breaking registration or RPC shape.
+const sidecarWireVersion = 1
+
+const (
+	sidecarReconnectBackoffMin = 5 * time.Second
+	sidecarReconnectBackoffMax = 60 * time.Second
+)
+
+var (
+	sidecarProcessStart     = time.Now()
+	sidecarReconnectBackoff = sidecarReconnectBackoffMin
+)
+
 // ── Wire protocol ─────────────────────────────────────────────────────────────
 
 type RPCRequest struct {
-	Type   string         `json:"type"`    // "tool_call"
-	ID     string         `json:"id"`      // correlation ID
-	Tool   string         `json:"tool"`    // tool name
+	Type   string         `json:"type"` // "tool_call"
+	ID     string         `json:"id"`   // correlation ID
+	Tool   string         `json:"tool"` // tool name
 	Params map[string]any `json:"params"`
 }
 
 type RPCResponse struct {
-	Type   string `json:"type"`   // "tool_result"
-	ID     string `json:"id"`     // matches request ID
+	Type   string `json:"type"` // "tool_result"
+	ID     string `json:"id"`   // matches request ID
 	Result any    `json:"result,omitempty"`
 	Error  string `json:"error,omitempty"`
 }
 
 type Registration struct {
 	Type         string   `json:"type"`         // "sidecar_register"
+	WireVersion  int      `json:"wire_version"` // must match relay SIDECAR_WIRE_VERSION_MAX_SUPPORTED
 	OS           string   `json:"os"`
 	Hostname     string   `json:"hostname"`
 	Capabilities []string `json:"capabilities"`
@@ -99,7 +116,9 @@ func main() {
 	if *local {
 		log.Printf("[sidecar] Local mode — HTTP tool API on port %s", func() string {
 			p := os.Getenv("DECISIONSAI_SIDECAR_HTTP_PORT")
-			if p == "" { return "11435" }
+			if p == "" {
+				return "11435"
+			}
 			return p
 		}())
 		interrupt := make(chan os.Signal, 1)
@@ -135,13 +154,20 @@ func main() {
 
 	for {
 		if err := runLoop(u.String(), handlers); err != nil {
-			log.Printf("[sidecar] Disconnected: %v — reconnecting in 5s", err)
+			log.Printf("[sidecar] Disconnected: %v — reconnecting in %v", err, sidecarReconnectBackoff)
 		}
 		select {
 		case <-interrupt:
 			log.Println("[sidecar] Shutting down")
 			return
-		case <-time.After(5 * time.Second):
+		case <-time.After(sidecarReconnectBackoff):
+		}
+		if sidecarReconnectBackoff < sidecarReconnectBackoffMax {
+			next := sidecarReconnectBackoff * 2
+			if next > sidecarReconnectBackoffMax {
+				next = sidecarReconnectBackoffMax
+			}
+			sidecarReconnectBackoff = next
 		}
 	}
 }
@@ -155,9 +181,10 @@ func runLoop(serverURL string, handlers map[string]ToolHandler) error {
 
 	// Register capabilities
 	hostname, _ := os.Hostname()
-	caps := []string{"terminal", "filesystem", "clipboard", "screenshot", "desktop", "screen_intelligence", "python_executor"}
+	caps := defaultSidecarCapabilities()
 	reg := Registration{
 		Type:         "sidecar_register",
+		WireVersion:  sidecarWireVersion,
 		OS:           runtime.GOOS,
 		Hostname:     hostname,
 		Capabilities: caps,
@@ -165,7 +192,8 @@ func runLoop(serverURL string, handlers map[string]ToolHandler) error {
 	if err := conn.WriteJSON(reg); err != nil {
 		return fmt.Errorf("register: %w", err)
 	}
-	log.Printf("[sidecar] Registered — capabilities: %v", caps)
+	sidecarReconnectBackoff = sidecarReconnectBackoffMin
+	log.Printf("[sidecar] Registered (wire_version=%d) — capabilities: %v", sidecarWireVersion, caps)
 
 	for {
 		_, msg, err := conn.ReadMessage()
@@ -205,11 +233,33 @@ func dispatch(handlers map[string]ToolHandler, req RPCRequest) RPCResponse {
 
 type ToolHandler func(params map[string]any) (any, error)
 
+func defaultSidecarCapabilities() []string {
+	return []string{"terminal", "filesystem", "clipboard", "screenshot", "desktop", "screen_intelligence", "python_executor"}
+}
+
+func buildHealthPayload(handlers map[string]ToolHandler) map[string]any {
+	tools := make([]string, 0, len(handlers))
+	for name := range handlers {
+		tools = append(tools, name)
+	}
+	sort.Strings(tools)
+	return map[string]any{
+		"ok":             true,
+		"wire_version":   sidecarWireVersion,
+		"os":             runtime.GOOS,
+		"arch":           runtime.GOARCH,
+		"go_version":     runtime.Version(),
+		"uptime_seconds": time.Since(sidecarProcessStart).Seconds(),
+		"capabilities":   defaultSidecarCapabilities(),
+		"tools":          tools,
+		"tool_count":     len(tools),
+	}
+}
 
 // startHTTPServer starts a simple HTTP server so Python tools can call
 // sidecar tools without needing a WebSocket connection.
 // POST /tool/{name}  body: JSON params  →  JSON result
-// GET  /health       →  {"ok":true}
+// GET  /health       →  JSON ok + wire_version, build, tools (for GUI / probes)
 func startHTTPServer(handlers map[string]ToolHandler) {
 	httpPort := os.Getenv("DECISIONSAI_SIDECAR_HTTP_PORT")
 	if httpPort == "" {
@@ -220,7 +270,7 @@ func startHTTPServer(handlers map[string]ToolHandler) {
 
 	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		w.Write([]byte(`{"ok":true}`))
+		_ = json.NewEncoder(w).Encode(buildHealthPayload(handlers))
 	})
 
 	mux.HandleFunc("/tool/", func(w http.ResponseWriter, r *http.Request) {

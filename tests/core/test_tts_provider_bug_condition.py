@@ -31,6 +31,12 @@ MOCK_PROVIDER = {
 }
 
 
+@pytest.mark.skip(
+    reason=(
+        "Obsolete pre-registry demonstrations: create_tts_service uses "
+        "tts_registry (see TestBugConditionFixed). Keeping file for history."
+    )
+)
 class TestBugConditionUnfixed:
     """Monkey-patch TTS_PROVIDERS to include a mock provider, then verify that
     consumer code paths reject / mishandle it.

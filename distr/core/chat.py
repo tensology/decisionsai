@@ -281,6 +281,51 @@ class ChatService:
             session.commit()
 
     @staticmethod
+    def append_assistant_notice(chat_id: int, message: str, *, hidden: bool = False) -> bool:
+        """Append an assistant-only row (no user message) for system/board notices."""
+        cleaned = (message or "").strip()
+        if not cleaned:
+            return False
+        with get_session() as session:
+            chat = session.get(Chat, chat_id)
+            if not chat:
+                logger.warning(
+                    "ChatService.append_assistant_notice: Chat %s missing, skipped",
+                    chat_id,
+                )
+                return False
+            root_query = text("""
+                WITH RECURSIVE parents(id, parent_id) AS (
+                    SELECT id, parent_id FROM chats WHERE id = :start_id
+                    UNION ALL
+                    SELECT c.id, c.parent_id FROM chats c JOIN parents p ON c.id = p.parent_id
+                )
+                SELECT id FROM parents WHERE parent_id IS NULL
+            """)
+            root_row = session.execute(root_query, {"start_id": chat_id}).fetchone()
+            root_id = root_row[0] if root_row else chat_id
+            root = session.get(Chat, root_id)
+            if not root:
+                return False
+            child = Chat(
+                parent_id=root_id,
+                title=None,
+                input=None,
+                response=cleaned,
+                provider=root.provider,
+                model_name=root.model_name,
+                voice_provider=root.voice_provider,
+                voice_model=root.voice_model,
+                is_hidden=hidden,
+                created_date=datetime.now(timezone.utc),
+                modified_date=datetime.now(timezone.utc),
+            )
+            session.add(child)
+            root.modified_date = datetime.now(timezone.utc)
+            session.commit()
+        return True
+
+    @staticmethod
     def get_current_chat_id() -> Optional[int]:
         with get_session() as session:
             settings = session.query(Settings).first()

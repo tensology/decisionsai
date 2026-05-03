@@ -1,0 +1,21 @@
+<!-- MCP servers tab (R7) -->
+<div class="mb-6 pb-4 border-b border-[#565869]">
+    <h2 class="text-xl font-semibold text-white mb-1">MCP Servers</h2>
+    <p class="text-sm text-gray-400">
+        Edit MCP servers stored in <code class="text-[#ececf1] bg-[#40414f] px-1 rounded">mcp_config.json</code>
+        (next to your models directory). Saving writes atomically; the running app reloads MCP when the file changes.
+    </p>
+</div>
+
+<div class="space-y-4 mb-6">
+    <div id="mcp-servers-mount" class="space-y-4"></div>
+    <button type="button" id="mcp-add-row"
+            class="px-4 py-2 rounded-md text-sm font-medium bg-[#565869] text-[#ececf1] hover:bg-[#7a7c8c] transition-colors">
+        Add server
+    </button>
+</div>
+
+<p class="text-xs text-[#9ca3af] leading-relaxed">
+    <strong class="text-[#ececf1]">stdio:</strong> command is argv (first item = executable). &nbsp;
+    <strong class="text-[#ececf1]">sse:</strong> set URL and optional headers (e.g. Authorization). Env lines use <code class="text-[#ececf1]">KEY=value</code>.
+</p>

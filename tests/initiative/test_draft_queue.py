@@ -1,7 +1,9 @@
 import threading
 import pytest
 from datetime import datetime, timezone, timedelta
-from distr.core.initiative.draft_queue import DraftQueue, DraftEntry
+
+from distr.core.initiative.draft_queue import DraftEntry, DraftQueue
+from distr.core.initiative.tiers import PermissionTier
 
 
 def make_entry(entry_id="test-id", hours_until_expiry=24):
@@ -102,6 +104,7 @@ class TestDraftQueuePersistence:
         assert len(loaded) == 1
         assert loaded[0].id == "persist-test"
         assert loaded[0].description == entry.description
+        assert loaded[0].permission_tier == PermissionTier.APPROVE
 
     def test_empty_queue_no_file_error(self, tmp_path):
         path = str(tmp_path / "nonexistent.json")

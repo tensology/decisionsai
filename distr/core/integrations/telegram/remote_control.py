@@ -32,6 +32,23 @@ logger = logging.getLogger(__name__)
 class TelegramRemoteControlMixin:
     """Methods for remote-control commands received over the Telegram WebSocket."""
 
+    def _telegram_thread_id_for_message_bus(self) -> Optional[int]:
+        """Telegram DM / channel id for R15 thread ↔ chat persistence."""
+        raw = None
+        if hasattr(self, "_get_chat_id"):
+            try:
+                raw = self._get_chat_id()
+            except Exception:
+                raw = None
+        if raw is None:
+            raw = getattr(self, "telegram_user_id", None)
+        if raw is None:
+            return None
+        try:
+            return int(raw)
+        except (TypeError, ValueError):
+            return None
+
     def _handle_remote_control_command(self, data: dict):
         """
         Handle remote control commands from the server via WebSocket.
@@ -850,7 +867,9 @@ class TelegramRemoteControlMixin:
                         )
                     else:
                         try:
-                            from distr.core.signals import signal_manager
+                            from distr.core.integrations.bus import (
+                                get_integration_message_bus,
+                            )
 
                             # Remote-app voice/text instructions should follow the
                             # remote return path (no local desktop player window).
@@ -863,11 +882,14 @@ class TelegramRemoteControlMixin:
                             )
                             if hasattr(self, "_current_input_type"):
                                 self._current_input_type = "text"
-                            signal_manager.send_text_input.emit(
-                                str(instruction_text), True, None, False
+                            get_integration_message_bus().deliver_telegram_user_input(
+                                text=str(instruction_text),
+                                image_path=None,
+                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                speak=False,
                             )
                             logger.info(
-                                f"Forwarded instruction to agent via signal_manager: '{instruction_text[:50]}...'"
+                                f"Forwarded instruction to agent via message bus: '{instruction_text[:50]}...'"
                             )
                             self._send_websocket_message(
                                 {
@@ -995,7 +1017,10 @@ class TelegramRemoteControlMixin:
                         })
                     else:
                         if mode == "command":
-                            from distr.core.signals import signal_manager
+                            from distr.core.integrations.bus import (
+                                get_integration_message_bus,
+                            )
+
                             self._mark_remote_agent_response_context(
                                 request_id=request_id,
                                 source_command="voice_text_input",
@@ -1003,7 +1028,12 @@ class TelegramRemoteControlMixin:
                             )
                             if hasattr(self, "_current_input_type"):
                                 self._current_input_type = "text"
-                            signal_manager.send_text_input.emit(str(text), True, None, False)
+                            get_integration_message_bus().deliver_telegram_user_input(
+                                text=str(text),
+                                image_path=None,
+                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                speak=False,
+                            )
                         elif mode == "dictate":
                             self._type_text_quick(text)
                         self._send_websocket_message({
@@ -1105,7 +1135,10 @@ class TelegramRemoteControlMixin:
                                         })
                                         # For command mode, also send the text to the agent as input
                                         if mode == "command":
-                                            from distr.core.signals import signal_manager
+                                            from distr.core.integrations.bus import (
+                                                get_integration_message_bus,
+                                            )
+
                                             self._track_recent_remote_voice_command(
                                                 request_id=request_id, transcript=str(transcript)
                                             )
@@ -1120,7 +1153,12 @@ class TelegramRemoteControlMixin:
                                             )
                                             if hasattr(self, "_current_input_type"):
                                                 self._current_input_type = "text"
-                                            signal_manager.send_text_input.emit(str(transcript), True, None, False)
+                                            get_integration_message_bus().deliver_telegram_user_input(
+                                                text=str(transcript),
+                                                image_path=None,
+                                                telegram_chat_id=self._telegram_thread_id_for_message_bus(),
+                                                speak=False,
+                                            )
                                     else:
                                         self._send_websocket_message({
                                             "type": "remote_control_response", "command": "voice_transcribe",

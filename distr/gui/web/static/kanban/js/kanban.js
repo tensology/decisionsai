@@ -7,6 +7,8 @@
     var dbBoards = [];
     var editingBoardId = null;     // null = create, number = edit
     var modalTicketId = null;
+    /** Loaded ticket's source_chat_id (null = unset); used to avoid overwriting on save. */
+    var modalTicketSourceChatId = null;
     var copyTicketData = null;     // { title, description } for copy modal
     var ctxMenuBoardId = null;     // board id for context menu
     var waChats = [];
@@ -366,6 +368,22 @@
     var truncate = commonUtils.truncate;
 
     var apiFetch = window.DecisionsAPI.fetch;
+
+    /** Board GET omits agent_* keys; sidebar list includes agent_enabled for merging into cached detail. */
+    function mergeBoardDetailAgentEnabled(detail, boardId, boardList) {
+        if (!detail || boardId == null) return detail;
+        var list = Array.isArray(boardList) ? boardList : [];
+        for (var i = 0; i < list.length; i++) {
+            var b = list[i];
+            if (String(b.id) !== String(boardId)) continue;
+            if (typeof b.agent_enabled !== "undefined") {
+                detail.agent_enabled = b.agent_enabled;
+            }
+            break;
+        }
+        return detail;
+    }
+
     function showSnackbar(msg, type) { window.DecisionsAPI.snackbar(msg, type, { id: "kb-snackbar" }); }
     var modalHelpers = window.KanbanModalHelpers;
 
@@ -585,6 +603,7 @@
         apiFetch: apiFetch,
         showSnackbar: showSnackbar,
         stripHtml: stripHtml,
+        mergeSourceChatIntoPayload: commonUtils.mergeSourceChatIntoPayload,
         selectBoard: selectBoard,
         openTicketModal: openTicketModal,
         openCreateExternalTicketModal: openCreateExternalTicketModal,
@@ -598,6 +617,7 @@
         apiFetch: apiFetch,
         esc: esc,
         showSnackbar: showSnackbar,
+        mergeSourceChatIntoPayload: commonUtils.mergeSourceChatIntoPayload,
         selectBoard: selectBoard,
         getExternalBoards: getExternalBoards,
         refreshWaThreadIfOpen: refreshWaThreadIfOpen,
@@ -872,7 +892,11 @@
         }
 
         if (source === "database") {
-            apiFetch("/api/kanban/boards/" + id).then(function(data) {
+            Promise.all([
+                apiFetch("/api/kanban/boards/" + id),
+                apiFetch("/api/kanban/boards").catch(function() { return []; }),
+            ]).then(function(results) {
+                var data = mergeBoardDetailAgentEnabled(results[0] || {}, id, results[1]);
                 currentBoardData = data;
                 if (!keepMessagesVisible) {
                 document.getElementById("kb-loading").classList.add("hidden");
@@ -1004,8 +1028,12 @@
     function refreshCurrentBoardRealtime() {
         if (!currentBoard || currentBoard.source !== "database") return;
         var boardId = currentBoard.id;
-        apiFetch("/api/kanban/boards/" + boardId).then(function(data) {
+        Promise.all([
+            apiFetch("/api/kanban/boards/" + boardId),
+            apiFetch("/api/kanban/boards").catch(function() { return []; }),
+        ]).then(function(results) {
             if (!currentBoard || currentBoard.source !== "database" || currentBoard.id !== boardId) return;
+            var data = mergeBoardDetailAgentEnabled(results[0] || {}, boardId, results[1]);
             currentBoardData = data;
             renderBoard(data, true);
         }).catch(function() {});
@@ -1207,6 +1235,7 @@
             auto_send_to_project: action === 'project',
             auto_send_to_cli: action === 'cli',
         };
+        commonUtils.mergeSourceChatIntoPayload(payload);
 
         apiFetch("/api/kanban/tickets/copy-external-to-board", {
             method: "POST", headers: { "Content-Type": "application/json" },
@@ -1332,6 +1361,7 @@
 
     function openTicketModal(ticketId) {
         modalTicketId = ticketId;
+        modalTicketSourceChatId = null;
         switchTicketTab("details");
         // Reset modal to local-ticket mode
         resetTicketModalForLocal();
@@ -1345,6 +1375,7 @@
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
             loadLinkableEntities(t);
+            modalTicketSourceChatId = t.source_chat_id != null ? t.source_chat_id : null;
             setModalProjectActionState(!!(t.linked_project_id || (currentBoardData && currentBoardData.default_project_id)));
             // Hide external metadata section for local tickets
             var extMeta = document.getElementById("kb-modal-external-meta");
@@ -1356,6 +1387,7 @@
     function closeTicketModal() {
         document.getElementById("kb-ticket-modal").classList.add("hidden");
         modalTicketId = null;
+        modalTicketSourceChatId = null;
         window._extTicketData = null;
         window._extTicketSource = null;
         var descArea = document.getElementById("kb-modal-ticket-desc");
@@ -1456,6 +1488,10 @@
             linked_snippet_id: null,
             linked_action_id: null,
         };
+        if (modalTicketSourceChatId == null && typeof commonUtils.getSourceChatIdForTickets === "function") {
+            var linkCid = commonUtils.getSourceChatIdForTickets();
+            if (linkCid != null) payload.source_chat_id = linkCid;
+        }
         if (!payload.title) { showSnackbar("Title is required", "error"); return; }
         apiFetch("/api/kanban/tickets/" + modalTicketId, {
             method: "PUT", headers: { "Content-Type": "application/json" },

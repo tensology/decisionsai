@@ -97,6 +97,9 @@ class KanbanTicket(Base):
     # Workflow execution status — mirrors the latest linked AutoWorkflowRun status
     workflow_status = Column(String, nullable=True)  # None | running | completed | failed | cancelled | waiting
 
+    # Chat that created or owns this ticket for UX (lane-move notices, etc.)
+    source_chat_id = Column(Integer, ForeignKey('chats.id'), nullable=True)
+
     # Subagent hierarchy — parent ticket that spawned this one (if any)
     parent_ticket_id = Column(Integer, ForeignKey('kanban_tickets.id'), nullable=True)
 

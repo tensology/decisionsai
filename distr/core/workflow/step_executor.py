@@ -376,12 +376,15 @@ class StepExecutorMixin:
                 logger.error("Failed to dispatch step %s to WorkflowAgent: %s", step_id, e)
                 return {"output": str(e), "passed": False}
 
-        # Fallback: create a WorkflowAgent on-demand and execute.
-        # WARNING: This path means no RunContext exists (no event loop, no tools).
-        # The agent can only produce text responses — it cannot use file_operations,
-        # execute_code, pi_agent, etc. This usually means the workflow wasn't
-        # started via start_workflow_run().
-        logger.warning("_run_agent: no RunContext for step %s (run_id=%s) — fallback agent has no tools. Workflow should be started via start_workflow_run().", step_id, run_id)
+        # Fallback: no per-run event loop / shared WorkflowAgent — execute synchronously
+        # in a worker thread. WorkflowAgent still loads the standard tool set (via
+        # load_tools + optional cache warmup); prefer start_workflow_run() for async
+        # dispatch and a persistent agent loop when available.
+        logger.info(
+            "_run_agent: no RunContext for step %s (run_id=%s) — using threaded WorkflowAgent fallback.",
+            step_id,
+            run_id,
+        )
         # Must run in a background thread since we may be inside an existing
         # event loop (e.g. FastAPI uvicorn loop). We can't call
         # loop.run_until_complete() when another loop is running.
@@ -515,6 +518,40 @@ class StepExecutorMixin:
                             continuation_input = feedback.strip()
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed to load feedback: %s", e)
+            # ── Load structured ticket context (if run metadata has ticket_id) ──
+            try:
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(
+                        AutoWorkflowRun.id == run_id).first()
+                    if run and run.run_data:
+                        run_data = json.loads(run.run_data or "{}")
+                        ticket_id = run_data.get("ticket_id")
+                        if ticket_id:
+                            try:
+                                from distr.core.kanban.ticket_cli_context import (
+                                    build_kanban_ticket_cli_instruction,
+                                )
+                                ticket_ctx = build_kanban_ticket_cli_instruction(
+                                    db,
+                                    int(ticket_id),
+                                    project_name=(run_data.get("project_name") or ""),
+                                    project_folder=(run_data.get("project_folder") or ""),
+                                    project_id=run_data.get("project_id"),
+                                    max_total_chars=4500,
+                                )
+                                if ticket_ctx and ticket_ctx.strip():
+                                    if workflow_input_context:
+                                        workflow_input_context = (
+                                            workflow_input_context
+                                            + "\n\n"
+                                            + ticket_ctx.strip()
+                                        )
+                                    else:
+                                        workflow_input_context = ticket_ctx.strip()
+                            except Exception as ce:
+                                logger.debug("_build_agent_prompt: ticket context assembly failed: %s", ce)
+            except Exception as e:
+                logger.debug("_build_agent_prompt: failed loading ticket metadata context: %s", e)
 
         # ── Inject run context (ticket/board/project context) from start_workflow_run(context=...) ──
         if run_id is not None:

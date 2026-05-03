@@ -16,6 +16,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+import pytest
+
+pytest.importorskip("sounddevice")
+pytest.importorskip("pipecat.transports.local.audio")
+
 import sounddevice as sd
 from pipecat.transports.local.audio import LocalAudioTransport, LocalAudioTransportParams
 from pipecat.pipeline.pipeline import Pipeline

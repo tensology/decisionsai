@@ -9,8 +9,11 @@ import os
 from typing import List, Dict, Any, Optional
 
 from distr.core.db import get_session, Action
+from distr.core.workflow.migration import _SESSION_STATUS_MAP
 from distr.core.db.workflow import (
-    AutoWorkflow, AutoWorkflowStep,
+    AutoWorkflow,
+    AutoWorkflowStep,
+    AutoWorkflowVariable,
 )
 
 logger = logging.getLogger(__name__)
@@ -159,6 +162,14 @@ def export_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
             "workflow_type": wf.workflow_type or "manual",
             "context_rules": wf.context_rules or "",
             "start_step_position": wf.start_step_position or 0,
+            "variables": [
+                {
+                    "name": v.name,
+                    "default_value": v.default_value or "",
+                    "description": v.description or "",
+                }
+                for v in sorted(wf.variables, key=lambda x: (x.name or "", x.id))
+            ],
             "schedule_preset": wf.schedule_preset,
             "schedule_time": wf.schedule_time,
             "schedule_days": wf.schedule_days,
@@ -303,7 +314,10 @@ def _convert_legacy_to_unified(data: Dict[str, Any]) -> Dict[str, Any]:
         unified_steps.append(unified_step)
 
     unified["steps"] = unified_steps
-    unified["variables"] = []
+    unified["variables"] = list(data.get("variables") or [])
+    if "status" in data:
+        old_st = data["status"]
+        unified["status"] = _SESSION_STATUS_MAP.get(old_st, old_st)
     return unified
 
 
@@ -456,6 +470,21 @@ def import_workflow(data: Dict[str, Any], recordings: Optional[Dict[str, bytes]]
         for step in position_to_step.values():
             step.on_pass_goto = _position_to_step_id(pass_refs.get(step.id), position_to_step)
             step.on_fail_goto = _position_to_step_id(fail_refs.get(step.id), position_to_step)
+
+        for v in data.get("variables") or []:
+            if not isinstance(v, dict):
+                continue
+            vn = v.get("name")
+            if not vn:
+                continue
+            db.add(
+                AutoWorkflowVariable(
+                    workflow_id=wf.id,
+                    name=str(vn),
+                    default_value=v.get("default_value") or "",
+                    description=v.get("description") or None,
+                )
+            )
 
         db.commit()
         return wf.id

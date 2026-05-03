@@ -8,8 +8,14 @@ import tempfile
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from typing import Any
+
+from distr.core.initiative.tiers import PermissionTier
+from distr.core.paths import DB_DIR
 
 logger = logging.getLogger("distr.core.initiative.service")
+
+_DEFAULT_DRAFT_PATH = os.path.join(DB_DIR, "initiative_drafts.json")
 
 
 @dataclass
@@ -21,11 +27,17 @@ class DraftEntry:
     reason: str
     created_at: str
     expires_at: str
+    permission_tier: int = PermissionTier.APPROVE
+    #: When set, ``InitiativeService.approve_draft`` runs this before removing the row (R11).
+    execute_payload: dict[str, Any] | None = None
+
+
+_DRAFT_ENTRY_FIELDS = {f.name for f in dataclasses.fields(DraftEntry)}
 
 
 class DraftQueue:
-    def __init__(self, path: str = "db/initiative_drafts.json") -> None:
-        self._path = path
+    def __init__(self, path: str | None = None) -> None:
+        self._path = path or _DEFAULT_DRAFT_PATH
         self._lock = threading.Lock()
         self._entries: list[DraftEntry] = []
         self._load()
@@ -52,6 +64,14 @@ class DraftQueue:
                     self._save()
                     return True
             return False
+
+    def get_by_id(self, entry_id: str) -> DraftEntry | None:
+        """Return the pending entry with this id, or ``None``."""
+        with self._lock:
+            for e in self._entries:
+                if e.id == entry_id:
+                    return e
+            return None
 
     def expire_old(self) -> int:
         now = datetime.now(tz=timezone.utc)
@@ -92,7 +112,13 @@ class DraftQueue:
         try:
             with open(self._path, "r", encoding="utf-8") as fh:
                 raw = json.load(fh)
-            self._entries = [DraftEntry(**item) for item in raw]
+            loaded: list[DraftEntry] = []
+            for item in raw:
+                row = {k: item[k] for k in item if k in _DRAFT_ENTRY_FIELDS}
+                if "permission_tier" not in row and "tier" in item:
+                    row["permission_tier"] = int(item["tier"])
+                loaded.append(DraftEntry(**row))
+            self._entries = loaded
         except Exception:
             logger.warning("Failed to load draft queue from %s; starting empty.", self._path)
             self._entries = []

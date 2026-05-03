@@ -13,8 +13,12 @@ import sys
 import os
 from pathlib import Path
 
+import pytest
+
+pytest.importorskip("langchain.tools")
+
 # Add project root to path
-project_root = Path(__file__).parent.parent
+project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector

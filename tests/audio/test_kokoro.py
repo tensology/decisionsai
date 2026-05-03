@@ -3,8 +3,12 @@ import logging
 import sys
 import os
 
+import pytest
+
+pytest.importorskip("pipecat.frames.frames")
+
 # Add project root to path
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '../../../../')))
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
 
 from pipecat.frames.frames import StartFrame, TextFrame, EndFrame, AudioRawFrame, TTSStartedFrame, TTSStoppedFrame
 from pipecat.pipeline.pipeline import Pipeline
@@ -12,7 +16,7 @@ from pipecat.pipeline.task import PipelineTask
 from pipecat.pipeline.runner import PipelineRunner
 from pipecat.processors.frame_processor import FrameProcessor, FrameDirection
 
-from distr.core.agent.services.kokoro import KokoroTTSService
+from distr.core.agent.services.tts.kokoro import KokoroTTSService
 
 logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger("test_kokoro")

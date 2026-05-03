@@ -40,6 +40,8 @@ CONNECTED_ACCOUNT_SECRET_FIELDS = {
     "access_token",
     "refresh_token",
     "client_secret",
+    "bot_token",
+    "signing_secret",
 }
 
 

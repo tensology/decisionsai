@@ -96,9 +96,12 @@ class TestSignalForwarding:
             warnings.simplefilter("ignore", DeprecationWarning)
             old_signal = getattr(sm, old_name)
         new_signal = getattr(sm, new_name)
-        # PyQt6 bound signals are not identity-comparable (each access
-        # creates a new wrapper), so compare the underlying signal signature.
-        assert old_signal.signal == new_signal.signal
+        # Real PyQt6: compare underlying `.signal`. Headless tests use MagicMock
+        # bound signals without `.signal`; aliases still forward to the same object.
+        if hasattr(old_signal, "signal") and hasattr(new_signal, "signal"):
+            assert old_signal.signal == new_signal.signal
+        else:
+            assert old_signal is new_signal
 
     @pytest.mark.parametrize("old_name", list(_EXPECTED_ALIASES.keys()))
     def test_alias_emits_deprecation_warning(self, sm, old_name):
@@ -155,4 +158,7 @@ class TestConnectAndEmitThroughAlias:
             warnings.simplefilter("ignore", DeprecationWarning)
             alias_signal = getattr(sm, old_name)
         new_signal = getattr(sm, new_name)
-        assert alias_signal.signal == new_signal.signal
+        if hasattr(alias_signal, "signal") and hasattr(new_signal, "signal"):
+            assert alias_signal.signal == new_signal.signal
+        else:
+            assert alias_signal is new_signal

@@ -4,6 +4,11 @@ app.py - Main Application Entry Point
 # LOGGING POLICY:
 # Only call setup_logging() in the main process (in run()).
 # Do NOT call setup_logging() in any other module or at import time.
+#
+# Env (optional):
+#   DECISIONSAI_CONSOLE_LOG_LEVEL — DEBUG|INFO|WARNING|ERROR for the main stderr handler (default WARNING).
+#   DECISIONSAI_LOG_CONSOLE_INFO=1 — shorthand to set console to INFO.
+#   DECISIONSAI_AGENT_ACTIVITY_CONSOLE=0 — disable stderr lines for each agent tool completion (file still logs).
 
 This module serves as the main entry point for the Decisions AI application.
 It handles:
@@ -188,6 +193,24 @@ def _setup_crash_logging():
 
 def setup_logging(clear_logs=True):
     """Configure application-wide logging"""
+
+    def _parse_console_level() -> int:
+        """Console verbosity for the main ``distr`` StreamHandler."""
+        explicit = (os.environ.get("DECISIONSAI_CONSOLE_LOG_LEVEL") or "").strip().upper()
+        names = {
+            "DEBUG": logging.DEBUG,
+            "INFO": logging.INFO,
+            "WARNING": logging.WARNING,
+            "ERROR": logging.ERROR,
+            "CRITICAL": logging.CRITICAL,
+        }
+        if explicit in names:
+            return names[explicit]
+        flag = (os.environ.get("DECISIONSAI_LOG_CONSOLE_INFO") or "").strip().lower()
+        if flag in ("1", "true", "yes", "on"):
+            return logging.INFO
+        return logging.WARNING
+
     # Enable crash logging first (catches SIGSEGV, SIGABRT etc.)
     _setup_crash_logging()
 
@@ -207,6 +230,15 @@ def setup_logging(clear_logs=True):
             handler = logger.handlers[0]
             logger.removeHandler(handler)
             handler.close()
+
+    # Dedicated agent activity logger (tool completions) — reset handlers each setup
+    activity_logger = logging.getLogger("distr.agent.activity")
+    while activity_logger.handlers:
+        _h = activity_logger.handlers[0]
+        activity_logger.removeHandler(_h)
+        _h.close()
+    activity_logger.setLevel(logging.INFO)
+    activity_logger.propagate = False
         
     # Then set up our application logging
     app_logger = logging.getLogger('distr')
@@ -230,9 +262,21 @@ def setup_logging(clear_logs=True):
     
     # Set log levels to reduce spam
     file_handler.setLevel(logging.INFO)      # Only log INFO and above to file
-    console_handler.setLevel(logging.WARNING) # Only show warnings/errors in console
+    console_level = _parse_console_level()
+    console_handler.setLevel(console_level)
     app_logger.setLevel(logging.INFO)
     logging.getLogger().setLevel(logging.INFO)
+
+    # Agent tool completions: always INFO to file + stderr (unless opted out), independent of console_level
+    activity_show_stderr = (os.environ.get("DECISIONSAI_AGENT_ACTIVITY_CONSOLE") or "1").strip().lower() not in (
+        "0", "false", "no", "off",
+    )
+    activity_logger.addHandler(file_handler)
+    if activity_show_stderr:
+        activity_stderr = logging.StreamHandler(_console_stream)
+        activity_stderr.setFormatter(formatter)
+        activity_stderr.setLevel(logging.INFO)
+        activity_logger.addHandler(activity_stderr)
     
     # Add handlers to our app logger
     app_logger.addHandler(file_handler)
@@ -479,6 +523,8 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         QTimer.singleShot(500, self._check_and_connect_telegram_websocket)
         # Check if WhatsApp is already connected and connect WebSocket on startup
         QTimer.singleShot(800, self._check_and_connect_whatsapp_websocket)
+        QTimer.singleShot(1100, self._maybe_start_discord_bot_background)
+        QTimer.singleShot(1300, self._maybe_start_slack_outbound_worker)
         
         # Initialize action playback service (independent of UI)
         from distr.core.actions.playback_service import ActionPlaybackService
@@ -1683,6 +1729,24 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
                 logger.info("No existing WhatsApp connection found on startup")
         except Exception as e:
             logger.error(f"Error checking WhatsApp connection on startup: {e}", exc_info=True)
+
+    def _maybe_start_discord_bot_background(self):
+        """Starts discord.py bot thread when ``DECISIONSAI_DISCORD_BOT_TOKEN`` is set (TASK 16)."""
+        try:
+            from distr.core.integrations.discord.runner import start_discord_bot_background
+
+            start_discord_bot_background()
+        except Exception as e:
+            logger.warning(f"Discord bot startup skipped or failed: {e}", exc_info=True)
+
+    def _maybe_start_slack_outbound_worker(self):
+        """Drain Slack outbound queue when ``DECISIONSAI_SLACK_BOT_TOKEN`` is set (TASK 17)."""
+        try:
+            from distr.core.integrations.slack.outbound import start_slack_outbound_worker_background
+
+            start_slack_outbound_worker_background()
+        except Exception as e:
+            logger.warning("Slack outbound worker startup skipped or failed: %s", e, exc_info=True)
 
 
 # ===========================================

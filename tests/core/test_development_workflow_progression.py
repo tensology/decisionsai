@@ -8,7 +8,7 @@ from distr.core.workflow.dispatcher import StepDispatcher, _RunContext, _active_
 
 
 def test_development_workflow_step_progression_trace(capfd):
-    """Show Planning -> Execution -> Validation progression with context/result chaining."""
+    """Show Architect -> Execution -> Validation progression with context/result chaining."""
     from sqlalchemy import create_engine
     from sqlalchemy.orm import sessionmaker
     from unittest.mock import patch, MagicMock
@@ -35,7 +35,9 @@ def test_development_workflow_step_progression_trace(capfd):
 
     with patch("distr.core.workflow.dispatcher.get_session", _get_session), patch(
         "distr.core.workflow.router.get_session", _get_session
-    ), patch("distr.core.workflow.service.get_session", _get_session):
+    ), patch("distr.core.workflow.service.get_session", _get_session), patch(
+        "distr.core.workflow.step_executor.get_session", _get_session
+    ), patch("distr.core.workflow.post_execution.get_session", _get_session):
         with _get_session() as db:
             wf = AutoWorkflow(
                 name="Development",
@@ -50,7 +52,7 @@ def test_development_workflow_step_progression_trace(capfd):
                 AutoWorkflowStep(
                     workflow_id=wf.id,
                     position=0,
-                    name="Planning",
+                    name="Architect",
                     action_type="agent_instruction",
                     instruction="Create a concrete implementation plan with success criteria.",
                     status="pending",
@@ -91,6 +93,7 @@ def test_development_workflow_step_progression_trace(capfd):
         fake_loop = MagicMock()
         fake_thread = threading.Thread(target=lambda: None)
         with _runs_lock:
+            _active_runs.clear()
             _active_runs[run_id] = _RunContext(
                 run_id=run_id,
                 workflow_agent=fake_agent,
@@ -109,8 +112,8 @@ def test_development_workflow_step_progression_trace(capfd):
             step_name = step_data["name"]
             captured_prompts[step_name] = prompt
 
-            if step_name == "Planning":
-                print("\n[TRACE] STEP 1: Planning")
+            if step_name == "Architect":
+                print("\n[TRACE] STEP 1: Architect")
                 print(prompt[:600])
                 assert "Ticket: Fix check-in pipeline for board Alpha" in prompt
                 return {
@@ -163,12 +166,12 @@ def test_development_workflow_step_progression_trace(capfd):
             assert len(results) == 3
 
             # Guardrails proving chaining and initial ticket context propagation
-            assert "Ticket: Fix check-in pipeline for board Alpha" in captured_prompts["Planning"]
+            assert "Ticket: Fix check-in pipeline for board Alpha" in captured_prompts["Architect"]
             assert "Plan complete. Success criteria" in captured_prompts["Execution"]
             assert "Implemented changes. Updated dispatcher context injection" in captured_prompts["Validation"]
 
         out = capfd.readouterr().out
-        assert "[TRACE] STEP 1: Planning" in out
+        assert "[TRACE] STEP 1: Architect" in out
         assert "[TRACE] STEP 2: Execution" in out
         assert "[TRACE] STEP 3: Validation" in out
         assert "[TRACE] FINAL RUN STATUS: completed" in out

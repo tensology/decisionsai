@@ -11,6 +11,7 @@ import os
 from pathlib import Path
 from typing import Type
 
+from distr.core.agent.tool_voice_format import voice_then_reference
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -107,7 +108,13 @@ to install into Pi — include how the user wants to use it in instructions (ask
                     "Read bundled skill files under skills/<id>/. To install into a project's Pi CLI, use push_skill(skill_id, project_path, instructions=...) "
                     "with the user's stated goals in instructions (or ask briefly how they want to use it before pushing)."
                 )
-                return "\n".join(lines)
+                ref = "\n".join(lines)
+                tag_note = f", filtered by tag {tag}" if tag else ""
+                spoken = (
+                    f"I opened the bundled skill list{tag_note}. "
+                    f"There are {len(registry)} total; showing {len(results)}. Names and IDs are in the reference."
+                )
+                return voice_then_reference(spoken, ref)
 
             # Query → search mode with scoring
             scored = []
@@ -157,7 +164,12 @@ to install into Pi — include how the user wants to use it in instructions (ask
                 "Read bundled skill files under skills/<id>/. To install into a project's Pi CLI, use push_skill(skill_id, project_path, instructions=...) "
                 "with the user's stated goals in instructions (or ask briefly how they want to use it before pushing)."
             )
-            return "\n".join(lines)
+            ref = "\n".join(lines)
+            spoken = (
+                f"I searched skills for {query!r} and found {len(results)} matches. "
+                "Scores and IDs are in the reference."
+            )
+            return voice_then_reference(spoken, ref)
 
         except Exception as e:
             logger.error("Error in find_skill: %s", e, exc_info=True)

@@ -692,6 +692,13 @@ class AgentSession:
         except Exception as e:
             self.logger.warning("warm_tool_cache failed (tools will load on demand): %s", e)
 
+        try:
+            from distr.core.mcp.runtime import init_mcp_stack
+
+            init_mcp_stack()
+        except Exception as e:
+            self.logger.warning("init_mcp_stack failed (MCP tools unavailable): %s", e)
+
         # Create LLM service (delegates to service_factory via _create_llm_service_only)
         self._create_llm_service_only()
         self.logger.debug(f"LLM service created: {self.config['llm']['engine']} / {self.config['llm'].get('model_name')}")

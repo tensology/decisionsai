@@ -348,7 +348,8 @@ _INVALID_TOOL_NAME_STRATEGY = st.one_of(
     # Contains space
     st.from_regex(r"[a-zA-Z_][a-zA-Z0-9_]{0,7} [a-zA-Z0-9_]{1,8}", fullmatch=True),
     # Contains special chars (not alphanumeric or underscore)
-    st.from_regex(r"[a-zA-Z_][a-zA-Z0-9_]{0,7}[!@#$%^&*\-+.][a-zA-Z0-9_]{0,8}", fullmatch=True),
+    # Exclude "." — names like "A.A" normalize to a valid last segment and would falsely pass.
+    st.from_regex(r"[a-zA-Z_][a-zA-Z0-9_]{0,7}[!@#$%^&*\-+][a-zA-Z0-9_]{0,8}", fullmatch=True),
 )
 
 

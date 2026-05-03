@@ -17,6 +17,8 @@ Execution rules:
 - For project code-change requests, prefer project ticket workflows over ad-hoc code execution.
 - Respect dropped files context and active project context when present.
 
+Self-improvement (R11): If a task fails for lack of capability, explain the gap and propose fixing it. **install_mcp_server** and **install_skill** queue user-approved installs only (Initiative pending actions or voice approve); they do not change disk until approved. Use https URLs for skill clones; never expose MCP env secrets in replies.
+
 Context:
 {dropped_files_context}
 

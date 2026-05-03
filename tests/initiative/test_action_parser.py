@@ -7,6 +7,7 @@ from distr.core.initiative.proposed_action import (
     parse_llm_response,
     serialize,
 )
+from distr.core.initiative.rubric import RubricScore
 
 
 class TestParseLLMResponse:
@@ -56,6 +57,14 @@ class TestParseLLMResponse:
             action = parse_llm_response(raw)
             assert action.action_type == at
 
+    def test_parses_rubric_object(self):
+        raw = (
+            '{"action_type": "suggestion", "description": "x", '
+            '"rubric": {"impact": 5, "risk": 4}}'
+        )
+        action = parse_llm_response(raw)
+        assert action.rubric == RubricScore(5, 4, 3, 3, 3)
+
 
 class TestSerializeDeserialize:
     def test_round_trip(self):
@@ -66,6 +75,14 @@ class TestSerializeDeserialize:
             draft="draft content",
             telegram_message="[Initiative] Running",
             requires_confirmation=False,
+        )
+        assert deserialize(serialize(action)) == action
+
+    def test_round_trip_with_rubric(self):
+        action = ProposedAction(
+            action_type="suggestion",
+            description="Hey",
+            rubric=RubricScore(4, 4, 4, 3, 3),
         )
         assert deserialize(serialize(action)) == action
 

@@ -13,6 +13,11 @@ from distr.core.workflow_engine.step_types import StepType
 
 logger = logging.getLogger(__name__)
 
+try:
+    import litellm as _litellm_client
+except ImportError:
+    _litellm_client = None  # type: ignore[misc, assignment]
+
 # ---------------------------------------------------------------------------
 # Prompt templates
 # ---------------------------------------------------------------------------
@@ -202,9 +207,9 @@ class CodeGeneratorService:
         messages = [{"role": "user", "content": prompt}]
 
         try:
-            import litellm
-
-            response = litellm.completion(
+            if _litellm_client is None:
+                raise ImportError("litellm")
+            response = _litellm_client.completion(
                 model=model_str,
                 messages=messages,
                 max_tokens=4096,

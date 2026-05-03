@@ -87,9 +87,9 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
         # Load tools (use cache when available to avoid re-instantiation)
         try:
-            from distr.core.agent.tools.loader import _tool_cache
+            from distr.core.agent.tools.loader import _tool_cache, get_warmed_tools_list
             if _tool_cache:
-                self._tools = list(_tool_cache.values())
+                self._tools = get_warmed_tools_list()
             else:
                 self._tools = load_tools(
                     chat_manager=chat_manager, use_navigation_tools=True,

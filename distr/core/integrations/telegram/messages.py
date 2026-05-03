@@ -614,11 +614,11 @@ class TelegramMessagesMixin:
         # Instead of emitting each message immediately, buffer them.
         # After 3 seconds of silence the batch is flushed as one combined message.
         if text:
-            # Start persistent typing loop so user sees dots while we wait for agent
-            self._start_typing_loop("typing")
-            self._telegram_batch_buffer.append((str(text), False, None, input_type))
-            # Reset the timer — every new message restarts the 3-second window
-            self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
+            try:
+                self._telegram_batch_thread_id = int(chat_id) if chat_id is not None else None
+            except (TypeError, ValueError):
+                self._telegram_batch_thread_id = getattr(self, "telegram_user_id", None)
+            self._enqueue_telegram_batch(str(text), None, input_type)
             logger.info(
                 "[Telegram] 📥 Buffered message (%d in batch): '%s' (chat_id: %s)",
                 len(self._telegram_batch_buffer), text[:50], chat_id,
@@ -751,12 +751,18 @@ class TelegramMessagesMixin:
         self._current_input_type = input_type
 
         try:
-            from distr.core.signals import signal_manager
+            from distr.core.integrations.bus import get_integration_message_bus
+
             logger.info(
                 "[Telegram] 📤 Flushing batch (%d messages, input_type=%s) to agent: '%s'",
                 len(items), input_type, combined[:80],
             )
-            signal_manager.send_text_input.emit(combined, True, image_path, None)
+            get_integration_message_bus().deliver_telegram_user_input(
+                text=combined,
+                image_path=image_path,
+                telegram_chat_id=getattr(self, "_telegram_batch_thread_id", None),
+                speak=None,
+            )
             logger.info("[Telegram] ✅ Batch flushed to agent (input_type=%s)", input_type)
         except Exception as e:
             logger.error("Failed to flush Telegram batch: %s", e, exc_info=True)
@@ -765,6 +771,12 @@ class TelegramMessagesMixin:
 
     def _enqueue_telegram_batch(self, text: str, image_path: str = None, input_type: str = "text"):
         """Add a message to the batch buffer and (re)start the flush timer."""
+        uid = getattr(self, "telegram_user_id", None)
+        if uid is not None:
+            try:
+                self._telegram_batch_thread_id = int(uid)
+            except (TypeError, ValueError):
+                pass
         self._start_typing_loop("typing")  # Keep dots alive while batching
         self._telegram_batch_buffer.append((text, bool(image_path), image_path, input_type))
         self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)

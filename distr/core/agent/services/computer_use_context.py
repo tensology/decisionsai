@@ -157,4 +157,4 @@ def clear_context() -> None:
         _context_state["last_observation"] = None
         _context_state["last_candidate_target"] = None
         _context_state["last_action"] = None
-        _set_updated_at_unlocked()
+        _context_state["updated_at"] = None

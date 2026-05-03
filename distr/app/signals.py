@@ -90,7 +90,34 @@ class SignalBridgeMixin:
                 params['speak'] = bool(speak)
             self._send_command_to_agent('process_text_input', params)
         signal_manager.send_text_input.connect(on_send_text_input)
-        
+
+        # R15: integration message bus — persist (telegram thread_id → chat_id) when routing inbound text
+        try:
+            from distr.core.integrations.bus import get_integration_message_bus
+
+            bus = get_integration_message_bus()
+
+            def _integration_bus_text_sink(text, is_telegram=False, uploaded_image_path=None, speak=None):
+                signal_manager.send_text_input.emit(
+                    text, is_telegram, uploaded_image_path, speak
+                )
+
+            bus.set_text_sink(_integration_bus_text_sink)
+
+            def _integration_bus_chat_id_provider():
+                cm = getattr(self, "chat_manager", None)
+                if cm is None:
+                    return None
+                try:
+                    return cm.get_current_chat()
+                except Exception:
+                    return None
+
+            bus.set_chat_id_provider(_integration_bus_chat_id_provider)
+            logger.info("Integration message bus wired (text sink + chat_id provider)")
+        except Exception as e:
+            logger.warning("Failed to wire integration message bus: %s", e)
+
         # Speaker enabled state signals
         signal_manager.set_speaker_enabled.connect(
             lambda enabled: self._send_command_to_agent('set_speaker_enabled', {'enabled': enabled})

@@ -20,6 +20,7 @@ import logging
 import asyncio
 import subprocess
 import threading
+from collections import deque
 from typing import Optional, Dict, List, Callable, Any
 from dataclasses import dataclass, field
 
@@ -84,6 +85,9 @@ class PiRpcSession:
         # Status tracking
         self.status = "idle"  # idle, running, completed, failed, aborted
         self._pi_bin: Optional[str] = None
+
+        # FIFO: one ticket write-back per completed agent turn (paired with send_prompt)
+        self._ticket_writeback_queue: deque = deque()
 
     @staticmethod
     def find_pi() -> Optional[str]:
@@ -290,6 +294,7 @@ class PiRpcSession:
             self._add_output("[Agent finished]")
             # Auto-read out overview when agent finishes
             self._auto_overview()
+            self._maybe_ticket_pi_writeback()
 
         elif event_type == "compaction_start":
             self._add_output("[Compacting context...]")
@@ -309,37 +314,66 @@ class PiRpcSession:
                 if status_text:
                     self._add_output(f"⚙️ {status_text}")
 
+    def _infer_pi_turn_outcome(self) -> str:
+        """Infer completed vs failed for the latest agent turn (tool errors in tail)."""
+        for m in reversed(self.messages):
+            if m.role == "user":
+                break
+            if m.role == "tool_result" and m.is_error:
+                return "failed"
+        return "completed"
+
+    def _build_completion_summary(self) -> str:
+        """Short summary from last user cmd + assistant reply + last tool (for overview / tickets)."""
+        msgs = self.get_messages()
+        if not msgs:
+            return "Agent finished."
+
+        user_cmds = [m["content"] for m in msgs if m.get("role") == "user" and m.get("content")]
+        assistant_resps = [m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")]
+        tool_results = [m for m in msgs if m.get("role") == "tool_result" and m.get("tool_result")]
+
+        last_cmd = user_cmds[-1][:100] if user_cmds else ""
+        last_resp = assistant_resps[-1][:300] if assistant_resps else ""
+        last_tool = ""
+        if tool_results:
+            t = tool_results[-1]
+            name = t.get("tool_name", "tool")
+            result = (t.get("tool_result") or "")[:100]
+            is_err = t.get("is_error", False)
+            last_tool = f"{'Error in' if is_err else ''} {name}: {result}"
+
+        parts = []
+        if last_cmd:
+            parts.append(f"Ran: {last_cmd}")
+        if last_resp:
+            parts.append(f"Result: {last_resp}")
+        if last_tool:
+            parts.append(last_tool)
+
+        return ". ".join(parts) if parts else "Agent finished."
+
+    def _maybe_ticket_pi_writeback(self):
+        """Append Pi completion summary to the Kanban ticket queued for this agent_end."""
+        if not self._ticket_writeback_queue:
+            return
+        ticket_id = self._ticket_writeback_queue.popleft()
+        try:
+            summary = self._build_completion_summary()
+            outcome = self._infer_pi_turn_outcome()
+            from distr.core.kanban.ticket_writeback import append_pi_cli_summary_to_ticket
+
+            append_pi_cli_summary_to_ticket(ticket_id, summary, outcome_status=outcome)
+        except Exception as e:
+            logger.debug("Pi ticket write-back failed for ticket %s: %s", ticket_id, e)
+
     def _auto_overview(self):
         """When pi finishes, auto-read out the overview to the originating channel."""
         try:
             msgs = self.get_messages()
             if not msgs:
                 return
-
-            # Build a short summary from last user cmd + last assistant response + last tool
-            user_cmds = [m["content"] for m in msgs if m.get("role") == "user" and m.get("content")]
-            assistant_resps = [m["content"] for m in msgs if m.get("role") == "assistant" and m.get("content")]
-            tool_results = [m for m in msgs if m.get("role") == "tool_result" and m.get("tool_result")]
-
-            last_cmd = user_cmds[-1][:100] if user_cmds else ""
-            last_resp = assistant_resps[-1][:300] if assistant_resps else ""
-            last_tool = ""
-            if tool_results:
-                t = tool_results[-1]
-                name = t.get("tool_name", "tool")
-                result = (t.get("tool_result") or "")[:100]
-                is_err = t.get("is_error", False)
-                last_tool = f"{'Error in' if is_err else ''} {name}: {result}"
-
-            parts = []
-            if last_cmd:
-                parts.append(f"Ran: {last_cmd}")
-            if last_resp:
-                parts.append(f"Result: {last_resp}")
-            if last_tool:
-                parts.append(last_tool)
-
-            summary = ". ".join(parts) if parts else "Agent finished."
+            summary = self._build_completion_summary()
 
             # Send to the originating channel
             if self._origin == "telegram" and self._telegram_chat_id:
@@ -382,7 +416,13 @@ class PiRpcSession:
         if len(self._output_lines) > self._max_buffer_lines:
             self._output_lines = self._output_lines[-self._max_buffer_lines:]
 
-    def send_prompt(self, instruction: str, origin: str = "cli", telegram_chat_id: Optional[str] = None) -> bool:
+    def send_prompt(
+        self,
+        instruction: str,
+        origin: str = "cli",
+        telegram_chat_id: Optional[str] = None,
+        ticket_id_for_writeback: Optional[int] = None,
+    ) -> bool:
         """Send a prompt to pi via RPC. Returns True if sent successfully."""
         if not self._process or not self._running:
             if not self.start():
@@ -405,6 +445,8 @@ class PiRpcSession:
             self._process.stdin.flush()
             self._add_output(f"\n>>> {instruction}")
             self.status = "running"
+            if ticket_id_for_writeback is not None:
+                self._ticket_writeback_queue.append(int(ticket_id_for_writeback))
             return True
         except Exception as e:
             logger.error(f"PiRpcSession: failed to send prompt: {e}")

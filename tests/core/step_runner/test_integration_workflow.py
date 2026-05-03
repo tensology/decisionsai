@@ -41,8 +41,6 @@ sys.modules.setdefault("distr.gui.web.workflow_events", MagicMock())
 sys.modules.setdefault("distr.gui", MagicMock())
 sys.modules.setdefault("distr.gui.web", MagicMock())
 
-# agent_bridge must NOT be mocked — we need the real WorkflowAgentBridge
-# to verify report delivery.  Remove any stale mock.
 sys.modules.pop("distr.core.workflow_engine.agent_bridge", None)
 
 from distr.app.workflow import WorkflowOrchestrationMixin  # noqa: E402

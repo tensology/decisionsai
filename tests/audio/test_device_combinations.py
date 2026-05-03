@@ -14,6 +14,11 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
+import pytest
+
+pytest.importorskip("sounddevice")
+pytest.importorskip("pyaudio")
+
 import sounddevice as sd
 import pyaudio
 import logging

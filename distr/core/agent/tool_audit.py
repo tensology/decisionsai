@@ -3,12 +3,26 @@ Tool execution audit logging.
 
 Records every tool execution as a step in the workflow audit session for the current chat.
 This provides a visible audit log in Settings > Workflows.
+
+Human-visible trace: ``distr.agent.activity`` logs one ``[agent_tool]`` line per completion
+(to ``decisions.log`` and stderr by default). Disable stderr-only with
+``DECISIONSAI_AGENT_ACTIVITY_CONSOLE=0``.
 """
 
 import logging
 from typing import Optional, Any
 
 logger = logging.getLogger(__name__)
+_activity_logger = logging.getLogger("distr.agent.activity")
+
+
+def _preview_result(text: Optional[str], limit: int = 220) -> str:
+    if not text:
+        return ""
+    one_line = " ".join(str(text).split())
+    if len(one_line) <= limit:
+        return one_line
+    return one_line[: limit - 3] + "..."
 
 
 def record_tool_execution(
@@ -40,6 +54,15 @@ def record_tool_execution(
             status=status,
             user_text=user_text,
             routing_path=effective_routing,
+        )
+        pv = _preview_result(result)
+        _activity_logger.info(
+            "[agent_tool] chat_id=%s tool=%s status=%s instruction=%s result=%s",
+            chat_id,
+            tool_name,
+            status,
+            _preview_result(inst, 120),
+            pv or "(empty)",
         )
         if event_queue:
             try:

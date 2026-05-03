@@ -129,12 +129,18 @@ class KanbanAgentCheckIn:
     def _load_board(self) -> Optional[_BoardInfo]:
         """Fetch the board and validate required agent fields.
 
-        Agent configuration (enabled, lanes, LLM provider/model) is read from
-        the board first, falling back to global settings.
+        Global ``kanban_agent_enabled`` must be true (master switch). Lane strings and
+        Ticket Board LLM rows come from settings when those keys are present; otherwise
+        the board row supplies defaults. Orchestrator/coder rows fall back to chat
+        conversational/coding LLM settings when kanban-specific strings are empty.
 
         Returns a ``_BoardInfo`` or ``None`` if validation fails.
         """
         settings = load_settings_from_db()
+
+        if not settings.get("kanban_agent_enabled", False):
+            logger.info("Agent check-in: globally disabled (kanban_agent_enabled=False)")
+            return None
 
         with get_session() as db:
             board = db.query(KanbanBoard).filter(KanbanBoard.id == self.board_id).first()
@@ -142,25 +148,31 @@ class KanbanAgentCheckIn:
                 logger.error("Agent check-in: board %s not found", self.board_id)
                 return None
 
-            # Board-level agent_enabled takes precedence over global
-            agent_enabled = board.agent_enabled
-            if agent_enabled is None:
-                agent_enabled = settings.get('kanban_agent_enabled', False)
-            agent_source_lane = board.agent_source_lane or settings.get('kanban_agent_source_lane', '')
-            agent_done_lane = board.agent_done_lane or settings.get('kanban_agent_done_lane', '')
+            if board.agent_enabled is False:
+                logger.info("Agent check-in: board %s has agent_enabled=False", self.board_id)
+                return None
+
+            if "kanban_agent_source_lane" in settings:
+                agent_source_lane = settings.get("kanban_agent_source_lane") or ""
+            else:
+                agent_source_lane = board.agent_source_lane or ""
+
+            if "kanban_agent_done_lane" in settings:
+                agent_done_lane = settings.get("kanban_agent_done_lane") or ""
+            else:
+                agent_done_lane = board.agent_done_lane or ""
+
             default_workflow_id = board.default_workflow_id
             default_project_id = board.default_project_id
             board_id = board.id
             board_name = board.name
-            board_agent_enabled = board.agent_enabled
-
-        if not agent_enabled:
-            logger.info("Agent check-in: agent not enabled (board=%s, global=%s)",
-                        board_agent_enabled, settings.get('kanban_agent_enabled', False))
-            return None
 
         if not agent_source_lane:
             logger.error("Agent check-in: no source lane configured for board %s", self.board_id)
+            return None
+
+        if not agent_done_lane:
+            logger.error("Agent check-in: no done lane configured for board %s", self.board_id)
             return None
 
         # Workflow is the only automation path.
@@ -168,24 +180,31 @@ class KanbanAgentCheckIn:
             logger.error("Agent check-in: board %s has no default workflow configured", self.board_id)
             return None
 
+        orch_p = settings.get("kanban_agent_orchestrator_provider", "") or settings.get(
+            "conversational_llm_provider", ""
+        )
+        orch_m = settings.get("kanban_agent_orchestrator_model", "") or settings.get(
+            "conversational_llm_model", ""
+        )
+        coder_p = settings.get("kanban_agent_coder_provider", "") or settings.get("coding_llm_provider", "")
+        coder_m = settings.get("kanban_agent_coder_model", "") or settings.get("coding_llm_model", "")
+        sub_p = settings.get("kanban_agent_sub_provider", "") or ""
+        sub_m = settings.get("kanban_agent_sub_model", "") or ""
+
         info = _BoardInfo(
             id=board_id,
             name=board_name,
             agent_enabled=True,
             agent_source_lane=agent_source_lane,
-            agent_done_lane=agent_done_lane or "Done",
+            agent_done_lane=agent_done_lane,
             default_workflow_id=default_workflow_id,
             default_project_id=default_project_id,
-            # Runtime mapping is synchronized with global LLM settings:
-            # - Orchestrator -> Conversational
-            # - Coder -> Coding
-            # - Sub-agent -> kanban_* in LLM settings (Ticket Board Sub-agent row)
-            agent_orchestrator_provider=settings.get('conversational_llm_provider', ''),
-            agent_orchestrator_model=settings.get('conversational_llm_model', ''),
-            agent_coder_provider=settings.get('coding_llm_provider', ''),
-            agent_coder_model=settings.get('coding_llm_model', ''),
-            agent_sub_provider=settings.get('kanban_agent_orchestrator_provider', ''),
-            agent_sub_model=settings.get('kanban_agent_orchestrator_model', ''),
+            agent_orchestrator_provider=orch_p,
+            agent_orchestrator_model=orch_m,
+            agent_coder_provider=coder_p,
+            agent_coder_model=coder_m,
+            agent_sub_provider=sub_p,
+            agent_sub_model=sub_m,
         )
         return info
 
@@ -364,32 +383,49 @@ class KanbanAgentCheckIn:
             logger.error("Agent check-in: pi coding agent not found")
             return "failed"
 
-        # Build instruction from ticket
         title = ticket.get("title", "")
-        description = ""
+        instruction = title
         try:
-            with get_session() as db:
-                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
-                if tk:
-                    description = tk.description or ""
-        except Exception:
-            pass
+            from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
 
-        instruction = f"{title}\n\n{description}".strip() if description else title
+            with get_session() as db:
+                instruction = build_kanban_ticket_cli_instruction(
+                    db,
+                    ticket["id"],
+                    project_name=project_name or "",
+                    project_folder=folder or "",
+                    project_id=project_id,
+                )
+                tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                if tk and tk.title:
+                    title = tk.title
+        except Exception:
+            description = ""
+            try:
+                with get_session() as db:
+                    tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
+                    if tk:
+                        description = tk.description or ""
+            except Exception:
+                pass
+            instruction = f"{title}\n\n{description}".strip() if description else title
 
         logger.info("Agent check-in: sending ticket #%s to pi in %s", ticket["id"], folder)
 
+        output = None
+        status = "failed"
         try:
             # Try RPC session first (async, persistent)
             if project_id:
                 rpc = get_rpc_session(project_id)
                 if rpc and rpc.is_alive:
-                    success = rpc.send_prompt(instruction)
+                    success = rpc.send_prompt(instruction, ticket_id_for_writeback=ticket["id"])
                     if success:
                         status = "running"
                         logger.info("Agent check-in: sent ticket #%s to pi via RPC", ticket["id"])
                     else:
                         status = "failed"
+                        output = "Failed to send prompt to Pi RPC"
                         logger.warning("Agent check-in: failed to send ticket #%s via RPC", ticket["id"])
                 else:
                     # No active session — use pi -p (print mode, one-shot)
@@ -423,8 +459,19 @@ class KanbanAgentCheckIn:
             logger.error("Agent check-in: pi error for ticket #%s: %s", ticket["id"], e)
             status = "failed"
             output = f"Pi error: {e}"
-            if 'output' not in dir():
-                output = output
+
+        # Pi one-shot / failure paths: write result onto ticket (RPC async path uses agent_end hook)
+        if status != "running" and output is not None:
+            try:
+                from distr.core.kanban.ticket_writeback import append_pi_cli_summary_to_ticket
+
+                append_pi_cli_summary_to_ticket(
+                    ticket["id"],
+                    output or "(no output)",
+                    outcome_status="failed" if status == "failed" else "completed",
+                )
+            except Exception:
+                logger.debug("Agent check-in: ticket Pi write-back failed", exc_info=True)
 
         # Log to audit trail
         try:
@@ -440,7 +487,7 @@ class KanbanAgentCheckIn:
                 step = AutoWorkflowStep(
                     workflow_id=audit.id, position=0,
                     name=f"Ticket #{ticket['id']}", instruction=instruction[:500],
-                    status=status, result=output[:2000] if 'output' in dir() else None, tool_used="pi",
+                    status=status, result=output[:2000] if output else None, tool_used="pi",
                 )
                 db.add(step)
                 db.commit()
@@ -500,6 +547,17 @@ class KanbanAgentCheckIn:
             "ticket_id": ticket["id"],
             "to_lane": next_lane_name,
         })
+        try:
+            from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
+
+            notify_source_chat_ticket_moved(
+                ticket["id"],
+                board_name=board.name,
+                to_lane_name=next_lane_name,
+                reason="workflow_completed",
+            )
+        except Exception:
+            logger.debug("Agent check-in: ticket chat notify failed", exc_info=True)
 
     def _wait_for_run(self, run_id: int) -> str:
         """Poll until the workflow run reaches a terminal status."""

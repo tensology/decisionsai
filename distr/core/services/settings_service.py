@@ -62,6 +62,7 @@ def save_general_settings(data) -> None:
     data.global_ptt_hotkey_secondary = secondary
 
     settings = load_settings_from_db()
+    previous_settings = dict(settings)
 
     # Bulk-copy every field from the Pydantic model
     for field in data.__fields__:

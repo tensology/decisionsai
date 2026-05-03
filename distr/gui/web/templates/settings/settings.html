@@ -9,6 +9,7 @@
 <script src="/settings/static/js/audio.js"></script>
 <script src="/settings/static/js/thirdparty.js"></script>
 <script src="/settings/static/js/llms.js"></script>
+<script src="/settings/static/js/mcp.js"></script>
 <script src="/settings/static/js/skins.js"></script>
 <script src="/settings/static/js/advanced.js"></script>
 <script src="/settings/static/js/initiative.js"></script>
@@ -38,6 +39,9 @@
                 </a>
                 <a href="#llms" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="llms">
                     <span class="font-medium">LLMs</span>
+                </a>
+                <a href="#mcp" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="mcp">
+                    <span class="font-medium">MCP Servers</span>
                 </a>
                 <a href="#skins" class="tab-button w-full text-left px-4 py-3 rounded-lg transition-colors block" data-tab="skins">
                     <span class="font-medium">Skins</span>
@@ -77,6 +81,9 @@
                 </div>
                 <div id="tab-llms" class="tab-content">
                     {% include "settings/sections/llms.html" %}
+                </div>
+                <div id="tab-mcp" class="tab-content">
+                    {% include "settings/sections/mcp.html" %}
                 </div>
                 <div id="tab-skins" class="tab-content">
                     {% include "settings/sections/skins.html" %}

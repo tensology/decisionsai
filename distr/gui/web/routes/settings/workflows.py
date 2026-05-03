@@ -91,6 +91,11 @@ class WorkflowSeedFixturesRequest(BaseModel):
     workflow_names: Optional[List[str]] = None
 
 
+class WorkflowPurgeAllRequest(BaseModel):
+    confirm: bool = False
+    include_audit: bool = False
+
+
 class ContextItemCreateRequest(BaseModel):
     title: str
     content: str = ""
@@ -132,6 +137,25 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
             logger.error("Workflow create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/purge-all")
+    async def workflow_purge_all(data: WorkflowPurgeAllRequest):
+        """Remove every workflow (except audit workflows unless include_audit is True)."""
+        if not data.confirm:
+            return JSONResponse(
+                {"detail": "Set confirm=true in the JSON body to delete all workflows."},
+                status_code=400,
+            )
+        try:
+            from distr.core.workflow.service import purge_all_workflows
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            removed = purge_all_workflows(include_audit=data.include_audit)
+            increment_workflow_updated()
+            return JSONResponse({"success": True, "removed": removed})
+        except Exception as e:
+            logger.error("Workflow purge-all failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     # ── Plan / Version / Step-level endpoints (must be before {workflow_id} routes) ──

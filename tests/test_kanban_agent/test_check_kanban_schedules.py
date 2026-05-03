@@ -8,7 +8,7 @@ global settings instead of per-board columns.
 import contextlib
 import json
 from datetime import datetime, timedelta
-from unittest.mock import patch, MagicMock
+from unittest.mock import patch
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -60,6 +60,7 @@ def _seed_board_with_workflow(factory, board_name="Board", has_workflow=True,
         if last_run_hours_ago is not None:
             run = AutoWorkflowRun(
                 workflow_id=wf_id,
+                board_id=board.id,
                 started_at=datetime.utcnow() - timedelta(hours=last_run_hours_ago),
                 status="completed",
             )
@@ -71,10 +72,10 @@ def _seed_board_with_workflow(factory, board_name="Board", has_workflow=True,
     return board_id, wf_id
 
 
-# The imports inside check_kanban_schedules() are local, so we patch at source.
+# Scheduler imports start_agent_checkin inside the function — patch that binding.
 _PATCH_DB = "distr.core.db.get_session"
 _PATCH_SETTINGS = "distr.core.settings.load_settings_from_db"
-_PATCH_AGENT = "distr.core.kanban.agent.KanbanAgentCheckIn"
+_PATCH_START_AGENT = "distr.core.kanban.agent.start_agent_checkin"
 
 
 class TestCheckKanbanSchedulesGlobalSettings:
@@ -97,9 +98,9 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls:
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
-            mock_agent_cls.assert_not_called()
+            mock_start.assert_not_called()
 
     def test_enabled_agent_fires_for_due_board(self):
         """When enabled and schedule is due, fires agent for board with workflow."""
@@ -117,10 +118,9 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls, \
-             patch("threading.Thread") as mock_thread:
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
-            mock_agent_cls.assert_called_once_with(board_id)
+            mock_start.assert_called_once_with(board_id)
 
     def test_board_without_workflow_is_skipped(self):
         """Boards without a default_workflow_id are not considered."""
@@ -138,10 +138,9 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls, \
-             patch("threading.Thread") as mock_thread:
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
-            mock_agent_cls.assert_not_called()
+            mock_start.assert_not_called()
 
     def test_uses_global_frequency_not_board_frequency(self):
         """Global frequency setting is used, not the board's agent_frequency column."""
@@ -163,6 +162,7 @@ class TestCheckKanbanSchedulesGlobalSettings:
         # Last run 2 days ago — daily would be due, monthly would not
         run = AutoWorkflowRun(
             workflow_id=wf.id,
+            board_id=board.id,
             started_at=datetime.utcnow() - timedelta(days=2),
             status="completed",
         )
@@ -182,11 +182,10 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls, \
-             patch("threading.Thread") as mock_thread:
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
             # Should fire because global says daily and last run was 2 days ago
-            mock_agent_cls.assert_called_once_with(board_id)
+            mock_start.assert_called_once_with(board_id)
 
     def test_hourly_uses_global_hours(self):
         """Hourly frequency uses kanban_agent_hours from global settings."""
@@ -204,11 +203,10 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls, \
-             patch("threading.Thread") as mock_thread:
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
             # With all 24 hours selected and last run 3 hours ago, should be due
-            mock_agent_cls.assert_called_once_with(board_id)
+            mock_start.assert_called_once_with(board_id)
 
     def test_multiple_boards_with_workflows_all_checked(self):
         """All boards with default_workflow_id are checked, not just agent_enabled ones."""
@@ -227,11 +225,9 @@ class TestCheckKanbanSchedulesGlobalSettings:
 
         with patch(_PATCH_SETTINGS, return_value=settings), \
              patch(_PATCH_DB, side_effect=lambda: _session_ctx(factory)), \
-             patch(_PATCH_AGENT) as mock_agent_cls, \
-             patch("threading.Thread") as mock_thread:
-            mock_agent_cls.return_value.run = MagicMock()
+             patch(_PATCH_START_AGENT) as mock_start:
             check_kanban_schedules()
-            fired_board_ids = [call.args[0] for call in mock_agent_cls.call_args_list]
+            fired_board_ids = [call.args[0] for call in mock_start.call_args_list]
 
         assert board_id1 in fired_board_ids
         assert board_id2 in fired_board_ids

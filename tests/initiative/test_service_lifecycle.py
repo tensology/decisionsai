@@ -51,6 +51,11 @@ class TestInitiativeServiceLifecycle:
         service = self._make_service()
         mock_timer = MagicMock()
         service._idle_timer = mock_timer
+        bridge = MagicMock()
+        bridge.reset_idle_timer_requested.emit.side_effect = (
+            lambda *a, **k: service._reset_idle_timer_on_qt()
+        )
+        service._qt_bridge = bridge
         service._reset_idle_timer(chat_id=42)
         mock_timer.start.assert_called_once_with(service.IDLE_TIMEOUT_MS)
 

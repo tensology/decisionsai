@@ -8,6 +8,8 @@ import os
 from typing import List, Dict, Any, Optional
 from datetime import datetime
 
+from sqlalchemy import or_
+
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
 from distr.core.db.kanban import KanbanBoard, KanbanTicket
@@ -89,7 +91,6 @@ from distr.core.workflow import import_export as _import_export_module  # noqa: 
 from distr.core.workflow.import_export import (  # noqa: F401, E402
     export_workflow,
     export_workflow_bundle,
-    import_workflow,
     import_workflow_bundle,
     list_presets,
     load_preset,
@@ -118,6 +119,14 @@ def export_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
             "workflow_type": wf.workflow_type or "manual",
             "context_rules": wf.context_rules or "",
             "start_step_position": wf.start_step_position or 0,
+            "variables": [
+                {
+                    "name": v.name,
+                    "default_value": v.default_value or "",
+                    "description": v.description or "",
+                }
+                for v in sorted(wf.variables, key=lambda x: (x.name or "", x.id))
+            ],
             "steps": [
                 {
                     "position": s.position,
@@ -149,57 +158,10 @@ def export_workflow(workflow_id: int) -> Optional[Dict[str, Any]]:
 
 
 def import_workflow(data: Dict[str, Any]) -> Optional[int]:
-    """Compatibility wrapper so tests can patch ``service.get_session``."""
+    """Portable JSON import (unified or legacy). Delegates to ``import_export``."""
     if not isinstance(data, dict):
         return None
-    steps_data = data.get("steps", []) or []
-    with get_session() as db:
-        wf = AutoWorkflow(
-            name=(data.get("name") or "Imported Workflow").strip() or "Imported Workflow",
-            description=data.get("description") or "",
-            workflow_type=data.get("workflow_type") or "manual",
-            context_rules=data.get("context_rules") or "",
-            start_step_position=int(data.get("start_step_position") or 0),
-        )
-        db.add(wf)
-        db.flush()
-
-        created_steps = []
-        for s in steps_data:
-            step = AutoWorkflowStep(
-                workflow_id=wf.id,
-                position=int(s.get("position", len(created_steps))),
-                name=s.get("name") or f"Step {len(created_steps) + 1}",
-                description=s.get("description") or "",
-                action_type=s.get("action_type") or "agent_instruction",
-                step_type=s.get("step_type") or s.get("action_type") or "agent_instruction",
-                instruction=s.get("instruction") or "",
-                verification=s.get("verification") or "",
-                config=json.dumps(s.get("config") or {}),
-                validation_type=s.get("validation_type") or "none",
-                validation_prompt=s.get("validation_prompt") or "",
-                routing_mode=s.get("routing_mode") or "static",
-                wait_before_next=int(s.get("wait_before_next") or 0),
-                max_retries=int(s.get("max_retries") or 0),
-                timeout_seconds=int(s.get("timeout_seconds") or 300),
-                require_approval=bool(s.get("require_approval", False)),
-                recording_filename=s.get("recording_filename") or "",
-                code=s.get("code") or "",
-                validation_code=s.get("validation_code") or "",
-                linked_project_id=s.get("linked_project_id"),
-                wait_for_continue=bool(s.get("wait_for_continue", False)),
-            )
-            db.add(step)
-            db.flush()
-            created_steps.append((step, s))
-
-        position_to_step = {step.position: step for step, _ in created_steps}
-        for step, s in created_steps:
-            step.on_pass_goto = _position_to_step_id(s.get("on_pass_goto_position"), position_to_step)
-            step.on_fail_goto = _position_to_step_id(s.get("on_fail_goto_position"), position_to_step)
-
-        db.commit()
-        return wf.id
+    return _import_export_module.import_workflow(data)
 
 
 # ── Step config validation ──
@@ -394,9 +356,88 @@ def delete_workflow(workflow_id: int) -> bool:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return False
+        step_ids = [
+            row[0]
+            for row in db.query(AutoWorkflowStep.id)
+            .filter(AutoWorkflowStep.workflow_id == workflow_id)
+            .all()
+        ]
+        run_ids = [
+            row[0]
+            for row in db.query(AutoWorkflowRun.id)
+            .filter(AutoWorkflowRun.workflow_id == workflow_id)
+            .all()
+        ]
+        result_filters = []
+        if step_ids:
+            result_filters.append(AutoWorkflowStepResult.step_id.in_(step_ids))
+        if run_ids:
+            result_filters.append(AutoWorkflowStepResult.run_id.in_(run_ids))
+        if result_filters:
+            db.query(AutoWorkflowStepResult).filter(or_(*result_filters)).delete(
+                synchronize_session=False
+            )
         db.delete(wf)
         db.commit()
         return True
+
+
+def purge_all_workflows(*, include_audit: bool = False) -> int:
+    """Delete all workflows.
+
+    By default, workflows with workflow_type ``audit`` are preserved so the
+    system audit trail remains intact. Pass ``include_audit=True`` only when you
+    intend to wipe audit workflows as well (they will be recreated on demand).
+
+    Step-result rows are removed first so SQLite does not try to null ``step_id``
+    on ``auto_workflow_step_results`` when steps are cascade-deleted.
+
+    Returns the number of workflow rows deleted.
+    """
+    removed = 0
+    with get_session() as db:
+        query = db.query(AutoWorkflow)
+        if not include_audit:
+            query = query.filter(
+                or_(
+                    AutoWorkflow.workflow_type.is_(None),
+                    AutoWorkflow.workflow_type != "audit",
+                )
+            )
+        workflows = query.all()
+        wf_ids = [wf.id for wf in workflows]
+        if wf_ids:
+            step_ids = [
+                row[0]
+                for row in db.query(AutoWorkflowStep.id)
+                .filter(AutoWorkflowStep.workflow_id.in_(wf_ids))
+                .all()
+            ]
+            run_ids = [
+                row[0]
+                for row in db.query(AutoWorkflowRun.id)
+                .filter(AutoWorkflowRun.workflow_id.in_(wf_ids))
+                .all()
+            ]
+            result_filters = []
+            if step_ids:
+                result_filters.append(AutoWorkflowStepResult.step_id.in_(step_ids))
+            if run_ids:
+                result_filters.append(AutoWorkflowStepResult.run_id.in_(run_ids))
+            if result_filters:
+                db.query(AutoWorkflowStepResult).filter(or_(*result_filters)).delete(
+                    synchronize_session=False
+                )
+        for wf in workflows:
+            db.delete(wf)
+            removed += 1
+        db.commit()
+    logger.warning(
+        "Purged %s workflow(s) from database (include_audit=%s)",
+        removed,
+        include_audit,
+    )
+    return removed
 
 
 def duplicate_workflow(workflow_id: int) -> Optional[int]:
@@ -935,7 +976,8 @@ def _dispatch_step(
 
     normalized_action = (action_type or "").strip().lower()
     if normalized_action == "agent_instruction":
-        if instruction is None or instruction == "":
+        _instr = (instruction or "").strip()
+        if not _instr:
             try:
                 update_step(step_id, status="failed", result="No instruction provided")
             except Exception:
@@ -968,7 +1010,7 @@ def _dispatch_step(
         if not run_ctx:
             return {"error": "No active workflow run context found for step"}
 
-        prompt = f"[{context_prefix} — {step_name}]\n{instruction}"
+        prompt = f"[{context_prefix} — {step_name}]\n{_instr}"
         execute_result = run_ctx.workflow_agent.execute(prompt)
         if not asyncio.iscoroutine(execute_result):
             # In legacy mocked paths, execute() may return a plain MagicMock.
@@ -992,6 +1034,19 @@ def _dispatch_step(
 
         future.add_done_callback(_on_done)
         return {"success": True, "message": "Step dispatched"}
+
+    if normalized_action == "play_recording":
+        recording_name = (recording_filename or "").strip()
+        if not recording_name:
+            try:
+                update_step(step_id, status="failed", result="No recording attached to this step")
+            except Exception:
+                pass
+            return {"error": "No recording configured"}
+        from distr.core.signals import signal_manager
+
+        signal_manager.play_recording_file.emit(recording_name)
+        return {"success": True, "async": True, "message": "Playing recording."}
 
     step_type = StepType.PLAYWRIGHT if normalized_action == "playwright" else StepType.EXECUTE_CODE
     executable_code = (code or "").strip()

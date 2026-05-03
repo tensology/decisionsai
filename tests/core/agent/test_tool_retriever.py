@@ -347,13 +347,14 @@ def test_hard_ceiling(query: str, k: int, built_retriever) -> None:
 
     For any non-empty query string, any standard-tier model name, and any
     value of K >= 1, the length of the list returned by retrieve() SHALL be
-    <= K + 6 + 1.
+    <= K + |ALWAYS_ON_NAMES| + 1 (semantic top-K ∪ always-on plus ``request_tool``).
     """
     # Feature: semantic-tool-retrieval, Property 5
     result = built_retriever.retrieve(query, "llama3:8b", k=k)
     assert result is not None, "retrieve() should not return None for a built retriever"
-    assert len(result) <= k + 6 + 1, (
-        f"Active_Tool_Set length {len(result)} exceeds Hard_Ceiling {k + 6 + 1} "
+    ceiling = k + len(ALWAYS_ON_NAMES) + 1
+    assert len(result) <= ceiling, (
+        f"Active_Tool_Set length {len(result)} exceeds Hard_Ceiling {ceiling} "
         f"for k={k}, query={query!r}"
     )
 

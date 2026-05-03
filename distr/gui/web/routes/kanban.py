@@ -301,13 +301,18 @@ class BoardUpdate(BaseModel):
     default_action_id: Optional[int] = None
     color: Optional[str] = None
     position: Optional[int] = None
-    agent_enabled: Optional[bool] = None
+
+
+class BoardAgentEnabledUpdate(BaseModel):
+    agent_enabled: bool
+
 
 class TicketCreate(BaseModel):
     lane_id: int
     title: str
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
+    source_chat_id: Optional[int] = None
 
 class TicketUpdate(BaseModel):
     title: Optional[str] = None
@@ -321,6 +326,7 @@ class TicketUpdate(BaseModel):
     linked_action_id: Optional[int] = None
     time_estimate: Optional[str] = None
     time_spent: Optional[str] = None
+    source_chat_id: Optional[int] = None
 
 class TicketMove(BaseModel):
     lane_id: int
@@ -369,6 +375,7 @@ class CopyExternalTicket(BaseModel):
     time_spent: Optional[str] = None
     auto_send_to_project: Optional[bool] = False
     auto_send_to_cli: Optional[bool] = False
+    source_chat_id: Optional[int] = None
 
 
 class ExternalTicketCreate(BaseModel):
@@ -657,8 +664,6 @@ def create_routes():
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
                 board.position = payload.position
-            if payload.agent_enabled is not None:
-                board.agent_enabled = payload.agent_enabled
             s.commit()
             
             # Sync Project's kanban_board_id reference if default_project_id changed
@@ -669,6 +674,17 @@ def create_routes():
                     if proj and proj.kanban_board_id != board.id:
                         proj.kanban_board_id = board.id
                         s.commit()
+            return JSONResponse({"success": True})
+
+    @router.put("/kanban/boards/{board_id}/agent-enabled")
+    async def update_board_agent_enabled(board_id: int, payload: BoardAgentEnabledUpdate):
+        """Board-level agent check-in toggle (not part of BoardUpdate — see property tests)."""
+        with get_session() as s:
+            board = s.query(KanbanBoard).get(board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+            board.agent_enabled = payload.agent_enabled
+            s.commit()
             return JSONResponse({"success": True})
 
     @router.delete("/kanban/boards/{board_id}")
@@ -740,6 +756,7 @@ def create_routes():
                         "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
                         "whatsapp_message_id": t.whatsapp_message_id,
                         "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
+                        "source_chat_id": t.source_chat_id,
                     })
                 lanes.append({"id": lane.id, "name": lane.name, "position": lane.position, "tickets": tickets})
             return JSONResponse({
@@ -751,7 +768,6 @@ def create_routes():
                 "default_snippet_id": board.default_snippet_id,
                 "default_action_id": board.default_action_id,
                 "color": board.color or "",
-                "agent_enabled": getattr(board, 'agent_enabled', False) or False,
                 "in_use": getattr(board, 'in_use', False) or False,
                 "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
@@ -775,6 +791,7 @@ def create_routes():
                 linked_project_id=board.default_project_id if board else None,
                 linked_snippet_id=board.default_snippet_id if board else None,
                 linked_action_id=board.default_action_id if board else None,
+                source_chat_id=payload.source_chat_id,
             )
             s.add(ticket)
             s.flush()
@@ -803,6 +820,7 @@ def create_routes():
                 "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
                 "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                 "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
+                "source_chat_id": t.source_chat_id,
             })
 
     @router.put("/kanban/tickets/{ticket_id}")
@@ -851,6 +869,8 @@ def create_routes():
                 t.lane_id = payload.lane_id
             if payload.position is not None:
                 t.position = payload.position
+            if "source_chat_id" in fields_set:
+                t.source_chat_id = payload.source_chat_id
             # For local tickets linked to external providers, keep external card/issue in sync immediately on save.
             _sync_local_ticket_to_external(
                 source=t.external_source,
@@ -864,6 +884,7 @@ def create_routes():
 
     @router.put("/kanban/tickets/{ticket_id}/move")
     async def move_ticket(ticket_id: int, payload: TicketMove):
+        notify_ctx = None
         with get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
@@ -871,6 +892,20 @@ def create_routes():
             lane = s.query(KanbanLane).get(payload.lane_id)
             if not lane:
                 raise HTTPException(404, "Lane not found")
+            old_lane_id = t.lane_id
+            old_lane = s.query(KanbanLane).get(old_lane_id)
+            old_lane_name = old_lane.name if old_lane else ""
+            board_name = ""
+            if old_lane:
+                bd = s.query(KanbanBoard).get(old_lane.board_id)
+                board_name = bd.name if bd else ""
+            new_lane_name = lane.name
+            if old_lane_id != payload.lane_id:
+                notify_ctx = {
+                    "board_name": board_name,
+                    "from_lane_name": old_lane_name or None,
+                    "to_lane_name": new_lane_name,
+                }
             t.lane_id = payload.lane_id
             t.position = payload.position
             # Reorder siblings
@@ -881,7 +916,20 @@ def create_routes():
             for i, sib in enumerate(siblings):
                 new_pos = i if i < payload.position else i + 1
                 sib.position = new_pos
-            return JSONResponse({"success": True})
+        if notify_ctx:
+            try:
+                from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
+
+                notify_source_chat_ticket_moved(
+                    ticket_id,
+                    board_name=notify_ctx["board_name"],
+                    to_lane_name=notify_ctx["to_lane_name"],
+                    from_lane_name=notify_ctx["from_lane_name"],
+                    reason="manual",
+                )
+            except Exception:
+                logger.debug("move_ticket: chat notify failed", exc_info=True)
+        return JSONResponse({"success": True})
 
     @router.delete("/kanban/tickets/{ticket_id}")
     async def delete_ticket(ticket_id: int):
@@ -1132,6 +1180,7 @@ def create_routes():
                 external_url=payload.external_url,
                 linked_workflow_id=board.default_workflow_id,
                 linked_project_id=board.default_project_id,
+                source_chat_id=payload.source_chat_id,
             )
             s.add(ticket)
             s.flush()
@@ -1937,7 +1986,15 @@ source: kanban_ticket_{t.id}
             folder = project.folder_location
             project_name = project.name
 
-        instruction = f"{title}\n\n{description}".strip() if description else title
+            from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
+
+            instruction = build_kanban_ticket_cli_instruction(
+                s,
+                tid,
+                project_name=project_name,
+                project_folder=folder or "",
+                project_id=project_id,
+            )
 
         # Check that pi is available
         pi_path = PiRpcSession.find_pi()
@@ -1970,7 +2027,7 @@ source: kanban_ticket_{t.id}
         try:
             rpc = await get_or_create_rpc_session(project_id, folder)
             # Use --append-system-prompt to provide ticket context
-            success = rpc.send_prompt(instruction)
+            success = rpc.send_prompt(instruction, ticket_id_for_writeback=tid)
             if not success:
                 raise Exception("Failed to send prompt to pi")
         except Exception as e:

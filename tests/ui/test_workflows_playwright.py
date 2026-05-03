@@ -1,7 +1,9 @@
 """
 Playwright E2E test for the Workflows page.
 Tests UI rendering, performance, interaction flow, and console/network health.
-Run:  python -m pytest tests/ui/test_workflows_playwright.py --headed -v -s
+
+Run (needs dev server on http://127.0.0.1:8765 and Chromium):
+  pytest -m e2e_playwright tests/ui/test_workflows_playwright.py --headed -v -s
 """
 
 import re
@@ -10,6 +12,7 @@ import json
 import pytest
 from playwright.sync_api import Page, expect
 
+pytestmark = pytest.mark.e2e_playwright
 
 BASE_URL = "http://127.0.0.1:8765"
 WORKFLOWS_URL = f"{BASE_URL}/workflows/"
@@ -826,47 +829,34 @@ class TestWorkflowsHeaderActions:
         page.close()
 
 
-class TestWorkflowsFooterActions:
-    """Test the footer action bar: Export, Download, Duplicate."""
+class TestWorkflowsContextMenuActions:
+    """Duplicate, export, download, and purge-all live on the list row context menu."""
 
-    def test_footer_actions_visible_when_workflow_selected(self, browser_context):
+    def test_context_menu_shows_workflow_actions(self, browser_context):
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
         page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
 
-        # Footer becomes visible once a workflow is auto-selected
-        footer = page.locator("#wf-list-footer-actions")
-        # Wait for auto-selection to complete
-        try:
-            page.locator("#wf-list [data-id]").first.wait_for(state="visible", timeout=5000)
-            page.wait_for_timeout(1000)
-        except Exception:
-            pass
-        
-        # Footer should be visible because a workflow is auto-selected
-        assert not footer.is_hidden(), "Footer actions not visible after workflow auto-selected"
-
         list_items = page.locator("#wf-list [data-id]")
         try:
             list_items.first.wait_for(state="visible", timeout=5000)
-            list_items.first.click()
-            page.wait_for_timeout(1000)
+            page.wait_for_timeout(500)
         except Exception:
-            pytest.skip("No workflows for footer test")
+            pytest.skip("No workflows for context menu test")
 
-        # Should become visible
-        assert not footer.is_hidden(), "Footer actions not visible after selecting workflow"
+        list_items.first.click(button="right")
+        page.wait_for_timeout(300)
 
-        export_btn = page.locator("#wf-export-btn")
-        download_btn = page.locator("#wf-download-btn")
-        duplicate_btn = page.locator("#wf-duplicate-btn")
+        menu = page.locator("#wf-context-menu")
+        assert menu.is_visible(), "Workflow context menu not visible after right-click"
 
-        assert export_btn.is_visible(), "Export button not visible"
-        assert download_btn.is_visible(), "Download button not visible"
-        assert duplicate_btn.is_visible(), "Duplicate button not visible"
+        assert page.locator('#wf-context-menu [data-action="duplicate"]').is_visible()
+        assert page.locator('#wf-context-menu [data-action="export"]').is_visible()
+        assert page.locator('#wf-context-menu [data-action="download"]').is_visible()
+        assert page.locator('#wf-context-menu [data-action="purge-all"]').is_visible()
 
-        print_diagnostics(cl, nl, "FOOTER ACTIONS")
+        print_diagnostics(cl, nl, "CONTEXT MENU ACTIONS")
         page.close()
 
 

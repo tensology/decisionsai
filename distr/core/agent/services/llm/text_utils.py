@@ -3,18 +3,52 @@
 import json
 import re
 import logging
+import unicodedata
 from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Broader than legacy BMP-only whitelist: letters, numbers, marks, punctuation, symbols, spaces.
+# Excludes category C (controls/format/surrogate) and So (emoji / pictographs) for speakability.
+_ALLOWED_SPOKEN_TTS_CATEGORIES = frozenset({
+    "Lu", "Ll", "Lt", "Lm", "Lo",
+    "Nd", "Nl", "No",
+    "Mc", "Mn",
+    "Pc", "Pd", "Pe", "Pf", "Pi", "Po", "Ps",
+    "Sk", "Sm", "Sc",
+    "Zs",
+})
+
+
+def _char_allowed_for_spoken_tts(char: str) -> bool:
+    """Keep multilingual prose; drop emoji (So), controls, and format characters."""
+    if char in "\n\r\t":
+        return True
+    code = ord(char)
+    if code < 0x20:
+        return False
+    cat = unicodedata.category(char)
+    if cat.startswith("C"):
+        return False
+    if cat == "So":
+        return False
+    return cat in _ALLOWED_SPOKEN_TTS_CATEGORIES
 
 
 
 
-def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
+
+def clean_text_for_tts(
+    text: str, strip_whitespace: bool = True, *, spoken_prose: bool = False
+) -> str:
     """
     Clean text for Text-to-Speech processing.
     Removes markdown, emojis, and unpronounceable characters.
+
+    If ``spoken_prose`` is True (e.g. ``speak_text_directly``, planner readouts), use a
+    Unicode-category allowlist so Latin-extended, Greek, Cyrillic, CJK, etc. are kept
+    instead of the legacy BMP-only filter (which gutted long planner paragraphs).
+    Emoji (category So) and controls are still removed.
     """
     if not text:
         return ""
@@ -42,24 +76,28 @@ def clean_text_for_tts(text: str, strip_whitespace: bool = True) -> str:
     # Strip leaked Instruction tags from workflow reports that may surface in LLM output
     text = re.sub(r'\[Instruction:.*?\]', '', text, flags=re.IGNORECASE | re.DOTALL)
 
-    # Normalize smart/curly quotes
-    text = re.sub(r"[\u2018\u2019\u0060\u00B4]", "'", text)
+    # Normalize smart/curly quotes (do not map U+0060 grave — Markdown/code backticks)
+    text = re.sub(r"[\u2018\u2019\u00B4]", "'", text)
     text = re.sub(r"[\u201C\u201D]", '"', text)
 
-    # Remove emojis and non-speakable unicode characters
+    # Remove emojis / unspeakable characters (strict BMP) or category-based (spoken prose)
     sanitized_chars = []
     for char in text:
         try:
-            code = ord(char)
-            if (
-                (0x20 <= code <= 0x24F) or
-                code == 0x0A or code == 0x0D or code == 0x09 or
-                code == 0x2026 or code == 0x2013 or code == 0x2014
-            ):
-                sanitized_chars.append(char)
+            if spoken_prose:
+                if _char_allowed_for_spoken_tts(char):
+                    sanitized_chars.append(char)
+            else:
+                code = ord(char)
+                if (
+                    (0x20 <= code <= 0x24F) or
+                    code == 0x0A or code == 0x0D or code == 0x09 or
+                    code == 0x2026 or code == 0x2013 or code == 0x2014
+                ):
+                    sanitized_chars.append(char)
         except (ValueError, TypeError):
             continue
-    text = ''.join(sanitized_chars)
+    text = "".join(sanitized_chars)
 
     # Remove markdown formatting
     text = re.sub(r'\*+', '', text)

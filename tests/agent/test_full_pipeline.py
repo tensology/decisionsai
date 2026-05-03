@@ -1,6 +1,13 @@
 import asyncio
 import sys
 import os
+
+import pytest
+
+pytest.importorskip("psutil")
+pytest.importorskip("loguru")
+pytest.importorskip("pipecat.pipeline.pipeline")
+
 import psutil
 import numpy as np
 from loguru import logger
@@ -17,9 +24,9 @@ from pipecat.frames.frames import (
 from pipecat.processors.frame_processor import FrameProcessor
 
 # Imports for our services
-from distr.core.agent.services.whisper import WhisperSTTService
+from distr.core.agent.services.stt.whisper import WhisperSTTService
 from distr.core.agent.services.ollama import OllamaLLMService
-from distr.core.agent.services.kokoro import KokoroTTSService
+from distr.core.agent.services.tts.kokoro import KokoroTTSService
 
 # Configure logging
 logger.remove()

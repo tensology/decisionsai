@@ -8,6 +8,10 @@ import sys
 import os
 import time
 import threading
+
+import pytest
+
+pytest.importorskip("pynput")
 from pynput import keyboard, mouse
 
 def test_pynput_in_thread():

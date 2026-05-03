@@ -8,6 +8,32 @@ from fastapi.responses import JSONResponse
 from ._shared import logger, OllamaPullRequest, LLMSettings, route_handler
 
 
+def _is_available_model_entry(model) -> bool:
+    """Return True unless the provider marks this model/endpoint unavailable."""
+    if not isinstance(model, dict):
+        return True
+
+    explicit_false_flags = (
+        model.get("available"),
+        model.get("is_available"),
+        model.get("isAvailable"),
+        model.get("enabled"),
+        model.get("is_enabled"),
+    )
+    if any(flag is False for flag in explicit_false_flags):
+        return False
+
+    status = str(model.get("status") or "").strip().lower()
+    if status in {"unavailable", "disabled", "inactive", "offline", "deprecated"}:
+        return False
+
+    availability = str(model.get("availability") or "").strip().lower()
+    if availability in {"unavailable", "disabled", "inactive", "offline"}:
+        return False
+
+    return True
+
+
 def register_routes(router, templates):
 
     @router.get("/llms")
@@ -160,6 +186,10 @@ def register_routes(router, templates):
         fetcher = _fetchers.get(provider)
         if fetcher:
             models = fetcher()
+
+        # Providers may return endpoint/model rows that exist but are not currently
+        # available. Hide those entries from all UI dropdowns.
+        models = [m for m in models if _is_available_model_entry(m)]
 
         if models:
             def _is_dict(m):

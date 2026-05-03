@@ -40,6 +40,8 @@ ALWAYS_ON_NAMES: set[str] = {
     "mode_control",
     "new_chat",
     "system_info",
+    "memory_search",
+    "memory_read",
 }
 
 _MICRO_ALLOWLIST: list[str] = ["smollm", "tinyllama", "phi-1", "phi-1.5"]
@@ -93,6 +95,22 @@ def build_index_async(tools: list) -> None:
 
     thread = threading.Thread(target=_build, daemon=True)
     thread.start()
+
+
+def schedule_tool_index_rebuild(tools: list) -> None:
+    """Rebuild the semantic tool index after tools change post-startup (e.g. MCP).
+
+    Unlike :func:`build_index_async`, this always runs a fresh :meth:`ToolRetriever.build_index`
+    in a background thread so newly registered tools participate in retrieval.
+    """
+
+    def _run() -> None:
+        try:
+            get_tool_retriever().build_index(tools)
+        except Exception:
+            logger.warning("schedule_tool_index_rebuild failed", exc_info=True)
+
+    threading.Thread(target=_run, daemon=True).start()
 
 
 # ---------------------------------------------------------------------------
@@ -295,8 +313,9 @@ class ToolRetriever:
             return None
 
         if not self.is_ready():
-            from distr.core.agent.tools.loader import _tool_cache
-            all_tools = list(_tool_cache.values())
+            from distr.core.agent.tools.loader import list_all_cached_tool_instances
+
+            all_tools = list_all_cached_tool_instances()
             logger.warning(
                 "ToolRetriever: index not available — returning all %d tools (token cost may be elevated)",
                 len(all_tools),
@@ -345,3 +364,21 @@ class ToolRetriever:
             backend=self._backend,
         )
         return result
+
+    def route(self, user_message: str, tools: list, model_name: str = "llama3:8b") -> list:
+        """Map :meth:`retrieve` names to tool instances in retrieval order.
+
+        When :meth:`retrieve` returns ``None`` (index off or kill switch), returns
+        ``tools`` unchanged so callers still have a full candidate set.
+        """
+        names = self.retrieve(user_message, model_name)
+        if names is None:
+            return list(tools)
+        by_name = {t.name: t for t in tools}
+        out: list = []
+        seen: set[str] = set()
+        for n in names:
+            if n in by_name and n not in seen:
+                out.append(by_name[n])
+                seen.add(n)
+        return out

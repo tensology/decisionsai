@@ -202,6 +202,7 @@ class TelegramWebSocketManager(
         # individually.  After BATCH_DELAY_MS of silence the buffer is flushed.
         self._telegram_batch_buffer: list = []  # list of (text, is_media, image_path, input_type)
         self._current_input_type: str = "text"  # last flushed input type ("text" or "voice")
+        self._telegram_batch_thread_id: int | None = None  # Telegram chat id for R15 bus mapping
 
         # Sleep prevention — keep the machine awake while Telegram is connected
         self._sleep_inhibit_proc = None  # subprocess handle (macOS caffeinate) or ctypes ref (Windows)

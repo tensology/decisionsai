@@ -47,24 +47,29 @@ def _make_run(**overrides):
 
 class TestStaticRoute:
     def test_pass_follows_on_pass_goto(self):
+        db = MagicMock()
         step = _make_step(on_pass_goto=5, on_fail_goto=9)
-        result = StepRouter._static_route(step, passed=True)
+        result = StepRouter._static_route(db, step, passed=True)
         assert result == 5
 
     def test_fail_follows_on_fail_goto(self):
+        db = MagicMock()
         step = _make_step(on_pass_goto=5, on_fail_goto=9)
-        result = StepRouter._static_route(step, passed=False)
+        result = StepRouter._static_route(db, step, passed=False)
         assert result == 9
 
     def test_null_goto_ends_run(self):
+        db = MagicMock()
         step = _make_step(on_pass_goto=None, on_fail_goto=None)
-        assert StepRouter._static_route(step, passed=True) is None
-        assert StepRouter._static_route(step, passed=False) is None
+        db.query.return_value.filter.return_value.order_by.return_value.first.return_value = None
+        assert StepRouter._static_route(db, step, passed=True) is None
+        assert StepRouter._static_route(db, step, passed=False) is None
 
     def test_minus_one_ends_run(self):
+        db = MagicMock()
         step = _make_step(on_pass_goto=-1, on_fail_goto=-1)
-        assert StepRouter._static_route(step, passed=True) == -1
-        assert StepRouter._static_route(step, passed=False) == -1
+        assert StepRouter._static_route(db, step, passed=True) == -1
+        assert StepRouter._static_route(db, step, passed=False) == -1
 
 
 # ── Parse routing response tests ───────────────────────────────────
@@ -269,7 +274,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, None]
         db.add = MagicMock()
 
         router = StepRouter()

@@ -11,6 +11,7 @@ import threading
 from typing import List, Dict, Optional
 
 from distr.core.agent.tools.base import BaseActionTool
+from distr.core.agent.tools.registry import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -21,8 +22,28 @@ _cache_lock: threading.Lock = threading.Lock()
 
 
 def get_cached_tool(name: str):
-    """Return a cached tool instance by name, or None if not cached."""
-    return _tool_cache.get(name)
+    """Return a cached tool instance by name, or None if unavailable / missing."""
+    reg = get_tool_registry()
+    rec = reg.get_record(name)
+    if rec is not None:
+        return rec.tool if rec.available else None
+    with _cache_lock:
+        return _tool_cache.get(name)
+
+
+def get_warmed_tools_list():
+    """Tools to bind to the LLM when the cache is warm (respects registry availability)."""
+    reg = get_tool_registry()
+    if reg.count() > 0:
+        return reg.get_all()
+    with _cache_lock:
+        return list(_tool_cache.values())
+
+
+def list_all_cached_tool_instances():
+    """Snapshot every warmed instance (including unavailable), e.g. for indexing."""
+    with _cache_lock:
+        return list(_tool_cache.values())
 
 
 def _get_tool_definitions(
@@ -136,6 +157,24 @@ def _get_tool_definitions(
         ("DocumentExtractorTool", {}),
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
+        ("MemorySearchTool", {}),
+        ("MemoryReadTool", {}),
+        (
+            "MemoryAddTool",
+            dict(
+                event_queue=event_queue,
+                command_queue=command_queue,
+                confirmation_results_dict=confirmation_results_dict,
+            ),
+        ),
+        (
+            "MemoryEditTool",
+            dict(
+                event_queue=event_queue,
+                command_queue=command_queue,
+                confirmation_results_dict=confirmation_results_dict,
+            ),
+        ),
         ("ImageGeneratorTool", {}),
         # Wake Up
         ("WakeUpTool", {}),
@@ -220,12 +259,27 @@ def warm_tool_cache(
         confirmation_results_dict=confirmation_results_dict,
     )
 
+    reg = get_tool_registry()
+    reg.unregister_by_source("native")
+
     with _cache_lock:
+        _tool_cache.clear()
         _failed_tools: list = []
         for tool_name, kwargs in tool_definitions:
             try:
                 tool_class = _get_tool_class(tool_name)
                 tool = tool_class(**kwargs)
+                try:
+                    reg.register(tool, "native")
+                except ValueError as ve:
+                    logger.error(
+                        "Duplicate tool name after instantiate %s → %r: %s",
+                        tool_name,
+                        tool.name,
+                        ve,
+                    )
+                    _failed_tools.append(tool_name)
+                    continue
                 _tool_cache[tool.name] = tool
                 logger.debug("Cached %s: %s", tool_name, tool.name)
             except Exception as e:
@@ -245,6 +299,16 @@ def warm_tool_cache(
                 mod = importlib.import_module(f"{_BASE_PACKAGE}.{submodule}")
                 cls = getattr(mod, class_name)
                 tool = cls(**kwargs)
+                try:
+                    reg.register(tool, "native")
+                except ValueError as ve:
+                    logger.error(
+                        "Duplicate tool name (accessibility %s) → %r: %s",
+                        tool_name,
+                        tool.name,
+                        ve,
+                    )
+                    continue
                 _tool_cache[tool.name] = tool
                 logger.debug("Cached accessibility tool: %s", tool_name)
             except Exception as e:
@@ -264,14 +328,32 @@ def warm_tool_cache(
                 mod = importlib.import_module(f"{_BASE_PACKAGE}.{submodule}")
                 cls = getattr(mod, class_name)
                 tool = cls(**kwargs)
+                try:
+                    reg.register(tool, "native")
+                except ValueError as ve:
+                    logger.error(
+                        "Duplicate tool name (sidecar %s) → %r: %s",
+                        tool_name,
+                        tool.name,
+                        ve,
+                    )
+                    continue
                 _tool_cache[tool.name] = tool
                 logger.debug("Cached sidecar tool: %s", tool_name)
             except Exception as e:
                 logger.debug("Skipped %s (sidecar not available): %s", tool_name, e)
 
+        tools_for_index = list(_tool_cache.values())
+
     # Trigger background embedding index build
     from distr.core.agent.tool_retriever import build_index_async
-    build_index_async(list(_tool_cache.values()))
+    build_index_async(tools_for_index)
+    try:
+        from distr.core.agent.tools.sidecar_tool_watch import prime_sidecar_tool_availability
+
+        prime_sidecar_tool_availability()
+    except Exception:
+        logger.debug("prime_sidecar_tool_availability skipped", exc_info=True)
     if _failed_tools:
         logger.warning(
             "warm_tool_cache: %d tool(s) failed to initialise and will be UNAVAILABLE: %s",
@@ -280,6 +362,45 @@ def warm_tool_cache(
         )
     logger.info("warm_tool_cache complete — %d tools cached, %d failed, index build started",
                 len(_tool_cache), len(_failed_tools))
+
+
+def ensure_tool_cache_warmed_if_empty(
+    chat_manager=None,
+    llm_service=None,
+    tts_service=None,
+    llm_model=None,
+    event_queue=None,
+    command_queue=None,
+    confirmation_results_dict=None,
+) -> None:
+    """Warm the global tool cache once if it is still empty.
+
+    Headless paths (e.g. isolated workflow \"Run step\") may construct a
+    :class:`~distr.core.workflow_agent.WorkflowAgent` before the main agent
+    startup has called :func:`warm_tool_cache`. Without this, :func:`load_tools`
+    stays on the cold path and may expose fewer tools than a normal session.
+    """
+    with _cache_lock:
+        if _tool_cache:
+            return
+    warm_tool_cache(
+        chat_manager=chat_manager,
+        llm_service=llm_service,
+        tts_service=tts_service,
+        llm_model=llm_model,
+        event_queue=event_queue,
+        command_queue=command_queue,
+        confirmation_results_dict=confirmation_results_dict,
+    )
+    try:
+        from distr.core.mcp.runtime import init_mcp_stack
+
+        init_mcp_stack()
+    except Exception:
+        logger.debug(
+            "init_mcp_stack from ensure_tool_cache_warmed_if_empty failed",
+            exc_info=True,
+        )
 
 
 # Registry: (module_path, class_name) for each tool
@@ -355,6 +476,12 @@ TOOL_REGISTRY = {
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
+    "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
+    "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
+    "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
+    "MemoryEditTool":          ("system.memory_tools", "MemoryEditTool"),
+    "InstallMCPServerTool":    ("system.self_improvement_tools", "InstallMCPServerTool"),
+    "InstallSkillTool":        ("system.self_improvement_tools", "InstallSkillTool"),
     "ExitAppTool":             ("system.exit_app", "ExitAppTool"),
     "RestartAppTool":          ("system.restart_app", "RestartAppTool"),
     "WakeUpTool":              ("system.wake_up", "WakeUpTool"),
@@ -444,7 +571,11 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CreateActionTool": "Record a new reusable macro action that can be replayed later to automate repetitive tasks.",
     # workflow builder (AutoWorkflow) tools
     "ListWorkflowsTool": "List all saved workflows with optional filtering by status or search term.",
-    "GetWorkflowTool": "Retrieve the full details, steps, and run history of a specific workflow by its ID.",
+    "GetWorkflowTool": (
+        "Retrieve full workflow details: steps, per-step config, run history, and wait/pause/approval "
+        "settings for each step. Use workflow_id from list_workflows or REFERENCE. Prefer this over "
+        "request_tool when the user asks whether steps pause, wait for confirmation, or what a workflow does."
+    ),
     "RunWorkflowTool": "Start a new run of a workflow, executing its steps in order.",
     "CancelWorkflowRunTool": "Cancel an in-progress workflow run by its run ID.",
     "GetActiveWorkflowRunsTool": "List active workflow runs with run IDs, statuses, and current step names so the agent can recover workflow context before continue or status actions.",
@@ -469,6 +600,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
+    "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",
+    "MemoryReadTool": "Read line ranges from cross-chat AGENT.md, USER.md, MEMORY.md, or EVENTS.md persistent files.",
+    "MemoryAddTool": "Append a new section to MEMORY.md or USER.md with confirmation when file-change prompts are enabled.",
+    "MemoryEditTool": "Append or replace sections in USER.md or AGENT.md, or append-only to MEMORY.md; cannot replace MEMORY.md.",
+    "InstallMCPServerTool": "Queue adding a new MCP server entry for user approval; after approve, merges into mcp_config.json with duplicate-name checks.",
+    "InstallSkillTool": "Queue cloning an https Git skill repo into bundled DecisionsAI skills for user approval; requires git at approve time and SKILL.md at repo root.",
     "ExitAppTool": "Quit and close the DecisionsAI desktop application.",
     "RestartAppTool": "Restart the DecisionsAI desktop application to apply updates or recover from errors.",
     "WakeUpTool": "Wake the computer from sleep or activate the display when the screen is off.",
@@ -550,7 +687,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
             names = get_tool_retriever().retrieve(user_message, model_name or "")
             if names is None:
                 # Kill switch active or index not ready — fall back to all cached tools
-                return list(_tool_cache.values())
+                return get_warmed_tools_list()
             resolved: List = []
             for name in names:
                 tool = get_cached_tool(name)
@@ -560,7 +697,7 @@ def load_tools(chat_manager=None, filter_methods: Optional[List[str]] = None, us
                     logger.error("Retriever returned tool name %r but it is not in the cache — skipping", name)
             return resolved
         else:
-            return list(_tool_cache.values())
+            return get_warmed_tools_list()
 
     # --- Cold path: only reached when warm_tool_cache has not run yet ---
 

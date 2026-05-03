@@ -1,12 +1,22 @@
 #!/usr/bin/env python3
 """
 Test script to investigate Telegram token flow and see what the server returns
+
+Live API: skipped in pytest unless DECISIONSAI_NETWORK_TESTS=1.
 """
 import requests
 import json
 import os
 import sys
 from pathlib import Path
+
+import pytest
+
+pytestmark = pytest.mark.skipif(
+    os.environ.get("DECISIONSAI_NETWORK_TESTS", "").strip().lower()
+    not in ("1", "true", "yes", "on"),
+    reason="Live DecisionsAI API; set DECISIONSAI_NETWORK_TESTS=1 to run",
+)
 
 # Add project root to path
 project_root = Path(__file__).parent

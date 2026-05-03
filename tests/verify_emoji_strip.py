@@ -1,8 +1,17 @@
 """Verify that clean_text_for_tts strips emojis before they reach TTS."""
-import sys, os
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+import importlib.util
+import sys
+from pathlib import Path
 
-from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+_ROOT = Path(__file__).resolve().parents[1]
+_spec = importlib.util.spec_from_file_location(
+    "text_utils",
+    _ROOT / "distr/core/agent/services/llm/text_utils.py",
+)
+_mod = importlib.util.module_from_spec(_spec)
+assert _spec.loader is not None
+_spec.loader.exec_module(_mod)
+clean_text_for_tts = _mod.clean_text_for_tts
 
 cases = [
     ("Hello 😊 world", "Hello world"),
@@ -38,3 +47,10 @@ for raw, expected in cases:
 print(f"\n{passed}/{passed+failed} passed")
 if failed:
     sys.exit(1)
+
+# spoken_prose: keep non-BMP letters, still drop emoji (So)
+sp_ok = clean_text_for_tts("你好 😊 Day plan", spoken_prose=True)
+assert "你好" in sp_ok and "😊" not in sp_ok, repr(sp_ok)
+strict = clean_text_for_tts("你好 plan")
+assert "你好" not in strict, repr(strict)
+print("PASS: spoken_prose keeps CJK, strips emoji; strict BMP drops CJK")

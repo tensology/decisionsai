@@ -214,6 +214,7 @@ class TestTicketCollectionOrdering:
 
             board_info = _BoardInfo(
                 id=board_id,
+                name="Test Board",
                 agent_enabled=True,
                 agent_source_lane="Source",
                 agent_done_lane="Done",

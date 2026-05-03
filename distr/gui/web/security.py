@@ -132,6 +132,14 @@ def redact_connected_account(account: Dict[str, Any]) -> Dict[str, Any]:
     elif provider == "trello":
         base["api_key_masked"] = mask_secret(account.get("api_key"))
         base["has_api_token"] = bool((account.get("api_token") or "").strip())
+    elif provider == "discord_bot":
+        base["bot_token_masked"] = mask_secret(account.get("bot_token"))
+        base["has_bot_token"] = bool((account.get("bot_token") or "").strip())
+    elif provider == "slack_app":
+        base["bot_token_masked"] = mask_secret(account.get("bot_token"))
+        base["signing_secret_masked"] = mask_secret(account.get("signing_secret"))
+        base["has_bot_token"] = bool((account.get("bot_token") or "").strip())
+        base["has_signing_secret"] = bool((account.get("signing_secret") or "").strip())
     return base
 
 

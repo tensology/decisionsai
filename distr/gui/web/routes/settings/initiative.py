@@ -89,13 +89,24 @@ def register_routes(router, templates):
 
     @router.post("/initiative/drafts/{draft_id}/approve")
     async def approve_draft(draft_id: str):
-        """Approve a pending draft action."""
+        """Approve a pending draft action (runs ``execute_payload`` when set)."""
         try:
+            from distr.core.initiative.draft_execute import approve_draft_in_queue
             from distr.core.initiative.draft_queue import DraftQueue
+
             queue = DraftQueue()
-            removed = queue.remove(draft_id)
+            removed = approve_draft_in_queue(queue, draft_id)
             if removed:
                 return JSONResponse({"success": True, "message": "Draft approved and removed"})
+            still_there = queue.get_by_id(draft_id) is not None
+            if still_there:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": "Approval failed — install step did not complete (draft left in queue).",
+                    },
+                    status_code=400,
+                )
             return JSONResponse({"success": False, "error": "Draft not found"}, status_code=404)
         except Exception as e:
             logger.error(f"Failed to approve draft: {e}", exc_info=True)

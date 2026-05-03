@@ -171,8 +171,10 @@ class InitiativeService:
         return [dataclasses.asdict(e) for e in self._draft_queue.get_all()]
 
     def approve_draft(self, draft_id: str) -> bool:
-        """Approve and remove a draft entry."""
-        removed = self._draft_queue.remove(draft_id)
+        """Run optional ``execute_payload``, then remove the draft entry."""
+        from distr.core.initiative.draft_execute import approve_draft_in_queue
+
+        removed = approve_draft_in_queue(self._draft_queue, draft_id)
         if removed:
             logger.info("InitiativeService: draft %s approved and removed", draft_id)
         return removed
@@ -251,9 +253,7 @@ class InitiativeService:
             logger.error("InitiativeService: failed to load settings on idle timer expiry", exc_info=True)
             return
         level = self._get_level(settings)
-        if level == "observe":
-            logger.debug("InitiativeService: idle timer expired but level=observe, skipping")
-            return
+        # observe: cycle still runs; policy gates proposals (rubric can surface drafts).
         # assist level: run cycle to generate suggestions (SUGGEST_ONLY)
         # operate/own: run full cycle
         with self._cycle_lock:
@@ -265,6 +265,20 @@ class InitiativeService:
     def _on_schedule_tick(self) -> None:
         if self._stopped:
             return
+        try:
+            from distr.core.mcp.runtime import tick_mcp_reconnect
+
+            tick_mcp_reconnect()
+        except Exception:
+            logger.debug("tick_mcp_reconnect skipped", exc_info=True)
+        try:
+            from distr.core.agent.tools.sidecar_tool_watch import tick_sidecar_tool_availability
+
+            tick_sidecar_tool_availability()
+        except Exception:
+            logger.debug("tick_sidecar_tool_availability skipped", exc_info=True)
+        # R3: DB-backed proactive tasks (Morning Brief, planners, etc.)
+        threading.Thread(target=self._maybe_run_proactive_scheduler, daemon=True).start()
         try:
             from distr.core.utils import load_settings_from_db
             settings = load_settings_from_db()
@@ -359,9 +373,6 @@ class InitiativeService:
                 return
 
             level = migrate_initiative_level(settings.get("initiative_level", "assist"))
-            if level == "observe":
-                cycle_ok = True
-                return
 
             # Expire old drafts
             self._draft_queue.expire_old()
@@ -418,7 +429,7 @@ class InitiativeService:
             logger.info("InitiativeService: policy decision=%s for action_type=%s",
                         decision, action.action_type)
 
-            self._dispatch_action(action, settings, decision)
+            self._dispatch_action(action, settings, decision, boundaries)
             self._last_cycle_error = None  # clear previous error on success
             cycle_ok = True
 
@@ -434,6 +445,243 @@ class InitiativeService:
             with self._cycle_lock:
                 self._cycle_running = False
             logger.debug("InitiativeService: cycle finished (trigger=%s)", trigger_source)
+
+    # ------------------------------------------------------------------
+    # Proactive scheduler (R3)
+    # ------------------------------------------------------------------
+
+    def _maybe_run_proactive_scheduler(self) -> None:
+        """Run due proactive tasks when no initiative cycle holds the lock."""
+        if self._stopped:
+            return
+        with self._cycle_lock:
+            if self._cycle_running:
+                return
+            self._cycle_running = True
+        try:
+            self._run_proactive_scheduler_cycle()
+        except Exception:
+            logger.error("InitiativeService: proactive scheduler failed", exc_info=True)
+        finally:
+            with self._cycle_lock:
+                self._cycle_running = False
+
+    def _run_proactive_scheduler_cycle(self) -> None:
+        from distr.core.db import get_session
+        from distr.core.initiative.scheduler import (
+            default_local_tz,
+            iter_due_proactive_tasks,
+            mark_proactive_task_run,
+        )
+        from distr.core.initiative.tiers import PermissionTier
+        from distr.core.utils import load_settings_from_db
+
+        try:
+            settings = load_settings_from_db()
+        except Exception:
+            logger.error("InitiativeService: proactive cycle could not load settings", exc_info=True)
+            return
+
+        boundaries = {
+            "initiative_allow_telegram": settings.get("initiative_allow_telegram", False),
+            "initiative_allow_routine_tasks": settings.get("initiative_allow_routine_tasks", False),
+            "initiative_ask_external_comms": settings.get("initiative_ask_external_comms", True),
+            "initiative_ask_file_changes": settings.get("initiative_ask_file_changes", True),
+            "initiative_ask_sensitive": settings.get("initiative_ask_sensitive", True),
+        }
+
+        snapshots: list[dict] = []
+        try:
+            with get_session() as session:
+                local_tz = default_local_tz()
+                now_utc = datetime.now(timezone.utc)
+                for row in iter_due_proactive_tasks(session, now_utc=now_utc, local_tz=local_tz):
+                    snapshots.append(
+                        {
+                            "id": row.id,
+                            "name": row.name,
+                            "instruction": (row.instruction or "").strip(),
+                            "tier": row.tier,
+                        }
+                    )
+        except Exception:
+            logger.error("InitiativeService: proactive due query failed", exc_info=True)
+            return
+
+        if not snapshots:
+            return
+
+        for snap in snapshots:
+            tid = snap["id"]
+            name = snap["name"]
+            instruction = snap["instruction"] or name
+            tier_val = max(0, min(3, int(snap["tier"])))
+            tier = PermissionTier(tier_val)
+
+            if str(name).strip().lower() == "memory distillation":
+                try:
+                    from distr.core.memory.distiller import run_memory_distillation
+
+                    outcome = run_memory_distillation()
+                    logger.info(
+                        "InitiativeService: Memory Distillation task id=%s ok=%s skipped=%s reason=%s",
+                        tid,
+                        outcome.ok,
+                        outcome.skipped,
+                        outcome.reason,
+                    )
+                except Exception:
+                    logger.error(
+                        "InitiativeService: Memory Distillation task id=%s failed",
+                        tid,
+                        exc_info=True,
+                    )
+                try:
+                    with get_session() as session:
+                        mark_proactive_task_run(session, tid)
+                except Exception:
+                    logger.error(
+                        "InitiativeService: could not mark proactive task id=%s run",
+                        tid,
+                        exc_info=True,
+                    )
+                continue
+
+            from distr.core.initiative.planners import planner_scope_for_task_name
+
+            planner_scope = planner_scope_for_task_name(name)
+            if planner_scope:
+                try:
+                    self._run_planner_proactive_task(
+                        scope=planner_scope,
+                        task_name=name,
+                        task_id=tid,
+                        instruction=instruction,
+                        settings=settings,
+                        tier=tier,
+                    )
+                except Exception:
+                    logger.error(
+                        "InitiativeService: planner task id=%s name=%r failed",
+                        tid,
+                        name,
+                        exc_info=True,
+                    )
+                try:
+                    with get_session() as session:
+                        mark_proactive_task_run(session, tid)
+                except Exception:
+                    logger.error(
+                        "InitiativeService: could not mark proactive task id=%s run",
+                        tid,
+                        exc_info=True,
+                    )
+                continue
+
+            action = ProposedAction(
+                action_type="suggestion",
+                description=f"[{name}] {instruction}",
+                payload={
+                    "source": "proactive",
+                    "task_name": name,
+                    "proactive_task_id": tid,
+                },
+                telegram_message=f"Proactive — {name}",
+            )
+            try:
+                self._dispatch_proactive_instruction(action, settings, boundaries, tier=tier)
+            except Exception:
+                logger.error(
+                    "InitiativeService: proactive task id=%s failed", tid, exc_info=True
+                )
+            try:
+                with get_session() as session:
+                    mark_proactive_task_run(session, tid)
+            except Exception:
+                logger.error(
+                    "InitiativeService: could not mark proactive task id=%s run", tid, exc_info=True
+                )
+
+    def _run_planner_proactive_task(
+        self,
+        *,
+        scope: str,
+        task_name: str,
+        task_id: int,
+        instruction: str,
+        settings: dict,
+        tier,
+    ) -> None:
+        """R4: LLM markdown planner, DB row, chat, Telegram, optional TTS."""
+        from distr.core.db import get_session
+        from distr.core.db.planner_output import save_planner_row
+        from distr.core.initiative.planners import generate_planner_markdown, tts_excerpt_from_markdown
+        from distr.core.initiative.tiers import PermissionTier
+        from distr.core.signals import signal_manager
+
+        if tier == PermissionTier.SILENT:
+            logger.info(
+                "InitiativeService: planner suppressed (SILENT tier): %s",
+                task_name,
+            )
+            return
+
+        bundle = self._context_assembler.build(settings)
+        markdown, date_info = generate_planner_markdown(
+            scope, settings, bundle, instruction
+        )
+        with get_session() as session:
+            save_planner_row(
+                session,
+                scope=scope,
+                date_info=date_info,
+                content=markdown,
+                proactive_task_id=task_id,
+            )
+
+        header = f"[Planner — {task_name}]"
+        chat_body = f"{header}\n\n{markdown.strip()}"
+        self._log_planner_to_chat(chat_body)
+
+        tg_body = chat_body
+        if len(tg_body) > 4000:
+            tg_body = tg_body[:3990] + "\n…(truncated)"
+        self._send_telegram_if_allowed(tg_body, settings)
+
+        if settings.get("chat_voice_enabled", True):
+            excerpt = tts_excerpt_from_markdown(markdown)
+            if excerpt:
+                try:
+                    signal_manager.speak_text_directly.emit(
+                        f"Here's your {scope} planner. {excerpt}"
+                    )
+                except Exception as e:
+                    logger.debug("InitiativeService: planner TTS emit failed: %s", e)
+
+    def _log_planner_to_chat(self, message: str) -> None:
+        """Append planner markdown without the generic [Initiative] suggestion prefix."""
+        if not self.chat_manager:
+            return
+        try:
+            current_chat = self.chat_manager.get_current_chat()
+            if current_chat:
+                self.chat_manager.add_assistant_message(current_chat, message)
+        except Exception as e:
+            logger.debug("InitiativeService: _log_planner_to_chat failed: %s", e)
+
+    def _dispatch_proactive_instruction(self, action, settings: dict, boundaries: dict, tier) -> None:
+        """
+        Deliver a scheduled proactive instruction without LLM policy SKIP on observe/assist.
+
+        Uses the task's permission tier (R2); APPROVE+ queues a draft for confirmation.
+        """
+        from distr.core.initiative.tiers import PermissionTier
+
+        if tier.value >= PermissionTier.APPROVE.value:
+            action.requires_confirmation = True
+            self._draft_and_ask(action, settings, tier=tier)
+            return
+        self._execute_action(action, settings, tier=tier)
 
     # ------------------------------------------------------------------
     # LLM call
@@ -470,6 +718,11 @@ class InitiativeService:
             "available_tools": bundle.available_tools[:15],
             "skills": bundle.skills[:10],
             "recent_audit": bundle.recent_audit[:10],
+            "memory_files_trimmed": {
+                "has_agent": bool(bundle.memory_agent),
+                "has_user": bool(bundle.memory_user),
+                "has_long_term": bool(bundle.memory_long_term),
+            },
         }, ensure_ascii=False)
         messages = [
             {"role": "system", "content": system_prompt},
@@ -518,12 +771,19 @@ class InitiativeService:
             k: v for k, v in settings.items() if k.startswith("initiative_")
         })
 
-        if level == "assist":
+        if level == "observe":
+            role_instruction = (
+                "Your initiative level is OBSERVE: do not propose autonomous execution. "
+                "Prefer action_type 'none' unless something clearly warrants user review — "
+                "then include a rubric so important items can become pending approvals."
+            )
+        elif level == "assist":
             role_instruction = (
                 "Your role is to SUGGEST helpful next steps based on the context. "
                 "You should NOT propose executing anything — only surface observations "
                 "and recommendations the user might find useful. "
-                "Prefer action_type 'suggestion' or 'none'."
+                "Prefer action_type 'suggestion' or 'none'. "
+                "Include a rubric (see below) so higher-impact items can be queued for approval."
             )
         elif level == "operate":
             role_instruction = (
@@ -541,18 +801,54 @@ class InitiativeService:
                 "Be proactive but respect the boundaries."
             )
 
+        rubric_help = (
+            "Also include an optional \"rubric\" object when proposing any non-none action. "
+            "Each dimension is an integer 1–5 (omit keys you are unsure about — they default to 3):\n"
+            "  impact — 1 negligible … 5 critical\n"
+            "  risk — 1 high risk … 5 no/low risk\n"
+            "  cost — 1 very costly … 5 negligible cost\n"
+            "  urgency — 1 not urgent … 5 immediate\n"
+            "  confidence — 1 unlikely … 5 certain\n"
+            "Scores sum to a total; totals ≥13 queue for user approval (draft); "
+            "≥18 at operate/own allow autonomous execution only when boundaries permit.\n"
+        )
+
+        memory_sections: list[str] = []
+        if getattr(bundle, "memory_agent", "").strip():
+            memory_sections.append(
+                "### Cross-chat memory — AGENT.md (trimmed)\n" + bundle.memory_agent.strip()
+            )
+        if getattr(bundle, "memory_user", "").strip():
+            memory_sections.append(
+                "### Cross-chat memory — USER.md (trimmed)\n" + bundle.memory_user.strip()
+            )
+        if getattr(bundle, "memory_long_term", "").strip():
+            memory_sections.append(
+                "### Cross-chat memory — MEMORY.md (trimmed)\n" + bundle.memory_long_term.strip()
+            )
+        memory_block = ""
+        if memory_sections:
+            memory_block = (
+                "\nPersistent memory files (cross-chat, not the chat thread):\n"
+                + "\n\n".join(memory_sections)
+                + "\n\n"
+            )
+
         return (
             f"You are an autonomous agent assistant. Initiative level: {level}.\n"
             f"Current datetime: {bundle.current_datetime}\n"
             f"Boundary settings: {boundary_info}\n\n"
             f"{role_instruction}\n\n"
+            f"{memory_block}"
             "Context available: active project, ticket boards and tickets, "
             "workflows (stuck/unfinished), recent tool audit trail, available tools, "
-            "and available skills.\n\n"
+            "available skills, and trimmed AGENT/USER/MEMORY markdown files when present.\n\n"
+            f"{rubric_help}"
             "Based on the context, propose ONE action. "
             "Respond with a JSON object (no markdown fences) with fields:\n"
             "  action_type: suggestion | routine_task | external_comms | file_change | sensitive | none\n"
             "  description: what the action does (string)\n"
+            "  rubric: optional object with impact, risk, cost, urgency, confidence (ints 1–5)\n"
             "  payload: optional dict with details (e.g. board_id, lane, title for ticket board)\n"
             "  draft: optional text draft for the action\n"
             "  telegram_message: optional notification text\n"
@@ -570,8 +866,23 @@ class InitiativeService:
     # Action dispatch
     # ------------------------------------------------------------------
 
-    def _dispatch_action(self, action: ProposedAction, settings: dict, decision) -> None:
+    def _dispatch_action(
+        self,
+        action: ProposedAction,
+        settings: dict,
+        decision,
+        boundaries: dict,
+        *,
+        tier_override=None,
+    ) -> None:
         from distr.core.initiative.policy import PolicyDecision
+        from distr.core.initiative.tiers import PermissionTier, effective_permission_tier
+
+        tier = (
+            tier_override
+            if tier_override is not None
+            else effective_permission_tier(action.action_type, boundaries, settings)
+        )
 
         if decision == PolicyDecision.SKIP:
             logger.info("InitiativeService: action skipped (policy=SKIP) action_type=%s",
@@ -580,50 +891,57 @@ class InitiativeService:
 
         if decision == PolicyDecision.SUGGEST_ONLY:
             logger.info("InitiativeService: suggestion: %s", action.description)
-            self._deliver_suggestion(action, settings)
+            self._deliver_suggestion(action, settings, tier=tier)
             return
 
         if decision == PolicyDecision.DRAFT_AND_ASK:
             action.requires_confirmation = True
-            self._draft_and_ask(action, settings)
+            self._draft_and_ask(action, settings, tier=tier)
             return
 
-        # EXECUTE
-        self._execute_action(action, settings)
+        # EXECUTE — permission tier may still require approval (APPROVE / ESCALATE)
+        if tier.value >= PermissionTier.APPROVE.value:
+            action.requires_confirmation = True
+            self._draft_and_ask(action, settings, tier=tier)
+            return
 
-    def _execute_action(self, action: ProposedAction, settings: dict) -> None:
+        self._execute_action(action, settings, tier=tier)
+
+    def _execute_action(self, action: ProposedAction, settings: dict, tier=None) -> None:
         """Execute an approved action."""
+        from distr.core.initiative.tiers import PermissionTier
+
         allow_routine = settings.get("initiative_allow_routine_tasks", False)
 
         if action.action_type == "routine_task":
             if not allow_routine:
                 logger.info("InitiativeService: routine task blocked by boundary: %s",
                             action.description)
-                self._deliver_suggestion(action, settings)
+                self._deliver_suggestion(action, settings, tier=tier)
                 return
 
             runner_type = (action.payload or {}).get("runner_type", "")
             if runner_type == "kanban":
-                self._dispatch_kanban(action, settings)
+                self._dispatch_kanban(action, settings, tier=tier)
             elif runner_type == "workflow":
-                self._dispatch_workflow(action, settings)
+                self._dispatch_workflow(action, settings, tier=tier)
             else:
                 # Default: try ticket board if board_id present, otherwise log as suggestion
                 if (action.payload or {}).get("board_id"):
-                    self._dispatch_kanban(action, settings)
+                    self._dispatch_kanban(action, settings, tier=tier)
                 else:
-                    self._deliver_suggestion(action, settings)
+                    self._deliver_suggestion(action, settings, tier=tier)
             return
 
         if action.action_type == "suggestion":
-            self._deliver_suggestion(action, settings)
+            self._deliver_suggestion(action, settings, tier=tier)
             return
 
         # external_comms, file_change, sensitive with EXECUTE decision
-        # These are actions the policy says we can do without asking.
-        # Log them and notify the user.
         logger.info("InitiativeService: auto-executing %s: %s",
                      action.action_type, action.description)
+        if tier == PermissionTier.SILENT:
+            return
         self._log_to_chat(f"[Auto] {action.action_type}: {action.description}", settings)
         self._send_telegram_if_allowed(
             action.telegram_message or f"{action.action_type}: {action.description}",
@@ -634,8 +952,18 @@ class InitiativeService:
     # Delivery helpers
     # ------------------------------------------------------------------
 
-    def _deliver_suggestion(self, action: ProposedAction, settings: dict) -> None:
+    def _deliver_suggestion(
+        self, action: ProposedAction, settings: dict, tier=None
+    ) -> None:
         """Deliver a suggestion via chat and optionally Telegram."""
+        from distr.core.initiative.tiers import PermissionTier
+
+        if tier == PermissionTier.SILENT:
+            logger.info(
+                "InitiativeService: suggestion suppressed (SILENT tier): %s",
+                action.description,
+            )
+            return
         msg = action.description
         if action.suggested_tool and isinstance(action.suggested_tool, dict):
             tn = action.suggested_tool.get("name", "")
@@ -647,7 +975,9 @@ class InitiativeService:
             settings,
         )
 
-    def _dispatch_kanban(self, action: ProposedAction, settings: dict) -> None:
+    def _dispatch_kanban(
+        self, action: ProposedAction, settings: dict, tier=None
+    ) -> None:
         """Create a ticket from the proposed action."""
         payload = action.payload or {}
         board_id = payload.get("board_id")
@@ -669,7 +999,7 @@ class InitiativeService:
 
         if not board_id:
             logger.warning("InitiativeService: no board_id for ticket board dispatch, falling back to suggestion")
-            self._deliver_suggestion(action, settings)
+            self._deliver_suggestion(action, settings, tier=tier)
             return
 
         try:
@@ -699,39 +1029,47 @@ class InitiativeService:
                     session.commit()
                     logger.info("InitiativeService: created ticket '%s' in lane '%s' (board %s)",
                                 title[:50], lane.name, board_id)
-                    self._log_to_chat(f"Created ticket: {title[:100]}", settings)
-                    self._send_telegram_if_allowed(
-                        action.telegram_message or f"Created ticket: {title[:100]}",
-                        settings,
-                    )
+                    from distr.core.initiative.tiers import PermissionTier
+
+                    if tier != PermissionTier.SILENT:
+                        self._log_to_chat(f"Created ticket: {title[:100]}", settings)
+                        self._send_telegram_if_allowed(
+                            action.telegram_message or f"Created ticket: {title[:100]}",
+                            settings,
+                        )
                     return
         except Exception:
             logger.error("InitiativeService: ticket creation failed", exc_info=True)
 
-        self._deliver_suggestion(action, settings)
+        self._deliver_suggestion(action, settings, tier=tier)
 
-    def _dispatch_workflow(self, action: ProposedAction, settings: dict) -> None:
+    def _dispatch_workflow(
+        self, action: ProposedAction, settings: dict, tier=None
+    ) -> None:
         """Trigger a workflow run from the proposed action."""
         payload = action.payload or {}
         workflow_id = payload.get("workflow_id")
         if not workflow_id:
             logger.warning("InitiativeService: no workflow_id for workflow dispatch")
-            self._deliver_suggestion(action, settings)
+            self._deliver_suggestion(action, settings, tier=tier)
             return
 
         try:
+            from distr.core.initiative.tiers import PermissionTier
             from distr.core.workflow.dispatcher import start_workflow_run
+
             start_workflow_run(int(workflow_id))
             logger.info("InitiativeService: triggered workflow %s: %s",
                         workflow_id, action.description)
-            self._log_to_chat(f"Started workflow #{workflow_id}: {action.description}", settings)
-            self._send_telegram_if_allowed(
-                action.telegram_message or f"Started workflow: {action.description}",
-                settings,
-            )
+            if tier != PermissionTier.SILENT:
+                self._log_to_chat(f"Started workflow #{workflow_id}: {action.description}", settings)
+                self._send_telegram_if_allowed(
+                    action.telegram_message or f"Started workflow: {action.description}",
+                    settings,
+                )
         except Exception:
             logger.error("InitiativeService: workflow dispatch failed", exc_info=True)
-            self._deliver_suggestion(action, settings)
+            self._deliver_suggestion(action, settings, tier=tier)
 
     # ------------------------------------------------------------------
     # Draft queue
@@ -739,6 +1077,8 @@ class InitiativeService:
 
     def _surface_draft_queue(self, chat_id: int) -> None:
         """Surface pending drafts as chat messages when a chat starts."""
+        from distr.core.initiative.tiers import PermissionTier
+
         drafts = self._draft_queue.get_all()
         if not drafts:
             return
@@ -750,8 +1090,9 @@ class InitiativeService:
         if not current_chat:
             return
         for draft in drafts:
+            tier_label = PermissionTier(draft.permission_tier).name
             msg = (
-                f"[Pending action — {draft.action_type}] {draft.description}\n\n"
+                f"[Pending action — {draft.action_type}] [{tier_label}] {draft.description}\n\n"
                 f"Draft: {draft.draft}\n\n"
                 f"ID: `{draft.id}`\n"
                 "Say **approve** or **reject** to respond, "
@@ -759,17 +1100,27 @@ class InitiativeService:
             )
             self.chat_manager.add_assistant_message(current_chat, msg)
 
-    def _draft_and_ask(self, action: ProposedAction, settings: dict) -> None:
+    def _draft_and_ask(
+        self, action: ProposedAction, settings: dict, tier=None
+    ) -> None:
         """Queue an action for user approval."""
+        from distr.core.initiative.tiers import PermissionTier
+
+        resolved_tier = tier if tier is not None else PermissionTier.APPROVE
         now = datetime.now(tz=timezone.utc)
+        reason = f"Confirmation required ({resolved_tier.name}) for {action.action_type}"
+        if resolved_tier.value >= PermissionTier.ESCALATE.value:
+            reason += " — explicit approval required (ESCALATE)."
+
         entry = DraftEntry(
             id=str(uuid.uuid4()),
             action_type=action.action_type,
             description=action.description,
             draft=action.draft or action.description,
-            reason=f"Boundary requires confirmation for {action.action_type}",
+            reason=reason,
             created_at=now.isoformat(),
             expires_at=(now + timedelta(hours=48)).isoformat(),
+            permission_tier=int(resolved_tier),
         )
         self._draft_queue.add(entry)
         logger.info("InitiativeService: draft queued %s: %s", entry.id, entry.description)
@@ -779,7 +1130,7 @@ class InitiativeService:
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if allow_telegram and uid and uid > 0:
             msg = (
-                f"[Initiative] I'd like to: {action.description}\n\n"
+                f"[Initiative][{resolved_tier.name}] I'd like to: {action.description}\n\n"
                 f"Draft:\n{entry.draft}\n\n"
                 "Approve or reject this in the app."
             )
@@ -787,7 +1138,7 @@ class InitiativeService:
 
         # Also log to chat
         self._log_to_chat(
-            f"Pending approval — {action.action_type}: {action.description}",
+            f"Pending approval [{resolved_tier.name}] — {action.action_type}: {action.description}",
             settings,
         )
 

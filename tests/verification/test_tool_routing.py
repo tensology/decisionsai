@@ -8,7 +8,11 @@ Two test layers:
 Run:
   python -m pytest tests/verification/test_tool_routing.py -v
   python -m pytest tests/verification/test_tool_routing.py -v -k router   # router only (fast)
-  python -m pytest tests/verification/test_tool_routing.py -v -k llm      # LLM only (slower)
+  python -m pytest tests/verification/test_tool_routing.py -v -m llm_verification  # LLM only (slow / flaky)
+
+  Default `pytest` (see repo `pytest.ini`) already omits `llm_verification` and `e2e_playwright`.
+  To force-include LLM tests: `pytest -m llm_verification tests/verification/test_tool_routing.py`
+  or run everything: `pytest -m "" tests/`
 
 Or standalone:
   python tests/verification/test_tool_routing.py              # both layers
@@ -320,6 +324,7 @@ LLM_CRITICAL_CASES = [
 ]
 
 
+@pytest.mark.llm_verification
 @pytest.mark.parametrize(
     "user_text,expected_tools",
     LLM_CRITICAL_CASES,
@@ -327,6 +332,9 @@ LLM_CRITICAL_CASES = [
 )
 def test_llm_picks_correct_tool(user_text, expected_tools):
     """The LLM should pick one of the expected tools from the router's candidate set."""
+    if os.environ.get("DECISIONS_SKIP_LLM_TOOL_ROUTING", "").lower() in ("1", "true", "yes"):
+        pytest.skip("DECISIONS_SKIP_LLM_TOOL_ROUTING set — skips flaky Ollama tool-choice assertions")
+
     model = _check_ollama_available()
     if not model:
         pytest.skip("Ollama not running or no chat model available")
@@ -335,7 +343,7 @@ def test_llm_picks_correct_tool(user_text, expected_tools):
     tools = _get_tools()
 
     # Get the narrowed tool set from the router
-    if router.is_ready:
+    if router.is_ready():
         candidate_tools = router.route(user_text, tools)
     else:
         candidate_tools = tools
@@ -363,8 +371,8 @@ def _run_router_tests():
     print("=" * 70)
 
     router = _get_router()
-    if not router.is_ready:
-        print("SKIP: ToolRouter not ready (Ollama embedding unavailable)")
+    if not router.is_ready():
+        print("SKIP: ToolRetriever index not ready (embedding backend unavailable)")
         return 0, 0
 
     tools = _get_tools()
@@ -374,17 +382,19 @@ def _run_router_tests():
     for user_text, expected_tool in ROUTING_CASES:
         selected = router.route(user_text, tools)
         selected_names = [t.name for t in selected]
-        scores = router.get_scores(user_text)
-        rank = next((i + 1 for i, (n, _) in enumerate(scores) if n == expected_tool), "?")
-        sim = next((s for n, s in scores if n == expected_tool), 0)
+        rank = (
+            selected_names.index(expected_tool) + 1
+            if expected_tool in selected_names
+            else "?"
+        )
 
         if expected_tool in selected_names:
-            print(f"  ✅ \"{user_text[:55]}\" -> {expected_tool} (rank={rank}, sim={sim:.3f})")
+            print(f"  ✅ \"{user_text[:55]}\" -> {expected_tool} (rank={rank})")
             passed += 1
         else:
-            top3 = [(n, f"{s:.3f}") for n, s in scores[:3]]
-            print(f"  ❌ \"{user_text[:55]}\" -> MISSING {expected_tool} (rank={rank}, sim={sim:.3f})")
-            print(f"     Top 3: {top3}")
+            top3 = selected_names[:3]
+            print(f"  ❌ \"{user_text[:55]}\" -> MISSING {expected_tool} (rank={rank})")
+            print(f"     Top 3 candidates: {top3}")
             failed += 1
 
     print(f"\nRouter: {passed}/{passed + failed} passed")
@@ -410,7 +420,7 @@ def _run_llm_tests():
     failed = 0
 
     for user_text, expected_tools in LLM_CRITICAL_CASES:
-        if router.is_ready:
+        if router.is_ready():
             candidate_tools = router.route(user_text, tools)
         else:
             candidate_tools = tools

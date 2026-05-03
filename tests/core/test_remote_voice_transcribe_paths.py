@@ -15,18 +15,29 @@ _REMOTE_CONTROL_PATH = (
     / "remote_control.py"
 )
 
-# Prevent package-level imports from pulling PyQt6-heavy __init__ modules.
+# Prevent package-level imports from pulling PyQt6-heavy __init__ modules while we
+# exec remote_control.py — then **remove** stubs so later tests see the real package.
 _fake_tg_pkg = types.ModuleType("distr.core.integrations.telegram")
 _fake_tg_pkg.__path__ = []
 _fake_tg_utils = types.ModuleType("distr.core.integrations.telegram.utils")
 _fake_tg_utils.hash_channel_id = lambda value: f"hash_{value}"
-sys.modules.setdefault("distr.core.integrations.telegram", _fake_tg_pkg)
-sys.modules.setdefault("distr.core.integrations.telegram.utils", _fake_tg_utils)
 
-_SPEC = importlib.util.spec_from_file_location("remote_control_under_test", _REMOTE_CONTROL_PATH)
-_MODULE = importlib.util.module_from_spec(_SPEC)
-_SPEC.loader.exec_module(_MODULE)
-TelegramRemoteControlMixin = _MODULE.TelegramRemoteControlMixin
+_TG_KEYS = ("distr.core.integrations.telegram", "distr.core.integrations.telegram.utils")
+_prior_tg = {k: sys.modules[k] for k in _TG_KEYS if k in sys.modules}
+try:
+    sys.modules["distr.core.integrations.telegram"] = _fake_tg_pkg
+    sys.modules["distr.core.integrations.telegram.utils"] = _fake_tg_utils
+
+    _SPEC = importlib.util.spec_from_file_location("remote_control_under_test", _REMOTE_CONTROL_PATH)
+    _MODULE = importlib.util.module_from_spec(_SPEC)
+    _SPEC.loader.exec_module(_MODULE)
+    TelegramRemoteControlMixin = _MODULE.TelegramRemoteControlMixin
+finally:
+    for _k in _TG_KEYS:
+        if _k in _prior_tg:
+            sys.modules[_k] = _prior_tg[_k]
+        else:
+            sys.modules.pop(_k, None)
 
 
 class _SignalCollector:
@@ -85,6 +96,26 @@ def _install_fake_signals(monkeypatch, emit_fn):
     monkeypatch.setitem(sys.modules, "distr.core.signals", fake_signals_mod)
 
 
+def _patch_message_bus_deliver(monkeypatch, emits):
+    """Remote control routes via ``IntegrationMessageBus.deliver_telegram_user_input``."""
+
+    class _Bus:
+        def deliver_telegram_user_input(
+            self,
+            *,
+            text,
+            image_path=None,
+            telegram_chat_id=None,
+            speak=None,
+        ):
+            emits.append((text, True, image_path, speak))
+
+    monkeypatch.setattr(
+        "distr.core.integrations.bus.get_integration_message_bus",
+        lambda: _Bus(),
+    )
+
+
 def _voice_payload(mode="dictate"):
     audio_b64 = base64.b64encode(b"not-real-audio").decode("ascii")
     return {
@@ -100,6 +131,7 @@ def test_instruction_command_routes_as_telegram_without_desktop_tts(monkeypatch)
 
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     _install_fake_signals(monkeypatch, lambda *args: emits.append(args))
+    _patch_message_bus_deliver(monkeypatch, emits)
 
     host._handle_remote_control_command(
         {
@@ -172,6 +204,7 @@ def test_voice_transcribe_command_mode_routes_to_agent_with_telegram_flag(monkey
     monkeypatch.setattr("threading.Thread", _ImmediateThread)
     _install_fake_qt(monkeypatch, _App(host))
     _install_fake_signals(monkeypatch, lambda *args: emits.append(args))
+    _patch_message_bus_deliver(monkeypatch, emits)
 
     host._handle_remote_control_command(_voice_payload(mode="command"))
 

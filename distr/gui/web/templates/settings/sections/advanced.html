@@ -12,27 +12,35 @@
                 This software is provided as-is, without warranties or guarantees. All data is stored locally on your device. The AI models and features are for personal use. You are responsible for reviewing and verifying any information or suggestions provided.
             </p>
 
-            <!-- Connection Buttons -->
-            <div class="flex justify-center gap-4">
+            <!-- Connection Buttons (flex-wrap + advanced-integration-btn keeps every chip the same size; Discord/Slack no longer shrink) -->
+            <div class="flex flex-wrap justify-center items-center gap-3">
                 <button type="button" id="google_connect_btn"
-                        class="px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors">
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#007bff] hover:bg-[#0069d9] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
                     Google
                 </button>
                 <button type="button" id="telegram_connect_btn"
-                        class="px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors">
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#0088cc] hover:bg-[#0077b3] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
                     Telegram
                 </button>
                 <button type="button" id="whatsapp_connect_btn"
-                        class="px-6 py-2.5 border border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-md text-sm font-medium transition-colors">
+                        class="advanced-integration-btn px-6 py-2.5 border-2 border-[#25D366] text-[#25D366] hover:bg-[#25D366] hover:text-white rounded-md text-sm font-medium transition-colors">
                     WhatsApp
                 </button>
                 <button type="button" id="trello_connect_btn"
-                        class="px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors">
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#0079BF] hover:bg-[#026aa7] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
                     Trello
                 </button>
                 <button type="button" id="jira_connect_btn"
-                        class="px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors">
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#0052CC] hover:bg-[#0043a8] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
                     Jira
+                </button>
+                <button type="button" id="discord_connect_btn"
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#5865F2] hover:bg-[#4752c4] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
+                    Discord
+                </button>
+                <button type="button" id="slack_connect_btn"
+                        class="advanced-integration-btn px-6 py-2.5 bg-[#4A154B] hover:bg-[#611f69] text-white rounded-md text-sm font-medium transition-colors border border-white/15">
+                    Slack
                 </button>
             </div>
         </div>

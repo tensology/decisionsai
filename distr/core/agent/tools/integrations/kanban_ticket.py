@@ -15,6 +15,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+from distr.core.agent.tool_voice_format import voice_then_reference
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -168,6 +169,16 @@ class KanbanTicketTool(BaseTool):
     def _get_session(self):
         from distr.core.db import get_session
         return get_session()
+
+    def _source_chat_id_for_new_ticket(self) -> Optional[int]:
+        """Chat thread linked for lane-move notifications (board agent / Kanban UI)."""
+        if not self.chat_manager:
+            return None
+        try:
+            cid = self.chat_manager.get_current_chat()
+            return int(cid) if cid else None
+        except Exception:
+            return None
 
     def _all_boards(self) -> List[Dict]:
         from distr.core.db.kanban import KanbanBoard
@@ -592,12 +603,20 @@ class KanbanTicketTool(BaseTool):
                             ext_board_id = b["id"]
                             break
                 if not ext_board_id:
-                    return f"Please specify a board. Use action='list_boards' to see available {provider} boards."
+                    return voice_then_reference(
+                        f"Say which {provider} board to use, or list boards first.",
+                        f"Please specify a board. Use action='list_boards' to see available {provider} boards.",
+                    )
                 tickets = self._fetch_external_tickets(provider, ext_board_id)
                 if not tickets:
-                    return f"No tickets found on {provider} board {ext_board_id}."
+                    return voice_then_reference(
+                        "That board came back with no tickets.",
+                        f"No tickets found on {provider} board {ext_board_id}.",
+                    )
                 lines = [f"#{t['id']} {t['title']}" + (f" [{t.get('status', '')}]" if t.get('status') else "") for t in tickets[:30]]
-                return f"{provider.title()} board tickets ({len(tickets)}):\n" + "\n".join(lines)
+                ref = f"{provider.title()} board tickets ({len(tickets)}):\n" + "\n".join(lines)
+                spoken = f"I pulled your {provider} board; there are {len(tickets)} items. Details are below."
+                return voice_then_reference(spoken, ref)
             elif action == "get_ticket":
                 return self._action_get_ticket(ticket_id or self._last_ticket_id)
             elif action == "update_ticket":
@@ -653,17 +672,24 @@ class KanbanTicketTool(BaseTool):
             elif action in ("whatsapp_send_message", "wa_send_message", "send_whatsapp"):
                 return self._action_whatsapp_send_message(jid=jid, jid_phone=jid_phone, text=text or description or title)
             else:
-                return (
+                ref = (
                     f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
                     "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message"
                 )
+                return voice_then_reference(
+                    "That ticket-board action name did not match anything I know how to run.",
+                    ref,
+                )
 
         except Exception as e:
             logger.error("KanbanTicketTool error: %s", e, exc_info=True)
-            return f"Error: {e}"
+            return voice_then_reference(
+                "Something went wrong while running that ticket command.",
+                f"Error: {e}",
+            )
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)
@@ -690,16 +716,33 @@ class KanbanTicketTool(BaseTool):
             logger.debug("Could not fetch external boards: %s", e)
 
         if not lines:
-            return "No Ticket boards found. You can create one in the Board UI."
-        return "Available boards:\n" + "\n".join(lines)
+            return voice_then_reference(
+                "You do not have any ticket boards yet; create one from the Board view.",
+                "No Ticket boards found. You can create one in the Board UI.",
+            )
+        ref = "Available boards:\n" + "\n".join(lines)
+        n = len(lines)
+        spoken = (
+            "You have one board available; details are below."
+            if n == 1
+            else f"I listed {n} boards, including local ones and any linked Trello or Jira boards."
+        )
+        return voice_then_reference(spoken, ref)
 
     def _action_get_active_board(self) -> str:
         board, was_recovered = self._get_active_board(auto_recover=True)
         if not board:
-            return "No local Ticket boards found."
+            return voice_then_reference(
+                "There are no local ticket boards yet.",
+                "No local Ticket boards found.",
+            )
         if was_recovered:
-            return f"No board was previously marked active. I set '{board['name']}' (ID {board['id']}) as active."
-        return f"Active board is '{board['name']}' (ID {board['id']})."
+            ref = f"No board was previously marked active. I set '{board['name']}' (ID {board['id']}) as active."
+            spoken = f"No board was active before, so I set {board['name']} as your active board."
+            return voice_then_reference(spoken, ref)
+        ref = f"Active board is '{board['name']}' (ID {board['id']})."
+        spoken = f"Your active board is {board['name']}."
+        return voice_then_reference(spoken, ref)
 
     def _fetch_external_boards(self) -> Dict:
         """Fetch Trello and Jira boards from connected accounts."""
@@ -819,10 +862,15 @@ class KanbanTicketTool(BaseTool):
     def _action_list_lanes(self, board_id=None, board_name=None) -> str:
         board = self._find_board(board_id, board_name)
         if not board:
-            return "Board not found. Use action='list_boards' to see available boards."
+            return voice_then_reference(
+                "I could not find that board.",
+                "Board not found. Use action='list_boards' to see available boards.",
+            )
         lanes = self._get_lanes(board["id"])
         names = [l["name"] for l in lanes]
-        return f"Lanes in '{board['name']}': {', '.join(names)}"
+        ref = f"Lanes in '{board['name']}': {', '.join(names)}"
+        spoken = f"Here are the lanes on {board['name']}."
+        return voice_then_reference(spoken, ref)
 
     def _action_create_ticket(self, text="", board_name="", board_id=None,
                                lane_name="", title="", description="",
@@ -845,14 +893,22 @@ class KanbanTicketTool(BaseTool):
                     board = boards[0]
                 elif len(boards) > 1:
                     board_list = ", ".join(f"'{b['name']}' (ID {b['id']})" for b in boards)
-                    return f"There are multiple boards. Please specify which one: {board_list}"
+                    ref = f"There are multiple boards. Please specify which one: {board_list}"
+                    spoken = "You have several boards; tell me which one to use."
+                    return voice_then_reference(spoken, ref)
                 else:
-                    return "No boards found. Create one first with action='create_board'."
+                    return voice_then_reference(
+                        "There are no boards yet; create one first from the Board view or ask me to set one up.",
+                        "No boards found. Create one first with action='create_board'.",
+                    )
 
         # Resolve lane
         lane = self._find_lane(board["id"], lane_name)
         if not lane:
-            return f"No lanes found in board '{board['name']}'."
+            return voice_then_reference(
+                "That board has no lanes configured yet.",
+                f"No lanes found in board '{board['name']}'.",
+            )
 
         # Gather conversation context for rich ticket content
         conv_files = []
@@ -900,6 +956,7 @@ class KanbanTicketTool(BaseTool):
                 linked_project_id=effective_project_id,
                 linked_workflow_id=effective_workflow_id,
                 send_to_cli=effective_send_to_cli,
+                source_chat_id=self._source_chat_id_for_new_ticket(),
             )
             s.add(ticket)
             s.flush()
@@ -919,7 +976,10 @@ class KanbanTicketTool(BaseTool):
         if attached:
             result += f". Attached {len(attached)} file(s): {', '.join(attached)}"
         logger.info("KanbanTicketTool: %s", result)
-        return result
+        spoken = f"I added a ticket called {title} on {board['name']}."
+        if attached:
+            spoken += " I also attached files from our conversation."
+        return voice_then_reference(spoken, result)
 
     def _create_bulk_tickets(self, board, lane, tickets_data, conv_files,
                               linked_project_id, linked_workflow_id):
@@ -952,6 +1012,7 @@ class KanbanTicketTool(BaseTool):
                     linked_project_id=effective_project_id,
                     linked_workflow_id=effective_workflow_id,
                     send_to_cli=effective_send_to_cli,
+                    source_chat_id=self._source_chat_id_for_new_ticket(),
                 )
                 s.add(ticket)
                 s.flush()
@@ -967,12 +1028,17 @@ class KanbanTicketTool(BaseTool):
             self._last_ticket_id = created[-1]["id"]
 
         titles = [f"#{c['id']} {c['title']}" for c in created]
-        return f"Created {len(created)} ticket(s) in board '{board['name']}', lane '{lane['name']}':\n" + "\n".join(titles)
+        ref = f"Created {len(created)} ticket(s) in board '{board['name']}', lane '{lane['name']}':\n" + "\n".join(titles)
+        spoken = f"I created {len(created)} tickets on {board['name']} in the {lane['name']} lane."
+        return voice_then_reference(spoken, ref)
 
     def _action_list_tickets(self, board_id=None, board_name=None, lane_name=None) -> str:
         board = self._find_board(board_id, board_name)
         if not board:
-            return "Board not found."
+            return voice_then_reference(
+                "I could not find that board.",
+                "Board not found.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
             query = s.query(KanbanTicket).join(KanbanLane).filter(KanbanLane.board_id == board["id"])
@@ -980,23 +1046,34 @@ class KanbanTicketTool(BaseTool):
                 query = query.filter(KanbanLane.name.ilike(f"%{lane_name}%"))
             tickets = query.order_by(KanbanLane.position, KanbanTicket.position).all()
             if not tickets:
-                return f"No tickets in board '{board['name']}'."
+                return voice_then_reference(
+                    f"There are no tickets on {board['name']} right now.",
+                    f"No tickets in board '{board['name']}'.",
+                )
             lines = []
             for t in tickets:
                 lane_n = t.lane.name if t.lane else "?"
                 files_count = len(t.files) if t.files else 0
                 extra = f" ({files_count} files)" if files_count else ""
                 lines.append(f"[{lane_n}] #{t.id} {t.title} ({t.priority}){extra}")
-            return f"Tickets in '{board['name']}':\n" + "\n".join(lines)
+            ref = f"Tickets in '{board['name']}':\n" + "\n".join(lines)
+            spoken = f"I listed the tickets on {board['name']}; lanes and priorities are below."
+            return voice_then_reference(spoken, ref)
 
     def _action_get_ticket(self, ticket_id) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to open that.",
+                "No ticket ID provided.",
+            )
         from distr.core.db.kanban import KanbanTicket
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             files = [f.filename for f in t.files] if t.files else []
             todos = [f"{'[x]' if td.done else '[ ]'} {td.text}" for td in t.todos] if t.todos else []
             links = [f"{l.title}: {l.url}" for l in t.links] if t.links else []
@@ -1013,19 +1090,27 @@ class KanbanTicketTool(BaseTool):
                 parts.append(f"Todos: {'; '.join(todos)}")
             if links:
                 parts.append(f"Links: {'; '.join(links)}")
-            return "\n".join(parts)
+            ref = "\n".join(parts)
+            spoken = f"Opened ticket {t.title}."
+            return voice_then_reference(spoken, ref)
 
     def _action_update_ticket(self, ticket_id, title="", description="",
                                priority="", lane_name="",
                                linked_project_id=None, linked_workflow_id=None,
                                send_to_cli=False) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to update that.",
+                "No ticket ID provided.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             if title:
                 t.title = title
             if description:
@@ -1051,52 +1136,85 @@ class KanbanTicketTool(BaseTool):
                     ).first()
                     if new_lane:
                         t.lane_id = new_lane.id
-            return f"Updated ticket #{ticket_id}"
+            return voice_then_reference("I saved those ticket changes.", f"Updated ticket #{ticket_id}")
 
     def _action_attach_file(self, ticket_id, file_path) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to attach a file.",
+                "No ticket ID provided.",
+            )
         if not file_path or not os.path.isfile(file_path):
-            return f"File not found: {file_path}"
+            return voice_then_reference(
+                "That file path does not exist or is not readable.",
+                f"File not found: {file_path}",
+            )
         name = self._attach_file_to_ticket(ticket_id, file_path)
         if name:
-            return f"Attached '{name}' to ticket #{ticket_id}"
-        return "Failed to attach file."
+            return voice_then_reference(f"I attached {name} to that ticket.", f"Attached '{name}' to ticket #{ticket_id}")
+        return voice_then_reference("I could not attach that file.", "Failed to attach file.")
 
     def _action_add_todo(self, ticket_id, text) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to add a checklist item.",
+                "No ticket ID provided.",
+            )
         if not text:
-            return "No todo text provided."
+            return voice_then_reference(
+                "Say what you want on the checklist.",
+                "No todo text provided.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanTicketTodo
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             max_pos = max([td.position for td in t.todos], default=-1) if t.todos else -1
             todo = KanbanTicketTodo(ticket_id=ticket_id, text=text, position=max_pos + 1)
             s.add(todo)
-        return f"Added todo to ticket #{ticket_id}"
+        return voice_then_reference(
+            "I added that checklist item to the ticket.",
+            f"Added todo to ticket #{ticket_id}",
+        )
 
     def _action_add_link(self, ticket_id, title, url) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to save a link.",
+                "No ticket ID provided.",
+            )
         if not url:
-            return "No URL provided."
+            return voice_then_reference(
+                "I need a URL to attach.",
+                "No URL provided.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanTicketLink
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             link = KanbanTicketLink(ticket_id=ticket_id, title=title or url, url=url)
             s.add(link)
-        return f"Added link to ticket #{ticket_id}"
+        return voice_then_reference(
+            "I saved that link on the ticket.",
+            f"Added link to ticket #{ticket_id}",
+        )
 
     # ── Board CRUD ────────────────────────────────────────────────────────
 
     def _action_create_board(self, name: str) -> str:
         if not name or not name.strip():
-            return "Board name is required."
+            return voice_then_reference(
+                "Say what you want the new board to be called.",
+                "Board name is required.",
+            )
         from distr.core.db.kanban import KanbanBoard, KanbanLane
         default_lanes = ["Backlog", "Current", "QA / Assess", "Done"]
         with self._get_session() as s:
@@ -1108,48 +1226,74 @@ class KanbanTicketTool(BaseTool):
             s.flush()
             board_id = board.id
         self._last_board_id = board_id
-        return f"Created board '{name.strip()}' (ID {board_id}) with lanes: {', '.join(default_lanes)}"
+        ref = f"Created board '{name.strip()}' (ID {board_id}) with lanes: {', '.join(default_lanes)}"
+        spoken = f"I created a board called {name.strip()} with the usual lanes."
+        return voice_then_reference(spoken, ref)
 
     def _action_delete_board(self, board_id=None, board_name=None) -> str:
         board = self._find_board(board_id, board_name)
         if not board:
-            return "Board not found."
+            return voice_then_reference(
+                "I could not find that board.",
+                "Board not found.",
+            )
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
             b = s.query(KanbanBoard).get(board["id"])
             if not b:
-                return "Board not found."
+                return voice_then_reference(
+                    "I could not find that board.",
+                    "Board not found.",
+                )
             name = b.name
             s.delete(b)
-        return f"Deleted board '{name}' and all its tickets"
+        return voice_then_reference(f"I removed the board {name} and everything on it.", f"Deleted board '{name}' and all its tickets")
 
     # ── Ticket delete & move ──────────────────────────────────────────────
 
     def _action_delete_ticket(self, ticket_id) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to delete that.",
+                "No ticket ID provided.",
+            )
         from distr.core.db.kanban import KanbanTicket
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             title = t.title
             s.delete(t)
-        return f"Deleted ticket #{ticket_id} ('{title}')"
+        return voice_then_reference(f"I deleted that ticket: {title}.", f"Deleted ticket #{ticket_id} ('{title}')")
 
     def _action_move_ticket(self, ticket_id, lane_name) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to move that.",
+                "No ticket ID provided.",
+            )
         if not lane_name:
-            return "No lane name provided."
+            return voice_then_reference(
+                "Say which lane to move it into.",
+                "No lane name provided.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
             board_id = t.lane.board_id if t.lane else None
             if not board_id:
-                return "Cannot determine board for this ticket."
+                return voice_then_reference(
+                    "That ticket is not on a board I can read.",
+                    "Cannot determine board for this ticket.",
+                )
             new_lane = s.query(KanbanLane).filter(
                 KanbanLane.board_id == board_id,
                 KanbanLane.name.ilike(f"%{lane_name}%")
@@ -1157,27 +1301,42 @@ class KanbanTicketTool(BaseTool):
             if not new_lane:
                 lanes = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position).all()
                 available = ", ".join(l.name for l in lanes)
-                return f"Lane '{lane_name}' not found. Available: {available}"
+                return voice_then_reference(
+                    "That lane name did not match any lane on this board.",
+                    f"Lane '{lane_name}' not found. Available: {available}",
+                )
             max_pos = max([tk.position for tk in new_lane.tickets], default=-1)
             t.lane_id = new_lane.id
             t.position = max_pos + 1
             moved_lane_name = new_lane.name
-        return f"Moved ticket #{ticket_id} to lane '{moved_lane_name}'"
+        return voice_then_reference(
+            f"I moved that ticket into {moved_lane_name}.",
+            f"Moved ticket #{ticket_id} to lane '{moved_lane_name}'",
+        )
 
     # ── Sub-resource deletes ──────────────────────────────────────────────
 
     def _action_delete_file(self, ticket_id, filename) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to remove an attachment.",
+                "No ticket ID provided.",
+            )
         if not filename:
-            return "No filename provided."
+            return voice_then_reference(
+                "Say which filename to remove.",
+                "No filename provided.",
+            )
         from distr.core.db.kanban import KanbanTicketFile
         with self._get_session() as s:
             f = s.query(KanbanTicketFile).filter_by(ticket_id=ticket_id).filter(
                 KanbanTicketFile.filename.ilike(f"%{filename}%")
             ).first()
             if not f:
-                return f"File '{filename}' not found on ticket #{ticket_id}."
+                return voice_then_reference(
+                    "That attachment was not on the ticket.",
+                    f"File '{filename}' not found on ticket #{ticket_id}.",
+                )
             name = f.filename
             # Remove physical file
             try:
@@ -1186,66 +1345,111 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 pass
             s.delete(f)
-        return f"Removed file '{name}' from ticket #{ticket_id}"
+        return voice_then_reference(
+            f"I removed {name} from the ticket.",
+            f"Removed file '{name}' from ticket #{ticket_id}",
+        )
 
     def _action_toggle_todo(self, ticket_id, todo_text) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number for that checklist change.",
+                "No ticket ID provided.",
+            )
         if not todo_text:
-            return "No todo text provided."
+            return voice_then_reference(
+                "Say which checklist line to toggle.",
+                "No todo text provided.",
+            )
         from distr.core.db.kanban import KanbanTicketTodo
         with self._get_session() as s:
             todo = s.query(KanbanTicketTodo).filter_by(ticket_id=ticket_id).filter(
                 KanbanTicketTodo.text.ilike(f"%{todo_text}%")
             ).first()
             if not todo:
-                return f"Todo matching '{todo_text}' not found on ticket #{ticket_id}."
+                return voice_then_reference(
+                    "I could not find a checklist line that matched what you said.",
+                    f"Todo matching '{todo_text}' not found on ticket #{ticket_id}.",
+                )
             todo.done = not todo.done
             status = "done" if todo.done else "not done"
-        return f"Toggled todo to {status} on ticket #{ticket_id}"
+        return voice_then_reference(
+            f"I flipped that checklist item to {status}.",
+            f"Toggled todo to {status} on ticket #{ticket_id}",
+        )
 
     def _action_delete_todo(self, ticket_id, todo_text) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to remove a checklist line.",
+                "No ticket ID provided.",
+            )
         if not todo_text:
-            return "No todo text provided."
+            return voice_then_reference(
+                "Say which checklist line to remove.",
+                "No todo text provided.",
+            )
         from distr.core.db.kanban import KanbanTicketTodo
         with self._get_session() as s:
             todo = s.query(KanbanTicketTodo).filter_by(ticket_id=ticket_id).filter(
                 KanbanTicketTodo.text.ilike(f"%{todo_text}%")
             ).first()
             if not todo:
-                return f"Todo matching '{todo_text}' not found on ticket #{ticket_id}."
+                return voice_then_reference(
+                    "I could not find a checklist line that matched what you said.",
+                    f"Todo matching '{todo_text}' not found on ticket #{ticket_id}.",
+                )
             s.delete(todo)
-        return f"Removed todo from ticket #{ticket_id}"
+        return voice_then_reference(
+            "I removed that checklist line from the ticket.",
+            f"Removed todo from ticket #{ticket_id}",
+        )
 
     def _action_delete_link(self, ticket_id, url) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to remove a link.",
+                "No ticket ID provided.",
+            )
         if not url:
-            return "No URL provided."
+            return voice_then_reference(
+                "Say which link to remove.",
+                "No URL provided.",
+            )
         from distr.core.db.kanban import KanbanTicketLink
         with self._get_session() as s:
             link = s.query(KanbanTicketLink).filter_by(ticket_id=ticket_id).filter(
                 KanbanTicketLink.url.ilike(f"%{url}%")
             ).first()
             if not link:
-                return f"Link matching '{url}' not found on ticket #{ticket_id}."
+                return voice_then_reference(
+                    "I could not find a link on that ticket that matched.",
+                    f"Link matching '{url}' not found on ticket #{ticket_id}.",
+                )
             s.delete(link)
-        return f"Removed link from ticket #{ticket_id}"
+        return voice_then_reference(
+            "I removed that link from the ticket.",
+            f"Removed link from ticket #{ticket_id}",
+        )
 
     # ── Send to project ───────────────────────────────────────────────────
 
     def _action_send_to_project(self, ticket_id) -> str:
         if not ticket_id:
-            return "No ticket ID provided."
+            return voice_then_reference(
+                "I need a ticket number to export that.",
+                "No ticket ID provided.",
+            )
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         from distr.core.db.projects import Project
 
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
 
             # Resolve project: ticket-level first, then board-level default
             project_id = t.linked_project_id
@@ -1255,13 +1459,22 @@ class KanbanTicketTool(BaseTool):
                     project_id = board.default_project_id
 
             if not project_id:
-                return "No project linked to this ticket or its board."
+                return voice_then_reference(
+                    "Link a project to that ticket or its board before exporting.",
+                    "No project linked to this ticket or its board.",
+                )
 
             project = s.query(Project).get(project_id)
             if not project:
-                return "Linked project not found."
+                return voice_then_reference(
+                    "The linked project record is missing.",
+                    "Linked project not found.",
+                )
             if not project.folder_location:
-                return f"Project '{project.name}' has no folder location set."
+                return voice_then_reference(
+                    f"Set a folder path on project {project.name} first.",
+                    f"Project '{project.name}' has no folder location set.",
+                )
 
             tickets_folder = os.path.join(project.folder_location, ".tickets")
             os.makedirs(tickets_folder, exist_ok=True)
@@ -1304,7 +1517,9 @@ class KanbanTicketTool(BaseTool):
 
             project_name = project.name
 
-        return f"Sent ticket #{ticket_id} to project '{project_name}' → {ticket_path}"
+        ref = f"Sent ticket #{ticket_id} to project '{project_name}' → {ticket_path}"
+        spoken = f"I exported that ticket into your {project_name} project folder."
+        return voice_then_reference(spoken, ref)
 
     # ── Activate board ────────────────────────────────────────────────────
 
@@ -1312,7 +1527,10 @@ class KanbanTicketTool(BaseTool):
         """Set a board as the active/in-use board. Future ticket commands default to this board."""
         board = self._find_board(board_id, board_name)
         if not board:
-            return f"Board '{board_name or board_id}' not found."
+            return voice_then_reference(
+                "I could not find a board with that name.",
+                f"Board '{board_name or board_id}' not found.",
+            )
 
         from distr.core.db.kanban import KanbanBoard as KB
         with self._get_session() as s:
@@ -1320,12 +1538,18 @@ class KanbanTicketTool(BaseTool):
             s.query(KB).filter(KB.in_use == True).update({"in_use": False})
             b = s.query(KB).get(board["id"])
             if not b:
-                return f"Board '{board['name']}' not found."
+                return voice_then_reference(
+                    "I could not find that board.",
+                    f"Board '{board['name']}' not found.",
+                )
             b.in_use = True
             s.commit()
 
         self._last_board_id = board["id"]
-        return f"Board '{board['name']}' is now your active board. All ticket commands will default to this board."
+        return voice_then_reference(
+            f"{board['name']} is now your default board for ticket commands.",
+            f"Board '{board['name']}' is now your active board. All ticket commands will default to this board.",
+        )
 
     # ── Send ticket to CLI ────────────────────────────────────────────────
 
@@ -1346,22 +1570,29 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 pass
             if not ticket_id:
-                return "No ticket ID provided and no tickets found on the active board."
-
-        import subprocess
+                return voice_then_reference(
+                    "I need a ticket, and the active board has none to pick from.",
+                    "No ticket ID provided and no tickets found on the active board.",
+                )
 
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         from distr.core.db.projects import Project
-        from distr.core.pi_rpc import PiRpcSession, get_rpc_session
+        from distr.core.pi_rpc import PiRpcSession
 
         pi_path = PiRpcSession.find_pi()
         if not pi_path:
-            return "Pi coding agent is not installed. Install it with: npm install -g @mariozechner/pi-coding-agent"
+            return voice_then_reference(
+                "Pi coding agent is not installed on this system.",
+                "Pi coding agent is not installed. Install it with: npm install -g @mariozechner/pi-coding-agent",
+            )
 
         with self._get_session() as s:
             t = s.query(KanbanTicket).get(ticket_id)
             if not t:
-                return f"Ticket #{ticket_id} not found."
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{ticket_id} not found.",
+                )
 
             title = t.title
             description = t.description or ""
@@ -1375,18 +1606,35 @@ class KanbanTicketTool(BaseTool):
                     project_id = board.default_project_id
 
             if not project_id:
-                return "No project linked to this ticket or its board. Link a project first."
+                return voice_then_reference(
+                    "Link a project to that ticket or its board before sending to Pi.",
+                    "No project linked to this ticket or its board. Link a project first.",
+                )
 
             project = s.query(Project).get(project_id)
             if not project:
-                return "Linked project not found."
+                return voice_then_reference(
+                    "The linked project record is missing.",
+                    "Linked project not found.",
+                )
             if not project.folder_location:
-                return f"Project '{project.name}' has no folder location set."
+                return voice_then_reference(
+                    f"Set a folder path on project {project.name} first.",
+                    f"Project '{project.name}' has no folder location set.",
+                )
 
             folder = project.folder_location
             project_name = project.name
 
-        instruction = f"{title}\n\n{description}".strip() if description else title
+            from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
+
+            instruction = build_kanban_ticket_cli_instruction(
+                s,
+                ticket_id_val,
+                project_name=project_name,
+                project_folder=folder or "",
+                project_id=project_id,
+            )
 
         # Create audit trail
         audit_id = None
@@ -1426,13 +1674,23 @@ class KanbanTicketTool(BaseTool):
             result = dispatch_to_cli(
                 project_id=project_id,
                 cwd=folder,
-                instruction=f"Ticket #{ticket_id_val}: {instruction}",
+                instruction=instruction,
                 project_name=project_name,
-                append_system_prompt=f"You are working on project: {project_name}. This is ticket #{ticket_id_val}.",
+                ticket_id=ticket_id_val,
+                append_system_prompt=(
+                    f"You are working on project: {project_name}. "
+                    "The prompt includes a [KANBAN TICKET CONTEXT] block — use checklist, links, and file paths."
+                ),
             )
             if result["success"]:
-                return f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to CLI. Check the CLI tab for progress."
-            return f"[Pi — {project_name}] Ticket #{ticket_id_val} failed: {result['message']}"
+                return voice_then_reference(
+                    f"I sent that ticket to Pi for {project_name}. Check the CLI tab for progress.",
+                    f"[Pi — {project_name}] Ticket #{ticket_id_val} sent to CLI. Check the CLI tab for progress.",
+                )
+            return voice_then_reference(
+                "Pi did not accept that run; the error detail is below.",
+                f"[Pi — {project_name}] Ticket #{ticket_id_val} failed: {result['message']}",
+            )
 
     def _action_checkin_overview(self) -> str:
         """Return a concise status report of active board check-ins and workflow runs."""
@@ -1444,7 +1702,10 @@ class KanbanTicketTool(BaseTool):
         if not agents:
             runs = get_active_runs(limit=25)
             if not runs:
-                return "No active board check-ins or workflow runs."
+                return voice_then_reference(
+                    "Nothing is actively running on boards or workflows right now.",
+                    "No active board check-ins or workflow runs.",
+                )
             lines = ["No in-memory board agents, but active workflow runs exist:"]
             for r in runs[:10]:
                 lines.append(
@@ -1452,7 +1713,9 @@ class KanbanTicketTool(BaseTool):
                     f"ticket='{r.get('ticket_title') or r.get('ticket_id')}' "
                     f"phase={r.get('phase') or 'unknown'} status={r.get('status')}"
                 )
-            return "\n".join(lines)
+            ref = "\n".join(lines)
+            spoken = "No board agents are live in memory, but workflow runs are still active; details are below."
+            return voice_then_reference(spoken, ref)
 
         board_lines = []
         for board_id, agent in agents:
@@ -1474,7 +1737,9 @@ class KanbanTicketTool(BaseTool):
         parts = ["Active board check-ins:", *board_lines]
         if run_lines:
             parts.extend(["", "Active workflow runs:", *run_lines])
-        return "\n".join(parts)
+        ref = "\n".join(parts)
+        spoken = "Here is the check-in view for active boards and workflow runs."
+        return voice_then_reference(spoken, ref)
 
     def _get_whatsapp_manager(self):
         try:
@@ -1509,7 +1774,9 @@ class KanbanTicketTool(BaseTool):
                         jid = str(c.get("jid") or "")
                         name = c.get("name") or c.get("subject") or jid.split("@")[0] or "Unknown"
                         lines.append(f"- {name} ({jid})")
-                    return "WhatsApp chats:\n" + "\n".join(lines)
+                    ref = "WhatsApp chats:\n" + "\n".join(lines)
+                    spoken = "I listed WhatsApp chats; names and addresses are below."
+                    return voice_then_reference(spoken, ref)
             except Exception as e:
                 logger.debug("WhatsApp manager chat list failed, fallback to DB: %s", e)
 
@@ -1532,16 +1799,24 @@ class KanbanTicketTool(BaseTool):
             if len(seen) >= limit:
                 break
         if not seen:
-            return "No WhatsApp chats found."
+            return voice_then_reference(
+                "No WhatsApp chats are stored yet.",
+                "No WhatsApp chats found.",
+            )
         lines = [f"- {v['name']} ({v['jid']}) [{v['chat_type']}]" for v in seen.values()]
-        return "WhatsApp chats:\n" + "\n".join(lines)
+        ref = "WhatsApp chats:\n" + "\n".join(lines)
+        spoken = "Here are WhatsApp chats from recent stored messages."
+        return voice_then_reference(spoken, ref)
 
     def _action_whatsapp_list_messages(self, jid_phone: str, limit: int = 50, unprocessed_only: bool = False) -> str:
         from distr.core.db import WhatsAppMessage
 
         phone = (jid_phone or "").strip()
         if not phone:
-            return "Please provide jid_phone for whatsapp_list_messages."
+            return voice_then_reference(
+                "I need a chat phone key or JID to read WhatsApp messages.",
+                "Please provide jid_phone for whatsapp_list_messages.",
+            )
         limit = max(1, min(int(limit or 50), 200))
 
         wm = self._get_whatsapp_manager()
@@ -1555,13 +1830,18 @@ class KanbanTicketTool(BaseTool):
                 ) or {}
                 msgs = data.get("messages") or []
                 if not msgs:
-                    return f"No WhatsApp messages found for '{phone}'."
+                    return voice_then_reference(
+                        "That chat has no stored messages yet.",
+                        f"No WhatsApp messages found for '{phone}'.",
+                    )
                 lines = []
                 for m in msgs[-limit:]:
                     who = "Me" if m.get("from_me") else (m.get("sender_push_name") or m.get("sender_phone") or "Unknown")
                     body = (m.get("text") or m.get("caption") or f"[{m.get('media_type') or 'message'}]").strip()
                     lines.append(f"- #{m.get('id')} {who}: {body[:180]}")
-                return f"WhatsApp messages for '{phone}' ({len(msgs)}):\n" + "\n".join(lines)
+                ref = f"WhatsApp messages for '{phone}' ({len(msgs)}):\n" + "\n".join(lines)
+                spoken = f"I pulled {len(msgs)} messages from that WhatsApp chat."
+                return voice_then_reference(spoken, ref)
             except Exception as e:
                 logger.debug("WhatsApp manager message list failed, fallback to DB: %s", e)
 
@@ -1571,25 +1851,39 @@ class KanbanTicketTool(BaseTool):
                 query = query.filter(WhatsAppMessage.processed == False)
             rows = query.order_by(WhatsAppMessage.whatsapp_timestamp.asc()).limit(limit).all()
         if not rows:
-            return f"No WhatsApp messages found for '{phone}'."
+            return voice_then_reference(
+                "That chat has no stored messages yet.",
+                f"No WhatsApp messages found for '{phone}'.",
+            )
         lines = []
         for m in rows:
             who = "Me" if m.from_me else (m.sender_push_name or m.sender_phone or "Unknown")
             body = (m.text or m.caption or f"[{m.media_type or 'message'}]").strip()
             lines.append(f"- #{m.id} {who}: {body[:180]}")
-        return f"WhatsApp messages for '{phone}' ({len(rows)}):\n" + "\n".join(lines)
+        ref = f"WhatsApp messages for '{phone}' ({len(rows)}):\n" + "\n".join(lines)
+        spoken = f"I pulled {len(rows)} messages from that WhatsApp chat."
+        return voice_then_reference(spoken, ref)
 
     def _action_whatsapp_send_message(self, jid: str, jid_phone: str, text: str) -> str:
         message_text = (text or "").strip()
         target_jid = (jid or "").strip() or self._jid_from_phone(jid_phone)
         if not target_jid:
-            return "Please provide jid or jid_phone for whatsapp_send_message."
+            return voice_then_reference(
+                "I need a chat address or phone number to send WhatsApp.",
+                "Please provide jid or jid_phone for whatsapp_send_message.",
+            )
         if not message_text:
-            return "Please provide text for whatsapp_send_message."
+            return voice_then_reference(
+                "Say what message to send on WhatsApp.",
+                "Please provide text for whatsapp_send_message.",
+            )
 
         wm = self._get_whatsapp_manager()
         if not wm:
-            return "WhatsApp manager is not available."
+            return voice_then_reference(
+                "WhatsApp is not connected in this session.",
+                "WhatsApp manager is not available.",
+            )
         try:
             import requests
             payload = {"jid": target_jid, "text": message_text, "caption": "", "audio": None}
@@ -1602,11 +1896,17 @@ class KanbanTicketTool(BaseTool):
             except Exception:
                 data = {"raw": resp.text[:300]}
             if resp.status_code == 200 and data.get("success", True):
-                return f"Sent WhatsApp message to {target_jid}."
-            return f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}"
+                return voice_then_reference("WhatsApp message sent.", f"Sent WhatsApp message to {target_jid}.")
+            return voice_then_reference(
+                "WhatsApp did not accept that send.",
+                f"Failed to send WhatsApp message to {target_jid}: {data.get('error') or data}",
+            )
         except Exception as e:
             logger.error("WhatsApp send via tool failed: %s", e, exc_info=True)
-            return f"Failed to send WhatsApp message: {e}"
+            return voice_then_reference(
+                "WhatsApp send failed.",
+                f"Failed to send WhatsApp message: {e}",
+            )
 
     def _action_whatsapp_snapshot_to_ticket(
         self,
@@ -1622,10 +1922,16 @@ class KanbanTicketTool(BaseTool):
         message_ids = message_ids or []
         board = self._find_board(board_id, board_name)
         if not board:
-            return "Board not found for whatsapp_snapshot_to_ticket. Provide board_id or board_name."
+            return voice_then_reference(
+                "I need a board name or ID for that WhatsApp snapshot.",
+                "Board not found for whatsapp_snapshot_to_ticket. Provide board_id or board_name.",
+            )
         lane = self._find_lane(board["id"], "")
         if not lane:
-            return f"No lanes found in board '{board['name']}'."
+            return voice_then_reference(
+                "That board has no lanes yet.",
+                f"No lanes found in board '{board['name']}'.",
+            )
 
         with self._get_session() as s:
             query = s.query(WhatsAppMessage)
@@ -1633,15 +1939,24 @@ class KanbanTicketTool(BaseTool):
                 query = query.filter(WhatsAppMessage.id.in_(message_ids))
             else:
                 if not jid_phone:
-                    return "Provide message_ids or jid_phone for whatsapp_snapshot_to_ticket."
+                    return voice_then_reference(
+                        "Pass message IDs or a chat phone key for the snapshot.",
+                        "Provide message_ids or jid_phone for whatsapp_snapshot_to_ticket.",
+                    )
                 query = query.filter(WhatsAppMessage.jid_phone == jid_phone)
             msgs = query.order_by(WhatsAppMessage.whatsapp_timestamp.asc()).all()
             if not msgs:
-                return "No WhatsApp messages found for snapshot."
+                return voice_then_reference(
+                    "There were no messages to snapshot.",
+                    "No WhatsApp messages found for snapshot.",
+                )
 
             lane_obj = s.query(KanbanLane).get(lane["id"])
             if not lane_obj:
-                return "Lane not found for snapshot ticket."
+                return voice_then_reference(
+                    "The board lane for that snapshot is missing.",
+                    "Lane not found for snapshot ticket.",
+                )
 
             base_phone = msgs[0].jid_phone or jid_phone or "unknown"
             ticket_title = (title or "").strip() or f"[WA Snapshot] {base_phone} ({len(msgs)} messages)"
@@ -1661,6 +1976,7 @@ class KanbanTicketTool(BaseTool):
                 position=max_pos + 1,
                 whatsapp_message_id=msgs[-1].id,
                 whatsapp_message_wa_id=msgs[-1].message_id,
+                source_chat_id=self._source_chat_id_for_new_ticket(),
             )
             s.add(ticket)
             s.flush()
@@ -1682,4 +1998,6 @@ class KanbanTicketTool(BaseTool):
             created_id = ticket.id
             created_title = ticket.title
 
-        return f"Created ticket #{created_id} on board '{board['name']}' from {len(msgs)} WhatsApp messages: {created_title}"
+        ref = f"Created ticket #{created_id} on board '{board['name']}' from {len(msgs)} WhatsApp messages: {created_title}"
+        spoken = f"I turned those WhatsApp messages into a ticket on {board['name']}."
+        return voice_then_reference(spoken, ref)

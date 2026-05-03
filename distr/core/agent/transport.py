@@ -256,13 +256,12 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._playback_monitor_task = loop.create_task(self._wait_for_playback_complete())
 
     # Hardware buffer drain margin.  PyAudio's blocking write() returns once
-    # the data is accepted into the OS/driver buffer, which is typically
-    # 100-300 ms deep.  0.6 s gives comfortable headroom without the long
-    # dead-time the old 3.5 s value caused (user had to wait 3.5 s after
-    # audio finished before the system became responsive).
-    _PLAYBACK_BUFFER_MARGIN = 0.6
-    # Minimum wait even for very short utterances ("Done", "OK").
-    _PLAYBACK_MIN_WAIT = 0.8
+    # the data is accepted into the OS/driver buffer (often ~100–250 ms).
+    # Keep a small tail so AEC/mic does not open on speaker echo; avoid long
+    # “dead air” after TTS ends (player + idle UX).
+    _PLAYBACK_BUFFER_MARGIN = 0.35
+    # Floor only when the watermark is already in the past (no queued audio).
+    _PLAYBACK_MIN_WAIT = 0.22
 
     async def _wait_for_playback_complete(self):
         """Wait for playback to finish using the playback watermark.
@@ -277,7 +276,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         try:
             now = time.time()
             remaining = self._playback_watermark - now
-            sleep_secs = max(self._PLAYBACK_MIN_WAIT, remaining + self._PLAYBACK_BUFFER_MARGIN)
+            # Wait for queued audio + driver buffer; do not add a second large
+            # floor on top of a positive remaining (that doubled tail latency).
+            sleep_secs = remaining + self._PLAYBACK_BUFFER_MARGIN
+            if sleep_secs < self._PLAYBACK_MIN_WAIT:
+                sleep_secs = self._PLAYBACK_MIN_WAIT
 
             logger.debug(
                 f"Transport: [Complete {task_id}] output_bytes={self._total_output_bytes}, "

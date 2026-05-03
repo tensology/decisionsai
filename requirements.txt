@@ -5,6 +5,7 @@ vosk
 pyautogui
 pyaudio
 sentence-transformers
+scikit-learn>=1.3.0
 fuzzywuzzy
 setuptools-rust
 sqlalchemy
@@ -57,6 +58,7 @@ anthropic>=0.25.0
 # (e.g. 2.43.0+ ships only source tarballs requiring Rust to compile)
 pydantic>=2.7.0,<2.13.0
 pydantic-core>=2.18.2,<2.42.0
+cryptography>=42.0.0
 pyAudioDspTools
 resampy>=0.4.3
 # NumPy 2.x - requires torch 2.5+ which is compiled for numpy 2.x

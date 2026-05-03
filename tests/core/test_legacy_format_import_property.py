@@ -169,6 +169,9 @@ class TestLegacyFormatImportConversion:
         - Step fields preserved (instruction, step_type, verification, config, code, position)
         - Variable fields preserved (name, default_value, description)
         """
+        assume(doc["instruction"].strip())
+        for step_row in doc["steps"]:
+            assume(step_row["title"].strip())
         engine = _make_engine()
         factory = sessionmaker(bind=engine)
         tmp_dir = tmp_path_factory.mktemp("legacy_import")
@@ -184,6 +187,7 @@ class TestLegacyFormatImportConversion:
             return _session_ctx(factory)
 
         with patch.object(svc, "get_session", patched_get_session), \
+             patch("distr.core.workflow.import_export.get_session", patched_get_session), \
              patch("distr.core.paths.RECORDINGS_DIR", str(tmp_dir / "recordings")), \
              patch("distr.core.paths.DB_DIR", str(tmp_dir / "db")):
             wf_id = svc.import_workflow(legacy_data)

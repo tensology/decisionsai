@@ -17,7 +17,7 @@ function showNotification(message, type) {
 }
 window.showNotification = showNotification;
 
-var SETTINGS_TABS = ['general', 'initiative', 'audio', 'thirdparty', 'llms', 'skins', 'shortcuts', 'advanced', 'logs'];
+var SETTINGS_TABS = ['general', 'initiative', 'audio', 'thirdparty', 'llms', 'mcp', 'skins', 'shortcuts', 'advanced', 'logs'];
 
 function getTabFromHash() {
     var hash = (window.location.hash || '').replace(/^#/, '').toLowerCase();
@@ -51,6 +51,7 @@ function switchTab(tabName) {
     if (window._settingsUiReady) {
         if (tab === 'logs' && typeof window.loadLogs === 'function') setTimeout(window.loadLogs, 0);
         if (tab === 'llms' && typeof window.loadLLMsSettings === 'function') setTimeout(window.loadLLMsSettings, 0);
+        if (tab === 'mcp' && typeof window.loadMCPSettings === 'function') setTimeout(window.loadMCPSettings, 0);
     }
 }
 window.switchTab = switchTab;
@@ -99,6 +100,7 @@ function setupActionButtons() {
                 else if (active.id === 'tab-shortcuts' && typeof window.saveShortcutSettings === 'function') window.saveShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.saveAdvancedSettings === 'function') window.saveAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.saveInitiativeSettings === 'function') window.saveInitiativeSettings();
+                else if (active.id === 'tab-mcp' && typeof window.saveMCPSettings === 'function') window.saveMCPSettings();
                 else if (active.id === 'tab-logs') showNotification('Logs tab has no save action', 'info');
                 else showNotification('Settings saved (UI only)', 'info');
             }
@@ -125,6 +127,7 @@ function setupActionButtons() {
                 else if (active.id === 'tab-shortcuts' && typeof window.loadShortcutSettings === 'function') window.loadShortcutSettings();
                 else if (active.id === 'tab-advanced' && typeof window.loadAdvancedSettings === 'function') window.loadAdvancedSettings();
                 else if (active.id === 'tab-initiative' && typeof window.loadInitiativeSettings === 'function') window.loadInitiativeSettings();
+                else if (active.id === 'tab-mcp' && typeof window.loadMCPSettings === 'function') window.loadMCPSettings();
             }
             showNotification('Settings reloaded', 'info');
         }, true);

@@ -527,7 +527,9 @@ class ChatManagerCore:
 
     # ---- messages ----
 
-    def add_user_message(self, chat_id: int, message: str) -> None:
+    def add_user_message(
+        self, chat_id: int, message: str, *, source_platform: Optional[str] = None
+    ) -> None:
         cleaned_text = self.clean_text(message)
         session = get_session()
         chat = None
@@ -581,9 +583,10 @@ class ChatManagerCore:
 
             if root_id not in self.chat_histories:
                 self.get_chat_history(root_id)
-            self.chat_histories[root_id].append(
-                {"role": "user", "content": cleaned_text}
-            )
+            entry: dict[str, Any] = {"role": "user", "content": cleaned_text}
+            if source_platform:
+                entry["source_platform"] = source_platform
+            self.chat_histories[root_id].append(entry)
 
             has_children = (
                 session.query(Chat.id)
@@ -595,14 +598,26 @@ class ChatManagerCore:
             if not root.input and not root.parent_id and not has_children:
                 root.input = cleaned_text
                 root.modified_date = datetime.now(timezone.utc)
+                if source_platform:
+                    try:
+                        p = json.loads(root.params or "{}")
+                        if not isinstance(p, dict):
+                            p = {}
+                        p["source_platform"] = source_platform
+                        root.params = json.dumps(p)
+                    except (json.JSONDecodeError, TypeError):
+                        root.params = json.dumps({"source_platform": source_platform})
                 session.commit()
             else:
+                params_obj: dict[str, Any] = {}
+                if source_platform:
+                    params_obj["source_platform"] = source_platform
                 new_chat = Chat(
                     parent_id=root_id,
                     title=cleaned_text.split("\n")[0][:50],
                     input=cleaned_text,
                     response="",
-                    params=json.dumps({}),
+                    params=json.dumps(params_obj),
                     created_date=datetime.now(timezone.utc),
                     modified_date=datetime.now(timezone.utc),
                 )

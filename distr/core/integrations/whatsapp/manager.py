@@ -4,6 +4,11 @@ receives inbound WhatsApp messages, routing them to the agent.
 Architecture mirrors the Telegram integration:
   [WhatsApp Servers] <-> [Baileys Node.js service] <-> [Relay server /ws/whatsapp] <-> [This class] <-> [Agent]
 
+Production note (TASK 18): this desktop codebase does **not** implement Meta Cloud API webhooks; traffic is
+relay WebSocket + authenticated REST (``RELAY_INTERNAL_TOKEN`` when set, otherwise device Ed25519 challenge).
+Mirroring inbound text into :class:`~distr.core.integrations.bus.IntegrationMessageBus` is **opt-in** via
+``DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT``.
+
 This class handles:
   - WebSocket connection to the relay server
   - Reconnection with exponential backoff
@@ -37,6 +42,34 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 from distr.core.integrations.base import IntegrationReconnectMixin
+
+
+def _whatsapp_agent_bridge_enabled() -> bool:
+    return os.environ.get("DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT", "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def _route_whatsapp_text_to_message_bus(data: dict, full_text: str, jid: str) -> None:
+    """Opt-in: mirror inbound WhatsApp text into ``IntegrationMessageBus`` (TASK 18)."""
+    from distr.core.integrations.bus import IncomingMessage, get_integration_message_bus
+
+    tid = (jid or data.get("jid_phone") or "").strip()
+    if not tid:
+        return
+    sender = data.get("sender") or {}
+    sender_phone = sender.get("phone") or ""
+    msg = IncomingMessage(
+        platform="whatsapp",
+        thread_id=tid,
+        sender_id=str(sender_phone) if sender_phone else None,
+        text=full_text,
+        attachments=[],
+        raw=data,
+    )
+    get_integration_message_bus().ingest_incoming(msg)
 
 
 class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
@@ -577,9 +610,18 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         if message_id and not media:
             self._mark_relay_processed_by_message_id(message_id)
 
-        # Do NOT auto-route inbound WhatsApp messages into agent chat input.
-        # Agent actions on WhatsApp must be explicit via tools/user intent.
-        logger.debug("WhatsApp: inbound text stored only (no agent injection)")
+        # Default: store + SSE only. Opt-in agent routing via DECISIONSAI_WHATSAPP_ROUTE_TO_AGENT.
+        if (
+            not from_me
+            and _whatsapp_agent_bridge_enabled()
+            and display_text
+        ):
+            try:
+                _route_whatsapp_text_to_message_bus(data, full_text, jid)
+            except Exception:
+                logger.exception("WhatsApp: MessageBus bridge failed")
+        else:
+            logger.debug("WhatsApp: inbound text stored only (no agent injection)")
 
         # Also emit raw signal for any direct listeners
         self.message_received.emit(data)

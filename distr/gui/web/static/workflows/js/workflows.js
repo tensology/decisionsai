@@ -141,11 +141,35 @@
                             expandedStepId = null;
                             document.getElementById("wf-detail").classList.add("hidden");
                             document.getElementById("wf-empty").classList.remove("hidden");
-                            syncWorkflowFooterActionsVisibility();
                         }
                         loadList();
                     })
                     .catch(function () { snack("Failed to delete workflow", "error"); });
+            }
+        });
+    }
+
+    /** Bulk delete all workflows (audit workflow kept). Shown from list row context menu only. */
+    function performPurgeAll() {
+        showConfirmModal({
+            title: "Delete all workflows",
+            message:
+                "This permanently deletes every workflow in your library except the hidden audit workflow. Export anything you need first. Continue?",
+            confirmLabel: "Delete all",
+            onConfirm: function () {
+                api("POST", "/workflows/purge-all", { confirm: true, include_audit: false })
+                    .then(function (data) {
+                        snack("Removed " + (data.removed != null ? data.removed : 0) + " workflow(s)");
+                        currentWorkflowId = null;
+                        currentWorkflow = null;
+                        expandedStepId = null;
+                        document.getElementById("wf-detail").classList.add("hidden");
+                        document.getElementById("wf-empty").classList.remove("hidden");
+                        loadList();
+                    })
+                    .catch(function (e) {
+                        snack(e.message || "Purge failed", "error");
+                    });
             }
         });
     }
@@ -197,6 +221,8 @@
                 '<button type="button" data-action="download" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10">Download bundle</button>' +
                 '<div class="my-1 border-t border-white/10"></div>' +
                 '<button type="button" data-action="delete" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-red-400 hover:bg-red-500/20">Delete</button>' +
+                '<div class="my-1 border-t border-white/10"></div>' +
+                '<button type="button" data-action="purge-all" class="wf-cm-action w-full text-left px-3 py-2 text-sm text-red-400/90 hover:bg-red-500/20">Delete all workflows…</button>' +
             '</div>';
         document.body.insertAdjacentHTML("beforeend", html);
         wfContextMenuEl = document.getElementById("wf-context-menu");
@@ -206,6 +232,10 @@
                 var action = btn.dataset.action;
                 var workflowId = wfContextMenuId;
                 closeWorkflowContextMenu();
+                if (action === "purge-all") {
+                    performPurgeAll();
+                    return;
+                }
                 if (!workflowId) return;
                 if (action === "open") {
                     selectWorkflow(workflowId);
@@ -260,7 +290,10 @@
         api("GET", "/workflows?limit=50" + (search ? "&search=" + encodeURIComponent(search) : ""))
             .then(function (data) {
                 var el = document.getElementById("wf-list");
-                if (!data.length) { el.innerHTML = '<p class="text-sm text-gray-500">No workflows yet.</p>'; return; }
+                if (!data.length) {
+                    el.innerHTML = '<p class="text-sm text-gray-500">' + (search ? "No workflows match your search." : "No workflows yet.") + "</p>";
+                    return;
+                }
                 el.innerHTML = data.map(function (w) {
                     var active = currentWorkflowId === w.id ? " border-[#f97316] bg-white/10" : " border-transparent hover:bg-white/5";
                     var badge = w.schedule_enabled ? '<span class="text-xs px-1.5 py-0.5 rounded bg-blue-600/40 text-blue-300 ml-auto">' + esc(w.schedule_preset || "sched") + "</span>" : "";
@@ -291,7 +324,9 @@
                     var match = lastId && data.some(function (w) { return w.id === lastId; });
                     selectWorkflow(match ? lastId : data[0].id);
                 }
-            }).catch(function (e) { console.error("Load workflows failed", e); });
+            }).catch(function (e) {
+                console.error("Load workflows failed", e);
+            });
     }
 
     function selectWorkflow(id) {
@@ -302,19 +337,12 @@
         loadDetail(id);
     }
 
-    function syncWorkflowFooterActionsVisibility() {
-        var footer = document.getElementById("wf-list-footer-actions");
-        if (!footer) return;
-        footer.classList.toggle("hidden", !currentWorkflowId);
-    }
-
     function loadDetail(id) {
         api("GET", "/workflows/" + id).then(function (data) {
             currentWorkflow = data;
             document.getElementById("wf-empty").classList.add("hidden");
             document.getElementById("wf-detail").classList.remove("hidden");
             document.getElementById("wf-detail-name").value = data.name || "";
-            syncWorkflowFooterActionsVisibility();
             renderSteps(data.steps || []);
             renderSchedule(data);
             renderRuns(data.runs || []);
@@ -1829,37 +1857,6 @@
             });
         }
 
-        // Duplicate
-        var dupBtn = document.getElementById("wf-duplicate-btn");
-        if (dupBtn) {
-            dupBtn.addEventListener("click", function () {
-                if (!currentWorkflowId) return;
-                api("POST", "/workflows/" + currentWorkflowId + "/duplicate")
-                    .then(function (data) { snack("Workflow duplicated"); selectWorkflow(data.id); })
-                    .catch(function () { snack("Failed to duplicate", "error"); });
-            });
-        }
-
-        // Export to presets (.dwf bundle)
-        var exportBtn = document.getElementById("wf-export-btn");
-        if (exportBtn) {
-            exportBtn.addEventListener("click", function () {
-                if (!currentWorkflowId) return;
-                api("POST", "/workflows/" + currentWorkflowId + "/export-preset")
-                    .then(function (data) { snack("Exported as " + (data.filename || "preset")); checkPresetsExist(); })
-                    .catch(function () { snack("Failed to export", "error"); });
-            });
-        }
-
-        // Download .dwf file
-        var downloadBtn = document.getElementById("wf-download-btn");
-        if (downloadBtn) {
-            downloadBtn.addEventListener("click", function () {
-                if (!currentWorkflowId) return;
-                window.location.href = API + "/workflows/" + currentWorkflowId + "/export";
-            });
-        }
-
         // Presets dropdown (cog icon)
         var presetsBtn = document.getElementById("wf-presets-btn");
         var presetsDropdown = document.getElementById("wf-presets-dropdown");
@@ -2014,7 +2011,6 @@
             });
         }
 
-        syncWorkflowFooterActionsVisibility();
         loadList();
         checkPresetsExist();
         connectWebSocket();

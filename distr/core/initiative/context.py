@@ -19,6 +19,10 @@ class ContextBundle:
     recent_audit: list = field(default_factory=list)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
+    # R8 memory files — trimmed for LLM (not full AGENT/USER/MEMORY bodies)
+    memory_agent: str = ""
+    memory_user: str = ""
+    memory_long_term: str = ""
 
 
 class ContextAssembler:
@@ -88,6 +92,12 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to fetch recent audit", exc_info=True)
 
+        memory_agent, memory_user, memory_long_term = "", "", ""
+        try:
+            memory_agent, memory_user, memory_long_term = self._fetch_memory_snippets()
+        except Exception:
+            logger.warning("ContextAssembler: failed to load memory file snippets", exc_info=True)
+
         return ContextBundle(
             chat_history=chat_history,
             scheduled_sessions=scheduled_sessions,
@@ -100,11 +110,31 @@ class ContextAssembler:
             recent_audit=recent_audit,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
+            memory_agent=memory_agent,
+            memory_user=memory_user,
+            memory_long_term=memory_long_term,
         )
 
     # ------------------------------------------------------------------
     # Private helpers
     # ------------------------------------------------------------------
+
+    def _fetch_memory_snippets(self) -> tuple[str, str, str]:
+        """Trimmed AGENT.md / USER.md / MEMORY.md for initiative context (R8)."""
+        from distr.core.memory.files import (
+            ensure_memory_files,
+            load_context_snippets_for_llm,
+            try_load_system_prompt_template,
+        )
+
+        tpl = try_load_system_prompt_template()
+        ensure_memory_files(system_prompt_template=tpl)
+        snippets = load_context_snippets_for_llm()
+        return (
+            snippets.get("agent") or "",
+            snippets.get("user") or "",
+            snippets.get("memory") or "",
+        )
 
     def _fetch_chat_history(self, settings: dict) -> list:
         from distr.core.chat import ChatService

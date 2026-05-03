@@ -9,33 +9,17 @@ which handles the full screenshot → vision LLM → coordinate pipeline.
 """
 
 import logging
-import os
 from typing import Optional
 
-import requests
 from langchain.tools import BaseTool
 
 logger = logging.getLogger(__name__)
 
-_SIDECAR_PORT = int(os.environ.get("DECISIONSAI_SIDECAR_HTTP_PORT", "11435"))
-_SIDECAR_BASE = f"http://127.0.0.1:{_SIDECAR_PORT}"
-
 
 def _call_sidecar(tool: str, params: dict, timeout: int = 120) -> dict:
-    try:
-        resp = requests.post(
-            f"{_SIDECAR_BASE}/tool/{tool}",
-            json=params,
-            timeout=timeout,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.ConnectionError:
-        raise RuntimeError(
-            "Sidecar not running. These tools require the sidecar process."
-        )
-    except Exception as e:
-        raise RuntimeError(f"Sidecar call failed ({tool}): {e}")
+    from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
+
+    return call_sidecar_tool(tool, params, timeout=timeout)
 
 
 # ── run_python ────────────────────────────────────────────────────────────────

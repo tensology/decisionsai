@@ -18,8 +18,11 @@ import time
 import threading
 import numpy as np
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
 
+import pytest
+
+pytest.importorskip("pyaudio")
 import pyaudio
 from pydub import AudioSegment
 from distr.core.audio.echo_canceller import ReferenceBuffer, NLMSEchoCanceller

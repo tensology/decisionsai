@@ -572,9 +572,13 @@
             if (!currentBoardData) return;
             var firstLane = (currentBoardData.lanes || [])[0];
             if (!firstLane) { deps.showSnackbar("Board has no lanes", "error"); return; }
+            var newTicketBody = { lane_id: firstLane.id, title: "New Ticket", priority: "medium" };
+            if (typeof deps.mergeSourceChatIntoPayload === "function") {
+                deps.mergeSourceChatIntoPayload(newTicketBody);
+            }
             deps.apiFetch("/api/kanban/tickets", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ lane_id: firstLane.id, title: "New Ticket", priority: "medium" })
+                body: JSON.stringify(newTicketBody)
             }).then(function(data) {
                 deps.selectBoard("database", currentBoard.id);
                 setTimeout(function() { deps.openTicketModal(data.id); }, 300);
@@ -621,19 +625,23 @@
             if (!copyTicketData) return;
             var boardId = parseInt(document.getElementById("kb-copy-board-select").value, 10);
             if (!boardId) { deps.showSnackbar("Select a board", "error"); return; }
+            var copyPayload = {
+                board_id: boardId,
+                title: copyTicketData.title,
+                description: deps.stripHtml(copyTicketData.description),
+                priority: copyTicketData.priority || "medium",
+                time_estimate: copyTicketData.time_estimate || "",
+                time_spent: copyTicketData.time_spent || "",
+                external_source: copyTicketData.external_source,
+                external_id: copyTicketData.external_id,
+                external_url: copyTicketData.external_url,
+            };
+            if (typeof deps.mergeSourceChatIntoPayload === "function") {
+                deps.mergeSourceChatIntoPayload(copyPayload);
+            }
             deps.apiFetch("/api/kanban/tickets/copy-external-to-board", {
                 method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({
-                    board_id: boardId,
-                    title: copyTicketData.title,
-                    description: deps.stripHtml(copyTicketData.description),
-                    priority: copyTicketData.priority || "medium",
-                    time_estimate: copyTicketData.time_estimate || "",
-                    time_spent: copyTicketData.time_spent || "",
-                    external_source: copyTicketData.external_source,
-                    external_id: copyTicketData.external_id,
-                    external_url: copyTicketData.external_url,
-                })
+                body: JSON.stringify(copyPayload)
             }).then(function() {
                 deps.showSnackbar("Ticket copied to board");
                 closeCopyModal();
@@ -951,10 +959,14 @@
 
             if (boardSource === "database") {
                 if (!laneId) { deps.showSnackbar("Select a lane", "error"); return; }
+                var cetPayload = { title: title, description: desc, lane_id: parseInt(laneId, 10), priority: priority || "medium", board_id: boardId };
+                if (typeof deps.mergeSourceChatIntoPayload === "function") {
+                    deps.mergeSourceChatIntoPayload(cetPayload);
+                }
                 deps.apiFetch("/api/kanban/tickets", {
                     method: "POST",
                     headers: {"Content-Type": "application/json"},
-                    body: JSON.stringify({ title: title, description: desc, lane_id: parseInt(laneId, 10), priority: priority || "medium", board_id: boardId })
+                    body: JSON.stringify(cetPayload)
                 }).then(function(r) {
                     if (!r || !r.success) { deps.showSnackbar("Failed to create ticket", "error"); return; }
                     deps.showSnackbar("Ticket created");

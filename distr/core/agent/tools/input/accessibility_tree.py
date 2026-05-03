@@ -6,11 +6,9 @@ Talks to the local sidecar process via HTTP on 127.0.0.1:SIDECAR_PORT.
 """
 
 import logging
-import os
 import threading
 from typing import Optional
 
-import requests
 from langchain.tools import BaseTool
 from distr.core.agent.services.computer_use_context import (
     record_action,
@@ -20,8 +18,6 @@ from distr.core.agent.services.computer_use_context import (
 
 logger = logging.getLogger(__name__)
 
-_SIDECAR_PORT = int(os.environ.get("DECISIONSAI_SIDECAR_HTTP_PORT", "11435"))
-_SIDECAR_BASE = f"http://127.0.0.1:{_SIDECAR_PORT}"
 _SIDECAR_TIMEOUT = 20
 
 _element_cache: list[dict] = []
@@ -29,29 +25,9 @@ _element_cache_lock = threading.Lock()
 
 
 def _call_sidecar(tool: str, params: dict) -> dict:
-    try:
-        resp = requests.post(
-            f"{_SIDECAR_BASE}/tool/{tool}",
-            json=params,
-            timeout=_SIDECAR_TIMEOUT,
-        )
-        resp.raise_for_status()
-        return resp.json()
-    except requests.ConnectionError:
-        raise RuntimeError(
-            "Sidecar not running. Accessibility tree tools require the sidecar "
-            "(starts automatically with the app)."
-        )
-    except Exception as e:
-        raise RuntimeError(f"Sidecar call failed ({tool}): {e}")
+    from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
 
-
-def _is_sidecar_running() -> bool:
-    try:
-        requests.get(f"{_SIDECAR_BASE}/health", timeout=2)
-        return True
-    except Exception:
-        return False
+    return call_sidecar_tool(tool, params, timeout=_SIDECAR_TIMEOUT)
 
 
 def _find_by_name(name: str, app_name: str = "") -> Optional[dict]:

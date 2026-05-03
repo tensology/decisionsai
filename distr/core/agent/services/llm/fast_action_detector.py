@@ -185,7 +185,26 @@ class FastActionDetector:
              ActionType.ACTION_START_RECORDING, "start_recording", {}, False, "done"),
             (re.compile(r'\b(stop|end|finish)\b.*\brecording\b', re.IGNORECASE), 
              ActionType.ACTION_STOP_RECORDING, "stop_recording", {}, False, "done"),
-            
+
+            # === SUMMARIZE (before generic READ patterns — "summarize and read this") ===
+            # IMPORTANT: More specific patterns must come FIRST within this section
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+and\s+paste\s+this\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\bsummar(ize|ise)\s+and\s+paste\s+this\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\bsummar(ize|ise)\b.*\b(and\s+)?read\b.*\b(from\s+)?clipboard\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
+            (re.compile(r'\bsummar(ize|ise)\b.*\b(from\s+)?clipboard\b.*\b(and\s+)?read\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
+            (re.compile(r'\bsummar(ize|ise)\b.*\b(and\s+)?read\b.*\b(this|that|it)\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
+            (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+            (re.compile(r'\bsummar(ize|ise)\b.*\b(from\s+)?clipboard\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
+
             # === CLIPBOARD READ (TTS) ===
             # IMPORTANT: More specific patterns must come FIRST
             # "read this", "read that", "read it" - tool handles copy internally
@@ -196,8 +215,8 @@ class FastActionDetector:
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "read", "text": "__ORIGINAL_TEXT__"}, False, "tts"),
             # "read from clipboard", "read the clipboard", "read my clipboard", "read clipboard"
             # This reads the clipboard content ALOUD via TTS
-            # NOTE: Must come AFTER "summarize and read" patterns to avoid false matches
-            # Use negative lookahead to exclude "summarize and read" cases
+            # SUMMARIZE patterns are matched earlier in this list; negative lookahead keeps
+            # "summarize … clipboard" from routing here if regex order ever changes.
             (re.compile(r'^(?!.*\bsummar(ize|ise)\b).*\bread\b.*\b(from\s+)?(the\s+|my\s+)?clipboard\b', re.IGNORECASE), 
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "get"}, False, "tts_clipboard"),
             
@@ -370,32 +389,7 @@ class FastActionDetector:
              ActionType.CLIPBOARD_ELABORATE, "clipboard_action", {"action": "elaborate", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
             (re.compile(r'\belaborate\b.*\bclipboard\b', re.IGNORECASE), 
              ActionType.CLIPBOARD_ELABORATE, "clipboard_action", {"action": "elaborate", "text": "__ORIGINAL_TEXT__"}, False, "llm_response"),
-            
-            # === SUMMARIZE ===
-            # IMPORTANT: More specific patterns must come FIRST
-            # "summarize and paste this" - summarize the spoken message and paste it (MOST SPECIFIC)
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+and\s+paste\s+this\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\bsummar(ize|ise)\s+and\s+paste\s+this\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            # "summarize and read from clipboard", "summarize and read this" - must come before generic patterns
-            (re.compile(r'\bsummar(ize|ise)\b.*\b(and\s+)?read\b.*\b(from\s+)?clipboard\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
-            # "summarize from clipboard and read" - read comes AFTER clipboard
-            (re.compile(r'\bsummar(ize|ise)\b.*\b(from\s+)?clipboard\b.*\b(and\s+)?read\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
-            (re.compile(r'\bsummar(ize|ise)\b.*\b(and\s+)?read\b.*\b(this|that|it)\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "tts"),
-            # "summarize this", "summarize that", "can you summarize this" - tool handles copy internally
-            # Note: tool_args will be updated with original text in detect()
-            (re.compile(r'^(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\b(can\s+you\s+|could\s+you\s+|please\s+)?summar(ize|ise)\s+(this|that|it)\.?$', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            # "summarize the clipboard", "summarize from clipboard"
-            (re.compile(r'\bsummar(ize|ise)\b.*\b(from\s+)?clipboard\b', re.IGNORECASE), 
-             ActionType.CLIPBOARD_SUMMARIZE, "summarize_clipboard", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            
+
             # === DIRECT SCREENSHOT CAPTURE (no analysis - just send it) ===
             # "give me a screenshot", "give me a screenshot of screen 1", "send me a screenshot"
             (re.compile(r'\b(give|send|show)\s+(me\s+)?a?\s*screenshot\b', re.IGNORECASE), 

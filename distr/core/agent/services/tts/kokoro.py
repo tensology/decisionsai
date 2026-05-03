@@ -854,8 +854,10 @@ class KokoroTTSService(TTSService):
             return
             
         elif isinstance(frame, LLMFullResponseEndFrame):
-            self._in_response_after_start = False  # Allow CancelFrame to apply again for next interrupt
-            self._llm_response_started_at = 0  # Reset so future InterruptionFrames are not treated as stale
+            # NOTE: Do NOT clear _in_response_after_start / _llm_response_started_at here.
+            # Clearing immediately allowed late InterruptionFrames (interrupt_tts races, VAD glitches)
+            # to cancel TTS while we still synthesize "remaining buffer" audio — audible cut-offs.
+            # Reset both only at the end of this branch (after remaining text + tts_stopped).
             duplicate_sentences = sum(1 for count in self._sentence_emit_counts.values() if count > 1)
             logger.info(
                 "TTS RESPONSE END: response_id=%s unique_sentences=%d duplicate_sentences=%d",
@@ -1066,15 +1068,21 @@ class KokoroTTSService(TTSService):
                     message_hash = hashlib.md5(message_content.encode()).hexdigest()
                     current_time = _time_mod.time()
                     
-                    # Prevent duplicate sends within 2 seconds
-                    if message_hash == self._last_telegram_send_hash and (current_time - self._last_telegram_send_time) < 2.0:
-                        logger.warning(f"⚠️ TTS: Duplicate send_to_telegram event detected and dropped (same message sent {current_time - self._last_telegram_send_time:.2f}s ago): '{session_text_normalized[:50]}...'")
-                        logger.debug(f"[Telegram TTS] ⚠️ Duplicate event dropped (already sent recently)")
-                        return  # Exit early, don't send duplicate
-                    
-                    # Update tracking
-                    self._last_telegram_send_hash = message_hash
-                    self._last_telegram_send_time = current_time
+                    # Prevent duplicate sends within 2 seconds (do not return early — finish EndFrame downstream)
+                    _telegram_duplicate_recent = (
+                        message_hash == self._last_telegram_send_hash
+                        and (current_time - self._last_telegram_send_time) < 2.0
+                    )
+                    if _telegram_duplicate_recent:
+                        logger.warning(
+                            f"⚠️ TTS: Duplicate send_to_telegram event detected and dropped "
+                            f"(same message sent {current_time - self._last_telegram_send_time:.2f}s ago): "
+                            f"'{session_text_normalized[:50]}...'"
+                        )
+                        logger.debug("[Telegram TTS] ⚠️ Duplicate event dropped (already sent recently)")
+                    else:
+                        self._last_telegram_send_hash = message_hash
+                        self._last_telegram_send_time = current_time
                     
                     # Check if user requested to send raw screenshot directly
                     import threading
@@ -1146,7 +1154,7 @@ class KokoroTTSService(TTSService):
                     
                     logger.info(f"[Telegram TTS] Decision: send={should_send_to_telegram} (telegram_req={has_telegram_request}, welcome={is_welcome_message}, file_sent={file_already_sent}, text='{session_text_normalized[:80]}...')")
                     
-                    if should_send_to_telegram:
+                    if should_send_to_telegram and not _telegram_duplicate_recent:
                         if is_welcome_message and not has_telegram_request:
                             logger.debug(f"TTS: Welcome message detected - will send to Telegram even though not a Telegram request")
                             logger.debug(f"[Telegram TTS] 👋 Welcome message detected - sending to Telegram")
@@ -1268,6 +1276,10 @@ class KokoroTTSService(TTSService):
                 pass
             logger.debug(f"[Telegram TTS] 🧹 Cleared ALL telegram flags (response complete)")
             
+            # End of LLM response: safe to accept CancelFrame / non-stale InterruptionFrame logic again
+            self._in_response_after_start = False
+            self._llm_response_started_at = 0
+
             await self.push_frame(frame, direction)
             return
 

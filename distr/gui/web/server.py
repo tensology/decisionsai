@@ -226,6 +226,14 @@ def create_app() -> FastAPI:
         return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
 
     try:
+        from distr.gui.web.routes.integrations_hooks import router as integrations_hooks_router
+
+        app.include_router(integrations_hooks_router)
+        logger.info("Integration webhooks mounted at POST /hooks/slack/events")
+    except Exception as e:
+        logger.error("Failed to load integration webhook routes: %s", e, exc_info=True)
+
+    try:
         from distr.gui.web.routes.chat import create_routes as create_chat_routes
         chat_router = create_chat_routes(chat_templates_dir, base_path="/chat")
         app.include_router(chat_router, prefix="/api", tags=["chat"])
@@ -240,6 +248,36 @@ def create_app() -> FastAPI:
         logger.info("Docs API routes mounted at /docs/api")
     except Exception as e:
         logger.error("Failed to load Docs routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.events_stream import router as events_stream_router
+
+        app.include_router(events_stream_router)
+        logger.info("Event SSE mounted at GET /api/events/stream")
+    except Exception as e:
+        logger.error("Failed to load events stream routes: %s", e, exc_info=True)
+
+    @app.get("/api/sidecar/health")
+    async def api_sidecar_health():
+        """Whether the local sidecar responds on ``GET /health`` (TASK 14 / R23)."""
+        try:
+            from distr.core.agent.tools.input.sidecar_http import sidecar_base_url, sidecar_health
+
+            base = sidecar_base_url()
+            body = sidecar_health(timeout=2.0)
+            if body is None:
+                return JSONResponse(
+                    {"ok": False, "base_url": base, "sidecar_ok": False},
+                    status_code=503,
+                )
+            out: dict = {"ok": True, "base_url": base, "sidecar_ok": True}
+            for k, v in body.items():
+                if k != "ok":
+                    out[k] = v
+            return JSONResponse(out)
+        except Exception as e:
+            logger.warning("api_sidecar_health failed: %s", e)
+            return JSONResponse({"ok": False, "error": str(e)}, status_code=500)
 
     # Standalone pages — each has its own template directory
     @app.get("/actions/", response_class=HTMLResponse)

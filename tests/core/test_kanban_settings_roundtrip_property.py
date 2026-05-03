@@ -8,12 +8,18 @@ via load_settings_from_db() should produce values equivalent to the
 original configuration for all kanban-prefixed keys."""
 
 import json
+import sys
 from unittest.mock import patch
 
 from hypothesis import given, settings
 from hypothesis import strategies as st
 
-# Import the module under test eagerly so patching works
+# Root conftest stubs distr.core.settings as MagicMock for headless imports;
+# MagicMock answers yes to hasattr(...); real modules have __file__.
+_sm = sys.modules.get("distr.core.settings")
+if _sm is not None and getattr(_sm, "__file__", None) is None:
+    del sys.modules["distr.core.settings"]
+
 import distr.core.settings as settings_mod
 
 
@@ -115,8 +121,8 @@ def test_kanban_settings_round_trip(kanban_cfg: dict) -> None:
     def fake_core_load():
         return dict(store)
 
-    with patch.object(settings_mod, "core_save_settings", side_effect=fake_core_save), \
-         patch.object(settings_mod, "core_load_settings", side_effect=fake_core_load):
+    with patch("distr.core.utils.save_settings_to_db", side_effect=fake_core_save), \
+         patch("distr.core.utils.load_settings_from_db", side_effect=fake_core_load):
 
         # Save the generated kanban settings
         settings_mod.save_settings_to_db(kanban_cfg)

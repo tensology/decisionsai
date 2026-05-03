@@ -3,7 +3,7 @@
 Test script to fetch Trello boards from connected accounts.
 
 Usage:
-    python tests/integrations/test_trello_boards.py
+    python tests/integrations/trello_boards_manual.py
 """
 
 import sys

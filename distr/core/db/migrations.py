@@ -1836,6 +1836,7 @@ def run_migrations():
     for _wcol, _wtype, _wdef in [
         ("workflow_status", "VARCHAR", "NULL"),
         ("parent_ticket_id", "INTEGER", "NULL"),
+        ("source_chat_id", "INTEGER", "NULL"),
     ]:
         try:
             with Session() as s:

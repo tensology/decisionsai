@@ -15,6 +15,7 @@ from typing import Any, Optional, Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.agent.tool_voice_format import voice_then_reference
 from distr.core.pi_skill_push_files import USER_INTENT_FILENAME, write_pi_skill_user_intent
 
 logger = logging.getLogger(__name__)
@@ -211,14 +212,17 @@ Examples: "push brainstorming to ~/myapp", "install the security auditor here".
                 pass
 
             slash_hint = f"/skill:{actual_id}" if target.lower() == "pi" else f"/{actual_id}"
-            return (
-                f"✅ Pushed skill '{skill_name}' ({actual_id}) to {target}!\n\n"
-                f"Destination: {dest_file}\n"
-                f"Project: {project}{project_resolve_hint}\n"
-                f"Target: {target} ({target_dir_name}/)\n\n"
-                f"Use as command: {slash_hint}"
-                f"{intent_note}"
-            )
+            ref_parts = [
+                f"Pushed skill '{skill_name}' ({actual_id}) to {target}.",
+                f"Destination: {dest_file}",
+                f"Project: {project}{project_resolve_hint}",
+                f"Target: {target} ({target_dir_name}/)",
+                f"Use as command: {slash_hint}",
+            ]
+            if intent_note.strip():
+                ref_parts.append(intent_note.strip())
+            spoken = f"I installed the skill {skill_name} into your {target} folder for this project."
+            return voice_then_reference(spoken, "\n".join(ref_parts))
 
         except Exception as e:
             logger.error("Error in push_skill: %s", e, exc_info=True)

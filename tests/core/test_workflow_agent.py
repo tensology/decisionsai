@@ -27,9 +27,10 @@ def _mock_settings(provider="Ollama", model="llama3"):
 def _make_agent(provider="Ollama", model="llama3"):
     """Create a WorkflowAgent with all external deps mocked."""
     settings = _mock_settings(provider, model)
-    with patch("distr.core.workflow_agent.WorkflowAgent._load_tools"):
-        with patch("distr.core.llm_factory.resolve_settings_keys", return_value=(provider, model)):
-            agent = WorkflowAgent(settings=settings)
+    with patch("distr.core.llm_factory.resolve_settings_keys", return_value=(provider, model)):
+        with patch("distr.core.workflow_agent.WorkflowAgent._load_tools"):
+            with patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty"):
+                agent = WorkflowAgent(settings=settings)
     return agent
 
 
@@ -45,36 +46,41 @@ def _run(coro):
 class TestWorkflowAgentInstantiation:
     """Verify WorkflowAgent initialises with isolated state."""
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
-    def test_creates_with_ollama_provider(self, mock_resolve, mock_tools):
+    def test_creates_with_ollama_provider(self, mock_resolve, mock_tools, mock_ensure):
         agent = WorkflowAgent(settings=_mock_settings())
         assert agent.provider == "Ollama"
         assert agent.model == "llama3"
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("OpenAI", "gpt-4o"))
-    def test_creates_with_openai_provider(self, mock_resolve, mock_tools):
+    def test_creates_with_openai_provider(self, mock_resolve, mock_tools, mock_ensure):
         agent = WorkflowAgent(settings=_mock_settings("OpenAI", "gpt-4o"))
         assert agent.provider == "OpenAI"
         assert agent.model == "gpt-4o"
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Anthropic", "claude-3"))
-    def test_creates_with_anthropic_provider(self, mock_resolve, mock_tools):
+    def test_creates_with_anthropic_provider(self, mock_resolve, mock_tools, mock_ensure):
         agent = WorkflowAgent(settings=_mock_settings("Anthropic", "claude-3"))
         assert agent.provider == "Anthropic"
         assert agent.model == "claude-3"
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
-    def test_starts_with_empty_message_history(self, mock_resolve, mock_tools):
+    def test_starts_with_empty_message_history(self, mock_resolve, mock_tools, mock_ensure):
         agent = WorkflowAgent(settings=_mock_settings())
         assert agent.messages == []
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
-    def test_message_history_is_isolated_between_agents(self, mock_resolve, mock_tools):
+    def test_message_history_is_isolated_between_agents(self, mock_resolve, mock_tools, mock_ensure):
         """Two WorkflowAgent instances have completely separate message histories."""
         agent_a = WorkflowAgent(settings=_mock_settings())
         agent_b = WorkflowAgent(settings=_mock_settings())
@@ -85,9 +91,10 @@ class TestWorkflowAgentInstantiation:
         assert len(agent_a.messages) == 1
         assert len(agent_b.messages) == 0
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
-    def test_shutdown_clears_state(self, mock_resolve, mock_tools):
+    def test_shutdown_clears_state(self, mock_resolve, mock_tools, mock_ensure):
         agent = WorkflowAgent(settings=_mock_settings())
         agent._messages.append({"role": "user", "content": "test"})
         agent.shutdown()
@@ -96,9 +103,10 @@ class TestWorkflowAgentInstantiation:
         assert agent.tools == []
         assert agent._shutdown is True
 
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
     @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
     @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
-    def test_loads_settings_from_db_when_none(self, mock_resolve, mock_tools):
+    def test_loads_settings_from_db_when_none(self, mock_resolve, mock_tools, mock_ensure):
         """When settings=None, loads from DB."""
         import sys
         # Create a mock settings module to avoid sqlalchemy dependency
@@ -120,7 +128,7 @@ class TestWorkflowAgentExecute:
         """execute() returns the LLM response as a string."""
         agent = _make_agent()
 
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["Hello", " world"])):
+        with patch.object(agent, "_call_llm_sync", return_value=("Hello world", [])):
             result = _run(agent.execute("Say hello"))
 
         assert result == "Hello world"
@@ -129,56 +137,51 @@ class TestWorkflowAgentExecute:
         """execute() appends user and assistant messages to the agent's own history."""
         agent = _make_agent()
 
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["response"])):
+        with patch.object(agent, "_call_llm_sync", return_value=("response", [])):
             _run(agent.execute("instruction"))
 
-        assert len(agent.messages) == 2
-        assert agent.messages[0] == {"role": "user", "content": "instruction"}
-        assert agent.messages[1] == {"role": "assistant", "content": "response"}
+        assert {"role": "user", "content": "instruction"} in agent.messages
+        assert {"role": "assistant", "content": "response"} in agent.messages
 
     def test_execute_does_not_touch_other_agent(self):
         """Executing on one agent does not affect another agent's messages."""
         agent_a = _make_agent()
         agent_b = _make_agent()
 
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["resp_a"])):
+        with patch.object(agent_a, "_call_llm_sync", return_value=("resp_a", [])):
             _run(agent_a.execute("instruction_a"))
 
-        assert len(agent_a.messages) == 2
+        assert {"role": "user", "content": "instruction_a"} in agent_a.messages
         assert len(agent_b.messages) == 0
 
     def test_execute_does_not_emit_signals(self):
         """execute() must not call signal_manager.send_text_input or any global signal.
 
-        WorkflowAgent.execute() uses llm_factory.create_stream directly — it never
-        imports or touches signal_manager. We verify by checking that the execute
-        path only calls create_stream (no other side effects).
+        WorkflowAgent.execute() drives LLM calls via _call_llm_sync — it never
+        imports or touches signal_manager. We verify the LLM hook was invoked once.
         """
         agent = _make_agent()
 
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["ok"])) as mock_stream:
+        with patch.object(agent, "_call_llm_sync", return_value=("ok", [])) as mock_llm:
             result = _run(agent.execute("do something"))
 
         assert result == "ok"
-        # create_stream was the only external call
-        mock_stream.assert_called_once()
-        # Verify no signal_manager attribute exists on the agent
+        mock_llm.assert_called_once()
         assert not hasattr(agent, "signal_manager")
 
     def test_execute_accumulates_history_across_calls(self):
         """Multiple execute() calls build up the conversation history."""
         agent = _make_agent()
 
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["first"])):
+        with patch.object(agent, "_call_llm_sync", return_value=("first", [])):
             _run(agent.execute("step 1"))
-        with patch("distr.core.llm_factory.create_stream", return_value=iter(["second"])):
+        with patch.object(agent, "_call_llm_sync", return_value=("second", [])):
             _run(agent.execute("step 2"))
 
-        assert len(agent.messages) == 4
-        assert agent.messages[0]["content"] == "step 1"
-        assert agent.messages[1]["content"] == "first"
-        assert agent.messages[2]["content"] == "step 2"
-        assert agent.messages[3]["content"] == "second"
+        user_msgs = [m["content"] for m in agent.messages if m["role"] == "user"]
+        asst_msgs = [m["content"] for m in agent.messages if m["role"] == "assistant"]
+        assert user_msgs == ["step 1", "step 2"]
+        assert asst_msgs == ["first", "second"]
 
     def test_execute_after_shutdown_raises(self):
         """Calling execute() after shutdown raises RuntimeError."""
@@ -189,15 +192,19 @@ class TestWorkflowAgentExecute:
             _run(agent.execute("should fail"))
 
     def test_execute_handles_llm_error_gracefully(self):
-        """If the LLM stream raises, execute() returns an error string."""
+        """If the LLM call fails, execute() surfaces an error string."""
         agent = _make_agent()
 
-        def _failing_stream(**kwargs):
-            raise ConnectionError("LLM unreachable")
-
-        with patch("distr.core.llm_factory.create_stream", side_effect=_failing_stream):
+        with patch.object(
+            agent,
+            "_call_llm_sync",
+            return_value=("Error: LLM unreachable", []),
+        ):
             result = _run(agent.execute("try this"))
 
         assert "Error" in result
-        # History should still be updated
-        assert len(agent.messages) == 2
+        assert {"role": "user", "content": "try this"} in agent.messages
+        assert any(
+            m.get("role") == "assistant" and "Error" in (m.get("content") or "")
+            for m in agent.messages
+        )

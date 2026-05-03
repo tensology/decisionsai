@@ -12,6 +12,11 @@ Tests all available STT services to diagnose issues:
 import asyncio
 import sys
 import os
+
+import pytest
+
+pytest.importorskip("sounddevice")
+
 import numpy as np
 import sounddevice as sd
 import logging
@@ -192,7 +197,7 @@ class STTDiagnostic:
         print("="*80)
         
         try:
-            from distr.core.agent.services.whisper import WhisperSTTService
+            from distr.core.agent.services.stt.whisper import WhisperSTTService
             
             print("\n🔄 Initializing Whisper.cpp STT...")
             stt_service = WhisperSTTService(

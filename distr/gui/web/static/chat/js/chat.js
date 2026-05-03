@@ -25,6 +25,34 @@ let _selectSeq = 0;
 /** Guard against double-clicking "+" creating two chats simultaneously. */
 let _createChatGuard = false;
 
+/** Persist active chat for Kanban ticket creation / lane-move notices (cross-tab). */
+const KANBAN_SOURCE_CHAT_STORAGE_KEY = 'decisions_source_chat_id';
+
+function syncKanbanSourceChatContext() {
+    try {
+        const id = loadedChatId != null ? loadedChatId : currentChatId;
+        if (id != null && Number(id) >= 1) {
+            sessionStorage.setItem(KANBAN_SOURCE_CHAT_STORAGE_KEY, String(Number(id)));
+        } else {
+            sessionStorage.removeItem(KANBAN_SOURCE_CHAT_STORAGE_KEY);
+        }
+    } catch (e) { /* ignore private mode / quota */ }
+}
+
+window.DecisionsWebChat = window.DecisionsWebChat || {};
+window.DecisionsWebChat.getSourceChatIdForTickets = function () {
+    try {
+        const id = loadedChatId != null ? loadedChatId : currentChatId;
+        if (id != null && Number(id) >= 1) return Number(id);
+        const raw = sessionStorage.getItem(KANBAN_SOURCE_CHAT_STORAGE_KEY);
+        if (raw) {
+            const n = parseInt(raw, 10);
+            if (!isNaN(n) && n >= 1) return n;
+        }
+    } catch (e) { /* ignore */ }
+    return null;
+};
+
 // DOM Elements
 const sidebar = document.getElementById('sidebar');
 const chatList = document.getElementById('chatList');
@@ -90,6 +118,46 @@ async function _ensureTTSProviders() {
     return _ttsProviders;
 }
 
+function invalidateTTSProvidersCache() {
+    _ttsProviders = null;
+}
+
+/** Voice provider options from GET /api/tts/providers — same registry as Settings → General. */
+function populateChatVoiceProviderSelect(selectEl) {
+    if (!selectEl) return;
+    if (!_ttsProviders || !_ttsProviders.length) {
+        selectEl.innerHTML = '<option value="">No voice providers available</option>';
+        return;
+    }
+    selectEl.innerHTML = _ttsProviders.map(p =>
+        `<option value="${escapeHtml(p.id)}">${escapeHtml(p.name)}</option>`
+    ).join('');
+}
+
+/** Voice rows from cached provider payload (avoids extra /api/voices fetch when registry has voices). */
+function populateChatVoiceModelSelectForEl(modelSelectEl, providerId) {
+    if (!modelSelectEl) return;
+    const provider = _ttsProviders && _ttsProviders.find(p => p.id === providerId);
+    const voices = provider && Array.isArray(provider.voices) ? provider.voices : [];
+    if (voices.length) {
+        modelSelectEl.innerHTML = voices.map(v =>
+            `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`
+        ).join('');
+    } else {
+        modelSelectEl.innerHTML = '<option value="">No voices available</option>';
+    }
+}
+
+/** Saved voice_provider only if present in verified registry list; else first available. */
+function resolvedVoiceProviderForChat(generalData) {
+    const preferred = canonicalVoiceProviderForSelect(generalData);
+    if (_ttsProviders && _ttsProviders.length) {
+        if (_ttsProviders.some(p => p.id === preferred)) return preferred;
+        return _ttsProviders[0].id;
+    }
+    return preferred;
+}
+
 function getVoiceSettingsKey(voiceProvider) {
     if (_ttsProviders) {
         const provider = _ttsProviders.find(p => p.id === voiceProvider);
@@ -138,6 +206,7 @@ try {
     _providersBc.onmessage = function(ev) {
         if (ev.data && ev.data.type === 'thirdparty-providers-changed') {
             console.log('Third-party providers changed (cross-tab) — refreshing configure forms');
+            invalidateTTSProvidersCache();
             if (typeof loadDefaultSettings === 'function') loadDefaultSettings();
             if (typeof loadEmptyStateDropdowns === 'function') loadEmptyStateDropdowns();
         }
@@ -168,7 +237,7 @@ async function fetchDefaultsForNewChat() {
         }
         if (generalRes.ok) {
             const general = await generalRes.json();
-            voice_provider = canonicalVoiceProviderForSelect(general);
+            voice_provider = resolvedVoiceProviderForChat(general);
             const key = getVoiceSettingsKey(voice_provider);
             const v = (general[key] || '').trim();
             if (v && v !== '—') voice_model = v;
@@ -262,6 +331,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 await selectChat(lastId);
             }
         }
+        syncKanbanSourceChatContext();
     });
 });
 
@@ -1153,6 +1223,7 @@ async function selectChat(chatId) {
         startChatWebSocket();
         setTimeout(() => { chatMessages.scrollTop = chatMessages.scrollHeight; }, 300);
         await saveLastChatId(chatId);
+        syncKanbanSourceChatContext();
     } catch (error) {
         console.error('Error selecting chat:', error);
     }
@@ -1212,6 +1283,7 @@ async function loadChat(chatId, options = {}) {
     } catch (error) {
         console.error('Error loading chat:', error);
     } finally {
+        syncKanbanSourceChatContext();
         chatList.classList.remove('chat-list--locked');
     }
 }
@@ -1227,6 +1299,7 @@ function applyChatsData(data) {
         loadedChatId = agentCurrentChatId;
     }
     updateActiveChat();
+    syncKanbanSourceChatContext();
 }
 
 function updateActiveChat() {
@@ -1281,6 +1354,7 @@ function showEmptyState() {
     setSendButtonStreaming(false);
     hideEmptyStateAgentLoading();
     loadEmptyStateDropdowns();
+    syncKanbanSourceChatContext();
 }
 
 function showEmptyStateAgentLoading() {
@@ -1336,10 +1410,16 @@ async function loadEmptyStateDropdowns() {
                 else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
             } else if (llmModelEl.options[0] && llmModelEl.options[0].value) llmModelEl.selectedIndex = 0;
         }
-        const voiceProvider = canonicalVoiceProviderForSelect(generalData);
-        voiceProviderEl.value = voiceProvider;
-        await loadEmptyStateVoiceModels(voiceProvider);
-        const voiceKey = getVoiceSettingsKey(voiceProvider);
+        populateChatVoiceProviderSelect(voiceProviderEl);
+        const vpResolved = resolvedVoiceProviderForChat(generalData);
+        const vpOpts = [...voiceProviderEl.options].map(o => o.value);
+        if (vpOpts.includes(vpResolved)) {
+            voiceProviderEl.value = vpResolved;
+        } else if (voiceProviderEl.options[0] && voiceProviderEl.options[0].value) {
+            voiceProviderEl.selectedIndex = 0;
+        }
+        await loadEmptyStateVoiceModels(voiceProviderEl.value);
+        const voiceKey = getVoiceSettingsKey(voiceProviderEl.value);
         const defaultVoice = (generalData[voiceKey] || '').trim();
         if (defaultVoice && voiceModelEl.options.length) {
             const opt = Array.from(voiceModelEl.options).find(o => o.value === defaultVoice);
@@ -1464,11 +1544,17 @@ async function loadEmptyStateLlmModels(provider) {
 async function loadEmptyStateVoiceModels(provider) {
     const el = document.getElementById('emptyStateVoiceModel');
     if (!el) return;
-    el.innerHTML = '<option value="">Loading…</option>';
+    await _ensureTTSProviders();
     if (!provider) {
         el.innerHTML = '<option value="">Select provider</option>';
         return;
     }
+    const prov = _ttsProviders && _ttsProviders.find(p => p.id === provider);
+    if (prov && Array.isArray(prov.voices) && prov.voices.length) {
+        populateChatVoiceModelSelectForEl(el, provider);
+        return;
+    }
+    el.innerHTML = '<option value="">Loading…</option>';
     try {
         const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
         const data = await response.json();
@@ -1959,6 +2045,7 @@ async function sendMessage() {
             currentChatId = data.id;
             if (typeof applySelectedSkin === 'function') applySelectedSkin();
             updateActiveChat();
+            syncKanbanSourceChatContext();
             // Clear input immediately so user sees it sent
             messageInput.value = '';
             messageInput.style.height = 'auto';
@@ -2360,6 +2447,7 @@ async function deleteChat(chatId) {
         }
         updateActiveChat();
         updateLoadButtonVisibility();
+        syncKanbanSourceChatContext();
     } catch (error) {
         console.error('Error deleting chat:', error);
     }
@@ -2632,13 +2720,20 @@ async function playEmptyStateVoice() {
     }
 }
 
-// Load voice options for provider (settings API – kokoro, openai, elevenlabs)
+// Load voice options — registry voices first (same as Settings → General), then /api/voices fallback.
 async function loadVoiceModels(provider) {
-    voiceModelSelect.innerHTML = '<option value="">Loading…</option>';
+    if (!voiceModelSelect) return;
+    await _ensureTTSProviders();
     if (!provider) {
         voiceModelSelect.innerHTML = '<option value="">Select provider</option>';
         return;
     }
+    const prov = _ttsProviders && _ttsProviders.find(p => p.id === provider);
+    if (prov && Array.isArray(prov.voices) && prov.voices.length) {
+        populateChatVoiceModelSelectForEl(voiceModelSelect, provider);
+        return;
+    }
+    voiceModelSelect.innerHTML = '<option value="">Loading…</option>';
     try {
         const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
         const data = await response.json();
@@ -2688,19 +2783,27 @@ async function loadDefaultSettings() {
             }
         }
 
-        const voiceProvider = canonicalVoiceProviderForSelect(generalData);
-        voiceProviderSelect.value = voiceProvider;
-        await loadVoiceModels(voiceProvider);
-        const voiceKey = getVoiceSettingsKey(voiceProvider);
-        const defaultVoice = (generalData[voiceKey] || '').trim();
-        if (defaultVoice && voiceModelSelect.options.length) {
-            const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);
-            if (opt) voiceModelSelect.value = defaultVoice;
-            else if (voiceModelSelect.options[0] && voiceModelSelect.options[0].value) voiceModelSelect.selectedIndex = 0;
-        } else if (voiceModelSelect.options[0] && voiceModelSelect.options[0].value) {
-            voiceModelSelect.selectedIndex = 0;
+        if (voiceProviderSelect) {
+            populateChatVoiceProviderSelect(voiceProviderSelect);
+            const vpResolved = resolvedVoiceProviderForChat(generalData);
+            const vpOpts = [...voiceProviderSelect.options].map(o => o.value);
+            if (vpOpts.includes(vpResolved)) {
+                voiceProviderSelect.value = vpResolved;
+            } else if (voiceProviderSelect.options[0] && voiceProviderSelect.options[0].value) {
+                voiceProviderSelect.selectedIndex = 0;
+            }
+            await loadVoiceModels(voiceProviderSelect.value);
+            const voiceKey = getVoiceSettingsKey(voiceProviderSelect.value);
+            const defaultVoice = (generalData[voiceKey] || '').trim();
+            if (voiceModelSelect && defaultVoice && voiceModelSelect.options.length) {
+                const opt = Array.from(voiceModelSelect.options).find(o => o.value === defaultVoice);
+                if (opt) voiceModelSelect.value = defaultVoice;
+                else if (voiceModelSelect.options[0] && voiceModelSelect.options[0].value) voiceModelSelect.selectedIndex = 0;
+            } else if (voiceModelSelect && voiceModelSelect.options[0] && voiceModelSelect.options[0].value) {
+                voiceModelSelect.selectedIndex = 0;
+            }
+            updateChatVoiceButtons('modal');
         }
-        updateChatVoiceButtons('modal');
     } catch (error) {
         console.error('Error loading default settings:', error);
     }

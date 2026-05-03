@@ -5,6 +5,7 @@ Workflow tools for the agent — CRUD and execution for AutoWorkflow definitions
 import logging
 from typing import Any, Optional, Type
 
+from distr.core.agent.tool_voice_format import voice_then_reference
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
@@ -36,6 +37,144 @@ def _get_remembered_run_id() -> Optional[int]:
     return _last_workflow_context.get("run_id")
 
 
+# Spoken-first summaries for TTS: avoid brackets, snake_case action types, and digit-heavy lists.
+
+_CARDINAL_WORDS = (
+    "zero",
+    "one",
+    "two",
+    "three",
+    "four",
+    "five",
+    "six",
+    "seven",
+    "eight",
+    "nine",
+    "ten",
+    "eleven",
+    "twelve",
+    "thirteen",
+    "fourteen",
+    "fifteen",
+    "sixteen",
+    "seventeen",
+    "eighteen",
+    "nineteen",
+    "twenty",
+)
+
+
+def _cardinal_word(n: int) -> str:
+    """Small integers as words for friendlier tool text (aligns with TTS guidance)."""
+    if n < 0:
+        return "several"
+    if n < len(_CARDINAL_WORDS):
+        return _CARDINAL_WORDS[n]
+    return str(n)
+
+
+def _humanize_action_phrase(action_type: str) -> str:
+    return {
+        "agent_instruction": "hands-on agent work",
+        "playwright": "browser automation",
+        "execute_code": "scripted code",
+        "run_command": "a shell command",
+        "send_to_project_cli": "your project terminal",
+        "http_request": "a web request",
+        "play_recording": "replaying a recording",
+        "set_variable": "updating workflow variables",
+    }.get((action_type or "").strip().lower(), "automation")
+
+
+def _tts_workflow_summary(wf: dict) -> str:
+    """Plain-language paragraph(s) safe to read aloud — no technical markup."""
+    name = (wf.get("name") or "Workflow").strip()
+    steps = wf.get("steps") or []
+    n = len(steps)
+    if n == 0:
+        return (
+            f"I opened {name}. There are no steps yet — you can add them anytime "
+            "from the Workflows page."
+        )
+
+    parts = [f"I opened {name}. It has {_cardinal_word(n)} steps."]
+    if n <= 4:
+        flow_bits = []
+        for s in steps:
+            nm = (s.get("name") or "step").strip()
+            kind = _humanize_action_phrase(str(s.get("action_type") or ""))
+            flow_bits.append(f"{nm}, which uses {kind}")
+        parts.append("In order, those are: " + "; ".join(flow_bits) + ".")
+    else:
+        first = (steps[0].get("name") or "the first step").strip()
+        mid = (steps[n // 2].get("name") or "a middle step").strip()
+        last = (steps[-1].get("name") or "the last step").strip()
+        parts.append(
+            f"They start with {first}, include work such as {mid}, and finish with {last}. "
+            "If you want every title read out, say so and I will walk through them slowly."
+        )
+    parts.append("It is all saved — open Workflows whenever you want to fine-tune wording.")
+    return " ".join(parts)
+
+
+def _reference_workflow_block(wf: dict, *, header: str = "") -> str:
+    """Technical dump after REFERENCE — model must not read aloud (system prompt)."""
+    lines = []
+    if header:
+        lines.append(header)
+    lines.append(f"Workflow: {wf.get('name', 'Untitled')} (ID {wf.get('id', '?')})")
+    if wf.get("description"):
+        lines.append(f"Description: {wf['description']}")
+    steps = wf.get("steps", [])
+    if steps:
+        lines.append(f"Steps ({len(steps)}):")
+        for s in steps:
+            action = s.get("action_type", "agent_instruction")
+            status = s.get("status", "pending")
+            nm = s.get("name", "Unnamed")
+            lines.append(f"  {int(s.get('position', 0)) + 1}. {nm} [{action}] — {status}")
+            ins = s.get("instruction")
+            if ins:
+                lines.append(f"     Instruction: {ins[:180]}...")
+    runs = wf.get("runs", [])
+    if runs:
+        lines.append(f"Recent runs ({len(runs)}):")
+        for r in runs[:5]:
+            lines.append(f"  Run {r['id']}: {r['status']} (started {r.get('started_at', '?')})")
+    return "\n".join(lines)
+
+
+def _tts_list_workflows_summary(workflows: list) -> str:
+    n = len(workflows)
+    if n == 0:
+        return "You do not have any workflows saved yet."
+    if n == 1:
+        w = workflows[0]
+        return (
+            f"You have one workflow saved: {w.get('name', 'Untitled')}. "
+            "Say if you want me to walk through its steps."
+        )
+    names = [str(w.get("name") or "Untitled").strip() for w in workflows[:5]]
+    tail = ""
+    if n > 5:
+        tail = f" There are {_cardinal_word(n)} total; showing the first five names."
+    joined = ", ".join(names[:-1]) + f", and {names[-1]}" if len(names) > 1 else names[0]
+    return f"You have {_cardinal_word(n)} workflows: {joined}.{tail}"
+
+
+def _reference_list_block(workflows: list) -> str:
+    lines = ["Workflows:"]
+    for w in workflows:
+        sched = ""
+        if w.get("schedule_enabled"):
+            sched = f" [scheduled: {w.get('schedule_preset', '?')}"
+            if w.get("schedule_time"):
+                sched += f" at {w['schedule_time']}"
+            sched += "]"
+        lines.append(f"- ID {w['id']}: {w['name']} ({w['step_count']} steps){sched}")
+    return "\n".join(lines)
+
+
 # --- List workflows ---
 class ListWorkflowsInput(BaseModel):
     limit: int = Field(default=20, description="Max workflows to return")
@@ -57,19 +196,12 @@ class ListWorkflowsTool(BaseTool):
             from distr.core.workflow.service import list_workflows
             workflows = list_workflows(limit=limit, search=search)
             if not workflows:
-                return "No workflows found."
-            lines = []
-            for w in workflows:
-                sched = ""
-                if w.get("schedule_enabled"):
-                    sched = f" [scheduled: {w.get('schedule_preset', '?')}"
-                    if w.get("schedule_time"):
-                        sched += f" at {w['schedule_time']}"
-                    sched += "]"
-                lines.append(
-                    f"- ID {w['id']}: {w['name']} ({w['step_count']} steps){sched}"
+                return voice_then_reference(
+                    "You do not have any workflows saved yet.",
+                    "No workflows found.",
                 )
-            return "Workflows:\n" + "\n".join(lines)
+            spoken = _tts_list_workflows_summary(workflows)
+            return voice_then_reference(spoken, _reference_list_block(workflows))
         except Exception as e:
             logger.error("list_workflows failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
@@ -98,27 +230,14 @@ class GetWorkflowTool(BaseTool):
             from distr.core.workflow.service import get_workflow
             wf = get_workflow(workflow_id)
             if not wf:
-                return f"Workflow {workflow_id} not found."
+                return voice_then_reference(
+                    "I could not find a workflow with that ID.",
+                    f"Workflow {workflow_id} not found.",
+                )
             _remember_workflow_context(workflow_id=workflow_id)
-            lines = [f"Workflow: {wf['name']} (ID {wf['id']})"]
-            if wf.get("description"):
-                lines.append(f"Description: {wf['description']}")
-            steps = wf.get("steps", [])
-            if steps:
-                lines.append(f"\nSteps ({len(steps)}):")
-                for s in steps:
-                    action = s.get("action_type", "agent_instruction")
-                    status = s.get("status", "pending")
-                    name = s.get("name", "Unnamed")
-                    lines.append(f"  {s.get('position', 0)+1}. {name} [{action}] — {status}")
-                    if s.get("instruction"):
-                        lines.append(f"     Instruction: {s['instruction'][:100]}...")
-            runs = wf.get("runs", [])
-            if runs:
-                lines.append(f"\nRecent runs ({len(runs)}):")
-                for r in runs[:5]:
-                    lines.append(f"  Run {r['id']}: {r['status']} (started {r.get('started_at', '?')})")
-            return "\n".join(lines)
+            spoken = _tts_workflow_summary(wf)
+            ref = _reference_workflow_block(wf)
+            return voice_then_reference(spoken, ref)
         except Exception as e:
             logger.error("get_workflow failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
@@ -225,7 +344,10 @@ class GetProjectStatusTool(BaseTool):
                     Project.name.ilike(f"%{project_name}%")
                 ).first()
                 if not project:
-                    return f"Project '{project_name}' not found."
+                    return voice_then_reference(
+                        "I could not find a project with that name.",
+                        f"Project '{project_name}' not found.",
+                    )
 
                 sections.append(f"Project: {project.name}")
                 if project.description:
@@ -278,7 +400,7 @@ class GetProjectStatusTool(BaseTool):
                     )
 
                 if active_cli or active_workflow_runs:
-                    sections.append("\n🔴 CURRENTLY RUNNING:")
+                    sections.append("\nCURRENTLY RUNNING:")
                     for cs in active_cli:
                         instr = (cs.name or "")[:120]
                         sections.append(f"  • CLI: {instr}")
@@ -297,7 +419,7 @@ class GetProjectStatusTool(BaseTool):
                         status_label = "WAITING for input" if run.status == "waiting" else "RUNNING"
                         sections.append(f"  • Workflow '{wf_name}': {status_label}{step_info} (run {run.id})")
                 else:
-                    sections.append("\n✅ Nothing actively running right now.")
+                    sections.append("\nNothing actively running right now.")
 
                 # ── LATEST CLI RESULTS ────────────────────────────
 
@@ -376,7 +498,19 @@ class GetProjectStatusTool(BaseTool):
             if len(sections) <= 2:
                 sections.append("\nNo recent workflow runs, CLI activity, or ticket board entries found for this project.")
 
-            return "\n".join(sections)
+            body = "\n".join(sections)
+            running_now = bool(active_cli or active_workflow_runs)
+            spoken = (
+                f"I pulled status for {project.name}. "
+                + (
+                    "Something is running right now, either on the project terminal or in a workflow."
+                    if running_now
+                    else "Nothing is actively running at the moment."
+                )
+            )
+            if boards:
+                spoken += " Ticket boards linked to this project are summarized below."
+            return voice_then_reference(spoken.strip(), body)
         except Exception as e:
             logger.error("get_project_status failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
@@ -581,9 +715,18 @@ class GenerateWorkflowTool(BaseTool):
             workflow_data = json.loads(cleaned)
             wf_id = import_workflow(workflow_data)
             wf = get_workflow(wf_id)
-            step_count = len(wf.get("steps", [])) if wf else 0
-            wf_name = wf.get("name", "Workflow") if wf else "Workflow"
-            return f"Generated workflow '{wf_name}' (ID {wf_id}) with {step_count} steps."
+            if not wf:
+                return "The workflow was generated but could not be reloaded."
+            _remember_workflow_context(workflow_id=wf_id)
+            spoken = (
+                _tts_workflow_summary(wf)
+                + " This one was just created from your description."
+            )
+            ref = _reference_workflow_block(
+                wf,
+                header=f"New workflow ID {wf_id} (imported from generate_workflow).",
+            )
+            return voice_then_reference(spoken, ref)
         except json.JSONDecodeError as je:
             return f"Failed to parse generated workflow: {je}"
         except Exception as e:

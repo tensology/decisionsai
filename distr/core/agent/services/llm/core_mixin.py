@@ -87,6 +87,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 TOOL_DESCRIPTIONS,
                 _get_tool_class,
                 _tool_cache,
+                list_all_cached_tool_instances,
             )
             from distr.core.agent.tool_telemetry import log_request_tool_event
 
@@ -170,6 +171,58 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     )
                     return (True, msg, True)
 
+            # Workflow questions: models often call request_tool with vague text instead of get_workflow.
+            wf_topic = "workflow" in qlow or "automation" in qlow
+            wf_detail = any(
+                t in qlow
+                for t in (
+                    "step",
+                    "pause",
+                    "wait",
+                    "confirm",
+                    "approval",
+                    "stuck",
+                    "running",
+                )
+            )
+            if wf_topic and wf_detail:
+                for tn in ("get_workflow", "list_workflows"):
+                    existing = self._tools_dict.get(tn)
+                    if existing is not None:
+                        msg = (
+                            f"Use the '{tn}' tool directly — it is already in your active set. "
+                            "Pass workflow_id from REFERENCE or from list_workflows."
+                        )
+                        log_request_tool_event(
+                            query=qnorm,
+                            success=True,
+                            injected_tool_name=tn,
+                            model_name=_mn,
+                            injection_performed=False,
+                            message=msg,
+                        )
+                        return (True, msg, False)
+                    cached = _tool_cache.get(tn)
+                    if cached is not None:
+                        self._tools.append(cached)
+                        self._tools_dict[cached.name] = cached
+                        if not hasattr(self, "_sticky_tool_names"):
+                            self._sticky_tool_names = set()
+                        self._sticky_tool_names.add(cached.name)
+                        msg = (
+                            f"Tool '{tn}' is now available. "
+                            "Call it with workflow_id from REFERENCE or list_workflows."
+                        )
+                        log_request_tool_event(
+                            query=qnorm,
+                            success=True,
+                            injected_tool_name=tn,
+                            model_name=_mn,
+                            injection_performed=True,
+                            message=msg,
+                        )
+                        return (True, msg, True)
+
             # Score against registry keys and description values
             scores: list[tuple[str, int]] = []
             for class_name in TOOL_REGISTRY:
@@ -177,6 +230,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 desc = TOOL_DESCRIPTIONS.get(class_name, "")
                 desc_score = fuzz.token_set_ratio(qlow, desc.lower()) if desc else 0
                 best = max(name_score, desc_score)
+                if class_name == "GetWorkflowTool" and wf_topic and wf_detail:
+                    best = min(100, best + 28)
                 scores.append((class_name, best))
 
             scores.sort(key=lambda x: x[1], reverse=True)
@@ -196,7 +251,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     )
                     expected_cls = None
                 if expected_cls is not None:
-                    for tool in _tool_cache.values():
+                    for tool in list_all_cached_tool_instances():
                         if isinstance(tool, expected_cls):
                             matched_tool = tool
                             break
@@ -389,7 +444,14 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         if not current_chat_id:
             logger.debug("_ensure_user_message_persisted: No current chat, not auto-creating")
             return None
-        self.chat_manager.add_user_message(current_chat_id, text.strip())
+        src = (
+            "telegram"
+            if getattr(self, "_is_telegram_request", False)
+            else None
+        )
+        self.chat_manager.add_user_message(
+            current_chat_id, text.strip(), source_platform=src
+        )
         try:
             signal_manager.chat_message_added.emit(int(current_chat_id), "user", text.strip())
             # Drop the web “live speech-to-text” preview row; the real user bubble follows via message_added.
@@ -876,12 +938,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         Re-wires the RequestToolTool callback since self._tools_dict changed.
         """
         from distr.core.agent.tools import load_tools
-        from distr.core.agent.tools.loader import _tool_cache
+        from distr.core.agent.tools.loader import _tool_cache, get_warmed_tools_list
         self._tts_service = tts_service
         try:
             if _tool_cache:
                 # Cache is warm — reuse cached instances (fast path)
-                self._tools = list(_tool_cache.values())
+                self._tools = get_warmed_tools_list()
             else:
                 # Cache not warm — fall back to full instantiation
                 self._tools = load_tools(

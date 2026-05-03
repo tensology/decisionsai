@@ -1,4 +1,23 @@
+"""
+Initiative policy gate: map (action, level, boundaries, optional rubric) → PolicyDecision.
+
+Precedence (documented for TASK 3–4):
+  1. Hard guards: blocked action types, cooldown / duplicate proposals.
+  2. ``always_require_ask_for`` → DRAFT_AND_ASK.
+  3. Low confidence → SUGGEST_ONLY (payload / scope_policy).
+  4. High-risk file/external/sensitive → DRAFT_AND_ASK when thresholds say so.
+  5. Boundary flags (initiative_ask_*) encoded in level/action branches — they
+     produce DRAFT_AND_ASK / EXECUTE / SUGGEST_ONLY in the legacy paths below.
+  6. Rubric (when present): merged with legacy operate/own outcomes by taking the
+     *more restrictive* decision (SKIP > SUGGEST_ONLY > DRAFT_AND_ASK > EXECUTE).
+     Rubric never upgrades past a blocked capability (e.g. routine_task without allow).
+  7. observe / assist without rubric: legacy passive behaviour (SKIP / SUGGEST_ONLY).
+  8. observe / assist with rubric: rubric thresholds only (DESIGN §2.1).
+"""
+
 from enum import Enum
+
+from distr.core.initiative.rubric import RubricScore
 
 
 class PolicyDecision(Enum):
@@ -6,6 +25,19 @@ class PolicyDecision(Enum):
     DRAFT_AND_ASK = "draft_and_ask"
     SUGGEST_ONLY = "suggest_only"
     SKIP = "skip"
+
+
+_RUBRIC_MERGE_RANK = {
+    PolicyDecision.EXECUTE: 0,
+    PolicyDecision.DRAFT_AND_ASK: 1,
+    PolicyDecision.SUGGEST_ONLY: 2,
+    PolicyDecision.SKIP: 3,
+}
+
+
+def _more_restrictive(a: PolicyDecision, b: PolicyDecision) -> PolicyDecision:
+    """Prefer the safer / more user-gated outcome."""
+    return a if _RUBRIC_MERGE_RANK[a] >= _RUBRIC_MERGE_RANK[b] else b
 
 
 RISK_ORDER = {
@@ -37,7 +69,6 @@ def _read_policy_context(action, boundaries: dict, policy_context: dict | None =
     if scope_policy:
         merged.update(scope_policy)
 
-    # Optional policy-level flags; defaults preserve current behavior.
     merged.setdefault("cooldown_active", False)
     merged.setdefault("duplicate_recent", False)
     merged.setdefault("minimum_confidence_to_execute", 0.0)
@@ -65,23 +96,91 @@ def _read_policy_context(action, boundaries: dict, policy_context: dict | None =
     }
 
 
+def _extract_rubric(action) -> RubricScore | None:
+    r = getattr(action, "rubric", None)
+    if isinstance(r, RubricScore):
+        return r
+    payload = getattr(action, "payload", None)
+    if isinstance(payload, dict):
+        return RubricScore.from_payload(payload.get("rubric"))
+    return None
+
+
+def _evaluate_operate(action, boundaries: dict) -> PolicyDecision:
+    action_type = action.action_type
+
+    if action_type == "none":
+        return PolicyDecision.SKIP
+
+    if action_type == "routine_task":
+        if boundaries.get("initiative_allow_routine_tasks", False):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.SUGGEST_ONLY
+
+    if action_type == "suggestion":
+        return PolicyDecision.EXECUTE
+
+    if action_type == "external_comms":
+        if boundaries.get("initiative_ask_external_comms", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    if action_type == "file_change":
+        if boundaries.get("initiative_ask_file_changes", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    if action_type == "sensitive":
+        if boundaries.get("initiative_ask_sensitive", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    return PolicyDecision.SKIP
+
+
+def _evaluate_own(action, boundaries: dict) -> PolicyDecision:
+    action_type = action.action_type
+
+    if action_type == "none":
+        return PolicyDecision.SKIP
+
+    if action_type == "routine_task":
+        if boundaries.get("initiative_allow_routine_tasks", False):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.SUGGEST_ONLY
+
+    if action_type == "suggestion":
+        return PolicyDecision.EXECUTE
+
+    if action_type == "external_comms":
+        if boundaries.get("initiative_ask_external_comms", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    if action_type == "file_change":
+        if boundaries.get("initiative_ask_file_changes", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    if action_type == "sensitive":
+        if boundaries.get("initiative_ask_sensitive", False):
+            return PolicyDecision.DRAFT_AND_ASK
+        return PolicyDecision.EXECUTE
+
+    return PolicyDecision.SKIP
+
+
 def evaluate(action, level: str, boundaries: dict, policy_context: dict | None = None) -> PolicyDecision:
     """
     Map (action, level, boundaries) to a PolicyDecision.
 
-    action      — object with an `action_type` attribute (str)
-    level       — initiative level: observe | assist | operate | own
-    boundaries  — dict with keys:
-                    initiative_allow_telegram
-                    initiative_allow_routine_tasks
-                    initiative_ask_external_comms
-                    initiative_ask_file_changes
-                    initiative_ask_sensitive
+    action      — object with ``action_type``, optional ``payload``, optional ``rubric``
+    level       — observe | assist | operate | own
+    boundaries  — dict with initiative_allow_* / initiative_ask_* keys
     """
     action_type = action.action_type
     policy = _read_policy_context(action, boundaries, policy_context)
 
-    # Guard rails applied before level-specific logic.
     if action_type in policy["always_block_action_types"]:
         return PolicyDecision.SKIP
     if policy["cooldown_active"] or policy["duplicate_recent"]:
@@ -96,75 +195,30 @@ def evaluate(action, level: str, boundaries: dict, policy_context: dict | None =
     ):
         return PolicyDecision.DRAFT_AND_ASK
 
+    rubric_score = _extract_rubric(action)
+
     if level == "observe":
-        return PolicyDecision.SKIP
+        if rubric_score is None:
+            return PolicyDecision.SKIP
+        return rubric_score.policy_decision("observe")
 
     if level == "assist":
-        return PolicyDecision.SUGGEST_ONLY
+        if rubric_score is None:
+            return PolicyDecision.SUGGEST_ONLY
+        return rubric_score.policy_decision("assist")
 
     if level == "operate":
-        if action_type == "none":
-            return PolicyDecision.SKIP
-
-        if action_type == "routine_task":
-            if boundaries.get("initiative_allow_routine_tasks", False):
-                return PolicyDecision.EXECUTE
-            return PolicyDecision.SUGGEST_ONLY
-
-        if action_type == "suggestion":
-            # Deliver via Telegram if allowed, otherwise queue as draft
-            # Either way the decision from the gate perspective is EXECUTE
-            return PolicyDecision.EXECUTE
-
-        if action_type == "external_comms":
-            if boundaries.get("initiative_ask_external_comms", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        if action_type == "file_change":
-            if boundaries.get("initiative_ask_file_changes", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        if action_type == "sensitive":
-            if boundaries.get("initiative_ask_sensitive", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        # Unknown action type at operate level — skip
-        return PolicyDecision.SKIP
+        classic = _evaluate_operate(action, boundaries)
+        if rubric_score is None:
+            return classic
+        return _more_restrictive(classic, rubric_score.policy_decision("operate"))
 
     if level == "own":
-        if action_type == "none":
-            return PolicyDecision.SKIP
+        classic = _evaluate_own(action, boundaries)
+        if rubric_score is None:
+            return classic
+        return _more_restrictive(classic, rubric_score.policy_decision("own"))
 
-        if action_type == "routine_task":
-            if boundaries.get("initiative_allow_routine_tasks", False):
-                return PolicyDecision.EXECUTE
-            return PolicyDecision.SUGGEST_ONLY
-
-        if action_type == "suggestion":
-            return PolicyDecision.EXECUTE
-
-        if action_type == "external_comms":
-            if boundaries.get("initiative_ask_external_comms", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        if action_type == "file_change":
-            if boundaries.get("initiative_ask_file_changes", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        if action_type == "sensitive":
-            if boundaries.get("initiative_ask_sensitive", False):
-                return PolicyDecision.DRAFT_AND_ASK
-            return PolicyDecision.EXECUTE
-
-        # Unknown action type at own level — skip
-        return PolicyDecision.SKIP
-
-    # Unknown level — skip
     return PolicyDecision.SKIP
 
 

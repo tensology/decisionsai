@@ -30,6 +30,10 @@ sys.modules.setdefault("distr.core.workflow_engine.test_loop", _mock_test_loop_m
 
 import distr.core.workflow.service as service_mod
 import distr.core.workflow.dispatcher as dispatcher_mod
+import distr.core.workflow.post_execution as post_execution_mod
+import distr.core.workflow.router as router_mod
+import distr.core.workflow.step_executor as step_executor_mod
+import distr.core.workflow.planning as planning_mod
 from distr.core.workflow.service import start_workflow_run, _active_runs, _RunContext
 
 
@@ -2553,10 +2557,10 @@ def test_integration_smoke_two_step_workflow_completes():
 
     Creates a mock 2-step workflow where:
     - Step 1 (position 0) routes on_pass_goto → Step 2
-    - Step 2 (position 1) routes on_pass_goto → None (END)
+    - Step 2 (position 1) routes on_pass_goto → -1 (END; avoids DB "next by position" mock ambiguity)
     - WorkflowAgent.execute() returns controlled responses for each step
-    - Both steps execute via WorkflowAgent
-    - complete_step() is called for each step
+    - Both steps execute via WorkflowAgent; StepDispatcher._record_result_and_route runs after each
+    - complete_run(..., "completed") runs after step 2 (dispatcher path — not legacy complete_step)
     - The run reaches "completed" status
 
     **Validates: Requirements 1.1, 1.2, 3.1, 3.4**
@@ -2585,6 +2589,14 @@ def test_integration_smoke_two_step_workflow_completes():
     step1.code = ""
     step1.wait_for_continue = False
     step1.workflow_id = WORKFLOW_ID
+    step1.config = "{}"
+    step1.description = ""
+    step1.step_type = "agent_instruction"
+    step1.timeout_seconds = 300
+    step1.max_retries = 0
+    step1.require_approval = False
+    step1.verification = ""
+    step1.routing_prompt = ""
     step1.validation_type = "none"
     step1.validation_prompt = ""
     step1.routing_mode = "static"
@@ -2605,10 +2617,18 @@ def test_integration_smoke_two_step_workflow_completes():
     step2.code = ""
     step2.wait_for_continue = False
     step2.workflow_id = WORKFLOW_ID
+    step2.config = "{}"
+    step2.description = ""
+    step2.step_type = "agent_instruction"
+    step2.timeout_seconds = 300
+    step2.max_retries = 0
+    step2.require_approval = False
+    step2.verification = ""
+    step2.routing_prompt = ""
     step2.validation_type = "none"
     step2.validation_prompt = ""
     step2.routing_mode = "static"
-    step2.on_pass_goto = None  # END
+    step2.on_pass_goto = -1  # END (same as None for router; explicit avoids fragile mock for position query)
     step2.on_fail_goto = None
     step2.wait_before_next = 0
 
@@ -2618,6 +2638,10 @@ def test_integration_smoke_two_step_workflow_completes():
     wf = MagicMock()
     wf.id = WORKFLOW_ID
     wf.steps = [step1, step2]
+    # No chat: skips post_execution._append_workflow_step_audit → append_audit_step,
+    # which uses distr.core.db.get_session (not patched here) and would hit SQLite
+    # with MagicMock chat_id.
+    wf.chat_id = None
 
     # --- Build mock run ---
     mock_run = MagicMock()
@@ -2628,8 +2652,8 @@ def test_integration_smoke_two_step_workflow_completes():
     mock_run.completed_at = None
     mock_run.run_data = "{}"
 
-    # Track complete_step calls
-    complete_step_calls = []
+    # Async completion uses StepRouter via _record_result_and_route (not service.complete_step).
+    routing_calls = []
     run_completed = threading.Event()
 
     # --- Build mock WorkflowAgent ---
@@ -2646,13 +2670,15 @@ def test_integration_smoke_two_step_workflow_completes():
     mock_workflow_agent._shutdown = False
     mock_workflow_agent.execute = fake_execute
     mock_workflow_agent.shutdown = MagicMock()
+    # Truthy MagicMock.messages makes `(messages or [])` non-empty and
+    # `list(...)` iterate forever inside _augment_agent_result_with_tool_evidence.
+    mock_workflow_agent.messages = []
 
     # --- Set up mock DB ---
     # The DB mock needs to handle multiple query patterns across start_workflow_run,
-    # _dispatch_step, and complete_step calls.
-    # Key challenge: AutoWorkflowStep queries use filter(id == X) where X varies
-    # (current step for complete_step, next step for routing). We intercept the
-    # SQLAlchemy BinaryExpression to extract the compared value.
+    # dispatcher loads, and StepRouter queries.
+    # Key challenge: AutoWorkflowStep queries use filter(id == X) where X varies.
+    # We intercept SQLAlchemy BinaryExpression args to extract the compared value.
     mock_db = MagicMock()
 
     def _extract_step_id_from_filter_args(args):
@@ -2711,46 +2737,72 @@ def test_integration_smoke_two_step_workflow_completes():
     mock_session_ctx.__enter__ = MagicMock(return_value=mock_db)
     mock_session_ctx.__exit__ = MagicMock(return_value=False)
 
-    # We intercept complete_step to track calls while letting the real
-    # complete_step run so that routing and next-step dispatch happen naturally.
-    # The patches must stay alive for the entire async flow (start_workflow_run
-    # dispatches step 1 async → callback calls complete_step → routes to step 2
-    # → dispatches step 2 async → callback calls complete_step → run completes).
+    _original_rr = dispatcher_mod.StepDispatcher._record_result_and_route
 
-    original_complete_step = service_mod.complete_step
-
-    def tracking_complete_step(step_id, result, passed, _from_continue=False):
-        complete_step_calls.append({
+    def _tracking_record_result_and_route(self, step_id, run_id, result_text, passed, skip_wait=False):
+        routing_calls.append({
             "step_id": step_id,
-            "result": result,
+            "result": result_text,
             "passed": passed,
         })
-        # Update mock_run.current_step_id so DB queries return the right step
-        mock_run.current_step_id = step_id
-        # Call the real complete_step (which will route and dispatch next step)
-        ret = original_complete_step(step_id, result, passed, _from_continue=_from_continue)
-        # Check if run reached completed
-        if mock_run.status == "completed":
+        return _original_rr(self, step_id, run_id, result_text, passed, skip_wait=skip_wait)
+
+    _original_complete_run = dispatcher_mod.complete_run
+
+    def _tracking_complete_run(run_id, status="completed"):
+        ret = _original_complete_run(run_id, status)
+        if status == "completed":
             run_completed.set()
         return ret
 
     _active_runs.clear()
 
-    # Use patch as decorators that stay alive for the entire async flow
+    # Patch get_session everywhere this execution graph binds it (import copies the
+    # reference — patching only service_mod misses dispatcher/router/post_execution).
+    # WorkflowAgent is constructed via ``from distr.core.workflow_agent import WorkflowAgent``
+    # inside dispatcher.start_workflow_run — patch the class at definition site.
     patcher_session = patch.object(service_mod, "get_session", return_value=mock_session_ctx)
+    patcher_session_dispatcher = patch.object(
+        dispatcher_mod, "get_session", return_value=mock_session_ctx
+    )
+    patcher_session_pe = patch.object(
+        post_execution_mod, "get_session", return_value=mock_session_ctx
+    )
+    patcher_session_router = patch.object(
+        router_mod, "get_session", return_value=mock_session_ctx
+    )
+    patcher_session_se = patch.object(
+        step_executor_mod, "get_session", return_value=mock_session_ctx
+    )
+    patcher_session_planning = patch.object(
+        planning_mod, "get_session", return_value=mock_session_ctx
+    )
     patcher_wa = patch.object(service_mod, "WorkflowAgent", return_value=mock_workflow_agent)
+    patcher_wa_factory = patch(
+        "distr.core.workflow_agent.WorkflowAgent", return_value=mock_workflow_agent
+    )
     patcher_bridge = patch.object(service_mod, "WorkflowAgentBridge")
     patcher_speak = patch.object(service_mod, "_speak_result")
     patcher_os = patch.object(service_mod, "os")
-    patcher_complete = patch.object(service_mod, "complete_step", side_effect=tracking_complete_step)
+    patcher_rr = patch.object(
+        dispatcher_mod.StepDispatcher, "_record_result_and_route", _tracking_record_result_and_route
+    )
+    patcher_complete_run = patch.object(dispatcher_mod, "complete_run", side_effect=_tracking_complete_run)
 
     try:
         patcher_session.start()
+        patcher_session_dispatcher.start()
+        patcher_session_pe.start()
+        patcher_session_router.start()
+        patcher_session_se.start()
+        patcher_session_planning.start()
         patcher_wa.start()
+        patcher_wa_factory.start()
         mock_bridge_cls = patcher_bridge.start()
         patcher_speak.start()
         mock_os = patcher_os.start()
-        patcher_complete.start()
+        patcher_rr.start()
+        patcher_complete_run.start()
 
         mock_os.environ = {}
         mock_bridge_cls.return_value = MagicMock()
@@ -2766,31 +2818,31 @@ def test_integration_smoke_two_step_workflow_completes():
         # 2. Wait for the run to complete (both steps dispatched asynchronously)
         assert run_completed.wait(timeout=10.0), (
             "Timed out waiting for run to reach 'completed' status. "
-            f"complete_step calls so far: {complete_step_calls}"
+            f"_record_result_and_route calls so far: {routing_calls}"
         )
 
-        # 3. complete_step was called exactly twice (once per step)
-        assert len(complete_step_calls) == 2, (
-            f"Expected 2 complete_step calls, got {len(complete_step_calls)}: {complete_step_calls}"
+        # 3. Routing ran twice (once per finished agent step)
+        assert len(routing_calls) == 2, (
+            f"Expected 2 routing calls, got {len(routing_calls)}: {routing_calls}"
         )
 
-        # 4. First call was for step 1 with the correct response and passed=True
-        assert complete_step_calls[0]["step_id"] == STEP1_ID, (
-            f"Expected first complete_step for step {STEP1_ID}, got {complete_step_calls[0]['step_id']}"
+        # 4. First routing was for step 1 with the agent response and passed=True
+        assert routing_calls[0]["step_id"] == STEP1_ID, (
+            f"Expected first routing for step {STEP1_ID}, got {routing_calls[0]['step_id']}"
         )
-        assert complete_step_calls[0]["result"] == STEP1_RESPONSE, (
-            f"Expected first result={STEP1_RESPONSE!r}, got {complete_step_calls[0]['result']!r}"
+        assert routing_calls[0]["result"] == STEP1_RESPONSE, (
+            f"Expected first result={STEP1_RESPONSE!r}, got {routing_calls[0]['result']!r}"
         )
-        assert complete_step_calls[0]["passed"] is True
+        assert routing_calls[0]["passed"] is True
 
-        # 5. Second call was for step 2 with the correct response and passed=True
-        assert complete_step_calls[1]["step_id"] == STEP2_ID, (
-            f"Expected second complete_step for step {STEP2_ID}, got {complete_step_calls[1]['step_id']}"
+        # 5. Second routing was for step 2
+        assert routing_calls[1]["step_id"] == STEP2_ID, (
+            f"Expected second routing for step {STEP2_ID}, got {routing_calls[1]['step_id']}"
         )
-        assert complete_step_calls[1]["result"] == STEP2_RESPONSE, (
-            f"Expected second result={STEP2_RESPONSE!r}, got {complete_step_calls[1]['result']!r}"
+        assert routing_calls[1]["result"] == STEP2_RESPONSE, (
+            f"Expected second result={STEP2_RESPONSE!r}, got {routing_calls[1]['result']!r}"
         )
-        assert complete_step_calls[1]["passed"] is True
+        assert routing_calls[1]["passed"] is True
 
         # 6. The run reached "completed" status
         assert mock_run.status == "completed", (
@@ -2804,11 +2856,18 @@ def test_integration_smoke_two_step_workflow_completes():
 
     finally:
         # Stop all patchers
-        patcher_complete.stop()
+        patcher_complete_run.stop()
+        patcher_rr.stop()
         patcher_os.stop()
         patcher_speak.stop()
         patcher_bridge.stop()
+        patcher_wa_factory.stop()
         patcher_wa.stop()
+        patcher_session_planning.stop()
+        patcher_session_se.stop()
+        patcher_session_router.stop()
+        patcher_session_pe.stop()
+        patcher_session_dispatcher.stop()
         patcher_session.stop()
         # Clean up: stop event loops and clear _active_runs
         for rid, ctx in list(_active_runs.items()):
@@ -3208,7 +3267,7 @@ def test_empty_instruction_edge_case():
 
             # 2. update_step() was called to set status to "failed"
             mock_update_step.assert_called_once_with(
-                STEP_ID, status="failed", result="No instruction provided."
+                STEP_ID, status="failed", result="No instruction provided"
             )
 
             # 3. WorkflowAgent was NOT instantiated or called
@@ -3239,7 +3298,7 @@ def test_empty_instruction_edge_case():
 
             # 6. update_step() called again for whitespace case
             mock_update_step2.assert_called_once_with(
-                STEP_ID, status="failed", result="No instruction provided."
+                STEP_ID, status="failed", result="No instruction provided"
             )
 
             # 7. WorkflowAgent not called for whitespace case

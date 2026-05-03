@@ -21,7 +21,12 @@ import time
 import threading
 import numpy as np
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '../..')))
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
+
+import pytest
+
+pytest.importorskip("pyaudio")
+pytest.importorskip("pipecat.audio.filters.base_audio_filter")
 
 import pyaudio
 from pydub import AudioSegment

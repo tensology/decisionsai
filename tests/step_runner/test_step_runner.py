@@ -93,7 +93,7 @@ def test_build_step_context_prompt():
         f"got: {repr(result)}",
     )
 
-    # Multi-step → should include [STEP RUNNER] wrapper
+    # Multi-step → should include [WORKFLOW ENGINE] wrapper
     result_multi = build_step_context_prompt(
         step_index=0,
         total_steps=3,
@@ -103,8 +103,8 @@ def test_build_step_context_prompt():
         prior_results=[],
     )
     check(
-        "multi-step includes [STEP RUNNER] header",
-        "[STEP RUNNER]" in result_multi,
+        "multi-step includes [WORKFLOW ENGINE] header",
+        "[WORKFLOW ENGINE]" in result_multi,
         f"got: {repr(result_multi[:80])}",
     )
     check(
@@ -139,13 +139,13 @@ def test_build_step_context_prompt():
     )
     check(
         "single step with prior results uses wrapper",
-        "[STEP RUNNER]" in result_single_with_prior,
+        "[WORKFLOW ENGINE]" in result_single_with_prior,
         f"got: {repr(result_single_with_prior[:80])}",
     )
 
     # --- context_rules tests ---
 
-    # Single step with context_rules → should include [CONTEXT AND RULES] and [STEP RUNNER]
+    # Single step with context_rules → should include [CONTEXT AND RULES] and [WORKFLOW ENGINE]
     result_ctx = build_step_context_prompt(
         step_index=0,
         total_steps=1,
@@ -166,12 +166,12 @@ def test_build_step_context_prompt():
         "",
     )
     check(
-        "single step with context_rules includes [STEP RUNNER]",
-        "[STEP RUNNER]" in result_ctx,
+        "single step with context_rules includes [WORKFLOW ENGINE]",
+        "[WORKFLOW ENGINE]" in result_ctx,
         f"got: {repr(result_ctx[:200])}",
     )
 
-    # Multi-step with context_rules → [CONTEXT AND RULES] before [STEP RUNNER]
+    # Multi-step with context_rules → [CONTEXT AND RULES] before [WORKFLOW ENGINE]
     result_multi_ctx = build_step_context_prompt(
         step_index=0,
         total_steps=3,
@@ -182,9 +182,9 @@ def test_build_step_context_prompt():
         context_rules="Use Python 3.12 only.",
     )
     ctx_pos = result_multi_ctx.index("[CONTEXT AND RULES]")
-    sr_pos = result_multi_ctx.index("[STEP RUNNER]")
+    sr_pos = result_multi_ctx.index("[WORKFLOW ENGINE]")
     check(
-        "multi-step context_rules appears before [STEP RUNNER]",
+        "multi-step context_rules appears before [WORKFLOW ENGINE]",
         ctx_pos < sr_pos,
         f"ctx_pos={ctx_pos}, sr_pos={sr_pos}",
     )
@@ -239,7 +239,7 @@ def test_fast_action_through_step_runner():
     # Wrapped prompts go to WorkflowAgent, not fast-action detection.
     # Only single-step raw passthroughs hit the fast action detector.
     wrapped = (
-        "[STEP RUNNER] Executing step 2 of 3.\n"
+        "[WORKFLOW ENGINE] Executing step 2 of 3.\n"
         "Overall goal: Set up project\n"
         "\n"
         "Previous steps:\n"

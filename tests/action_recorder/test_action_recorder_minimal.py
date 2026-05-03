@@ -17,7 +17,7 @@ def test_minimal_recorder():
     
     try:
         print("\n1. Importing ActionRecorder...")
-        from distr.core.action_recorder import ActionRecorder
+        from distr.core.actions.recorder import ActionRecorder
         print("   ✓ Import successful")
         
         print("\n2. Creating ActionRecorder instance...")
@@ -62,7 +62,7 @@ def test_recorder_with_pyqt6():
     try:
         from PyQt6.QtWidgets import QApplication
         from PyQt6.QtCore import QTimer
-        from distr.core.action_recorder import ActionRecorder
+        from distr.core.actions.recorder import ActionRecorder
         
         app = QApplication.instance()
         if not app:

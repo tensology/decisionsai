@@ -10,8 +10,12 @@ Extracted from LLMSharedMixin to keep shared.py focused on core LLM logic.
 import logging
 import re
 import string
+import time
 
 logger = logging.getLogger(__name__)
+
+# R27: seconds user has to confirm after a draft readout or reminder summary.
+_VOICE_CONFIRM_WINDOW_S = 35.0
 
 
 class VoiceDictationMixin:
@@ -219,6 +223,349 @@ class VoiceDictationMixin:
                     logger.debug("Voice command detected: stop_listening")
                     self._execute_stop_listening()
                     return True
+
+        # --- R27 proactive / planner / draft voice ---
+        if await self._handle_proactive_voice_commands(text_lower, direction):
+            return True
+
+        return False
+
+    def _r27_expire_voice_gates(self) -> None:
+        """Clear timed voice gates after their deadline (monotonic clock)."""
+        now = time.monotonic()
+        gate_id = getattr(self, "_r27_draft_gate_id", None)
+        until = getattr(self, "_r27_draft_gate_until", 0.0) or 0.0
+        if gate_id is not None and until and now >= until:
+            self._r27_draft_gate_id = None
+            self._r27_draft_gate_until = 0.0
+        rg = getattr(self, "_r27_reminder_gate", None)
+        if isinstance(rg, dict) and rg.get("until") and now >= rg["until"]:
+            self._r27_reminder_gate = None
+
+    async def _r27_readout_draft_entry(self, target, direction) -> None:
+        """TTS body + open timed approve/reject gate for one queued draft."""
+        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+
+        body_raw = (target.draft or "").strip()
+        body = (
+            clean_text_for_tts(body_raw[:6000], spoken_prose=True) if body_raw else ""
+        )
+        if len(body) > 2400:
+            body = body[:2397] + "…"
+        intro = (
+            f"Pending draft: {target.description[:180]}. "
+            "Here is the draft text."
+        )
+        await self._speak_text(intro, direction)
+        if body:
+            await self._speak_text(body, direction)
+        self._r27_draft_gate_id = target.id
+        self._r27_draft_gate_until = time.monotonic() + _VOICE_CONFIRM_WINDOW_S
+        await self._speak_text(
+            "Say approve that, reject that, or never mind within about thirty five seconds.",
+            direction,
+        )
+        cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+        if cid and self.chat_manager:
+            try:
+                self.chat_manager.add_assistant_message(
+                    cid,
+                    f"[Voice — pending draft readout]\n\n`{target.id}`\n\n{body_raw[:8000]}",
+                )
+            except Exception as e:
+                logger.debug("Proactive voice: draft readout chat log failed: %s", e)
+        logger.info(
+            "R27 voice: pending draft readout id=%s gate_until=%s",
+            target.id,
+            self._r27_draft_gate_until,
+        )
+
+    async def _handle_proactive_voice_commands(self, text_lower: str, direction) -> bool:
+        """Planner readout, draft readout + timed confirm, reminder + DB confirm (R27)."""
+        from distr.core.initiative.planners import tts_excerpt_from_markdown
+        from distr.core.initiative.voice_commands import (
+            load_latest_planner_markdown,
+            match_draft_decision,
+            match_draft_decision_for_id,
+            match_read_draft_by_id_request,
+            match_reminder_request,
+            match_schedule_confirm,
+            match_voice_wait_cancel,
+            resolve_draft_entry_by_voice_id,
+            save_voice_reminder_proactive_task,
+            wants_agenda_readout,
+            wants_pending_draft_readout,
+        )
+        from distr.core.initiative.draft_execute import approve_draft_in_queue
+        from distr.core.initiative.draft_queue import DraftQueue
+
+        self._r27_expire_voice_gates()
+
+        # --- Reminder confirmation window (DB insert) ---
+        rg = getattr(self, "_r27_reminder_gate", None)
+        if isinstance(rg, dict) and rg.get("until", 0) > time.monotonic():
+            if match_voice_wait_cancel(text_lower):
+                self._r27_reminder_gate = None
+                await self._speak_text("Okay — I did not add that reminder.", direction)
+                logger.info("R27 voice: reminder gate cancelled")
+                return True
+            if match_schedule_confirm(text_lower):
+                ok, detail = save_voice_reminder_proactive_task(
+                    instruction=rg["instruction"],
+                    frequency=rg["frequency"],
+                )
+                self._r27_reminder_gate = None
+                if ok:
+                    await self._speak_text(
+                        f"Saved your proactive task: {detail}. It runs at nine A M local time.",
+                        direction,
+                    )
+                    cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                    if cid and self.chat_manager:
+                        try:
+                            self.chat_manager.add_assistant_message(
+                                cid,
+                                f"[Voice — proactive task saved]\n\n**{detail}**\n"
+                                f"- Frequency: {rg['frequency']}\n"
+                                f"- Instruction: {rg['instruction'][:2000]}",
+                            )
+                        except Exception as e:
+                            logger.debug("Proactive voice: reminder chat log failed: %s", e)
+                    logger.info("R27 voice: reminder saved to DB name=%r", detail)
+                else:
+                    await self._speak_text(
+                        f"I could not save that reminder. {detail[:200]}",
+                        direction,
+                    )
+                    logger.warning("R27 voice: reminder DB save failed: %s", detail)
+                return True
+            # Gate is open but phrase was not a confirmation — avoid FIFO draft approve, etc.
+            return False
+
+        # --- Draft readout confirmation window ---
+        gate_draft_id = getattr(self, "_r27_draft_gate_id", None)
+        gate_until = getattr(self, "_r27_draft_gate_until", 0.0) or 0.0
+        if gate_draft_id is not None and gate_until > time.monotonic():
+            if match_voice_wait_cancel(text_lower):
+                self._r27_draft_gate_id = None
+                self._r27_draft_gate_until = 0.0
+                await self._speak_text("Okay — I left the draft in your queue unchanged.", direction)
+                logger.info("R27 voice: draft gate cancelled")
+                return True
+            decision = match_draft_decision(text_lower)
+            if decision:
+                dq = DraftQueue()
+                dq.expire_old()
+                target_meta = None
+                for e in dq.get_all():
+                    if e.id == gate_draft_id:
+                        target_meta = e
+                        break
+                self._r27_draft_gate_id = None
+                self._r27_draft_gate_until = 0.0
+                verb = "approved" if decision == "approve" else "rejected"
+                if not target_meta:
+                    await self._speak_text(
+                        "That draft is no longer in the queue — it may have been removed already.",
+                        direction,
+                    )
+                    logger.info("R27 voice: gated draft %s missing id=%s", decision, gate_draft_id)
+                    return True
+                if decision == "approve":
+                    ok = approve_draft_in_queue(dq, gate_draft_id)
+                else:
+                    ok = dq.remove(gate_draft_id)
+                if ok:
+                    snippet = (target_meta.description or "")[:200]
+                    await self._speak_text(
+                        f"I {verb} the draft: {snippet}" if snippet else f"I {verb} that draft.",
+                        direction,
+                    )
+                    cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                    if cid and self.chat_manager:
+                        try:
+                            self.chat_manager.add_assistant_message(
+                                cid,
+                                f"[Voice — draft {verb}] `{gate_draft_id}`\n\n{target_meta.draft[:4000]}",
+                            )
+                        except Exception as e:
+                            logger.debug("Proactive voice: draft chat log failed: %s", e)
+                else:
+                    await self._speak_text(
+                        "I could not update that draft — it may have already been removed.",
+                        direction,
+                    )
+                logger.info("R27 voice: gated draft %s id=%s ok=%s", decision, gate_draft_id, ok)
+                return True
+            return False
+
+        # --- Read a specific draft by id (before generic "read pending draft") ---
+        read_token = match_read_draft_by_id_request(text_lower)
+        if read_token:
+            self._r27_reminder_gate = None
+            dq = DraftQueue()
+            dq.expire_old()
+            entries = dq.get_all()
+            entry, rid_status = resolve_draft_entry_by_voice_id(read_token, entries)
+            if rid_status == "ambiguous":
+                await self._speak_text(
+                    "Multiple pending drafts match that short id. "
+                    "Use the full U U I D from chat, or say read pending draft for the oldest one.",
+                    direction,
+                )
+                logger.info("R27 voice: read draft by id ambiguous token=%s", read_token)
+                return True
+            if rid_status == "none" or entry is None:
+                await self._speak_text(
+                    "I could not find a pending draft with that id.",
+                    direction,
+                )
+                logger.info("R27 voice: read draft by id not found token=%s", read_token)
+                return True
+            await self._r27_readout_draft_entry(entry, direction)
+            return True
+
+        # --- Start pending-draft readout (opens draft gate after TTS) ---
+        if wants_pending_draft_readout(text_lower):
+            self._r27_reminder_gate = None
+            dq = DraftQueue()
+            dq.expire_old()
+            entries = dq.get_all()
+            if not entries:
+                await self._speak_text(
+                    "There are no pending initiative drafts in your queue.",
+                    direction,
+                )
+                logger.info("R27 voice: pending draft readout requested but queue empty")
+                return True
+            await self._r27_readout_draft_entry(entries[0], direction)
+            return True
+
+        # --- Parsed reminder: open confirmation gate (no DB row until confirm) ---
+        remind = match_reminder_request(text_lower)
+        if remind:
+            self._r27_draft_gate_id = None
+            self._r27_draft_gate_until = 0.0
+            instr = remind["instruction"]
+            freq = remind["frequency"]
+            self._r27_reminder_gate = {
+                "instruction": instr,
+                "frequency": freq,
+                "until": time.monotonic() + _VOICE_CONFIRM_WINDOW_S,
+            }
+            await self._speak_text(
+                f"I will add a {freq} proactive task: remind you to {instr}. "
+                "Say confirm schedule to save it, or never mind to cancel.",
+                direction,
+            )
+            logger.info("R27 voice: reminder gate opened freq=%s", freq)
+            return True
+
+        if wants_agenda_readout(text_lower):
+            md = load_latest_planner_markdown()
+            if not md:
+                msg = "I do not have a saved day, week, or month planner yet. Run your scheduled planners first."
+            else:
+                excerpt = tts_excerpt_from_markdown(md, max_len=1100)
+                msg = f"Here is your latest planner. {excerpt}"
+            await self._speak_text(msg, direction)
+            cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+            if cid and self.chat_manager:
+                chat_body = (
+                    "[Voice — my agenda]\n\n"
+                    + (md if md else "_No planner rows in the database yet._")
+                )[:12000]
+                try:
+                    self.chat_manager.add_assistant_message(cid, chat_body)
+                except Exception as e:
+                    logger.debug("Proactive voice: add_assistant_message failed: %s", e)
+            logger.info("R27 voice: agenda readout handled")
+            return True
+
+        targeted = match_draft_decision_for_id(text_lower)
+        if targeted:
+            ddec, raw_tok = targeted
+            dq = DraftQueue()
+            dq.expire_old()
+            entries = dq.get_all()
+            entry, tid_status = resolve_draft_entry_by_voice_id(raw_tok, entries)
+            if tid_status == "ambiguous":
+                await self._speak_text(
+                    "Several drafts match that id fragment. Use the full U U I D from chat.",
+                    direction,
+                )
+                logger.info("R27 voice: targeted draft %s ambiguous token=%s", ddec, raw_tok)
+                return True
+            if tid_status == "none" or entry is None:
+                await self._speak_text(
+                    "No pending draft matches that id.",
+                    direction,
+                )
+                logger.info("R27 voice: targeted draft %s not found token=%s", ddec, raw_tok)
+                return True
+            if ddec == "approve":
+                ok = approve_draft_in_queue(dq, entry.id)
+            else:
+                ok = dq.remove(entry.id)
+            verb = "approved" if ddec == "approve" else "rejected"
+            if ok:
+                await self._speak_text(
+                    f"I {verb} draft {entry.id[:8]}: {(entry.description or '')[:200]}",
+                    direction,
+                )
+                cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                if cid and self.chat_manager:
+                    try:
+                        self.chat_manager.add_assistant_message(
+                            cid,
+                            f"[Voice — draft {verb}] `{entry.id}`\n\n{entry.draft[:4000]}",
+                        )
+                    except Exception as e:
+                        logger.debug("Proactive voice: draft chat log failed: %s", e)
+            else:
+                await self._speak_text(
+                    "I could not update that draft — it may have already been removed.",
+                    direction,
+                )
+            logger.info("R27 voice: targeted draft %s id=%s ok=%s", ddec, entry.id, ok)
+            return True
+
+        decision = match_draft_decision(text_lower)
+        if decision:
+            dq = DraftQueue()
+            dq.expire_old()
+            entries = dq.get_all()
+            if not entries:
+                await self._speak_text("There are no pending initiative drafts to approve or reject.", direction)
+                logger.info("R27 voice: draft %s but queue empty", decision)
+                return True
+            target = entries[0]
+            if decision == "approve":
+                ok = approve_draft_in_queue(dq, target.id)
+            else:
+                ok = dq.remove(target.id)
+            verb = "approved" if decision == "approve" else "rejected"
+            if ok:
+                await self._speak_text(
+                    f"I {verb} the pending draft: {target.description[:200]}",
+                    direction,
+                )
+                cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                if cid and self.chat_manager:
+                    try:
+                        self.chat_manager.add_assistant_message(
+                            cid,
+                            f"[Voice — draft {verb}] `{target.id}`\n\n{target.draft[:4000]}",
+                        )
+                    except Exception as e:
+                        logger.debug("Proactive voice: draft chat log failed: %s", e)
+            else:
+                await self._speak_text(
+                    "I could not update that draft — it may have already been removed.",
+                    direction,
+                )
+            logger.info("R27 voice: draft %s id=%s ok=%s", decision, target.id, ok)
+            return True
 
         return False
 

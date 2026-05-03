@@ -123,6 +123,8 @@ class TestConcurrentRunRejection:
 
         with patch(
             "distr.core.workflow.service.get_session", patched_get_session
+        ), patch(
+            "distr.core.workflow.dispatcher.get_session", patched_get_session
         ):
             result = start_workflow_run(wf_id)
 
@@ -130,9 +132,9 @@ class TestConcurrentRunRejection:
             f"Expected error for concurrent run with active status "
             f"'{active_status}', got: {result}"
         )
-        assert "already in progress" in result["error"].lower(), (
-            f"Error message should mention 'already in progress', "
-            f"got: {result['error']}"
+        err = result["error"].lower()
+        assert "already in progress" in err or "run is already" in err, (
+            f"Error message should mention an in-progress run, got: {result['error']}"
         )
 
         # Verify no new run was created
@@ -183,12 +185,14 @@ class TestConcurrentRunRejection:
         with patch(
             "distr.core.workflow.service.get_session", patched_get_session
         ), patch(
+            "distr.core.workflow.dispatcher.get_session", patched_get_session
+        ), patch(
             "distr.core.workflow.service.WorkflowAgent", return_value=mock_agent
         ), patch(
-            "distr.core.workflow.service.asyncio.new_event_loop",
+            "asyncio.new_event_loop",
             return_value=mock_loop,
         ), patch(
-            "distr.core.workflow.service.threading.Thread",
+            "threading.Thread",
             return_value=MagicMock(),
         ), patch(
             "distr.core.workflow.service._dispatch_step",

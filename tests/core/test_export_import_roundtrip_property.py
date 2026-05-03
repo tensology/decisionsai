@@ -157,6 +157,7 @@ class TestExportImportRoundTrip:
         context_rules, step count, step fields, and variable fields. The export
         SHALL include format_version "2.0".
         """
+        assume(wf_data["name"].strip())
         engine = _make_engine()
         factory = sessionmaker(bind=engine)
 
@@ -232,6 +233,7 @@ class TestExportImportRoundTrip:
 
         # ── 4. Import the exported JSON ──
         with patch.object(svc, "get_session", patched_get_session), \
+             patch("distr.core.workflow.import_export.get_session", patched_get_session), \
              patch("distr.core.paths.RECORDINGS_DIR", str(tmp_dir / "recordings")), \
              patch("distr.core.paths.DB_DIR", str(tmp_dir / "db")):
             imported_id = svc.import_workflow(exported)

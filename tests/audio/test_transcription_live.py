@@ -8,6 +8,12 @@ Records audio from microphone and shows transcriptions in real-time.
 import asyncio
 import sys
 import os
+
+import pytest
+
+pytest.importorskip("sounddevice")
+pytest.importorskip("pipecat.frames.frames")
+
 import numpy as np
 import sounddevice as sd
 import logging
@@ -17,7 +23,7 @@ from pathlib import Path
 project_root = Path(__file__).parent.parent.parent
 sys.path.insert(0, str(project_root))
 
-from distr.core.agent.services.whisper import WhisperSTTService
+from distr.core.agent.services.stt.whisper import WhisperSTTService
 from pipecat.frames.frames import TranscriptionFrame
 
 # Configure logging

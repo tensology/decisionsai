@@ -253,7 +253,7 @@ class EventHandlerMixin:
                     self.oracle_window.position_player_window()
                     QtWidgets.QApplication.processEvents()
             QTimer.singleShot(20, signal_manager.show_player_window.emit)
-            QTimer.singleShot(1000, signal_manager.player_play.emit)
+            QTimer.singleShot(350, signal_manager.player_play.emit)
 
         elif event == 'playback_finished':
             logger.info("[EVENT QUEUE] Playback finished event received - closing player immediately")
@@ -677,7 +677,15 @@ class EventHandlerMixin:
                 if hasattr(self, 'telegram_manager') and self.telegram_manager:
                     self.telegram_manager._enqueue_telegram_batch(str(transcript), input_type=input_type)
                 else:
-                    signal_manager.send_text_input.emit(str(transcript), True, None, None)
+                    # Same agent path as batched Telegram; no thread id when manager absent (no mapping persist).
+                    from distr.core.integrations.bus import get_integration_message_bus
+
+                    get_integration_message_bus().deliver_telegram_user_input(
+                        text=str(transcript),
+                        image_path=None,
+                        telegram_chat_id=None,
+                        speak=None,
+                    )
                 logger.info("[EVENT QUEUE] 📤 Forwarded Telegram voice transcription to agent (input_type=%s): '%s'", input_type, transcript[:100])
             except Exception as e:
                 logger.error("[EVENT QUEUE] ❌ Failed to forward Telegram transcription to agent: %s", e, exc_info=True)
@@ -836,6 +844,68 @@ class EventHandlerMixin:
             time.sleep(2)
             self._telegram_cleanup_temp_files(audio_file, None, None)
 
+    def _integration_reply_chat_id(self):
+        """Internal chat id for routing connector replies (Discord / Slack)."""
+        cm = getattr(self, "chat_manager", None)
+        if cm is not None:
+            try:
+                cid = cm.get_current_chat()
+                if cid is not None:
+                    return int(cid)
+            except Exception:
+                logger.debug(
+                    "integration reply: chat_manager.get_current_chat failed",
+                    exc_info=True,
+                )
+        try:
+            settings = load_settings_from_db()
+            raw = settings.get("agent_current_chat_id")
+            return int(raw) if raw is not None else None
+        except Exception:
+            return None
+
+    def _try_route_integration_text_reply(self, text_to_send, data: dict) -> bool:
+        """If this chat maps to Discord or Slack, enqueue text and skip Telegram."""
+        if not text_to_send or not str(text_to_send).strip():
+            return False
+        provider = (data.get("provider") or "").strip()
+        if provider not in ("kokoro", "tool"):
+            return False
+        chat_id = self._integration_reply_chat_id()
+        if chat_id is None:
+            return False
+
+        from distr.core.integrations.bus import get_integration_message_bus
+        from distr.core.integrations.outbound_state import get_discord_outbound_queue, get_slack_outbound_queue
+
+        bus = get_integration_message_bus()
+        body = str(text_to_send).strip()
+        if len(body) > 40000:
+            body = body[:40000]
+
+        for platform, qgetter in (
+            ("discord", get_discord_outbound_queue),
+            ("slack", get_slack_outbound_queue),
+        ):
+            tid = bus.resolve_thread_id_for_chat(platform, chat_id)
+            if not tid:
+                continue
+            q = qgetter()
+            ok = q.push({"channel_id": tid, "text": body})
+            if ok:
+                logger.info(
+                    "[INTEGRATION] Routed assistant text to %s thread=%s chat_id=%s",
+                    platform,
+                    tid,
+                    chat_id,
+                )
+                return True
+            logger.warning(
+                "[INTEGRATION] %s outbound queue full — falling through to Telegram",
+                platform,
+            )
+        return False
+
     # ---- worker (runs in thread) ----
 
     def _send_to_telegram_worker(self, data):
@@ -901,6 +971,11 @@ class EventHandlerMixin:
                 logger.info(f"[Telegram] 📤 Sending with screenshot_file: {screenshot_file} (exists: {screenshot_file.exists() if screenshot_file else False})")
             if not audio_file and not screenshot_file:
                 logger.debug("[Telegram] No audio_file or screenshot_file; sending text-only response")
+
+            if text_to_send and self._try_route_integration_text_reply(text_to_send, data):
+                time.sleep(2)
+                self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
+                return
 
             self.telegram_manager.send_to_telegram(
                 text=text_to_send,

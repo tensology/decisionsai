@@ -97,16 +97,11 @@ class PostExecutionMixin:
                     os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(next_step_id)
                     _update_workflow_thread_step(next_step_id)
 
-                    # Set next step to running
-                    with get_session() as db:
-                        next_step = db.query(AutoWorkflowStep).filter(
-                            AutoWorkflowStep.id == next_step_id).first()
-                        if next_step:
-                            next_step.status = "running"
-                            db.commit()
+                    # Dispatch the next step — StepDispatcher.run_in_workflow sets status to
+                    # "running". Pre-marking "running" here tripped the run_in_workflow
+                    # idempotency guard (same pattern as start_workflow_run's first step).
                     increment_workflow_updated()
 
-                    # Dispatch the next step
                     dispatcher = StepDispatcher()
                     dispatcher.run_in_workflow(next_step_id, run_id)
 

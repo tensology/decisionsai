@@ -14,6 +14,9 @@ Property-based test verifying that:
 from datetime import datetime, timedelta
 from unittest.mock import patch
 
+import pytest
+
+pytest.importorskip("croniter")
 from croniter import croniter
 from hypothesis import given, settings, assume
 from hypothesis import strategies as st

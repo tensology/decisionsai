@@ -15,6 +15,7 @@ from ._shared import (
     logger,
     parse_connected_accounts,
     redact_connected_account,
+    resolve_secret_update,
     validate_safe_outbound_url,
     rate_limiter,
     route_handler,
@@ -307,7 +308,21 @@ def register_routes(router, templates):
     # --- Connection status and accounts (Google, Jira, Trello, Telegram) ---
 
     @router.get("/advanced/connection-status")
-    @route_handler("get connection status", fallback={"google_connected": False, "telegram_connected": False, "jira_accounts": [], "trello_accounts": [], "jira_has_valid": False, "trello_has_valid": False})
+    @route_handler(
+        "get connection status",
+        fallback={
+            "google_connected": False,
+            "telegram_connected": False,
+            "whatsapp_connected": False,
+            "discord_bot_configured": False,
+            "slack_bot_configured": False,
+            "slack_signing_configured": False,
+            "jira_accounts": [],
+            "trello_accounts": [],
+            "jira_has_valid": False,
+            "trello_has_valid": False,
+        },
+    )
     async def get_connection_status():
         """Return connection status for Google, Telegram, Jira, Trello."""
         from distr.core.settings import load_settings_from_db
@@ -334,14 +349,133 @@ def register_routes(router, templates):
         trello_accounts = [acc for acc in connected_accounts if isinstance(acc, dict) and acc.get("provider") == "trello"]
         jira_has_valid = sum(1 for a in jira_accounts if a.get("is_valid", False)) > 0
         trello_has_valid = sum(1 for a in trello_accounts if a.get("is_valid", False)) > 0
+
+        discord_bot_configured = bool((os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or "").strip())
+        slack_bot_configured = bool((os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or "").strip())
+        slack_signing_configured = bool((os.environ.get("DECISIONSAI_SLACK_SIGNING_SECRET") or "").strip())
+        for acc in connected_accounts:
+            if not isinstance(acc, dict):
+                continue
+            if acc.get("provider") == "discord_bot" and (acc.get("bot_token") or "").strip():
+                discord_bot_configured = True
+            if acc.get("provider") == "slack_app":
+                if (acc.get("bot_token") or "").strip():
+                    slack_bot_configured = True
+                if (acc.get("signing_secret") or "").strip():
+                    slack_signing_configured = True
+
         return JSONResponse({
             "google_connected": google_connected,
             "whatsapp_connected": whatsapp_connected,
             "telegram_connected": telegram_connected,
+            "discord_bot_configured": discord_bot_configured,
+            "slack_bot_configured": slack_bot_configured,
+            "slack_signing_configured": slack_signing_configured,
             "jira_accounts": jira_accounts,
             "trello_accounts": trello_accounts,
             "jira_has_valid": jira_has_valid,
             "trello_has_valid": trello_has_valid,
+        })
+
+    @router.get("/advanced/integration-connectors")
+    @route_handler("load integration connectors", fallback={})
+    async def get_integration_connectors():
+        """Masked Discord / Slack credentials saved under Advanced (or overridden by env)."""
+        from distr.gui.web.security import mask_secret
+        from distr.core.integrations.token_resolve import (
+            PROVIDER_DISCORD_BOT,
+            PROVIDER_SLACK_APP,
+            integration_accounts_from_settings,
+        )
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        accounts = integration_accounts_from_settings(settings)
+        d_acc = next((a for a in accounts if a.get("provider") == PROVIDER_DISCORD_BOT), {})
+        s_acc = next((a for a in accounts if a.get("provider") == PROVIDER_SLACK_APP), {})
+        d_tok = (d_acc.get("bot_token") or "").strip()
+        s_bt = (s_acc.get("bot_token") or "").strip()
+        s_sg = (s_acc.get("signing_secret") or "").strip()
+        return JSONResponse({
+            "discord_bot_token": mask_secret(d_tok),
+            "slack_bot_token": mask_secret(s_bt),
+            "slack_signing_secret": mask_secret(s_sg),
+            "discord_bot_token_set": bool(d_tok),
+            "slack_bot_token_set": bool(s_bt),
+            "slack_signing_secret_set": bool(s_sg),
+            "discord_from_env": bool((os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or "").strip()),
+            "slack_bot_from_env": bool((os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or "").strip()),
+            "slack_signing_from_env": bool((os.environ.get("DECISIONSAI_SLACK_SIGNING_SECRET") or "").strip()),
+            "slack_events_url_hint": "/hooks/slack/events",
+        })
+
+    @router.post("/advanced/integration-connectors")
+    @route_handler("save integration connectors")
+    async def post_integration_connectors(body: dict):
+        """Persist Discord bot token and Slack bot token + signing secret (encrypted with other connected_accounts)."""
+        from distr.core.settings import load_settings_from_db, save_settings_to_db
+        from distr.core.integrations.token_resolve import PROVIDER_DISCORD_BOT, PROVIDER_SLACK_APP
+
+        def strip_provider(lst: list, provider: str) -> list:
+            return [a for a in lst if not (isinstance(a, dict) and a.get("provider") == provider)]
+
+        settings = load_settings_from_db()
+        accounts = parse_connected_accounts(settings)
+
+        existing_d = next(
+            (a for a in accounts if isinstance(a, dict) and a.get("provider") == PROVIDER_DISCORD_BOT),
+            {},
+        )
+        existing_s = next(
+            (a for a in accounts if isinstance(a, dict) and a.get("provider") == PROVIDER_SLACK_APP),
+            {},
+        )
+
+        if "discord_bot_token" in body:
+            accounts = strip_provider(accounts, PROVIDER_DISCORD_BOT)
+            inc_d = str(body.get("discord_bot_token") or "").strip()
+            if inc_d:
+                new_tok = resolve_secret_update(existing_d.get("bot_token") or "", inc_d)
+                if new_tok.strip():
+                    accounts.append({"provider": PROVIDER_DISCORD_BOT, "bot_token": new_tok.strip()})
+
+        if "slack_bot_token" in body or "slack_signing_secret" in body:
+            accounts = strip_provider(accounts, PROVIDER_SLACK_APP)
+            new_bt = (existing_s.get("bot_token") or "").strip()
+            new_sg = (existing_s.get("signing_secret") or "").strip()
+            if "slack_bot_token" in body:
+                inc = str(body.get("slack_bot_token") or "").strip()
+                if not inc:
+                    new_bt = ""
+                else:
+                    new_bt = resolve_secret_update(existing_s.get("bot_token") or "", inc).strip()
+            if "slack_signing_secret" in body:
+                inc = str(body.get("slack_signing_secret") or "").strip()
+                if not inc:
+                    new_sg = ""
+                else:
+                    new_sg = resolve_secret_update(existing_s.get("signing_secret") or "", inc).strip()
+            if new_bt or new_sg:
+                row: Dict[str, Any] = {"provider": PROVIDER_SLACK_APP}
+                if new_bt:
+                    row["bot_token"] = new_bt
+                if new_sg:
+                    row["signing_secret"] = new_sg
+                accounts.append(row)
+
+        settings["connected_accounts"] = accounts
+        save_settings_to_db(settings)
+
+        try:
+            from distr.core.integrations.slack.outbound import start_slack_outbound_worker_background
+
+            start_slack_outbound_worker_background()
+        except Exception:
+            logger.debug("Slack outbound worker refresh after save skipped", exc_info=True)
+
+        return JSONResponse({
+            "success": True,
+            "restart_note": "Restart the desktop app if you changed the Discord bot token so the bot thread picks it up.",
         })
 
     @router.post("/advanced/google/disconnect")

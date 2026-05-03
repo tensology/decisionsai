@@ -6,21 +6,29 @@ Run this script to test what the fast action detector does with various inputs.
 Type commands and see whether they'll be handled as quick actions or sent to the LLM.
 
 Usage:
-    cd <project_root>
-    python tests/agent/test_fast_detector_interactive.py
+    cd DecisionsAI
+    python tests/agent/fast_detector_interactive_manual.py
 """
 
 import sys
 import os
 
-# Get project root (4 levels up from this file)
+# DecisionsAI root: tests/agent → tests → DecisionsAI
 script_dir = os.path.dirname(os.path.abspath(__file__))
-project_root = os.path.dirname(os.path.dirname(os.path.dirname(script_dir)))
+project_root = os.path.dirname(os.path.dirname(script_dir))
 sys.path.insert(0, project_root)
 
-# Load the fast action detector by executing the file directly
-fast_detector_path = os.path.join(project_root, 'distr', 'agent', 'distr', 'services', 'fast_action_detector.py')
-exec(open(fast_detector_path).read())
+# Load detector module (same behavior as ``from distr...fast_action_detector import FastActionDetector``)
+fast_detector_path = os.path.join(
+    project_root,
+    "distr",
+    "core",
+    "agent",
+    "services",
+    "llm",
+    "fast_action_detector.py",
+)
+exec(open(fast_detector_path, encoding="utf-8").read())
 
 def main():
     detector = FastActionDetector()

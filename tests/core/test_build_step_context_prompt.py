@@ -119,7 +119,7 @@ class TestMultiStepPrompt:
             step_instruction="Do it",
             prior_results=[],
         )
-        assert "[STEP RUNNER]" in result
+        assert "[WORKFLOW ENGINE]" in result
         assert "1 of 2" in result
 
 
@@ -150,7 +150,7 @@ class TestContextRules:
             context_rules="Rule text",
         )
         ctx_pos = result.index("[CONTEXT AND RULES]")
-        header_pos = result.index("[STEP RUNNER]")
+        header_pos = result.index("[WORKFLOW ENGINE]")
         assert ctx_pos < header_pos
 
     def test_empty_context_rules_no_section(self):
@@ -192,7 +192,7 @@ class TestContinuationInput:
             prior_results=[],
             continuation_input="User says hi",
         )
-        header_pos = result.index("[STEP RUNNER]")
+        header_pos = result.index("[WORKFLOW ENGINE]")
         input_pos = result.index("[USER INPUT]")
         assert input_pos > header_pos
 
@@ -222,7 +222,7 @@ class TestContinuationInput:
         )
         assert "[USER INPUT]" in result
         assert "User provided input" in result
-        assert "[STEP RUNNER]" in result
+        assert "[WORKFLOW ENGINE]" in result
 
 
 class TestVariableResolution:

@@ -225,18 +225,14 @@ def check_kanban_schedules() -> None:
             if last_run and last_run.started_at:
                 last_run_at = last_run.started_at
 
+            # Schedule ticks use global kanban agent settings only (not per-board columns).
             board_infos.append({
                 "id": b.id,
                 "last_run_at": last_run_at,
                 "created_date": b.created_date,
-                "frequency": (b.agent_frequency or global_frequency or "daily"),
-                "agent_time": (b.agent_time or global_agent_time or "09:00"),
-                "agent_days": b.agent_days,
-                "agent_monthly_day": (
-                    b.agent_monthly_day
-                    if b.agent_monthly_day is not None
-                    else global_agent_monthly_day
-                ),
+                "frequency": global_frequency or "daily",
+                "agent_time": global_agent_time or "09:00",
+                "agent_monthly_day": global_agent_monthly_day,
             })
 
     for info in board_infos:

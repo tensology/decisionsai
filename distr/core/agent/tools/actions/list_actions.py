@@ -9,6 +9,7 @@ from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 import logging
 import json
+from distr.core.agent.tool_voice_format import voice_then_reference
 from distr.core.db import get_session, Action
 
 logger = logging.getLogger(__name__)
@@ -79,7 +80,14 @@ class ListActionsTool(BaseTool):
             
             result = "\n".join(result_lines)
             logger.info(f"ListActionsTool: Listed {len(actions_list)} actions")
-            return result
+            n = len(actions_list)
+            spoken = (
+                f"I found {n} saved actions you can trigger by name or phrase. "
+                "If you want detail on one, say its title; the full list is below for the screen."
+                if n != 1
+                else "You have one saved action; details are below for the screen."
+            )
+            return voice_then_reference(spoken, result)
             
         except Exception as e:
             logger.error(f"Error listing actions: {e}", exc_info=True)

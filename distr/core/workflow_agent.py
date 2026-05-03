@@ -53,6 +53,14 @@ class WorkflowAgent:
         # Load tools (scoped to this agent — no event_queue/command_queue)
         self._tools: list = []
         self._tools_dict: Dict[str, Any] = {}
+        # Match main-session tool availability: warm cache if startup has not run yet
+        # (isolated workflow steps, tests, or early WorkflowAgent construction).
+        try:
+            from distr.core.agent.tools.loader import ensure_tool_cache_warmed_if_empty
+
+            ensure_tool_cache_warmed_if_empty()
+        except Exception as exc:
+            logger.debug("WorkflowAgent: tool cache warmup skipped: %s", exc)
         self._load_tools()
 
         self._shutdown = False

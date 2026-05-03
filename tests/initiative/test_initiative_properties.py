@@ -160,6 +160,11 @@ def test_idle_timer_always_resets(emission_times):
         service._idle_timer = mock_timer
         service._schedule_timer = MagicMock()
         service.IDLE_TIMEOUT_MS = 300_000
+        # _reset_idle_timer marshals via Qt bridge emit → _reset_idle_timer_on_qt
+        service._qt_bridge = MagicMock()
+        service._qt_bridge.reset_idle_timer_requested.emit.side_effect = (
+            lambda *a, **k: service._reset_idle_timer_on_qt()
+        )
 
         for _ in emission_times:
             service._reset_idle_timer(chat_id=0)
