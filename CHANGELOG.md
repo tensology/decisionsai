@@ -6,10 +6,13 @@
 
 ### Hotfixes + stability
 
-- Avatar state now logs every transition (`idle -> thinking -> idle`) so debugging is way easier.
-- Fixed a real bug where push-to-talk could leave the avatar stuck in `thinking`.
-- Added extra safety reset paths so if generation stops weirdly, avatar still goes back to `idle`.
-- Cleaned up state handling so we stop doing unsafe direct state flips in edge cases.
+**Workflow reliability got a big stabilization pass.** Continuation and resume behavior were tightened so runs are less likely to drift, double-process, or stall mid-step. Context handling for longer workflow runs was also hardened so step execution stays more predictable under heavier real usage.
+
+**Safety around file operations was upgraded.** Risky file actions now go through stricter guardrails and clearer confirmation behavior before destructive operations, reducing the chance of accidental damage during automated or tool-driven workflows.
+
+**Initiative and media-path reliability both improved.** Initiative health/status and recovery behavior were hardened across backend + settings paths, and WhatsApp/media path resolution was cleaned up so media-related routing fails less often when files are moved, relayed, or resolved through different entry points.
+
+**LLM/tool routing and avatar-state behavior were tightened.** Tool-path reliability was improved to reduce wrong-path execution and silent odd behavior, and avatar-state debugging now logs full transitions (`idle -> thinking -> idle`) so state issues are easy to trace. This release also fixes a real stuck-thinking bug where pressing push-to-talk again during generation could leave the avatar in `thinking`, with added idle recovery so odd stop/cancel paths reset correctly.
 
 ---
 
