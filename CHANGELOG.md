@@ -2,29 +2,25 @@
 
 ---
 
-## [2.7.12] - 2026-05-01
+## [2.7.13] - 2026-05-05
 
-### Live events, sidecar handshakes, workflows you can right‑click, and a pile of plumbing
+### Quick fix: avatar could get stuck in thinking
 
-**If you’re new here:** DecisionsAI is the desktop + web stack that runs your assistant, workflows, kanban, voice, and all the glue. This release is mostly “things feel snappier and less janky,” plus some big behind‑the‑scenes pieces so the app can stream updates and talk to the Go sidecar in a versioned, boringly reliable way.
+- Added clear avatar state transition logs so we can see exactly when it goes `idle -> thinking -> idle`.
+- Fixed a case where pressing push-to-talk again while a response was still running could leave the avatar stuck in `thinking`.
+- Added a safety reset: if typing turns off and the avatar is still `thinking`, it now force-resets to `idle`.
 
-**Live updates in the browser (SSE).** The web UI can subscribe to an internal **Server‑Sent Events** stream (`/api/events/stream`) so the page doesn’t have to guess what changed — useful stuff can push over the wire when the in‑process event bus says so. There’s a small cap on concurrent streams per client so one tab can’t accidentally open fifty connections and melt your laptop.
+---
 
-**Sidecar: health, wire version, and “don’t spin forever.”** The Go sidecar exposes a richer **`/health`** payload (including **`wire_version`** and what it thinks it can do). Python has a small **`sidecar_http`** helper that probes that health endpoint and carries the same wire version constant — so when we tighten the protocol later, old sidecars and new app builds can fail loudly *before* weird partial bugs. Reconnect behavior got **exponential backoff** so a dead sidecar doesn’t hammer the CPU. If you use the cloud relay, the relay side is meant to honor the same wire version idea so registration stays sane.
+## [2.7.12] - 2026-05-03
 
-**Workflows UI: right‑click is your friend.** Export, duplicate, download, and the scary **delete all workflows** stuff used to live in a footer strip that was easy to miss. Now those actions live on a **context menu on each workflow row** (right‑click / secondary click). Same power, less “scroll to the bottom of the universe.” Playwright coverage was pointed at the new pattern.
+### Big stuff from this release (simple version)
 
-**Voice playback timing.** After TTS finishes, the player used to hang around a bit too long; **`transport`** and the **`player_play`** delay were tightened so the UI doesn’t feel like it’s stuck in “still talking” mode when audio is already done.
-
-**Agent + tools: fewer dumb mistakes on workflows.** The model sometimes reached for the wrong tool when you asked workflow questions. Descriptions and routing were nudged so **`get_workflow`** (and friends) are easier to pick correctly, and **`request_tool`** is less likely to misfire on workflow‑shaped prompts.
-
-**Initiative, MCP, outbound integrations — the “big folders of new code” zone.** There’s a lot of new surface under **`initiative/`** (planners, rubric, tiers, scheduler hooks, voice command paths, draft execution), **MCP** wiring in settings + routes, **Slack / Discord** scaffolding and outbound queue/worker pieces, **memory** helpers, **ticket** chat notify / CLI context / writeback paths, and a clearer **tool registry** story. Treat these as “early building blocks”: enable what you need, read settings labels, and don’t expect every integration to be a finished product on day one.
-
-**Kanban + chat + settings.** Kanban JS and ticket flows saw ongoing fixes; settings pages gained pieces for advanced/MCP areas; shared CSS and base template include the client script for the event stream where appropriate.
-
-**Tests: faster feedback, less hanging.** Some tests that depended on flaky hardware, long streams, or live keys were moved to **`*_manual.py`** names or trimmed so CI and local **`pytest`** don’t deadlock on SSE/streaming edge cases. New tests cover sidecar HTTP, event stream auth/slots, workflow purge, MCP settings API, and more.
-
-**Docs cleanup.** A couple of top‑level audit markdown files were removed as redundant; the **CHANGELOG** stays the human‑readable story — the code and tests are the source of truth for behavior.
+- Added live browser updates with SSE (`/api/events/stream`) so UI state updates in real time.
+- Added sidecar wire-version + health checks, plus reconnect backoff, to avoid weird sidecar mismatch bugs.
+- Moved workflow actions (export/duplicate/download/delete-all) into a right-click menu on each workflow row.
+- Improved workflow/tool routing so workflow questions are less likely to hit the wrong tool.
+- Added test coverage for event streams, sidecar checks, and workflow behavior.
 
 ---
 
