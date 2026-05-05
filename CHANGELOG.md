@@ -4,23 +4,27 @@
 
 ## [2.7.13] - 2026-05-05
 
-### Quick fix: avatar could get stuck in thinking
+### Hotfixes + stability
 
-- Added clear avatar state transition logs so we can see exactly when it goes `idle -> thinking -> idle`.
-- Fixed a case where pressing push-to-talk again while a response was still running could leave the avatar stuck in `thinking`.
-- Added a safety reset: if typing turns off and the avatar is still `thinking`, it now force-resets to `idle`.
+- Avatar state now logs every transition (`idle -> thinking -> idle`) so debugging is way easier.
+- Fixed a real bug where push-to-talk could leave the avatar stuck in `thinking`.
+- Added extra safety reset paths so if generation stops weirdly, avatar still goes back to `idle`.
+- Cleaned up state handling so we stop doing unsafe direct state flips in edge cases.
 
 ---
 
 ## [2.7.12] - 2026-05-03
 
-### Big stuff from this release (simple version)
+### Big release (simple summary, only the important stuff)
 
-- Added live browser updates with SSE (`/api/events/stream`) so UI state updates in real time.
-- Added sidecar wire-version + health checks, plus reconnect backoff, to avoid weird sidecar mismatch bugs.
-- Moved workflow actions (export/duplicate/download/delete-all) into a right-click menu on each workflow row.
-- Improved workflow/tool routing so workflow questions are less likely to hit the wrong tool.
-- Added test coverage for event streams, sidecar checks, and workflow behavior.
+- **Live web updates (SSE):** browser now gets real-time app events from `/api/events/stream` instead of waiting/polling.
+- **Sidecar reliability upgrade:** added wire-version checks, better `/health` data, and reconnect backoff so sidecar failures are cleaner.
+- **Workflow UX got better:** export/duplicate/download/delete-all moved into row right-click menu (much less messy).
+- **Workflow routing got less dumb:** improved tool selection for workflow-related prompts.
+- **Voice/player timing fixed up:** less "still talking" feel after TTS finishes.
+- **Kanban + chat + settings polish:** lots of practical fixes across these core pages and flows.
+- **MCP/initiative groundwork landed:** core plumbing and settings/routes for newer automation flows.
+- **Tests got stronger:** added/updated coverage for SSE/event stream behavior, sidecar checks, and workflow actions.
 
 ---
 
