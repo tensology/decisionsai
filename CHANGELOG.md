@@ -20,18 +20,13 @@
 
 ### Big stability release (simple summary, only the important stuff)
 
-- **Live web updates (SSE):** browser now gets real-time app events from `/api/events/stream` instead of waiting/polling.
-- **Sidecar reliability upgrade:** added wire-version checks, better `/health` data, and reconnect backoff so sidecar failures are cleaner.
-- **Workflow engine got a major stabilization pass:** better continuation/resume behavior, safer step execution flow, and stronger workflow context limits.
-- **Workflow UX got better:** export/duplicate/download/delete-all moved into row right-click menu (much less messy).
-- **File safety got stricter:** stronger guardrails around risky file operations, with clearer confirmation handling before destructive actions.
-- **Initiative health improved:** backend + settings updates to make initiative status/recovery more reliable.
-- **WhatsApp/media path handling got fixed:** better media path resolution and route handling so media-related flows fail less.
-- **LLM/tool reliability improved:** fixes across routing/execution paths to reduce silent failures and wrong-path tool behavior.
-- **Voice/player timing fixed up:** less "still talking" feel after TTS finishes.
-- **Kanban + chat + settings polish:** lots of practical fixes across these core pages and flows.
-- **MCP/initiative groundwork landed:** core plumbing and settings/routes for newer automation flows.
-- **Tests got stronger:** added/updated coverage for SSE/event streams, workflow behavior, file-safety guards, and WhatsApp media path handling.
+**Live updates and sidecar reliability both leveled up.** The web UI now receives real-time SSE events from `/api/events/stream` instead of relying on polling behavior, and sidecar health/wire-version handling was tightened with cleaner reconnect backoff so mismatch and disconnect failures are less messy.
+
+**Workflows got a serious stability and usability pass.** Core execution behavior was tightened around continuation/resume flow, step execution safety, and workflow context limits, while the workflow UI got cleaner by moving export/duplicate/download/delete-all actions into a row-level right-click menu where they are easier to use.
+
+**Safety and reliability improvements landed across core systems.** File-operation guardrails were strengthened with clearer destructive-action confirmation behavior, initiative health/status paths were hardened, media-path resolution for WhatsApp-related flows was improved, and LLM/tool routing reliability was tightened to reduce silent failures and wrong-path execution.
+
+**General polish and coverage improved at the same time.** Voice/player timing was tuned to reduce the "still talking" feel after TTS, practical fixes were applied across Kanban/chat/settings, MCP and initiative groundwork continued to expand, and test coverage was strengthened across event streams, workflow behavior, file-safety guards, and media-path handling.
 
 ---
 
