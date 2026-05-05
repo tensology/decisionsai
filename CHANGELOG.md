@@ -15,16 +15,20 @@
 
 ## [2.7.12] - 2026-05-03
 
-### Big release (simple summary, only the important stuff)
+### Big stability release (simple summary, only the important stuff)
 
 - **Live web updates (SSE):** browser now gets real-time app events from `/api/events/stream` instead of waiting/polling.
 - **Sidecar reliability upgrade:** added wire-version checks, better `/health` data, and reconnect backoff so sidecar failures are cleaner.
+- **Workflow engine got a major stabilization pass:** better continuation/resume behavior, safer step execution flow, and stronger workflow context limits.
 - **Workflow UX got better:** export/duplicate/download/delete-all moved into row right-click menu (much less messy).
-- **Workflow routing got less dumb:** improved tool selection for workflow-related prompts.
+- **File safety got stricter:** stronger guardrails around risky file operations, with clearer confirmation handling before destructive actions.
+- **Initiative health improved:** backend + settings updates to make initiative status/recovery more reliable.
+- **WhatsApp/media path handling got fixed:** better media path resolution and route handling so media-related flows fail less.
+- **LLM/tool reliability improved:** fixes across routing/execution paths to reduce silent failures and wrong-path tool behavior.
 - **Voice/player timing fixed up:** less "still talking" feel after TTS finishes.
 - **Kanban + chat + settings polish:** lots of practical fixes across these core pages and flows.
 - **MCP/initiative groundwork landed:** core plumbing and settings/routes for newer automation flows.
-- **Tests got stronger:** added/updated coverage for SSE/event stream behavior, sidecar checks, and workflow actions.
+- **Tests got stronger:** added/updated coverage for SSE/event streams, workflow behavior, file-safety guards, and WhatsApp media path handling.
 
 ---
 
