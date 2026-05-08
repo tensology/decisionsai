@@ -34,8 +34,9 @@ def register_routes(router, templates):
         in_dev = settings_data.input_device
         out_dev = settings_data.output_device
         try:
-            from PyQt5.QtWidgets import QApplication
-            from PyQt5.QtCore import QTimer
+            from PyQt6.QtWidgets import QApplication
+            from PyQt6.QtCore import QTimer
+
             app = QApplication.instance()
             if app is not None and hasattr(app, "update_agent_audio_devices") and hasattr(app, "agent_command_queue"):
                 QTimer.singleShot(0, lambda i=in_dev, o=out_dev: app.update_agent_audio_devices(i, o))

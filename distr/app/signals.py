@@ -229,10 +229,22 @@ class SignalBridgeMixin:
             if cid is not None:
                 combined = "".join(buf)
                 if combined:
+                    from distr.core.agent.services.llm.text_utils import (
+                        redact_filesystem_paths_for_conversation,
+                    )
+
+                    combined = redact_filesystem_paths_for_conversation(combined)
                     _post_chat_event({"event": "stream_token", "chat_id": cid, "token": combined})
 
         def on_chat_message_added_web(chat_id, role, content):
-            _post_chat_event({"event": "message_added", "chat_id": int(chat_id), "role": role, "content": content or ""})
+            c = content or ""
+            if role == "assistant":
+                from distr.core.agent.services.llm.text_utils import (
+                    redact_filesystem_paths_for_conversation,
+                )
+
+                c = redact_filesystem_paths_for_conversation(c)
+            _post_chat_event({"event": "message_added", "chat_id": int(chat_id), "role": role, "content": c})
         signal_manager.chat_message_added.connect(on_chat_message_added_web)
 
         def on_chat_stream_started_web(chat_id):

@@ -991,8 +991,8 @@ class TelegramMessagesMixin:
             except Exception as e:
                 logger.error("[Telegram] Failed to forward file to agent: %s", e, exc_info=True)
 
-            # Confirm receipt to user
-            self.send_to_telegram(f"📥 Received {type_label}: {dest.name}")
+            # Do not auto-ack media receipt in chat; forwarding context to the
+            # agent is enough and avoids noisy "Received image/file" messages.
 
         except Exception as e:
             logger.error("[Telegram] File download error: %s", e, exc_info=True)

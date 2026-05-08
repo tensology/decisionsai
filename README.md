@@ -211,6 +211,7 @@ python bin/start.py
 | Component | Install | Notes |
 |---|---|---|
 | **Vosk** (alt STT) | `python bin/setup_vosk.py` | ~1.8 GB English model |
+| **Microsoft VibeVoice** (Realtime TTS + local ASR) | `./scripts/install_vibevoice.sh` (venv active) | Not in `requirements.txt` (upstream pins `transformers==4.51.3` for streaming extras, which conflicts with **coqui-tts**’s `transformers>=4.57` in the same file). Default STT stays **Whisper.cpp** unless you pick VibeVoice ASR. Same venv as the app; optional `DECISIONSAI_VIBEVOICE_ROOT` or auto-detect under `$VIRTUAL_ENV/src/VibeVoice`. **ASR weights:** Hugging Face repos `microsoft/VibeVoice-ASR` (override with `DECISIONSAI_VIBEVOICE_ASR_MODEL`) and `Qwen/Qwen2.5-7B` (language model for the ASR processor). **`./bin/decisions.sh`**, **`python bin/setup.py`**, **`python bin/diagnose_stt.py`** (mic/file transcribe paths), and **`pytest tests/audio/`** run **`scripts/prefetch_local_models.py`** so Vosk, Whisper, and VibeVoice HF files land in cache before tests or first STT — same spirit as Whisper’s first `Model()` download. Set `DECISIONSAI_SKIP_VIBEVOICE_HF_PREFETCH=1` to skip only the VibeVoice HF snapshot step in the install script; set `DECISIONS_AI_SKIP_MODEL_PREFETCH=1` to skip the full prefetch everywhere. Set `DECISIONSAI_PREFETCH_VIBEVOICE_REALTIME=0` to skip prefetching `microsoft/VibeVoice-Realtime-0.5B`. |
 | **Voice cloning** | Built-in for Kokoro and ElevenLabs | Click **+ Custom** next to voice dropdown in Preferences |
 
 ---

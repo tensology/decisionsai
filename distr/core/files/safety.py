@@ -68,10 +68,10 @@ class FileOperationSafety:
         Initialize file safety system.
         
         Args:
-            log_dir: Directory for audit logs (default: ~/.decisionsai/file_safety_logs)
+            log_dir: Directory for audit logs (default: ~/.decisions/file_safety_logs)
         """
         if log_dir is None:
-            log_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "file_safety_logs")
+            log_dir = os.path.join(os.path.expanduser("~"), ".decisions", "file_safety_logs")
         
         self.log_dir = log_dir
         os.makedirs(self.log_dir, exist_ok=True)

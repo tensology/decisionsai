@@ -67,7 +67,14 @@
         document.body.insertAdjacentHTML("beforeend", html);
         var modal = document.getElementById("wf-confirm-modal");
         if (!modal) return;
-        function closeModal() { modal.remove(); }
+        var keyHandler = null;
+        function closeModal() {
+            if (keyHandler) {
+                document.removeEventListener("keydown", keyHandler, true);
+                keyHandler = null;
+            }
+            modal.remove();
+        }
         modal.addEventListener("click", function (evt) {
             if (evt.target === modal) closeModal();
         });
@@ -78,6 +85,38 @@
             closeModal();
             onConfirm();
         });
+        keyHandler = function (evt) {
+            if (!document.getElementById("wf-confirm-modal")) return;
+            if (evt.key === "Escape") {
+                evt.preventDefault();
+                evt.stopPropagation();
+                closeModal();
+                return;
+            }
+            if (evt.key === "Enter") {
+                evt.preventDefault();
+                evt.stopPropagation();
+                closeModal();
+                onConfirm();
+            }
+        };
+        document.addEventListener("keydown", keyHandler, true);
+        if (okBtn) okBtn.focus();
+    }
+
+    function isTypingTarget(target) {
+        if (!target) return false;
+        var tag = (target.tagName || "").toUpperCase();
+        if (target.isContentEditable) return true;
+        if (tag === "TEXTAREA") return true;
+        if (tag === "SELECT") return true;
+        if (tag !== "INPUT") return false;
+        var t = (target.type || "text").toLowerCase();
+        // Treat text-like inputs as typing contexts.
+        if (t === "button" || t === "submit" || t === "checkbox" || t === "radio" || t === "range" || t === "color" || t === "file") {
+            return false;
+        }
+        return true;
     }
 
     function showInputModal(opts) {
@@ -684,13 +723,30 @@
         api("GET", "/workflows/" + currentWorkflowId + "/active-run").then(function (data) {
             var runBar = document.getElementById("wf-run-bar");
             if (data && data.id) {
+                var phase = data.phase ? String(data.phase) : "planning";
+                var boardText = data.board_name || (data.board_id ? ("Board #" + data.board_id) : "No board");
+                var ticketText = data.ticket_title || (data.ticket_id ? ("Ticket #" + data.ticket_id) : "No ticket");
+                var stepText = data.current_step_name || (data.current_step_id ? ("Step #" + data.current_step_id) : "Starting");
+                var detailStrip = '<div class="grid grid-cols-1 md:grid-cols-3 gap-2 text-[11px] mt-1">' +
+                    '<div><span class="text-gray-500">Board:</span> <span class="text-gray-200">' + esc(boardText) + '</span></div>' +
+                    '<div><span class="text-gray-500">Ticket:</span> <span class="text-gray-200">' + esc(ticketText) + '</span></div>' +
+                    '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
+                '</div>';
                 if (data.status === "waiting") {
-                    runBar.innerHTML = '<div class="flex items-center gap-3 px-4 py-2 bg-amber-900/30 border-b border-amber-500/30">' +
-                        '<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>' +
-                        '<span class="text-xs text-amber-300">Waiting for continue...</span>' +
-                        '<button type="button" class="wf-continue-run px-2 py-1 rounded border border-amber-500/50 text-amber-400 text-xs hover:bg-amber-500/20" data-run-id="' + data.id + '">Continue</button>' +
-                        '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
+                    runBar.innerHTML = '<div class="px-4 py-2 bg-amber-900/30 border-b border-amber-500/30">' +
+                        '<div class="flex items-center gap-3">' +
+                            '<span class="w-2 h-2 rounded-full bg-amber-400 animate-pulse"></span>' +
+                            '<span class="text-xs text-amber-300">Waiting for continue... (phase: ' + esc(phase) + ')</span>' +
+                            '<button type="button" class="wf-open-runs-tab px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open Runs Tab</button>' +
+                            '<button type="button" class="wf-continue-run px-2 py-1 rounded border border-amber-500/50 text-amber-400 text-xs hover:bg-amber-500/20" data-run-id="' + data.id + '">Continue</button>' +
+                            '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
+                        '</div>' +
+                        detailStrip +
                     '</div>';
+                    runBar.querySelector(".wf-open-runs-tab").addEventListener("click", function () {
+                        switchTab("runs");
+                        loadActiveRuns();
+                    });
                     runBar.querySelector(".wf-continue-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
                             .then(function () { snack("Run continued"); startPolling(); loadDetail(currentWorkflowId); })
@@ -703,11 +759,19 @@
                     });
                     startPolling();
                 } else {
-                    runBar.innerHTML = '<div class="flex items-center gap-3 px-4 py-2 bg-blue-900/30 border-b border-blue-500/30">' +
-                        '<span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>' +
-                        '<span class="text-xs text-blue-300">Workflow running...</span>' +
-                        '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
+                    runBar.innerHTML = '<div class="px-4 py-2 bg-blue-900/30 border-b border-blue-500/30">' +
+                        '<div class="flex items-center gap-3">' +
+                            '<span class="w-2 h-2 rounded-full bg-blue-400 animate-pulse"></span>' +
+                            '<span class="text-xs text-blue-300">Workflow running... (phase: ' + esc(phase) + ')</span>' +
+                            '<button type="button" class="wf-open-runs-tab px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open Runs Tab</button>' +
+                            '<button type="button" class="wf-cancel-run ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-run-id="' + data.id + '">' + SVG_STOP + '<span>Stop Run</span></button>' +
+                        '</div>' +
+                        detailStrip +
                     '</div>';
+                    runBar.querySelector(".wf-open-runs-tab").addEventListener("click", function () {
+                        switchTab("runs");
+                        loadActiveRuns();
+                    });
                     runBar.querySelector(".wf-cancel-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/cancel-run/" + data.id)
                             .then(function () { snack("Run cancelled"); stopPolling(); loadDetail(currentWorkflowId); })
@@ -1783,6 +1847,15 @@
         document.addEventListener("click", function () { closeWorkflowContextMenu(); });
         document.addEventListener("keydown", function (evt) {
             if (evt.key === "Escape") closeWorkflowContextMenu();
+            if (evt.defaultPrevented) return;
+            if (document.getElementById("wf-confirm-modal")) return;
+            if (!currentWorkflowId) return;
+            if (isTypingTarget(evt.target)) return;
+            // Delete selected workflow with Delete/Backspace hotkey.
+            if (evt.key === "Delete" || evt.key === "Backspace") {
+                evt.preventDefault();
+                deleteWorkflowById(currentWorkflowId);
+            }
         });
 
         // Create workflow

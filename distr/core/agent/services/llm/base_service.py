@@ -286,11 +286,16 @@ class BaseLLMService(LLMSharedMixin, LLMService):
 
     def _save_assistant_message(self, content: str):
         """Save assistant message to history and chat manager."""
-        self._messages.append({"role": "assistant", "content": content})
+        from distr.core.agent.services.llm.text_utils import (
+            redact_filesystem_paths_for_conversation,
+        )
+
+        display = redact_filesystem_paths_for_conversation(content or "")
+        self._messages.append({"role": "assistant", "content": display})
         if self.chat_manager:
             current_chat = self.chat_manager.get_current_chat()
             if current_chat:
-                self.chat_manager.add_assistant_message(current_chat, content)
+                self.chat_manager.add_assistant_message(current_chat, display)
 
     def _get_provider_name(self) -> str:
         """Return the provider name. Override in subclass."""

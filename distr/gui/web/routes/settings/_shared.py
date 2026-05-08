@@ -154,6 +154,7 @@ class GeneralSettings(BaseModel):
     qwen3_voice: str = "aiden"
     f5tts_voice: str = "default"
     voxcpm_voice: str = "default"
+    vibevoice_realtime_voice: str = "en-carter_man"
     playback_speed: float = 1.0
     speech_volume: int = 100
     vad_threshold: int = 50

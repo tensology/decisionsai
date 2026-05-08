@@ -9,6 +9,7 @@
     var modalTicketId = null;
     /** Loaded ticket's source_chat_id (null = unset); used to avoid overwriting on save. */
     var modalTicketSourceChatId = null;
+    var sendWorkflowContext = null;
     var copyTicketData = null;     // { title, description } for copy modal
     var ctxMenuBoardId = null;     // board id for context menu
     var waChats = [];
@@ -401,6 +402,12 @@
     function hideKanbanConfirm() {
         modalHelpers.hideConfirm();
     }
+    /** External ticket modal reuses the same DOM as local tickets — clear DB ticket id so actions hit the Jira path. */
+    function prepareExternalTicketModal() {
+        modalTicketId = null;
+        modalTicketSourceChatId = null;
+    }
+
     var ticketUi = window.KanbanTicketUi.create({
         esc: esc,
         stripHtml: stripHtml,
@@ -409,8 +416,10 @@
         renderModalLinks: renderModalLinks,
         switchTicketTab: switchTicketTab,
         showSnackbar: showSnackbar,
+        prepareExternalTicketModal: prepareExternalTicketModal,
         openTicketModal: openTicketModal,
         copyAndPushExternalTicket: copyAndPushExternalTicket,
+        openSendWorkflowModal: openSendWorkflowModal,
         openCopyModal: openCopyModal,
         apiFetch: apiFetch,
         sendTicketToProjectById: sendTicketToProjectById,
@@ -418,15 +427,19 @@
         reloadCurrentDatabaseBoard: reloadCurrentDatabaseBoard,
         showKanbanConfirm: showKanbanConfirm,
         hideKanbanConfirm: hideKanbanConfirm,
+        startTicketDiscussion: startTicketDiscussion,
         getCurrentBoard: function() { return currentBoard; },
         getCurrentBoardData: function() { return currentBoardData; },
         getCurrentAgentStatus: function() { return currentAgentStatus; },
+        showRunPopover: showRunPopover,
     });
     var ticketModalSections = window.KanbanTicketModalSections.create({
         esc: esc,
         apiFetch: apiFetch,
         showSnackbar: showSnackbar,
         getModalTicketId: function() { return modalTicketId; },
+        renderModalAuditEntries: renderModalAuditEntries,
+        loadModalAuditReport: loadModalAuditReport,
     });
     var boardSettings = window.KanbanBoardSettings.create({
         apiFetch: apiFetch,
@@ -872,7 +885,8 @@
     }
     // ── Select board ──
 
-    function selectBoard(source, id, extUrl) {
+    function selectBoard(source, id, extUrl, opts) {
+        opts = opts || {};
         stopAgentStatusPolling();
         currentAgentStatus = null;
         currentBoard = { id: id, source: source, extUrl: extUrl || "" };
@@ -912,27 +926,40 @@
                 showSnackbar("Failed to load board: " + e.message, "error");
             });
         } else {
-            apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id)).then(function(data) {
-                currentBoardData = data;
-                if (!keepMessagesVisible) {
-                document.getElementById("kb-loading").classList.add("hidden");
-                document.getElementById("kb-board-view").classList.remove("hidden");
-                }
-                renderBoard(data, false);
-                if (data.local_id) {
-                    startAgentStatusPolling(data.local_id);
-                } else {
-                    stopAgentStatusPolling();
-                    currentAgentStatus = null;
-                    applyAgentStatusVisuals();
-                }
-            }).catch(function(e) {
-                if (!keepMessagesVisible) {
-                document.getElementById("kb-loading").classList.add("hidden");
-                document.getElementById("kb-empty").classList.remove("hidden");
-                }
-                showSnackbar("Failed to load external board: " + e.message, "error");
-            });
+            (function fetchExtBoard(attempt) {
+                attempt = attempt || 0;
+                var forceQ = opts.forceRefresh && attempt === 0 ? "?force_refresh=1" : "";
+                apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id) + forceQ).then(function(data) {
+                    currentBoardData = data;
+                    if (data.cache_ready === false && attempt < 90) {
+                        if (!keepMessagesVisible) {
+                            document.getElementById("kb-loading").classList.add("hidden");
+                            document.getElementById("kb-board-view").classList.remove("hidden");
+                        }
+                        renderBoard(data, false);
+                        setTimeout(function() { fetchExtBoard(attempt + 1); }, 700);
+                        return;
+                    }
+                    if (!keepMessagesVisible) {
+                        document.getElementById("kb-loading").classList.add("hidden");
+                        document.getElementById("kb-board-view").classList.remove("hidden");
+                    }
+                    renderBoard(data, false);
+                    if (data.local_id) {
+                        startAgentStatusPolling(data.local_id);
+                    } else {
+                        stopAgentStatusPolling();
+                        currentAgentStatus = null;
+                        applyAgentStatusVisuals();
+                    }
+                }).catch(function(e) {
+                    if (!keepMessagesVisible) {
+                        document.getElementById("kb-loading").classList.add("hidden");
+                        document.getElementById("kb-empty").classList.remove("hidden");
+                    }
+                    showSnackbar("Failed to load external board: " + e.message, "error");
+                });
+            })(0);
         }
         loadBoards(); // uses cache, just re-renders sidebar active state
     }
@@ -1078,6 +1105,21 @@
                 if (msg.type !== "kanban_updated") return;
                 if (!currentBoard || currentBoard.source !== "database") return;
                 if (msg.board_id != null && String(msg.board_id) !== String(currentBoard.id)) return;
+                var eventType = (msg.event || "").toLowerCase();
+                var payload = msg.payload || {};
+                if (eventType === "ticket_workflow_status") {
+                    if (payload && payload.ticket_id && payload.status) {
+                        setTicketWorkflowStatusOnCard(payload.ticket_id, payload.status);
+                    }
+                    return;
+                }
+                if (eventType === "run_completed") {
+                    if (payload && payload.ticket_id && payload.status) {
+                        setTicketWorkflowStatusOnCard(payload.ticket_id, payload.status);
+                        showSnackbar("Workflow " + String(payload.status) + " for ticket #" + String(payload.ticket_id));
+                        return;
+                    }
+                }
                 scheduleRealtimeBoardRefresh();
             } catch (e) {}
         };
@@ -1142,15 +1184,20 @@
             var body = document.createElement("div");
             body.className = "kb-lane-body flex-1 p-2 space-y-2 overflow-y-auto";
             body.dataset.laneId = lane.id;
-            if (isLocal) {
-                body.addEventListener("dragover", function(e) { e.preventDefault(); body.classList.add("drag-over"); });
-                body.addEventListener("dragleave", function() { body.classList.remove("drag-over"); });
-                body.addEventListener("drop", function(e) {
-                    e.preventDefault(); body.classList.remove("drag-over");
-                    var ticketId = e.dataTransfer.getData("text/plain");
-                    if (ticketId) moveTicket(parseInt(ticketId, 10), lane.id, body, e.clientY);
-                });
-            }
+            body.addEventListener("dragover", function(e) { e.preventDefault(); body.classList.add("drag-over"); });
+            body.addEventListener("dragleave", function() { body.classList.remove("drag-over"); });
+            body.addEventListener("drop", function(e) {
+                e.preventDefault(); body.classList.remove("drag-over");
+                var ticketId = e.dataTransfer.getData("text/plain");
+                if (!ticketId) return;
+                if (isLocal) {
+                    var tid = parseInt(ticketId, 10);
+                    if (!isFinite(tid)) return;
+                    moveTicket(tid, lane.id, body, e.clientY);
+                } else {
+                    moveExternalTicket(ticketId, lane.id, body, e.clientY);
+                }
+            });
             (lane.tickets || []).forEach(function(ticket) { body.appendChild(createTicketCard(ticket, isLocal, boardData)); });
             col.appendChild(body);
             container.appendChild(col);
@@ -1181,51 +1228,63 @@
     }
 
     /** Send a local ticket to project by ID. */
-    function sendTicketToProjectById(ticketId) {
+    function sendTicketToProjectById(ticketId, btnEl) {
+        if (btnEl) {
+            btnEl.dataset.prevHtml = btnEl.innerHTML;
+            btnEl.disabled = true;
+            btnEl.classList.add("text-orange-400");
+            btnEl.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
+        }
+        showSnackbar("Sending ticket #" + ticketId + " to project...", "info");
         apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-project", { method: "POST" })
-            .then(function(r) { showSnackbar(r.message || "Sent to project"); })
-            .catch(function(err) { showSnackbar("Error: " + err.message, "error"); });
+            .then(function(r) {
+                showSnackbar(r.message || "Sent to project");
+            })
+            .catch(function(err) {
+                showSnackbar("Error: " + err.message, "error");
+            })
+            .finally(function() {
+                if (btnEl) {
+                    btnEl.innerHTML = btnEl.dataset.prevHtml || btnEl.innerHTML;
+                    btnEl.classList.remove("text-orange-400");
+                    btnEl.disabled = false;
+                }
+            });
     }
 
     /** Copy an external ticket to the local board, then optionally send to CLI or project. */
-    function copyAndPushExternalTicket(ticket, source, action) {
+    function copyAndPushExternalTicket(ticket, source, action, selectedWorkflowId) {
         if (!dbBoards.length) { showSnackbar("No local boards available", "error"); return; }
         var requiresProject = action === 'cli' || action === 'project';
-        // Find the best target board
-        var targetBoard = (currentBoardData && currentBoardData.local_id) ? null : null;
-        // Prefer a board linked to the same project as the external board config
+        // Project may be set on the external (Trello/Jira) board config, while tickets are copied
+        // onto a source=database board only — local_id points at the external shadow row, not dbBoards.
+        var extProjectId = currentBoardData && currentBoardData.default_project_id ? currentBoardData.default_project_id : null;
+        // Prefer a database board linked to the same project as the external board config
         var preferredBoard = null;
-        for (var i = 0; i < dbBoards.length; i++) {
-            if (currentBoardData && currentBoardData.default_project_id && dbBoards[i].default_project_id === currentBoardData.default_project_id) {
-                preferredBoard = dbBoards[i]; break;
-            }
-        }
-        if (!preferredBoard && currentBoardData && currentBoardData.local_id) {
-            for (var j = 0; j < dbBoards.length; j++) {
-                if (dbBoards[j].id === currentBoardData.local_id) { preferredBoard = dbBoards[j]; break; }
+        if (extProjectId) {
+            for (var i = 0; i < dbBoards.length; i++) {
+                if (dbBoards[i].default_project_id === extProjectId) {
+                    preferredBoard = dbBoards[i];
+                    break;
+                }
             }
         }
         if (!preferredBoard) preferredBoard = dbBoards[0];
 
-        // Sending to CLI/project requires a local board linked to a project.
+        // Sending to CLI/project needs a project: either on the external board or on the destination local board.
         if (requiresProject) {
-            if (!preferredBoard.default_project_id) {
-                var fallbackBoard = null;
-                for (var k = 0; k < dbBoards.length; k++) {
-                    if (dbBoards[k].default_project_id) { fallbackBoard = dbBoards[k]; break; }
-                }
-                preferredBoard = fallbackBoard;
-            }
-            if (!preferredBoard || !preferredBoard.default_project_id) {
-                showSnackbar("Link a local board to a project before sending to " + (action === 'cli' ? "CLI" : "project"), "error");
+            var destProject = preferredBoard && preferredBoard.default_project_id ? preferredBoard.default_project_id : null;
+            if (!extProjectId && !destProject) {
+                showSnackbar("Link this Jira/Trello board to a project (board settings) or set a default project on a local board before sending to " + (action === 'cli' ? "CLI" : "project"), "error");
                 return;
             }
         }
 
+        var effectiveLinkedProject = extProjectId || (preferredBoard && preferredBoard.default_project_id) || null;
         var payload = {
             board_id: preferredBoard.id,
             title: ticket.title,
-            description: stripHtml(ticket.description || ""),
+            description: ticket.description || "",
             priority: ticket.priority || "medium",
             time_estimate: ticket.time_estimate || "",
             time_spent: ticket.time_spent || "",
@@ -1233,8 +1292,15 @@
             external_id: String(ticket.id),
             external_url: ticket.url || "",
             auto_send_to_project: action === 'project',
+            auto_send_to_workflow: action === 'workflow',
             auto_send_to_cli: action === 'cli',
         };
+        if (effectiveLinkedProject) {
+            payload.linked_project_id = effectiveLinkedProject;
+        }
+        if (selectedWorkflowId) {
+            payload.linked_workflow_id = selectedWorkflowId;
+        }
         commonUtils.mergeSourceChatIntoPayload(payload);
 
         apiFetch("/api/kanban/tickets/copy-external-to-board", {
@@ -1244,6 +1310,12 @@
             if (action === 'cli' && r.id) {
                 showSnackbar("Ticket copied — pushing to CLI…");
                 pushTicketToCli(r.id, null);
+            } else if (action === 'workflow') {
+                if (r.workflow_started) {
+                    showSnackbar("Ticket copied and sent to workflow");
+                } else {
+                    showSnackbar("Ticket copied but workflow did not start: " + (r.workflow_error || "unknown error"), "error");
+                }
             } else if (action === 'project') {
                 showSnackbar(r.sent_to_project ? "Ticket copied & sent to project: " + (r.project_name || "") : "Ticket copied to board");
             } else {
@@ -1256,6 +1328,201 @@
         }).catch(function(err) {
             showSnackbar("Error: " + err.message, "error");
         });
+    }
+
+    var DISCUSS_PROMPT_MAX_CHARS = 14000;
+
+    /** Keep Ticket Board in sync with Chat tab when sessionStorage was never set (Kanban page does not load chat.js). */
+    function persistSourceChatIdForTickets(chatId) {
+        if (chatId == null || chatId < 1) return;
+        try {
+            sessionStorage.setItem("decisions_source_chat_id", String(Number(chatId)));
+        } catch (e) { /* ignore */ }
+    }
+
+    /** Prefer agent's loaded chat, then last-used from settings, then most recently modified row. */
+    function pickChatIdFromChatsListPayload(data) {
+        if (!data || !Array.isArray(data.chats)) return null;
+        var present = {};
+        var i, c, nid;
+        for (i = 0; i < data.chats.length; i++) {
+            c = data.chats[i];
+            if (c && c.id != null) {
+                nid = typeof c.id === "number" ? c.id : parseInt(c.id, 10);
+                if (!isNaN(nid) && nid >= 1) present[nid] = true;
+            }
+        }
+        function coercePick(v) {
+            if (v == null) return null;
+            var n = typeof v === "number" ? v : parseInt(v, 10);
+            if (isNaN(n) || n < 1) return null;
+            return present[n] ? n : null;
+        }
+        var agent = coercePick(data.agent_current_chat_id);
+        if (agent != null) return agent;
+        var last = coercePick(data.last_chat_id);
+        if (last != null) return last;
+        if (data.chats.length && data.chats[0].id != null) {
+            nid = typeof data.chats[0].id === "number" ? data.chats[0].id : parseInt(data.chats[0].id, 10);
+            if (!isNaN(nid) && nid >= 1) return nid;
+        }
+        return null;
+    }
+
+    /**
+     * Resolve which chat should receive ticket-discussion messages.
+     * Uses the same source as the Chat tab when available; otherwise GET /api/chats (agent + last + newest);
+     * if there are no chats, POST /api/chats to create one so "Let's talk about it" always has a target.
+     */
+    function resolveChatIdForTicketDiscuss() {
+        var direct =
+            typeof commonUtils.getSourceChatIdForTickets === "function"
+                ? commonUtils.getSourceChatIdForTickets()
+                : null;
+        if (direct != null && direct >= 1) {
+            persistSourceChatIdForTickets(direct);
+            return Promise.resolve(direct);
+        }
+        return apiFetch("/api/chats")
+            .then(function (data) {
+                var cid = pickChatIdFromChatsListPayload(data);
+                if (cid != null) return cid;
+                return apiFetch("/api/chats", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({}),
+                }).then(function (created) {
+                    if (!created || created.id == null) {
+                        throw new Error("Could not create a chat");
+                    }
+                    var nc = typeof created.id === "number" ? created.id : parseInt(created.id, 10);
+                    if (isNaN(nc) || nc < 1) throw new Error("Invalid chat id from create");
+                    return nc;
+                });
+            })
+            .then(function (chatId) {
+                persistSourceChatIdForTickets(chatId);
+                return chatId;
+            });
+    }
+
+    /**
+     * Build the first user message for a new chat so the agent opens in "discuss this ticket" mode
+     * (warm opener + pertinent questions; no file/CLI/project actions until the user asks).
+     */
+    function buildTicketDiscussionStartingQuestion(ticket, isLocal, boardLabel, source) {
+        var title = (ticket.title || "").trim() || "(untitled)";
+        var descRaw = ticket.description || "";
+        var desc = stripHtml(descRaw);
+        if (desc.length > DISCUSS_PROMPT_MAX_CHARS) {
+            desc = desc.substring(0, DISCUSS_PROMPT_MAX_CHARS) + "\n…[description truncated for chat size]";
+        }
+        var idPart = isLocal ? ("Local ticket id: " + ticket.id) : ("External id: " + String(ticket.id));
+        var urlLine = ticket.url ? "\n- URL: " + ticket.url : "";
+        var meta = [];
+        if (ticket.time_estimate) meta.push("Estimate: " + ticket.time_estimate);
+        if (ticket.time_spent) meta.push("Spent: " + ticket.time_spent);
+        if (ticket.priority) meta.push("Priority: " + ticket.priority);
+        if (ticket.members && ticket.members.length) meta.push("People: " + ticket.members.join(", "));
+        if (ticket.labels && ticket.labels.length) meta.push("Labels: " + ticket.labels.join(", "));
+        var metaBlock = meta.length ? ("\n- " + meta.join("\n- ")) : "";
+        var todosBlock = "";
+        if (ticket.todos && ticket.todos.length) {
+            todosBlock =
+                "\n**Checklist / subtasks**\n" +
+                ticket.todos
+                    .map(function(t) {
+                        var mark = t.done ? "[x]" : "[ ]";
+                        return mark + " " + (t.text || "");
+                    })
+                    .join("\n");
+        }
+        var descNote = "";
+        if (!desc && descRaw && String(descRaw).trim()) {
+            descNote =
+                "\n\n*(Jira returned a non-empty description in HTML/ADF that is not expanded to plain text here — open the issue URL above for the full body, images, and acceptance details.)*";
+        }
+        var orchestratorHint = !isLocal
+            ? "\n\n**Orchestrator instruction:** This ticket is shown on an **external** board (Jira/Trello). The context "
+                + "for this turn is **fully in this user message** unless you see a separate 'Local ticket id'. Do **not** "
+                + "call the ticket-board tool (`create_ticket` with action `discuss_ticket` or `get_ticket`) using the "
+                + "Jira key to reload the issue; there may be no local `KanbanTicket` row until the user uses "
+                + "**Copy to local board**. Answer from this message and the URL; suggest copying to the board only "
+                + "if they need send-to-project or a local ticket id."
+            : "";
+        return (
+            "[Ticket Board — discuss this ticket]\n" +
+            "The user wants a real conversation first (not a new ticket file, project drop, CLI run, or board edit) unless they ask for one later.\n" +
+            "Briefly reflect what you think they are trying to accomplish, then ask **3–5 specific questions** " +
+            "(scope, acceptance criteria, constraints, risks, dependencies, stakeholders). Avoid generic filler. " +
+            "Stay in discussion until they explicitly ask you to draft a ticket, push to project/CLI, or update the description.\n\n" +
+            "**Context** — Source: " + source + " · Board: " + (boardLabel || "(unknown)") + " · " + idPart + urlLine + metaBlock + "\n\n" +
+            "**Title**\n" + title + "\n" +
+            todosBlock +
+            "\n**Description**\n" + (desc || "(none)") +
+            descNote +
+            orchestratorHint
+        );
+    }
+
+    var _ticketDiscussInFlight = false;
+
+    /**
+     * Send ticket context into the **current** loaded chat (same session as Chat page uses for tickets).
+     * Does not create a chat or open a tab. Agent should respond in voice if speak is true.
+     */
+    function startTicketDiscussion(ticket, isLocal) {
+        if (!ticket) {
+            showSnackbar("No ticket to discuss", "error");
+            return;
+        }
+        if (_ticketDiscussInFlight) {
+            return;
+        }
+        var src = currentBoard && currentBoard.source ? currentBoard.source : "database";
+        var boardLabel = (currentBoardData && currentBoardData.name) ? currentBoardData.name : "";
+        var starting = buildTicketDiscussionStartingQuestion(ticket, !!isLocal, boardLabel, src);
+        _ticketDiscussInFlight = true;
+        showSnackbar("Sending ticket context to your agent…", "info");
+        resolveChatIdForTicketDiscuss()
+            .then(function (chatId) {
+                return apiFetch("/api/chats/" + chatId + "/load-in-agent", { method: "POST" }).then(function () {
+                    return apiFetch("/api/chats/" + chatId + "/send-to-agent", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ message: starting, speak: true }),
+                    });
+                });
+            })
+            .then(function () {
+                showSnackbar(
+                    "Ticket context is in your agent chat now — open **Chat** to read and reply (same thread the orchestrator uses).",
+                    "success"
+                );
+            })
+            .catch(function (e) {
+                showSnackbar("Could not reach the agent: " + (e && e.message ? e.message : String(e)), "error");
+            })
+            .finally(function () {
+                _ticketDiscussInFlight = false;
+            });
+    }
+
+    function getModalTicketSnapshotForDiscuss() {
+        var title = (document.getElementById("kb-modal-ticket-title").value || "").trim();
+        var descArea = document.getElementById("kb-modal-ticket-desc");
+        var description = descArea ? descArea.value : "";
+        var estEl = document.getElementById("kb-modal-ticket-estimate");
+        var durEl = document.getElementById("kb-modal-ticket-duration");
+        return {
+            id: modalTicketId,
+            title: title,
+            description: description,
+            time_estimate: estEl ? estEl.value : "",
+            time_spent: durEl ? durEl.value : "",
+            priority: getSelectedPriority(),
+            url: ""
+        };
     }
 
     /** Open a detail modal for an external (Trello/Jira) ticket. */
@@ -1357,11 +1624,34 @@
         .catch(function(e) { showSnackbar("Move failed: " + e.message, "error"); });
     }
 
+    /** Move a Trello/Jira ticket on the remote board (list or column), then refresh the board. */
+    function moveExternalTicket(ticketId, targetLaneId, bodyEl, clientY) {
+        var src = currentBoard && currentBoard.source;
+        if (src !== "trello" && src !== "jira") return;
+        var bid = currentBoard.id;
+        var position = typeof clientY === "number"
+            ? computeTicketDropPosition(bodyEl, String(ticketId), clientY)
+            : bodyEl.querySelectorAll(".kb-card").length;
+        apiFetch("/api/kanban/external-boards/" + src + "/" + encodeURIComponent(bid) + "/move-ticket", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                ticket_id: String(ticketId),
+                target_lane_id: String(targetLaneId),
+                position: position
+            })
+        }).then(function() {
+            selectBoard(src, bid, currentBoard.extUrl || "");
+        }).catch(function(e) { showSnackbar("Move failed: " + e.message, "error"); });
+    }
+
     // ── Ticket modal ──
 
     function openTicketModal(ticketId) {
         modalTicketId = ticketId;
         modalTicketSourceChatId = null;
+        window._extTicketData = null;
+        window._extTicketSource = null;
         switchTicketTab("details");
         // Reset modal to local-ticket mode
         resetTicketModalForLocal();
@@ -1374,6 +1664,7 @@
             renderModalLinks(t.links || []);
             renderModalFiles(t.files || []);
             renderModalTodos(t.todos || []);
+            loadModalAuditReport(ticketId, t.audit_entries || []);
             loadLinkableEntities(t);
             modalTicketSourceChatId = t.source_chat_id != null ? t.source_chat_id : null;
             setModalProjectActionState(!!(t.linked_project_id || (currentBoardData && currentBoardData.default_project_id)));
@@ -1382,6 +1673,138 @@
             if (extMeta) extMeta.classList.add("hidden");
             document.getElementById("kb-ticket-modal").classList.remove("hidden");
         }).catch(function(e) { showSnackbar("Failed to load ticket: " + e.message, "error"); });
+    }
+
+    function loadModalAuditReport(ticketId, fallbackEntries) {
+        apiFetch("/api/kanban/tickets/" + ticketId + "/audit-report")
+            .then(function(report) {
+                renderModalAuditEntries(report.entries || []);
+                renderModalAuditSummary(report);
+                renderModalAuditRuns(report.runs || []);
+            })
+            .catch(function() {
+                renderModalAuditEntries(fallbackEntries || []);
+                renderModalAuditSummary({ total_entries: (fallbackEntries || []).length, runs: [] });
+                renderModalAuditRuns([]);
+            });
+    }
+
+    function clearModalAuditReport() {
+        if (!modalTicketId) return;
+        showKanbanConfirm({
+            title: "Clear report?",
+            message: "This will remove all report and audit history entries for this ticket.",
+            confirmLabel: "Clear Report",
+            danger: true,
+            onConfirm: function() {
+                hideKanbanConfirm();
+                apiFetch("/api/kanban/tickets/" + modalTicketId + "/audit-report", { method: "DELETE" })
+                    .then(function(res) {
+                        var deleted = Number((res && res.deleted_entries) || 0);
+                        showSnackbar("Report cleared" + (deleted ? " (" + deleted + " entries)" : ""));
+                        loadModalAuditReport(modalTicketId, []);
+                    })
+                    .catch(function(e) {
+                        showSnackbar("Failed to clear report: " + e.message, "error");
+                    });
+            }
+        });
+    }
+
+    function renderModalAuditSummary(report) {
+        var container = document.getElementById("kb-modal-audit-summary");
+        if (!container) return;
+        var runs = Array.isArray(report && report.runs) ? report.runs : [];
+        var totalRuns = runs.length;
+        var totalEntries = Number(report && report.total_entries) || 0;
+        var totalSeconds = 0;
+        runs.forEach(function(r) { totalSeconds += Number(r.total_duration_seconds || 0); });
+        container.innerHTML =
+            '<div class="p-2 bg-[#152054] border border-white/10 rounded"><div class="text-[11px] text-gray-400">Runs</div><div class="text-sm text-white">' + esc(String(totalRuns)) + "</div></div>" +
+            '<div class="p-2 bg-[#152054] border border-white/10 rounded"><div class="text-[11px] text-gray-400">Audit Entries</div><div class="text-sm text-white">' + esc(String(totalEntries)) + "</div></div>" +
+            '<div class="p-2 bg-[#152054] border border-white/10 rounded"><div class="text-[11px] text-gray-400">Total Runtime</div><div class="text-sm text-white">' + esc(formatDuration(totalSeconds)) + "</div></div>";
+    }
+
+    function renderModalAuditRuns(runs) {
+        var container = document.getElementById("kb-modal-audit-runs");
+        if (!container) return;
+        var list = Array.isArray(runs) ? runs : [];
+        if (!list.length) {
+            container.innerHTML = '<div class="text-xs text-gray-500">No run report yet.</div>';
+            return;
+        }
+        container.innerHTML = "";
+        list.forEach(function(run) {
+            var row = document.createElement("div");
+            row.className = "p-2 bg-[#152054] border border-white/10 rounded space-y-2";
+            var runId = run.run_id == null ? "n/a" : String(run.run_id);
+            var total = Number(run.total_duration_seconds || 0);
+            var steps = Array.isArray(run.step_breakdown) ? run.step_breakdown : [];
+            var maxStepSeconds = 1;
+            steps.forEach(function(s) { maxStepSeconds = Math.max(maxStepSeconds, Number(s.total_seconds || 0)); });
+            var timelineHtml = steps.map(function(s) {
+                var sec = Number(s.total_seconds || 0);
+                var width = Math.max(8, Math.round((sec / maxStepSeconds) * 100));
+                return '<div class="flex items-center gap-2">' +
+                    '<div class="w-16 text-[11px] text-gray-400">Step ' + esc(String(s.step_id)) + '</div>' +
+                    '<div class="flex-1 h-2 bg-[#0c153f] rounded overflow-hidden"><div class="h-2 bg-[#f97316]" style="width:' + esc(String(width)) + '%"></div></div>' +
+                    '<div class="w-28 text-[11px] text-gray-300 text-right">' + esc(formatDuration(sec)) + "</div>" +
+                    "</div>";
+            }).join("");
+            var tableRows = steps.map(function(s) {
+                return "<tr>" +
+                    '<td class="py-1 pr-3">Step ' + esc(String(s.step_id)) + "</td>" +
+                    '<td class="py-1 pr-3">' + esc(String(s.attempts || 0)) + "</td>" +
+                    '<td class="py-1 pr-3">' + esc(formatDuration(Number(s.total_seconds || 0))) + "</td>" +
+                    '<td class="py-1">' + esc(formatDuration(Number(s.wait_seconds || 0))) + "</td>" +
+                    "</tr>";
+            }).join("");
+            row.innerHTML =
+                '<div class="flex items-center justify-between"><div class="text-xs text-white">Run #' + esc(runId) + '</div><div class="text-[11px] text-gray-400">' + esc(run.started_at || "") + " -> " + esc(run.finished_at || "") + "</div></div>" +
+                '<div class="text-[11px] text-gray-400">Total runtime: ' + esc(formatDuration(total)) + "</div>" +
+                '<div class="space-y-1">' + (timelineHtml || '<div class="text-[11px] text-gray-500">No step timing data.</div>') + "</div>" +
+                '<table class="w-full text-[11px] text-gray-300"><thead><tr class="text-gray-500"><th class="text-left py-1 pr-3">Step</th><th class="text-left py-1 pr-3">Attempts</th><th class="text-left py-1 pr-3">Run Time</th><th class="text-left py-1">Wait Time</th></tr></thead><tbody>' + tableRows + "</tbody></table>";
+            container.appendChild(row);
+        });
+    }
+
+    function formatDuration(totalSeconds) {
+        var sec = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+        var h = Math.floor(sec / 3600);
+        var m = Math.floor((sec % 3600) / 60);
+        var s = sec % 60;
+        if (h > 0) return h + "h " + m + "m " + s + "s";
+        if (m > 0) return m + "m " + s + "s";
+        return s + "s";
+    }
+
+    function renderModalAuditEntries(entries) {
+        var container = document.getElementById("kb-modal-audit-entries");
+        if (!container) return;
+        var rows = Array.isArray(entries) ? entries : [];
+        if (!rows.length) {
+            container.innerHTML = '<div class="text-xs text-gray-500">No audit entries yet.</div>';
+            return;
+        }
+        container.innerHTML = "";
+        rows.forEach(function(entry) {
+            var row = document.createElement("div");
+            row.className = "p-2 bg-[#152054] border border-white/10 rounded";
+            var status = (entry.status || "pending").toString();
+            var lane = (entry.execution_lane || "cursor").toString();
+            var stamp = (entry.created_date || "").toString();
+            var summary = (entry.summary || "").toString();
+            var details = (entry.details || "").toString();
+            var meta = "lane: " + esc(lane) + " | status: " + esc(status);
+            if (entry.step_id != null) meta += " | step: " + esc(String(entry.step_id));
+            if (entry.run_id != null) meta += " | run: " + esc(String(entry.run_id));
+            row.innerHTML =
+                '<div class="text-[11px] text-gray-400">' + esc(stamp || "unknown time") + "</div>" +
+                '<div class="text-xs text-gray-200 mt-0.5">' + esc(summary || "(no summary)") + "</div>" +
+                '<div class="text-[11px] text-gray-500 mt-0.5">' + meta + "</div>" +
+                (details ? '<div class="text-[11px] text-gray-400 mt-1 whitespace-pre-wrap">' + esc(details) + "</div>" : "");
+            container.appendChild(row);
+        });
     }
 
     function closeTicketModal() {
@@ -1399,9 +1822,14 @@
 
     /** Reset modal UI back to local-ticket (editable) mode. */
     function resetTicketModalForLocal() {
+        var titleEl = document.getElementById("kb-modal-ticket-title");
         var descArea = document.getElementById("kb-modal-ticket-desc");
         var estimateInput = document.getElementById("kb-modal-ticket-estimate");
         var durationInput = document.getElementById("kb-modal-ticket-duration");
+        if (titleEl) {
+            titleEl.readOnly = false;
+            titleEl.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
+        }
         descArea.readOnly = false;
         descArea.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
         descArea.style.display = "";
@@ -1528,6 +1956,243 @@
                 showSnackbar("Ticket sent to project: " + (data.project_name || ""));
             })
             .catch(function(e) { showSnackbar("Failed: " + e.message, "error"); });
+    }
+
+    function resolveWorkflowModalDefault(ticket) {
+        var boardWorkflowId = currentBoardData && currentBoardData.default_workflow_id ? currentBoardData.default_workflow_id : null;
+        var ticketWorkflowId = ticket && ticket.linked_workflow_id ? ticket.linked_workflow_id : null;
+        if (boardWorkflowId) return { selectedWorkflowId: boardWorkflowId, hint: "Board default workflow is preselected." };
+        if (ticketWorkflowId) return { selectedWorkflowId: ticketWorkflowId, hint: "Ticket-linked workflow is preselected." };
+        return { selectedWorkflowId: null, hint: "No workflow linked yet. Pick one below." };
+    }
+
+    function closeSendWorkflowModal() {
+        var modal = document.getElementById("kb-send-workflow-modal");
+        var confirmBtn = document.getElementById("kb-send-workflow-confirm");
+        var hintEl = document.getElementById("kb-send-workflow-hint");
+        if (modal) modal.classList.add("hidden");
+        if (confirmBtn) {
+            confirmBtn.disabled = false;
+            confirmBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            confirmBtn.textContent = "Send";
+        }
+        if (hintEl && sendWorkflowContext && sendWorkflowContext.defaultHint) {
+            hintEl.textContent = sendWorkflowContext.defaultHint;
+        }
+        sendWorkflowContext = null;
+    }
+
+    function confirmSendWorkflowModal() {
+        var sel = document.getElementById("kb-send-workflow-select");
+        var confirmBtn = document.getElementById("kb-send-workflow-confirm");
+        var hintEl = document.getElementById("kb-send-workflow-hint");
+        var workflowId = parseInt(sel.value, 10) || null;
+        if (!workflowId) {
+            showSnackbar("Please select a workflow first", "error");
+            return;
+        }
+        if (!sendWorkflowContext) return;
+        if (confirmBtn) {
+            confirmBtn.disabled = true;
+            confirmBtn.classList.add("opacity-50", "cursor-not-allowed");
+            confirmBtn.textContent = "Sending...";
+        }
+        if (hintEl) {
+            hintEl.textContent = "Dispatching ticket to workflow...";
+        }
+        var targetTicketId = sendWorkflowContext.ticket && sendWorkflowContext.ticket.id ? sendWorkflowContext.ticket.id : null;
+        if (sendWorkflowContext.isLocal) {
+            showSnackbar("Sending ticket to workflow...");
+            apiFetch("/api/kanban/tickets/" + sendWorkflowContext.ticket.id + "/send-to-workflow", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ workflow_id: workflowId }),
+            }).then(function(resp) {
+                if (hintEl) hintEl.textContent = "Ticket sent. Workflow is now running.";
+                showSnackbar(resp.message || "Ticket sent to workflow");
+                if (targetTicketId) {
+                    setTicketWorkflowStatusOnCard(targetTicketId, "running");
+                }
+                closeSendWorkflowModal();
+            }).catch(function(e) {
+                if (confirmBtn) {
+                    confirmBtn.disabled = false;
+                    confirmBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                    confirmBtn.textContent = "Send";
+                }
+                if (hintEl && sendWorkflowContext && sendWorkflowContext.defaultHint) {
+                    hintEl.textContent = sendWorkflowContext.defaultHint;
+                }
+                showSnackbar("Workflow dispatch failed: " + e.message, "error");
+            });
+            return;
+        }
+        copyAndPushExternalTicket(sendWorkflowContext.ticket, sendWorkflowContext.source, "workflow", workflowId);
+        closeSendWorkflowModal();
+    }
+
+    // ── Workflow run popover ──────────────────────────────────────────
+
+    var _runPopover = null;
+
+    function _closeRunPopover() {
+        if (_runPopover) {
+            _runPopover.remove();
+            _runPopover = null;
+        }
+    }
+
+    // Global click-outside to close popover.
+    document.addEventListener("click", function(e) {
+        if (_runPopover && !_runPopover.contains(e.target) && !e.target.closest(".kb-wf-status-badge")) {
+            _closeRunPopover();
+        }
+    }, true);
+
+    function showRunPopover(badgeEl, ticketId) {
+        _closeRunPopover();
+        apiFetch("/api/kanban/tickets/" + ticketId + "/active-run").then(function(data) {
+            if (!data || !data.active) {
+                showSnackbar("No active run found for this ticket");
+                return;
+            }
+            var pop = document.createElement("div");
+            pop.className = "kb-run-popover fixed z-50 bg-[#1a2550] border border-white/20 rounded-lg shadow-xl p-3 text-xs";
+            pop.style.minWidth = "220px";
+            pop.style.maxWidth = "300px";
+
+            var statusCls = data.status === "waiting" ? "text-amber-300" : "text-sky-300";
+            var stepLine = data.current_step_name
+                ? '<div class="text-gray-400 mt-1">Step: <span class="text-gray-200">' + esc(data.current_step_name) + "</span></div>"
+                : "";
+            var phaseLine = data.phase
+                ? '<div class="text-gray-400">Phase: <span class="text-gray-200">' + esc(data.phase) + "</span></div>"
+                : "";
+            var wfName = data.workflow_name || ("Workflow #" + data.workflow_id);
+
+            pop.innerHTML =
+                '<div class="flex items-center justify-between gap-2 mb-2">' +
+                    '<span class="font-medium text-white truncate">' + esc(wfName) + "</span>" +
+                    '<span class="' + statusCls + ' font-medium shrink-0">' + esc(data.status) + "</span>" +
+                "</div>" +
+                stepLine + phaseLine +
+                '<div class="flex items-center gap-2 mt-3">' +
+                    '<button class="kb-run-pop-cancel flex-1 py-1 rounded border border-red-500/60 text-red-400 hover:bg-red-500/20 transition-colors">Stop Run</button>' +
+                    '<a class="kb-run-pop-view flex-1 text-center py-1 rounded border border-white/20 text-gray-300 hover:bg-white/10 transition-colors" href="/workflows/" target="_blank">View →</a>' +
+                "</div>";
+
+            pop.querySelector(".kb-run-pop-cancel").addEventListener("click", function() {
+                _closeRunPopover();
+                cancelTicketRun(data.run_id, data.workflow_id, ticketId);
+            });
+
+            // Set localStorage so the workflows page auto-selects this workflow.
+            pop.querySelector(".kb-run-pop-view").addEventListener("click", function() {
+                try { localStorage.setItem("wf_last_selected", String(data.workflow_id)); } catch(e) {}
+            });
+
+            document.body.appendChild(pop);
+            _runPopover = pop;
+
+            // Position below the badge, clamp to viewport.
+            var rect = badgeEl.getBoundingClientRect();
+            var top = rect.bottom + 6;
+            var left = rect.left;
+            var popW = 240;
+            if (left + popW > window.innerWidth - 8) left = window.innerWidth - popW - 8;
+            if (top + 140 > window.innerHeight - 8) top = rect.top - 140 - 6;
+            pop.style.top = top + "px";
+            pop.style.left = left + "px";
+        }).catch(function(e) {
+            showSnackbar("Could not load run info: " + e.message, "error");
+        });
+    }
+
+    function cancelTicketRun(runId, workflowId, ticketId) {
+        showKanbanConfirm({
+            title: "Stop workflow run?",
+            message: "The workflow will be cancelled and can be restarted from the ticket.",
+            confirmLabel: "Stop Run",
+            danger: true,
+            onConfirm: function() {
+                hideKanbanConfirm();
+                apiFetch("/api/workflows/" + workflowId + "/cancel-run/" + runId, { method: "POST" })
+                    .then(function() {
+                        showSnackbar("Workflow run stopped");
+                        setTicketWorkflowStatusOnCard(ticketId, "cancelled");
+                    })
+                    .catch(function(e) {
+                        showSnackbar("Could not stop run: " + e.message, "error");
+                    });
+            },
+        });
+    }
+
+    function setTicketWorkflowStatusOnCard(ticketId, workflowStatus) {
+        if (!ticketId) return;
+        var card = document.querySelector('.kb-card[data-ticket-id="' + String(ticketId) + '"]');
+        if (!card) return;
+        var status = String(workflowStatus || "").toLowerCase();
+        var badge = card.querySelector(".kb-wf-status-badge");
+        if (!status) {
+            if (badge) badge.remove();
+            return;
+        }
+        var isActive = status === "running" || status === "waiting";
+        var cls = "bg-gray-500/25 text-gray-200";
+        if (isActive) cls = "bg-sky-500/25 text-sky-200 cursor-pointer hover:bg-sky-500/40";
+        else if (status === "completed") cls = "bg-green-500/25 text-green-200";
+        else if (status === "failed" || status === "cancelled") cls = "bg-red-500/25 text-red-200";
+        if (!badge) {
+            var actionsRow = card.querySelector(".kb-card-actions");
+            if (!actionsRow) return;
+            var wrap = document.createElement("div");
+            wrap.className = "mt-1";
+            var tag = isActive ? "button" : "span";
+            wrap.innerHTML = '<' + tag + ' class="kb-wf-status-badge text-[10px] px-1.5 py-0.5 rounded font-medium"></' + tag + '>';
+            card.insertBefore(wrap, actionsRow);
+            badge = wrap.querySelector(".kb-wf-status-badge");
+            if (isActive) {
+                badge.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    showRunPopover(badge, ticketId);
+                });
+            }
+        }
+        badge.className = "kb-wf-status-badge " + cls + " text-[10px] px-1.5 py-0.5 rounded font-medium";
+        badge.textContent = status;
+    }
+
+    function openSendWorkflowModal(ticket, source) {
+        var isLocal = !source || source === "database";
+        var modal = document.getElementById("kb-send-workflow-modal");
+        var selectEl = document.getElementById("kb-send-workflow-select");
+        var hintEl = document.getElementById("kb-send-workflow-hint");
+        if (!modal || !selectEl || !hintEl) return;
+        var defaults = resolveWorkflowModalDefault(ticket);
+        sendWorkflowContext = {
+            ticket: ticket,
+            source: source || "database",
+            isLocal: isLocal,
+            defaultHint: defaults.hint,
+        };
+        hintEl.textContent = defaults.hint;
+        selectEl.innerHTML = '<option value="">Select workflow...</option>';
+        apiFetch("/api/kanban/linkable").then(function(data) {
+            var workflows = (data && data.workflows) || [];
+            workflows.forEach(function(wf) {
+                var opt = document.createElement("option");
+                opt.value = String(wf.id);
+                opt.textContent = wf.title || ("Workflow #" + wf.id);
+                if (defaults.selectedWorkflowId && String(wf.id) === String(defaults.selectedWorkflowId)) {
+                    opt.selected = true;
+                }
+                selectEl.appendChild(opt);
+            });
+            modal.classList.remove("hidden");
+        }).catch(function(e) {
+            showSnackbar("Failed to load workflows: " + e.message, "error");
+        });
     }
 
     // ── Modal: Links ──
@@ -2170,6 +2835,8 @@
         document.getElementById("kb-modal-close").addEventListener("click", closeTicketModal);
         document.getElementById("kb-modal-save").addEventListener("click", saveTicket);
         document.getElementById("kb-modal-delete").addEventListener("click", deleteTicket);
+        var clearReportBtn = document.getElementById("kb-modal-clear-report");
+        if (clearReportBtn) clearReportBtn.addEventListener("click", clearModalAuditReport);
         // Modal action buttons (copy, CLI, send-to-project, transfer)
         document.getElementById("kb-modal-act-copy").addEventListener("click", function() {
             if (modalTicketId) {
@@ -2201,14 +2868,49 @@
         });
         document.getElementById("kb-modal-act-project").addEventListener("click", function() {
             if (this.disabled) return;
+            var btn = this;
             if (modalTicketId) {
+                btn.dataset.prevHtml = btn.innerHTML;
+                btn.disabled = true;
+                btn.classList.add("opacity-70", "cursor-not-allowed");
+                btn.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
+                showSnackbar("Sending ticket to project...", "info");
                 apiFetch("/api/kanban/tickets/" + modalTicketId + "/send-to-project", { method: "POST" })
                     .then(function(r) { showSnackbar("Sent to project: " + (r.project_name || "")); })
-                    .catch(function(e) { showSnackbar("Error: " + e.message, "error"); });
+                    .catch(function(e) { showSnackbar("Error: " + e.message, "error"); })
+                    .finally(function() {
+                        btn.innerHTML = btn.dataset.prevHtml || btn.innerHTML;
+                        btn.classList.remove("opacity-70", "cursor-not-allowed");
+                        btn.disabled = false;
+                    });
             } else if (window._extTicketData) {
+                showSnackbar("Copying ticket and sending to project...", "info");
                 copyAndPushExternalTicket(window._extTicketData, window._extTicketSource, 'project');
             }
         });
+        document.getElementById("kb-modal-act-workflow").addEventListener("click", function() {
+            if (modalTicketId) {
+                apiFetch("/api/kanban/tickets/" + modalTicketId).then(function(t) {
+                    openSendWorkflowModal(t, "database");
+                }).catch(function(e) {
+                    showSnackbar("Failed to load ticket: " + e.message, "error");
+                });
+            } else if (window._extTicketData) {
+                openSendWorkflowModal(window._extTicketData, window._extTicketSource);
+            }
+        });
+        var modalDiscussBtn = document.getElementById("kb-modal-act-discuss");
+        if (modalDiscussBtn) {
+            modalDiscussBtn.addEventListener("click", function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                if (modalTicketId) {
+                    startTicketDiscussion(getModalTicketSnapshotForDiscuss(), true);
+                } else if (window._extTicketData) {
+                    startTicketDiscussion(window._extTicketData, false);
+                }
+            });
+        }
         // Transfer/copy button (external tickets)
         var transferBtn = document.getElementById("kb-modal-transfer-ext");
         if (transferBtn) transferBtn.addEventListener("click", function() {
@@ -2258,6 +2960,8 @@
         document.getElementById("kb-confirm-ok").addEventListener("click", function() {
             modalHelpers.invokeConfirmAction();
         });
+        document.getElementById("kb-send-workflow-cancel").addEventListener("click", closeSendWorkflowModal);
+        document.getElementById("kb-send-workflow-confirm").addEventListener("click", confirmSendWorkflowModal);
         document.getElementById("kb-confirm-modal").addEventListener("click", function(e) {
             if (e.target === this) hideKanbanConfirm();
         });

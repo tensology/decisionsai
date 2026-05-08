@@ -2,7 +2,7 @@
 Project RAG Service - Manages project-specific RAG indexes
 
 Each project gets its own persistent RAG index at:
-~/.decisionsai/project_indexes/project_{id}_{slugified_name}/
+~/.decisions/project_indexes/project_{id}_{slugified_name}/
 
 When switching projects:
 - Previous project RAG is cleared from memory (but persisted)
@@ -37,7 +37,7 @@ def get_project_index_path(project_id: int, project_name: str) -> str:
     """Get the index path for a project"""
     home_dir = os.path.expanduser("~")
     slug = slugify(project_name)
-    return os.path.join(home_dir, ".decisionsai", "project_indexes", f"project_{project_id}_{slug}")
+    return os.path.join(home_dir, ".decisions", "project_indexes", f"project_{project_id}_{slug}")
 
 
 def parse_gitignore(folder_path: str) -> Optional[pathspec.PathSpec]:
@@ -253,7 +253,7 @@ def index_project(project_id: int, model_name: str = "qwen3:8b") -> Dict[str, An
 
         for item in context_items:
             # Create a temporary file with the context content
-            temp_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "temp_context")
+            temp_dir = os.path.join(os.path.expanduser("~"), ".decisions", "temp_context")
             os.makedirs(temp_dir, exist_ok=True)
             temp_file = os.path.join(temp_dir, f"context_{item.id}.txt")
 
@@ -576,6 +576,23 @@ def get_active_project_context() -> Optional[str]:
             context_parts.append(f"For autonomous bug handling: check project context/logs, then call self_update_via_cursor with the exact request.")
             context_parts.append(f"Fallback call: create_project_ticket(instruction='<user's exact request>').")
             context_parts.append(f"After ticket creation, open the project if needed so implementation can proceed.")
+
+        # Voice + chat quality when a project is active (see .tickets work items on project-mode UX).
+        context_parts.append(
+            "\n### Conversational conduct (project mode)\n"
+            "- Keep replies concise for voice/TTS. Never read aloud anything at or below a line "
+            "starting with REFERENCE: in tool output; summarize in your own words if needed.\n"
+            "- After the user switches or activates a project, state the active project name once and "
+            "keep it consistent with ACTIVE PROJECT above.\n"
+            "- If they ask to inspect or 'look at' project context, use tools (e.g. query_current_project, "
+            "list_projects, project file/RAG search) instead of guessing. If the project is still ambiguous, "
+            "ask at most one targeted question (name or folder path), then proceed.\n"
+            "- Do not repeat the same clarifying question if the user already answered.\n"
+            "- If the user sounds frustrated, acknowledge briefly in one sentence, then complete the requested action.\n"
+            "- Route work per the CRITICAL section above: repo/product changes go through tickets or self_update "
+            "when applicable; simple explicit file-only requests can use file tools when the user asked for a file, "
+            "not a ticket.\n"
+        )
 
         return "\n".join(context_parts)
 

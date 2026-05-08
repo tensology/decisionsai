@@ -169,9 +169,9 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
         self.current_qr: Optional[str] = None
 
         # Logging
-        self._log_dir = Path.home() / ".decisionsai" / "logs"
+        self._log_dir = Path.home() / ".decisions" / "logs"
         self._log_dir.mkdir(parents=True, exist_ok=True)
-        self._device_identity_path = Path.home() / ".decisionsai" / "device_identity.json"
+        self._device_identity_path = Path.home() / ".decisions" / "device_identity.json"
         self._ws_auth_bundle: Optional[Dict[str, Any]] = None
         self._connect_lock = threading.Lock()
         self._connect_worker_running = False

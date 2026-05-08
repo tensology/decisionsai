@@ -23,8 +23,22 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
 )
 from distr.core.workflow.verification import _run_verification
-from distr.core.workflow.context_limits import truncate_step_result
+from distr.core.workflow.context_limits import truncate_step_summary
+from distr.core.kanban.result_packet import (
+    build_result_packet,
+    format_result_packet_note,
+    create_initial_result_packet_for_run,
+)
+from distr.core.kanban.evidence import format_evidence_block
+from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+from distr.core.workflow.risk_and_audit import (
+    infer_risk_profile,
+    build_audit_gates,
+    validation_rules_for_risk,
+    enforce_validation_requirements,
+)
 from distr.gui.web.workflow_events import increment_workflow_updated
+from distr.gui.web.kanban_events import increment_kanban_updated
 
 logger = logging.getLogger(__name__)
 
@@ -59,22 +73,63 @@ def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_s
     """
     try:
         status_label = (status or "unknown").strip().lower()
-        lines = [
-            f"[Workflow Run #{run_id}] Status: {status_label}",
-        ]
-        if steps_summary:
-            lines.append("Step summary:")
-            for s in steps_summary[-5:]:
-                title = (s.get("title") or "Step").strip()
-                st = (s.get("status") or "").strip()
-                result = (s.get("result") or "").strip()
-                snippet = result[:240]
-                if len(result) > 240:
-                    snippet += "..."
-                lines.append(f"- {title}: {st}")
-                if snippet:
-                    lines.append(f"  {snippet}")
-        note = "\n".join(lines).strip()
+        step_lines: List[str] = []
+        for s in steps_summary[-5:]:
+            title = (s.get("title") or "Step").strip()
+            st = (s.get("status") or "").strip()
+            result = (s.get("result") or "").strip()
+            snippet = result[:180]
+            if len(result) > 180:
+                snippet += "..."
+            line = f"{title}: {st}"
+            if snippet:
+                line += f" ({snippet})"
+            step_lines.append(line)
+
+        run_text = " ".join(
+            [str(getattr(ticket, "title", "") or ""), str(getattr(ticket, "description", "") or "")]
+            + [str((s.get("result") or "")) for s in steps_summary[-5:]]
+        )
+        risk = infer_risk_profile(run_text)
+        audits_run = build_audit_gates(
+            status=status_label,
+            risk_level=risk.get("level", "low"),
+            tests_passed=(status_label == "completed"),
+        )
+        validation_rules = validation_rules_for_risk(
+            risk.get("level", "low"),
+            risk.get("signals", []),
+        )
+        packet = build_result_packet(
+            ticket_id=str(getattr(ticket, "id", "") or ""),
+            board_id=str(getattr(ticket, "board_id", "") or "") if getattr(ticket, "board_id", None) is not None else None,
+            project_id=str(getattr(ticket, "linked_project_id", "") or "")
+            if getattr(ticket, "linked_project_id", None) is not None
+            else None,
+            execution_lane="cursor",
+            status=status_label,
+            summary=f"Workflow run {run_id} finished with {len(steps_summary)} recorded step result(s).",
+            files_changed=[],
+            change_summary=step_lines,
+            commands_suggested=["Run deterministic validation checks in CLI for high-risk changes."],
+            tests_run=[],
+            test_results=[],
+            limitations=["Workflow note contains compact per-step summary only."],
+            next_recommended=(
+                ["Inspect step outputs and move ticket based on risk policy."]
+                + validation_rules[:4]
+            ),
+            logs=[f"workflow_run:{run_id}"],
+            assumptions=[
+                f"risk_level={risk.get('level', 'low')}",
+                f"risk_type={risk.get('risk_type', 'standard')}",
+            ],
+            audits_run=audits_run,
+            final_verdict="pass" if status_label == "completed" else "needs_changes",
+            audit_rationale="Workflow terminal status mapped to canonical verdict.",
+        )
+        note = format_result_packet_note(packet, title=f"Workflow Run #{run_id}")
+        note = f"{note}\n\n{format_evidence_block()}"
         existing = (getattr(ticket, "description", "") or "").strip()
         if existing:
             ticket.description = f"{existing}\n\n{note}"
@@ -150,6 +205,32 @@ def _cleanup_run(run_id: int) -> None:
         pass
 
 
+def _cleanup_orphaned_runs_on_startup() -> None:
+    """Mark any 'running'/'waiting' runs as 'cancelled' on app startup.
+
+    Runs that were left open from a previous session (crash, force-quit) would
+    otherwise block every subsequent "Send to Workflow" for the same ticket.
+    Safe to call before any WorkflowAgent or RunContext is created.
+    """
+    with get_session() as db:
+        orphans = (
+            db.query(AutoWorkflowRun)
+            .filter(AutoWorkflowRun.status.in_(["running", "waiting"]))
+            .all()
+        )
+        if not orphans:
+            return
+        for run in orphans:
+            run.status = "cancelled"
+            run.completed_at = datetime.utcnow()
+        db.commit()
+        logger.info(
+            "Cancelled %d orphaned workflow run(s) from previous session: %s",
+            len(orphans),
+            [r.id for r in orphans],
+        )
+
+
 def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
     """Clean up resources and notify the bridge when a run reaches terminal status."""
     _cleanup_run(run_id)
@@ -168,7 +249,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                 steps_summary.append({
                     "title": step_obj.name if step_obj else f"Step {sr.step_id}",
                     "status": sr.status,
-                    "result": truncate_step_result(sr.agent_response or ""),
+                    "result": truncate_step_summary(sr.agent_response or "", sr.status or ""),
                 })
     except Exception:
         logger.debug("Could not load step results for run %d", run_id)
@@ -192,6 +273,18 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                     KanbanTicket.id == run_rec.ticket_id
                 ).first()
                 if ticket:
+                    append_ticket_audit_entry(
+                        db,
+                        ticket_id=int(run_rec.ticket_id),
+                        run_id=run_id,
+                        step_id=run_rec.current_step_id,
+                        step_result_id=None,
+                        execution_lane="cursor",
+                        status=(status or "completed").strip().lower(),
+                        final_verdict="pass" if (status or "").strip().lower() == "completed" else "needs_changes",
+                        summary=f"Run finished: {(status or 'completed').strip().lower()}",
+                        details=f"Workflow run {run_id} finished with status {(status or 'completed').strip().lower()}.",
+                    )
                     ticket.workflow_status = status
                     _append_workflow_summary_to_ticket(ticket, run_id, status, steps_summary)
                     db.commit()
@@ -262,7 +355,21 @@ def start_workflow_run(
         # Defensive guard for heavily mocked sessions in tests: only treat a result
         # as active when it looks like an AutoWorkflowRun instance.
         if active_run is not None and isinstance(active_run, AutoWorkflowRun):
-            return {"error": "A run is already in progress for this board/ticket"}
+            # If there is no live RunContext for this run, it's an orphan (e.g. from a
+            # previous server session that crashed). Auto-cancel it so the ticket can
+            # be pushed again — otherwise it would be blocked forever.
+            with _runs_lock:
+                is_truly_active = active_run.id in _active_runs
+            if is_truly_active:
+                return {"error": "A run is already in progress for this board/ticket"}
+            logger.info(
+                "start_workflow_run: auto-cancelling orphaned run %d (workflow=%d) — no live RunContext",
+                active_run.id,
+                workflow_id,
+            )
+            active_run.status = "cancelled"
+            active_run.completed_at = datetime.utcnow()
+            db.flush()
 
         # Validate all steps before starting
         sorted_steps = sorted(wf.steps, key=lambda s: s.position)
@@ -293,16 +400,60 @@ def start_workflow_run(
                 step.status = "pending"
                 step.result = None
 
+        normalized_metadata = dict(run_metadata or {})
+        risk_profile = infer_risk_profile((context or ""))
+        normalized_metadata.setdefault("risk_profile", risk_profile)
+        normalized_metadata.setdefault(
+            "validation_rules",
+            validation_rules_for_risk(
+                risk_profile.get("level", "low"),
+                risk_profile.get("signals", []),
+            ),
+        )
+        normalized_metadata.setdefault(
+            "result_packet",
+            create_initial_result_packet_for_run(
+                ticket_id=ticket_id,
+                board_id=board_id,
+                board_name=normalized_metadata.get("board_name"),
+                project_id=normalized_metadata.get("project_id"),
+                project_name=normalized_metadata.get("project_name"),
+                execution_lane="cursor",
+            ),
+        )
+        packet = normalized_metadata.get("result_packet") or {}
+        packet_audit = dict(packet.get("audit") or {})
+        packet_audit["audits_run"] = build_audit_gates(
+            status="running",
+            risk_level=risk_profile.get("level", "low"),
+            tests_passed=True,
+        )
+        packet["audit"] = packet_audit
+        normalized_metadata["result_packet"] = packet
+
         run = AutoWorkflowRun(
             workflow_id=workflow_id,
             status="running",
             board_id=board_id,
             ticket_id=ticket_id,
-            run_data=json.dumps(run_metadata or {}),
+            run_data=json.dumps(normalized_metadata),
         )
         db.add(run)
         db.flush()
         run_id = run.id
+        if ticket_id:
+            append_ticket_audit_entry(
+                db,
+                ticket_id=int(ticket_id),
+                run_id=run_id,
+                step_id=first_step.id if first_step else None,
+                step_result_id=None,
+                execution_lane="cursor",
+                status="running",
+                final_verdict="cannot_determine",
+                summary=f"Run started (workflow {workflow_id})",
+                details=f"Workflow run {run_id} started.",
+            )
 
         workflow_agent = WorkflowAgent()
         agent_loop = asyncio.new_event_loop()
@@ -345,6 +496,20 @@ def start_workflow_run(
     os.environ["DECISIONS_WORKFLOW_ID"] = str(workflow_id)
 
     dispatcher = StepDispatcher()
+    if board_id is not None and ticket_id is not None:
+        try:
+            increment_kanban_updated(
+                board_id=board_id,
+                event_type="ticket_workflow_status",
+                payload={
+                    "ticket_id": int(ticket_id),
+                    "run_id": int(run_id),
+                    "status": "running",
+                    "step_id": int(first_step_id),
+                },
+            )
+        except Exception:
+            logger.debug("Could not emit ticket_workflow_status start event", exc_info=True)
     result = dispatcher.run_in_workflow(first_step_id, run_id)
     if "error" in result:
         _clear_workflow_env()
@@ -458,6 +623,27 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
         if not run:
             return False
+        try:
+            run_data = json.loads(run.run_data or "{}")
+        except Exception:
+            run_data = {}
+        packet = dict(run_data.get("result_packet") or {})
+        risk_profile = dict(run_data.get("risk_profile") or {})
+        if packet:
+            enforced_status, updated_packet, missing_checks = enforce_validation_requirements(
+                packet=packet,
+                run_status=status,
+                risk_profile=risk_profile,
+            )
+            if missing_checks:
+                logger.info(
+                    "complete_run: enforcing required checks for run %s, missing=%s",
+                    run_id,
+                    ",".join(missing_checks),
+                )
+            status = enforced_status or status
+            run_data["result_packet"] = updated_packet
+            run.run_data = json.dumps(run_data)
         run.status = status
         run.completed_at = datetime.utcnow()
         workflow_id = run.workflow_id
@@ -586,6 +772,25 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
             self._fail_step(step_id, f"Validation failed: {errors}")
             return {"error": errors}
         self._set_status(step_id, "running")
+        try:
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                if run and run.ticket_id:
+                    append_ticket_audit_entry(
+                        db,
+                        ticket_id=int(run.ticket_id),
+                        run_id=run_id,
+                        step_id=step_id,
+                        step_result_id=None,
+                        execution_lane="cursor",
+                        status="running",
+                        final_verdict="cannot_determine",
+                        summary=f"{step_data.get('name') or f'Step {step_id}'} started",
+                        details=f"Step {step_id} entered running state.",
+                    )
+                    db.commit()
+        except Exception:
+            logger.debug("Could not write step-start audit entry", exc_info=True)
         result = self._execute(step_data, run_id=run_id)
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}

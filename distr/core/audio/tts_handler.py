@@ -109,7 +109,16 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
     """
     settings = load_settings_from_db()
     provider = _tts_provider_to_internal(provider)
-    voice = _normalize_voice_for_provider(provider, voice, settings)
+    raw_voice = (voice or "").strip()
+    voice = _normalize_voice_for_provider(provider, raw_voice, settings)
+    if raw_voice != voice:
+        logger.info(
+            "play-voice: voice id normalized provider=%s raw=%r -> %r "
+            "(saved settings may override unknown dropdown ids until you click Save)",
+            provider,
+            raw_voice,
+            voice,
+        )
     display_name = _resolve_display_name(provider, voice, voice_name)
     # Sanitize display name — phonemizer/espeak can't handle newlines or special chars
     display_name = re.sub(r'\s+', ' ', display_name).strip()
@@ -126,7 +135,13 @@ def generate_voice_sample(provider: str, voice: str, speed: float = 1.0, voice_n
         logger.info("Using cached voice sample: %s", out_file)
         return out_file
 
-    logger.info("Generating %s voice sample: voice=%s, speed=%s", provider, voice, speed)
+    logger.info(
+        "Generating voice sample: provider=%s voice=%s speed=%s out_file=%s",
+        provider,
+        voice,
+        speed,
+        out_file,
+    )
 
     # Use registry-based dispatch, fall back gracefully for unknown providers
     try:

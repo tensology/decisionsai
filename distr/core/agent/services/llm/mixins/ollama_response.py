@@ -791,6 +791,32 @@ class OllamaResponseMixin:
         self._save_and_signal(chat_id, error_msg)
         return error_msg, True
 
+    def _format_brief_confirmation(self, result) -> str | None:
+        """Convert raw tool result into a short conversational confirmation."""
+        result_str = str(result) if result else ""
+        if not result_str or result_str.startswith("Error"):
+            return None
+
+        human = humanize_silent_navigation_json(result_str)
+        if human:
+            result_str = human
+
+        # Keep only the user-facing preface from voice-first tool outputs.
+        result_str = re.split(r'\n\s*REFERENCE\s*:\s*\n', result_str, maxsplit=1, flags=re.IGNORECASE)[0]
+        cleaned = clean_text_for_tts(result_str)
+        if not cleaned:
+            return None
+
+        # Keep confirmations tight: first line and max 2 sentences.
+        first_line = cleaned.split('\n', 1)[0].strip()
+        if not first_line:
+            return None
+        parts = re.split(r'(?<=[.!?])\s+', first_line)
+        brief = " ".join(parts[:2]).strip()
+        if len(brief) > 220:
+            brief = brief[:217].rstrip() + "..."
+        return brief or None
+
     def _determine_brief_confirmation(self, tool_calls, tool_results):
         """Determine what brief text to speak/emit after tool execution.
 
@@ -816,20 +842,9 @@ class OllamaResponseMixin:
         # For all other tools: use the tool result as confirmation if it's meaningful.
         # Fall back to None (no text) only if there's truly nothing to say.
         for result in tool_results:
-            result_str = str(result) if result else ""
-            human = humanize_silent_navigation_json(result_str)
-            if human:
-                result_str = human
-            if result_str and len(result_str) > 2 and not result_str.startswith("Error"):
-                # Truncate long results for TTS
-                if len(result_str) > 500:
-                    first_line = result_str.split('\n')[0]
-                    if len(first_line) > 200:
-                        return first_line[:200] + "..."
-                    else:
-                        line_count = result_str.count('\n') + 1
-                        return f"{first_line} ... and {line_count - 1} more lines."
-                return result_str
+            brief = self._format_brief_confirmation(result)
+            if brief:
+                return brief
         return None
 
     def _save_and_signal(self, chat_id, text):

@@ -1,3 +1,5 @@
+import json
+
 from distr.core import utils as core_utils
 from distr.gui.web.security import (
     redact_connected_account,
@@ -47,3 +49,14 @@ def test_ssrf_guard_blocks_localhost_targets():
         assert False, "expected localhost target to be rejected"
     except ValueError:
         assert True
+
+
+def test_encrypt_connected_accounts_requires_list():
+    """save_settings_to_db must receive a list for connected_accounts so tokens are encrypted."""
+    accounts = [{"provider": "google", "access_token": "plain-access", "refresh_token": "plain-refresh"}]
+    encrypted = core_utils._encrypt_connected_accounts(accounts)
+    assert isinstance(encrypted, list)
+    assert encrypted[0]["access_token"].startswith(core_utils.ENCRYPTION_PREFIX)
+    assert encrypted[0]["refresh_token"].startswith(core_utils.ENCRYPTION_PREFIX)
+    blob = json.dumps(accounts)
+    assert core_utils._encrypt_connected_accounts(blob) is blob

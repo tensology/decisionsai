@@ -152,7 +152,7 @@ class UploadDocToGoogleTool(LazyToolMixin, BaseTool):
         """Get the last file that was dropped on the oracle ball."""
         try:
             import json
-            storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+            storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
             storage_file = os.path.join(storage_dir, "current_files.json")
             if not os.path.exists(storage_file):
                 return None

@@ -4,7 +4,7 @@ API routes/endpoints for Chat web UI
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, FileResponse
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from pydantic import BaseModel, ConfigDict
 from pathlib import Path
 from typing import Optional, List, Dict, Any, Set
@@ -226,6 +226,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
             if chat_id is None:
                 raise HTTPException(status_code=400, detail="chat_id required")
             chat_id = int(chat_id)
+        except ClientDisconnect:
+            logger.debug("notify_chat_updated: client disconnected before body read")
+            return JSONResponse({"ok": False, "disconnected": True})
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="chat_id must be an integer")
         payload = json.dumps({"type": "chat_updated", "chat_id": chat_id})
@@ -257,6 +260,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     status_code=400, detail="event and chat_id required"
                 )
             chat_id = int(chat_id)
+        except ClientDisconnect:
+            logger.debug("notify_chat_event: client disconnected before body read")
+            return JSONResponse({"ok": False, "disconnected": True})
         except (TypeError, ValueError):
             raise HTTPException(status_code=400, detail="Invalid body")
         payload = json.dumps(body)

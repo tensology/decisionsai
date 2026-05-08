@@ -1,8 +1,9 @@
 """Tests for Pi / CLI completion notes on Kanban tickets."""
 
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
-from distr.core.kanban.ticket_writeback import apply_pi_cli_note_to_ticket
+from distr.core.kanban.ticket_writeback import apply_pi_cli_note_to_ticket, append_pi_cli_summary_to_ticket
 from distr.core.pi_rpc import PiMessage, PiRpcSession
 
 
@@ -56,3 +57,36 @@ def test_agent_end_ticket_writeback_calls_append(monkeypatch):
     assert recorded[0][0] == 7
     assert recorded[0][2] == "completed"
     assert "Result:" in recorded[0][1]
+
+
+def test_append_pi_cli_summary_writes_ticket_audit_entry(monkeypatch):
+    fake_ticket = SimpleNamespace(id=123, description="", workflow_status=None, board_id=None)
+    fake_db = MagicMock()
+    fake_db.query.return_value.filter.return_value.first.return_value = fake_ticket
+
+    class _Ctx:
+        def __enter__(self):
+            return fake_db
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+    captured = {}
+
+    def fake_append_ticket_audit_entry(db, **kwargs):
+        captured["db"] = db
+        captured["kwargs"] = kwargs
+
+    monkeypatch.setattr("distr.core.db.get_session", lambda: _Ctx())
+    monkeypatch.setattr(
+        "distr.core.kanban.ticket_writeback.append_ticket_audit_entry",
+        fake_append_ticket_audit_entry,
+    )
+
+    append_pi_cli_summary_to_ticket(ticket_id=123, summary="CLI summary", outcome_status="failed")
+
+    assert captured["db"] is fake_db
+    assert captured["kwargs"]["ticket_id"] == 123
+    assert captured["kwargs"]["execution_lane"] == "cli"
+    assert captured["kwargs"]["status"] == "failed"
+    assert captured["kwargs"]["final_verdict"] == "needs_changes"

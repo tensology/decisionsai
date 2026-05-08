@@ -40,6 +40,7 @@ def _make_run(**overrides):
     run.current_step_id = overrides.get("current_step_id", 1)
     run.completed_at = overrides.get("completed_at", None)
     run.run_data = overrides.get("run_data", None)
+    run.ticket_id = overrides.get("ticket_id", None)
     return run
 
 
@@ -317,6 +318,74 @@ class TestRouteIntegration:
 
         assert decision["action"] == "end_run"
         assert "error" in decision
+
+    @patch("distr.core.workflow.router.increment_workflow_updated")
+    @patch("distr.core.workflow.router.get_session")
+    @patch("distr.core.workflow.router._run_verification", return_value=True)
+    def test_route_updates_result_packet_in_run_data(self, mock_verify, mock_get_session, mock_ws):
+        step = _make_step(id=1, name="Analyze", on_pass_goto=2)
+        run = _make_run(
+            id=10,
+            run_data=json.dumps(
+                {
+                    "result_packet": {
+                        "status": "running",
+                        "summary": "Workflow run started.",
+                        "changes": {"change_summary": []},
+                        "audit": {"final_verdict": "cannot_determine"},
+                    },
+                },
+            ),
+        )
+        next_step = _make_step(id=2)
+
+        db = MagicMock()
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.add = MagicMock()
+
+        router = StepRouter()
+        decision = router.route(1, "analysis passed", True, 10)
+
+        assert decision["action"] == "next_step"
+        payload = json.loads(run.run_data or "{}")
+        packet = payload.get("result_packet") or {}
+        assert packet.get("status") == "running"
+        changes = (packet.get("changes") or {}).get("change_summary") or []
+        assert any("Analyze: passed" in line for line in changes)
+
+    @patch("distr.core.workflow.router.append_ticket_audit_entry")
+    @patch("distr.core.workflow.router.increment_workflow_updated")
+    @patch("distr.core.workflow.router.get_session")
+    @patch("distr.core.workflow.router._run_verification", return_value=True)
+    def test_route_writes_ticket_audit_entry(
+        self,
+        mock_verify,
+        mock_get_session,
+        mock_ws,
+        mock_append_ticket_audit,
+    ):
+        step = _make_step(id=1, name="Audit Step", on_pass_goto=2)
+        run = _make_run(id=10, ticket_id=42, run_data=json.dumps({"result_packet": {}}))
+        next_step = _make_step(id=2)
+
+        db = MagicMock()
+        mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
+        mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.add = MagicMock()
+        db.flush = MagicMock()
+
+        router = StepRouter()
+        decision = router.route(1, "step output", True, 10)
+
+        assert decision["action"] == "next_step"
+        mock_append_ticket_audit.assert_called_once()
+        _, kwargs = mock_append_ticket_audit.call_args
+        assert kwargs["ticket_id"] == 42
+        assert kwargs["run_id"] == 10
+        assert kwargs["step_id"] == 1
 
 
 # ── Event emission tests ───────────────────────────────────────────

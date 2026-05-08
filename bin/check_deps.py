@@ -4,7 +4,8 @@ Check that all critical DecisionsAI dependencies are importable.
 Runs in a single process to avoid spawning 37+ subprocesses, which can
 trigger macOS jetsam (SIGKILL) under memory pressure and cause false
 "missing package" reports.
-Exit 0 if all OK, 1 if any missing. Missing package names printed to stderr.
+Exit 0 if all OK, 1 if any missing. Missing **critical** package names are printed to **stdout**
+(one per line) so launch scripts can parse them without mixing in library warnings on stderr.
 """
 import os
 import sys
@@ -41,11 +42,11 @@ CRITICAL = [
     ("colorama", "colorama"),
 ]
 
-# Packages that require native compilation and may not be available on all
-# platforms (e.g. pywhispercpp needs C++ build tools on Windows).  A missing
-# optional package is logged but does not cause a non-zero exit code.
+# Not in requirements.txt (transformers pin conflicts with coqui-tts / voxcpm).
+# Install via ./scripts/install_vibevoice.sh — warn only, do not fail startup.
 OPTIONAL = [
     ("pywhispercpp", "pywhispercpp"),
+    ("vibevoice", "vibevoice"),
 ]
 
 # Packages checked via pip metadata rather than import (heavy deps that may
@@ -81,7 +82,7 @@ def main():
 
     if missing:
         for name in missing:
-            print(name, file=sys.stderr)
+            print(name)
         return 1
 
     # Check optional packages — warn but don't fail

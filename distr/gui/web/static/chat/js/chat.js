@@ -320,7 +320,10 @@ document.addEventListener('DOMContentLoaded', () => {
         const idParam = params.get('id');
         if (idParam) {
             const chatId = parseInt(idParam, 10);
-            if (!isNaN(chatId)) await loadChat(chatId);
+            const fromCreate = params.get('from_create') === '1';
+            if (!isNaN(chatId)) {
+                await loadChat(chatId, { skipLoadInAgent: fromCreate });
+            }
         } else if (data && data.chats && data.chats.length === 0) {
             // Show empty state so user can select provider/model/voice before first chat
             showEmptyState();
@@ -2581,8 +2584,9 @@ async function playVoiceModal() {
         const headers = { 'Content-Type': 'application/json' };
         const token = typeof window !== 'undefined' && window.DECISIONSAI_INTERNAL_API_TOKEN;
         if (token) headers['X-DecisionsAI-Internal-Token'] = token;
-        const response = await fetch('/api/play-voice', {
+        const response = await fetch('/api/play-voice?_=' + Date.now(), {
             method: 'POST',
+            cache: 'no-store',
             headers,
             body: JSON.stringify({ provider, voice, speed: 1.0, voice_name: voiceName })
         });
@@ -2673,8 +2677,9 @@ async function playEmptyStateVoice() {
         const headers = { 'Content-Type': 'application/json' };
         const token = typeof window !== 'undefined' && window.DECISIONSAI_INTERNAL_API_TOKEN;
         if (token) headers['X-DecisionsAI-Internal-Token'] = token;
-        const response = await fetch('/api/play-voice', {
+        const response = await fetch('/api/play-voice?_=' + Date.now(), {
             method: 'POST',
+            cache: 'no-store',
             headers,
             body: JSON.stringify({ provider, voice, speed: 1.0, voice_name: voiceName })
         });

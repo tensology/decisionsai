@@ -4,10 +4,13 @@ API routes for Ticket Board management.
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse, Response
 from pydantic import BaseModel, Field
-from typing import Optional, List
+from typing import Optional, List, Tuple
+from urllib.parse import quote, urlparse, unquote
 from datetime import datetime
+import html
 import json
 import logging
+import re
 import os
 import threading
 import asyncio
@@ -21,10 +24,11 @@ from cryptography.hazmat.primitives import serialization
 from distr.core.paths import DB_DIR
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from distr.core.db import get_session
+from distr.core.db.orm_compat import orm_get_by_id
 from distr.core.db import WhatsAppMessage
 from distr.core.db.kanban import (
     KanbanBoard, KanbanLane, KanbanTicket,
-    KanbanTicketFile, KanbanTicketLink, KanbanTicketTodo,
+    KanbanTicketFile, KanbanTicketLink, KanbanTicketTodo, KanbanTicketAuditEntry,
 )
 from distr.core.kanban.agent import (
     _active_agents,
@@ -43,25 +47,289 @@ KANBAN_UPLOADS_DIR = os.path.join(DB_DIR, "kanban_uploads")
 DEFAULT_LANES = ["Backlog", "Current", "QA / Assess", "Done"]
 
 
-def _parse_jira_description(desc):
-    """Convert a Jira description field to simple HTML.
+def _yaml_scalar(s: str) -> str:
+    """YAML front-matter safe string (JSON double-quoted string is valid YAML 1.2)."""
+    return json.dumps(s if s is not None else "", ensure_ascii=False)
+
+
+_JIRA_WIKI_IMG = re.compile(r"!([^|\n\r!]+)(?:\|[^\n\r!]*)?!")
+
+
+def _find_jira_attachment(
+    attachments: Optional[List], filename: Optional[str] = None, att_id: Optional[str] = None
+):
+    """Match a Jira REST attachment dict by Cloud media id or filename."""
+    if not attachments:
+        return None
+    if att_id is not None and str(att_id).strip():
+        sid = str(att_id).strip()
+        for a in attachments:
+            if str(a.get("id", "")) == sid:
+                return a
+    if filename and str(filename).strip():
+        fn = str(filename).strip().lower()
+        for a in attachments:
+            if (a.get("filename") or "").strip().lower() == fn:
+                return a
+    return None
+
+
+def _jira_proxy_src_attr(full_content_url: str) -> str:
+    """Frontend (or markdown note) uses this path; proxy adds auth when loading."""
+    return "/api/kanban/external-boards/jira/proxy-image?url=" + quote(full_content_url, safe="")
+
+
+def _jira_url_should_proxy(url: str) -> bool:
+    u = (url or "").lower()
+    return bool(
+        url
+        and (
+            "/secure/attachment/" in u
+            or "/rest/api/" in u
+            or "api.atlassian.com/ex/jira/" in u
+            or "/download/resources/" in u
+        )
+    )
+
+
+def _jira_wiki_attachments_to_html(text: str, attachments: List) -> str:
+    """Replace Jira wiki image syntax !file.png|opts! with <img> or links using the attachment list."""
+
+    def repl(m):
+        fn = m.group(1).strip()
+        att = _find_jira_attachment(attachments, filename=fn)
+        if att:
+            content_url = att.get("content") or ""
+            mime = (att.get("mimeType") or "").lower()
+            if content_url and mime.startswith("image/"):
+                src = _jira_proxy_src_attr(content_url)
+                return (
+                    f'<img src="{html.escape(src, quote=True)}" alt="{esc_html(fn)}" '
+                    'style="max-width:100%;border-radius:4px;margin:4px 0" loading="lazy">'
+                )
+            if content_url:
+                href = _jira_proxy_src_attr(content_url)
+                disp = att.get("filename") or fn
+                return (
+                    f'<a href="{html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer" '
+                    f'style="color:#5b9bd5">📎 {esc_html(disp)}</a>'
+                )
+        return f'<span style="color:#888;font-size:12px">📎 {esc_html(fn)} (not found on issue)</span>'
+
+    out: List[str] = []
+    pos = 0
+    for m in _JIRA_WIKI_IMG.finditer(text):
+        out.append(html.escape(text[pos:m.start()], quote=False))
+        out.append(repl(m))
+        pos = m.end()
+    out.append(html.escape(text[pos:], quote=False))
+    return "".join(out)
+
+
+def _html_to_plain_ticket_description(html: str) -> str:
+    """Strip tags for .tickets markdown body; preserve rough line breaks."""
+    if not html:
+        return ""
+    t = re.sub(r"(?i)<br\s*/?>", "\n", html)
+    t = re.sub(r"</p\s*>", "\n\n", t)
+    t = re.sub(r"</(h[1-6]|div|li|tr)\s*>", "\n", t)
+    t = re.sub(r"<[^>]+>", "", t)
+    return html.unescape(t).strip()
+
+
+def _safe_attachment_basename(name: str, used: set) -> str:
+    base = re.sub(r"[^\w\.\-]+", "_", (name or "file").strip()) or "file"
+    base = base.replace("..", "_").strip("._") or "file"
+    cand = base
+    n = 2
+    while cand.lower() in used:
+        stem, dot, ext = base.rpartition(".")
+        if dot:
+            cand = f"{stem}_{n}.{ext}"
+        else:
+            cand = f"{base}_{n}"
+        n += 1
+    used.add(cand.lower())
+    return cand
+
+
+def _load_json_connected_accounts() -> List:
+    try:
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        return json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+    except Exception:
+        return []
+
+
+def _download_jira_issue_attachments_for_project(
+    project_folder: str, ticket_stamp: str, issue_key: str
+) -> Tuple[str, Optional[str]]:
+    """Save Jira attachments under .tickets/_imported/{ticket_stamp}/. Returns (markdown_block, error)."""
+    import requests as req_lib
+    from requests.auth import HTTPBasicAuth
+
+    accounts = _load_json_connected_accounts()
+    issue_key = (issue_key or "").strip()
+    if not issue_key:
+        return "", "missing issue key"
+
+    for acct in accounts:
+        if acct.get("provider", "").lower() != "jira" or not acct.get("email") or not acct.get("api_token"):
+            continue
+        domain = acct.get("domain") or ""
+        if not domain:
+            server_url = (acct.get("server_url") or "").strip().rstrip("/")
+            if server_url:
+                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+        if not domain:
+            continue
+        auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+        base_url = f"https://{domain}" if not domain.startswith("http") else domain
+        ir = req_lib.get(
+            f"{base_url}/rest/api/2/issue/{issue_key}",
+            params={"fields": "attachment"},
+            auth=auth,
+            headers={"Accept": "application/json"},
+            timeout=15,
+        )
+        if ir.status_code != 200:
+            continue
+        try:
+            ir_body = ir.json()
+        except Exception:
+            continue
+        if not isinstance(ir_body, dict):
+            continue
+        fields = ir_body.get("fields")
+        if not isinstance(fields, dict):
+            fields = {}
+        atts = fields.get("attachment") or []
+        if not isinstance(atts, list) or not atts:
+            return "\n## Attachments (imported)\n_No files on this issue._\n", None
+        imp_dir = os.path.join(project_folder, ".tickets", "_imported", ticket_stamp)
+        os.makedirs(imp_dir, exist_ok=True)
+        lines = ["\n## Attachments (imported from Jira)\n"]
+        used_names: set = set()
+        for a in atts:
+            if not isinstance(a, dict):
+                continue
+            url = a.get("content") or ""
+            if not url:
+                continue
+            raw_name = a.get("filename") or "attachment"
+            fname = _safe_attachment_basename(raw_name, used_names)
+            dest = os.path.join(imp_dir, fname)
+            try:
+                gr = req_lib.get(url, auth=auth, timeout=120, stream=True)
+                if gr.status_code != 200:
+                    lines.append(f"- (download failed: {raw_name!r} — HTTP {gr.status_code})\n")
+                    continue
+                with open(dest, "wb") as wf:
+                    for chunk in gr.iter_content(chunk_size=65536):
+                        if chunk:
+                            wf.write(chunk)
+            except OSError as e:
+                lines.append(f"- (write failed: {raw_name!r} — {e})\n")
+                continue
+            rel = f".tickets/_imported/{ticket_stamp}/{fname}"
+            mime = (a.get("mimeType") or "").lower()
+            if mime.startswith("image/"):
+                lines.append(f"![{fname}]({rel})\n")
+            else:
+                lines.append(f"- [{raw_name}]({rel})\n")
+        return "".join(lines), None
+
+    return "", "could not download Jira attachments (check credentials or issue key)"
+
+
+def _download_trello_card_attachments_for_project(
+    project_folder: str, ticket_stamp: str, card_id: str
+) -> Tuple[str, Optional[str]]:
+    """Save Trello card attachments under .tickets/_imported/{ticket_stamp}/."""
+    import requests as req_lib
+
+    accounts = _load_json_connected_accounts()
+    card_id = (card_id or "").strip()
+    if not card_id:
+        return "", "missing card id"
+
+    for acct in accounts:
+        if acct.get("provider", "").lower() != "trello" or not acct.get("api_key") or not acct.get("api_token"):
+            continue
+        key, token = acct["api_key"], acct["api_token"]
+        lr = req_lib.get(
+            f"https://api.trello.com/1/cards/{card_id}/attachments",
+            params={"key": key, "token": token, "fields": "name,url,mimeType,isUpload"},
+            timeout=20,
+        )
+        if lr.status_code != 200:
+            continue
+        try:
+            rows = lr.json()
+        except Exception:
+            continue
+        if not isinstance(rows, list) or not rows:
+            return "\n## Attachments (imported)\n_No files on this card._\n", None
+        imp_dir = os.path.join(project_folder, ".tickets", "_imported", ticket_stamp)
+        os.makedirs(imp_dir, exist_ok=True)
+        lines = ["\n## Attachments (imported from Trello)\n"]
+        used_names: set = set()
+        for a in rows:
+            if not isinstance(a, dict):
+                continue
+            url = a.get("url") or ""
+            if not url:
+                continue
+            raw_name = a.get("name") or "attachment"
+            fname = _safe_attachment_basename(raw_name, used_names)
+            dest = os.path.join(imp_dir, fname)
+            try:
+                sep = "&" if "?" in url else "?"
+                dl_url = url if "key=" in url else f"{url}{sep}key={key}&token={token}"
+                gr = req_lib.get(dl_url, timeout=120, stream=True)
+                if gr.status_code != 200:
+                    lines.append(f"- (download failed: {raw_name!r} — HTTP {gr.status_code})\n")
+                    continue
+                with open(dest, "wb") as wf:
+                    for chunk in gr.iter_content(chunk_size=65536):
+                        if chunk:
+                            wf.write(chunk)
+            except OSError as e:
+                lines.append(f"- (write failed: {raw_name!r} — {e})\n")
+                continue
+            rel = f".tickets/_imported/{ticket_stamp}/{fname}"
+            mime = (a.get("mimeType") or "").lower()
+            if mime.startswith("image/"):
+                lines.append(f"![{fname}]({rel})\n")
+            else:
+                lines.append(f"- [{raw_name}]({rel})\n")
+        return "".join(lines), None
+
+    return "", "could not download Trello attachments (check credentials or card id)"
+
+
+def _parse_jira_description(desc, attachments: Optional[List] = None):
+    """Convert a Jira description field to simple HTML (wiki images, ADF, attachment-backed media).
 
     Jira returns descriptions as either:
-    - A plain string (older API / legacy mode)
+    - A plain string (wiki markup, HTML, or plain text)
     - An Atlassian Document Format (ADF) dict/list (Jira Cloud)
-    - None
 
-    This function produces simple HTML with images, links, and formatting.
+    ``attachments`` should be the issue's ``fields.attachment`` list when available.
     """
+    atts = attachments if isinstance(attachments, list) else []
     if not desc:
         return ""
     # Plain string
     if isinstance(desc, str):
-        # Return as-is for frontend rendering (may contain HTML or plain text)
+        if atts and _JIRA_WIKI_IMG.search(desc):
+            return _jira_wiki_attachments_to_html(desc, atts)
         return desc
     # ADF format
     if isinstance(desc, (dict, list)):
-        parts = []
+        parts: List[str] = []
+
         def _walk(node, in_list=False):
             if isinstance(node, list):
                 for item in node:
@@ -151,21 +419,36 @@ def _parse_jira_description(desc):
                 img_url = attrs.get("url", "") or attrs.get("src", "")
                 alt = attrs.get("alt", "")
                 if img_url:
-                    parts.append(f'<img src="{esc_html(img_url)}" alt="{esc_html(alt)}" style="max-width:100%;border-radius:4px;margin:4px 0" loading="lazy">')
+                    src = _jira_proxy_src_attr(img_url) if _jira_url_should_proxy(img_url) else img_url
+                    parts.append(
+                        f'<img src="{html.escape(src, quote=True)}" alt="{esc_html(alt)}" '
+                        'style="max-width:100%;border-radius:4px;margin:4px 0" loading="lazy">'
+                    )
 
             elif ntype == "media":
-                # Jira media usually needs authentication to view, so we show a link
-                media_id = attrs.get("id", "")
-                media_type = attrs.get("type", "")
-                collection = attrs.get("collection", "")
-                # We'll note the media exists but can't directly embed due to Jira auth
-                alt = attrs.get("alt", f"media-{media_id}")
-                if media_type == "file":
-                    parts.append(f'<span style="color:#888;font-size:12px">📎 {esc_html(alt)}</span>')
+                mid = attrs.get("id")
+                att = _find_jira_attachment(atts, att_id=str(mid) if mid is not None else None)
+                alt = attrs.get("alt") or (att.get("filename") if att else None) or f"media-{mid}"
+                if att:
+                    content_url = att.get("content") or ""
+                    mime = (att.get("mimeType") or "").lower()
+                    if content_url and mime.startswith("image/"):
+                        src = _jira_proxy_src_attr(content_url)
+                        parts.append(
+                            f'<img src="{html.escape(src, quote=True)}" alt="{esc_html(str(alt))}" '
+                            'style="max-width:100%;border-radius:4px;margin:4px 0" loading="lazy">'
+                        )
+                    elif content_url:
+                        href = _jira_proxy_src_attr(content_url)
+                        disp = att.get("filename") or str(alt)
+                        parts.append(
+                            f'<a href="{html.escape(href, quote=True)}" target="_blank" rel="noopener noreferrer" '
+                            f'style="color:#5b9bd5">📎 {esc_html(disp)}</a>'
+                        )
+                    else:
+                        parts.append(f'<span style="color:#888;font-size:12px">📎 {esc_html(str(alt))}</span>')
                 else:
-                    # For images, try to construct a Jira attachment URL if possible
-                    # Jira media URLs require auth, so we just note it
-                    parts.append(f'<span style="color:#888;font-size:12px">🖼 {esc_html(alt)}</span>')
+                    parts.append(f'<span style="color:#888;font-size:12px">📎 {esc_html(str(alt))}</span>')
 
             else:
                 # Unknown node type — recurse into content
@@ -174,8 +457,6 @@ def _parse_jira_description(desc):
 
         _walk(desc)
         result = "".join(parts).strip()
-        # Clean up empty paragraphs
-        import re
         result = re.sub(r"<p>\s*</p>", "", result)
         return result
 
@@ -187,6 +468,17 @@ def esc_html(s):
     if not s:
         return ""
     return s.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
+
+
+def _jira_board_column_config_columns(cfg) -> list:
+    """Columns from agile board configuration. ``columnConfig`` is often present but may be ``null``."""
+    if not isinstance(cfg, dict):
+        return []
+    cc = cfg.get("columnConfig")
+    if not isinstance(cc, dict):
+        return []
+    cols = cc.get("columns")
+    return cols if isinstance(cols, list) else []
 
 
 def _trello_with_time_block(description: str, time_estimate: Optional[str], time_spent: Optional[str]) -> str:
@@ -375,7 +667,16 @@ class CopyExternalTicket(BaseModel):
     time_spent: Optional[str] = None
     auto_send_to_project: Optional[bool] = False
     auto_send_to_cli: Optional[bool] = False
+    auto_send_to_workflow: Optional[bool] = False
     source_chat_id: Optional[int] = None
+    # When copying from Trello/Jira, the destination board may be a plain local board while
+    # the project link lives on the external board config — set this to attach + .tickets export.
+    linked_project_id: Optional[int] = None
+    linked_workflow_id: Optional[int] = None
+
+
+class SendToWorkflowRequest(BaseModel):
+    workflow_id: Optional[int] = None
 
 
 class ExternalTicketCreate(BaseModel):
@@ -383,6 +684,14 @@ class ExternalTicketCreate(BaseModel):
     description: Optional[str] = ""
     lane_id: Optional[str] = None
     priority: Optional[str] = "medium"
+
+
+class ExternalBoardMoveTicket(BaseModel):
+    """Move a Trello card or Jira issue to another list/column on the same board."""
+
+    ticket_id: str = Field(..., description="Trello card id or Jira issue key")
+    target_lane_id: str = Field(..., description="Trello list id or Jira board column name")
+    position: int = Field(0, ge=0, description="0-based index within the target lane")
 
 
 ALLOWED_FREQUENCIES = {"5min", "10min", "15min", "30min", "hourly", "daily", "weekly", "fortnightly", "monthly"}
@@ -405,6 +714,471 @@ class KanbanSettingsUpdate(BaseModel):
     kanban_agent_sub_model: Optional[str] = None
     kanban_cli_tool: Optional[str] = None
     kanban_cli_auth: Optional[str] = None
+
+
+
+# ── External board detail cache (stale-while-revalidate; refresh in daemon threads) ──
+_BOARD_DETAIL_LOCK = threading.Lock()
+_BOARD_DETAIL_CACHE: dict = {}
+_BOARD_DETAIL_REFRESHING: set = set()
+_BOARD_DETAIL_STALE_AFTER_SEC = 45.0
+
+_PROXY_IMAGE_LOCK = threading.Lock()
+_PROXY_IMAGE_CACHE: dict = {}
+_PROXY_IMAGE_TTL_SEC = 300.0
+_PROXY_IMAGE_MAX_BYTES = 12 * 1024 * 1024
+_PROXY_IMAGE_MAX_ENTRIES = 128
+
+
+def _external_board_detail_cache_key(provider: str, board_id: str) -> str:
+    return f"{(provider or '').lower()}:{board_id}"
+
+
+def _invalidate_external_board_detail_cache(provider: str, board_id: str) -> None:
+    key = _external_board_detail_cache_key(provider, board_id)
+    with _BOARD_DETAIL_LOCK:
+        _BOARD_DETAIL_CACHE.pop(key, None)
+        _BOARD_DETAIL_REFRESHING.discard(key)
+
+
+def _external_board_detail_fetch_worker(provider: str, board_id: str, key: str) -> None:
+    try:
+        body = _build_external_board_detail_payload(provider, board_id)
+    except Exception as e:
+        logger.exception("Background external board fetch failed (%s)", key)
+        body = {
+            "name": "",
+            "url": "",
+            "lanes": [],
+            "can_create_ticket": True,
+            "cache_error": str(e) or type(e).__name__,
+        }
+    with _BOARD_DETAIL_LOCK:
+        _BOARD_DETAIL_CACHE[key] = {"ready": True, "t": time.time(), "body": body}
+        _BOARD_DETAIL_REFRESHING.discard(key)
+
+
+def _schedule_external_board_detail_refresh(provider: str, board_id: str, key: str) -> None:
+    with _BOARD_DETAIL_LOCK:
+        if key in _BOARD_DETAIL_REFRESHING:
+            return
+        _BOARD_DETAIL_REFRESHING.add(key)
+    threading.Thread(
+        target=_external_board_detail_fetch_worker,
+        args=(provider, board_id, key),
+        name=f"kanban-board-{key}",
+        daemon=True,
+    ).start()
+
+
+def _jira_proxy_url_allowed(url: str, accounts: list) -> bool:
+    try:
+        p = urlparse(url)
+        host = (p.hostname or "").lower()
+    except Exception:
+        return False
+    if not host or p.scheme not in ("https", "http"):
+        return False
+    if host.endswith(".atlassian.net") or host.endswith(".atlassian.com"):
+        return True
+    for acct in accounts:
+        if (acct.get("provider") or "").lower() != "jira":
+            continue
+        d = (acct.get("domain") or "").strip().lower()
+        if not d:
+            su = (acct.get("server_url") or "").strip().rstrip("/")
+            if su:
+                d = su.replace("https://", "").replace("http://", "").split("/")[0].lower()
+        if not d:
+            continue
+        if host == d or host.endswith("." + d):
+            return True
+    return False
+
+
+def _proxy_external_image_sync(provider: str, url: str) -> Tuple[bytes, str]:
+    """Fetch binary image for Jira/Trello; returns (body, content_type). Raises HTTPException."""
+    if not url:
+        raise HTTPException(400, "Missing url parameter")
+    if provider not in ("trello", "jira"):
+        raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+    try:
+        raw_url = unquote(url)
+    except Exception:
+        raw_url = url
+    try:
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+    except Exception:
+        accounts = []
+
+    import hashlib
+    ckey = hashlib.sha256(f"{provider}:{raw_url}".encode("utf-8", errors="replace")).hexdigest()
+    now = time.time()
+    with _PROXY_IMAGE_LOCK:
+        hit = _PROXY_IMAGE_CACHE.get(ckey)
+        if hit and (now - hit[0] < _PROXY_IMAGE_TTL_SEC):
+            return hit[1], hit[2]
+
+    import requests as req_lib
+
+    if provider == "trello":
+        for acct in accounts:
+            if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
+                sep = "&" if "?" in raw_url else "?"
+                authed_url = (
+                    f"{raw_url}{sep}key={acct['api_key']}&token={acct['api_token']}"
+                    if "key=" not in raw_url
+                    else raw_url
+                )
+                try:
+                    r = req_lib.get(authed_url, timeout=15, stream=True)
+                except req_lib.exceptions.RequestException as e:
+                    logger.warning("Trello proxy-image request failed: %s", e)
+                    continue
+                if r.status_code == 200:
+                    data = r.content
+                    if len(data) > _PROXY_IMAGE_MAX_BYTES:
+                        raise HTTPException(413, "Image too large")
+                    content_type = r.headers.get("content-type", "image/png")
+                    with _PROXY_IMAGE_LOCK:
+                        if len(_PROXY_IMAGE_CACHE) >= _PROXY_IMAGE_MAX_ENTRIES:
+                            oldest = min(_PROXY_IMAGE_CACHE, key=lambda k: _PROXY_IMAGE_CACHE[k][0])
+                            _PROXY_IMAGE_CACHE.pop(oldest, None)
+                        _PROXY_IMAGE_CACHE[ckey] = (now, data, content_type)
+                    return data, content_type
+                logger.warning("Trello proxy-image HTTP %s", r.status_code)
+                continue
+        raise HTTPException(404, "No valid Trello account or image not found")
+
+    if not _jira_proxy_url_allowed(raw_url, accounts):
+        raise HTTPException(400, "URL not allowed for Jira image proxy")
+
+    from requests.auth import HTTPBasicAuth
+
+    last_status: Optional[int] = None
+    last_detail = ""
+    for acct in accounts:
+        if acct.get("provider", "").lower() != "jira" or not acct.get("email") or not acct.get("api_token"):
+            continue
+        auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+        try:
+            r = req_lib.get(raw_url, auth=auth, timeout=15, stream=True)
+        except req_lib.exceptions.RequestException as e:
+            logger.warning("Jira proxy-image request failed: %s", e)
+            continue
+        last_status = r.status_code
+        last_detail = (r.text or "")[:200]
+        if r.status_code == 200:
+            try:
+                data = r.content
+            except Exception as e:
+                logger.warning("Jira proxy-image read body failed: %s", e)
+                continue
+            if len(data) > _PROXY_IMAGE_MAX_BYTES:
+                raise HTTPException(413, "Image too large")
+            content_type = r.headers.get("content-type", "image/png")
+            if "image/" not in content_type and "octet-stream" not in content_type:
+                content_type = "image/png"
+            with _PROXY_IMAGE_LOCK:
+                if len(_PROXY_IMAGE_CACHE) >= _PROXY_IMAGE_MAX_ENTRIES:
+                    oldest = min(_PROXY_IMAGE_CACHE, key=lambda k: _PROXY_IMAGE_CACHE[k][0])
+                    _PROXY_IMAGE_CACHE.pop(oldest, None)
+                _PROXY_IMAGE_CACHE[ckey] = (now, data, content_type)
+            return data, content_type
+        continue
+
+    if last_status and 400 <= last_status < 600:
+        raise HTTPException(last_status, f"Jira image fetch error: {last_detail}")
+    raise HTTPException(404, "No valid Jira account for image proxy")
+
+
+def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
+    """Build lanes/tickets dict for an external Trello or Jira board (blocking HTTP; used by cache refresh)."""
+    lanes = []
+    board_name = ""
+    board_url = ""
+    local_config = {}
+    with get_session() as s:
+        local_board = s.query(KanbanBoard).filter(
+            KanbanBoard.source == provider,
+            KanbanBoard.external_board_id == board_id
+        ).first()
+        if local_board:
+            local_config = {
+                "local_id": local_board.id,
+                "default_project_id": local_board.default_project_id,
+                "default_workflow_id": local_board.default_workflow_id,
+                "color": local_board.color,
+                "agent_enabled": local_board.agent_enabled or False,
+                "can_create_ticket": True,
+            }
+    try:
+        from distr.core.settings import load_settings_from_db
+        import json as _json
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        if isinstance(raw, str):
+            try:
+                accounts = _json.loads(raw)
+            except Exception:
+                accounts = []
+        else:
+            accounts = raw if isinstance(raw, list) else []
+        if provider == "trello":
+            for acct in accounts:
+                if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
+                    import requests
+                    br = requests.get(f"https://api.trello.com/1/boards/{board_id}",
+                                      params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"}, timeout=10)
+                    if br.status_code == 200:
+                        try:
+                            bd = br.json()
+                        except Exception:
+                            bd = {}
+                        if isinstance(bd, dict):
+                            board_name = bd.get("name", "")
+                            board_url = bd.get("url", "")
+                    lr = requests.get(f"https://api.trello.com/1/boards/{board_id}/lists",
+                                      params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url,labels,checklists,due"}, timeout=10)
+                    if lr.status_code == 200:
+                        try:
+                            lists_raw = lr.json()
+                        except Exception:
+                            lists_raw = []
+                        if not isinstance(lists_raw, list):
+                            lists_raw = []
+                        for lst in lists_raw:
+                            if not isinstance(lst, dict):
+                                continue
+                            cards = []
+                            for c in lst.get("cards", []):
+                                if not isinstance(c, dict):
+                                    continue
+                                desc_text = c.get("desc", "") or ""
+                                est_match = None
+                                spent_match = None
+                                try:
+                                    import re as _re
+                                    est_match = _re.search(r"(?:^|\n)Estimate:\s*(.+)", desc_text)
+                                    spent_match = _re.search(r"(?:^|\n)Duration:\s*(.+)", desc_text)
+                                except Exception:
+                                    est_match = None
+                                    spent_match = None
+                                card_data = {
+                                    "id": c["id"], "title": c["name"],
+                                    "description": desc_text,
+                                    "url": c.get("url", ""),
+                                }
+                                if est_match:
+                                    card_data["time_estimate"] = (est_match.group(1) or "").strip()
+                                if spent_match:
+                                    card_data["time_spent"] = (spent_match.group(1) or "").strip()
+                                # Fetch card details (labels, checklists, members)
+                                try:
+                                    cd = requests.get(f"https://api.trello.com/1/cards/{c['id']}",
+                                                      params={"key": acct["api_key"], "token": acct["api_token"],
+                                                               "fields": "name,desc,url,labels,checklists,due,members,shortUrl"},
+                                                      timeout=5)
+                                    if cd.status_code == 200:
+                                        try:
+                                            cd_data = cd.json()
+                                        except Exception:
+                                            cd_data = {}
+                                        if not isinstance(cd_data, dict):
+                                            cd_data = {}
+                                        card_data["labels"] = [lb.get("name", lb.get("color", "")) for lb in cd_data.get("labels", [])]
+                                        card_data["todos"] = [{"text": cl_item.get("name", ""), "done": cl_item.get("state", "") == "complete"}
+                                                                 for cl in cd_data.get("checklists", [])
+                                                                 for cl_item in cl.get("checkItems", [])]
+                                        card_data["due"] = cd_data.get("due")
+                                        card_data["members"] = [m.get("fullName", m.get("username", "")) for m in cd_data.get("members", [])]
+                                        # Fetch Trello card attachments (images)
+                                        try:
+                                            att = requests.get(f"https://api.trello.com/1/cards/{c['id']}/attachments",
+                                                               params={"key": acct["api_key"], "token": acct["api_token"],
+                                                                        "fields": "name,url,previews,mimeType,isUpload"},
+                                                               timeout=5)
+                                            if att.status_code == 200:
+                                                try:
+                                                    att_list = att.json()
+                                                except Exception:
+                                                    att_list = []
+                                                if not isinstance(att_list, list):
+                                                    att_list = []
+                                                media = []
+                                                for a in att_list:
+                                                    if not isinstance(a, dict):
+                                                        continue
+                                                    if a.get("mimeType", "").startswith("image/") or a.get("isUpload", False):
+                                                        # Use preview if available (smaller), otherwise full URL
+                                                        previews = a.get("previews", [])
+                                                        img_url = None
+                                                        if previews and len(previews) > 0:
+                                                            # Find the largest preview
+                                                            for prev in reversed(previews):
+                                                                if prev.get("width", 0) <= 1200:
+                                                                    img_url = prev.get("url")
+                                                                    break
+                                                            if not img_url:
+                                                                img_url = previews[-1].get("url")
+                                                        if not img_url:
+                                                            img_url = a.get("url", "")
+                                                        media.append({"url": img_url, "name": a.get("name", ""), "type": a.get("mimeType", "")})
+                                                if media:
+                                                    card_data["media"] = media
+                                        except Exception:
+                                            pass
+                                except Exception:
+                                    pass
+                                cards.append(card_data)
+                            lanes.append({"id": lst["id"], "name": lst["name"], "tickets": cards})
+                    break
+        elif provider == "jira":
+            for acct in accounts:
+                if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
+                    import requests
+                    from requests.auth import HTTPBasicAuth
+                    domain = acct.get("domain") or ""
+                    if not domain:
+                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                        if server_url:
+                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    if not domain:
+                        continue
+                    auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+                    base_url = f"https://{domain}" if not domain.startswith("http") else domain
+                    cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
+                                      auth=auth, headers={"Accept": "application/json"}, timeout=10)
+                    if cr.status_code == 200:
+                        try:
+                            cfg = cr.json()
+                        except Exception:
+                            cfg = {}
+                        if not isinstance(cfg, dict):
+                            cfg = {}
+                        board_name = cfg.get("name", "")
+                        loc = cfg.get("location")
+                        project_key = loc.get("projectKey", "") if isinstance(loc, dict) else ""
+                        board_url = f"https://{domain}/jira/software/projects/{project_key}/boards/{board_id}"
+                        for col in _jira_board_column_config_columns(cfg):
+                            if not isinstance(col, dict):
+                                continue
+                            cn = (col.get("name") or "").strip()
+                            if not cn:
+                                continue
+                            lanes.append({"id": cn, "name": cn, "tickets": []})
+                        # Determine per-board create permission for Jira (CREATE_ISSUES on board project).
+                        can_create = True
+                        if project_key:
+                            perm_params = {"projectKey": project_key, "permissions": "CREATE_ISSUES"}
+                            pr = requests.get(
+                                f"{base_url}/rest/api/3/mypermissions",
+                                auth=auth,
+                                headers={"Accept": "application/json"},
+                                params=perm_params,
+                                timeout=10,
+                            )
+                            if pr.status_code != 200:
+                                pr = requests.get(
+                                    f"{base_url}/rest/api/2/mypermissions",
+                                    auth=auth,
+                                    headers={"Accept": "application/json"},
+                                    params=perm_params,
+                                    timeout=10,
+                                )
+                            if pr.status_code == 200:
+                                try:
+                                    prj = pr.json()
+                                except Exception:
+                                    prj = {}
+                                perms = prj.get("permissions", {}) if isinstance(prj, dict) else {}
+                                create_issue = perms.get("CREATE_ISSUES", {}) if isinstance(perms, dict) else {}
+                                can_create = bool(create_issue.get("havePermission", True))
+                        local_config["can_create_ticket"] = can_create
+                    ir = requests.get(
+                        f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
+                        auth=auth,
+                        headers={"Accept": "application/json"},
+                        params={
+                            "maxResults": 100,
+                            "fields": "summary,status,description,assignee,reporter,timetracking,labels,subtasks,priority,attachment",
+                        },
+                        timeout=10,
+                    )
+                    if ir.status_code == 200:
+                        try:
+                            ir_body = ir.json()
+                        except Exception:
+                            ir_body = {}
+                        issues = ir_body.get("issues", []) if isinstance(ir_body, dict) else []
+                        if not isinstance(issues, list):
+                            issues = []
+                        for issue in issues:
+                            if not isinstance(issue, dict):
+                                continue
+                            fields = issue.get("fields", {})
+                            if not isinstance(fields, dict):
+                                fields = {}
+                            status_name = fields.get("status", {}).get("name", "")
+                            raw_desc = fields.get("description", "") or ""
+                            attachments = fields.get("attachment") or []
+                            if not isinstance(attachments, list):
+                                attachments = []
+                            description_text = _parse_jira_description(raw_desc, attachments)
+                            card = {
+                                "id": issue.get("key", ""), "title": fields.get("summary", ""),
+                                "description": description_text,
+                                "url": f"https://{domain}/browse/{issue.get('key', '')}",
+                            }
+                            # Enrich with Jira-specific fields
+                            assignee = fields.get("assignee")
+                            if assignee:
+                                card["members"] = [assignee.get("displayName", assignee.get("name", ""))]
+                            reporter = fields.get("reporter")
+                            if reporter:
+                                card["reporter"] = reporter.get("displayName", reporter.get("name", ""))
+                            # Time tracking
+                            timetracking = fields.get("timetracking")
+                            if timetracking:
+                                card["time_estimate"] = timetracking.get("originalEstimate", "")
+                                card["time_spent"] = timetracking.get("timeSpent", "")
+                            # Priority
+                            priority = fields.get("priority")
+                            if priority:
+                                card["priority"] = priority.get("name", "medium").lower()
+                            # Labels
+                            labels = fields.get("labels", [])
+                            if labels:
+                                card["labels"] = labels
+                            # Subtasks
+                            subtasks = fields.get("subtasks", [])
+                            if subtasks:
+                                card["todos"] = [{"text": st.get("fields", {}).get("summary", ""), "done": st.get("fields", {}).get("status", {}).get("name", "").lower() in ("done", "closed")} for st in subtasks]
+                            # Images for card strip / modal gallery (same as issue attachment list)
+                            media = []
+                            for a in attachments:
+                                ct = a.get("mimeType", "") or ""
+                                if ct.startswith("image/") and a.get("content"):
+                                    media.append({
+                                        "url": a.get("content", ""),
+                                        "name": a.get("filename", ""),
+                                        "type": ct,
+                                        "thumbnail": a.get("thumbnail", "") or "",
+                                    })
+                            if media:
+                                card["media"] = media
+                            for lane in lanes:
+                                if lane["name"].lower() == status_name.lower():
+                                    lane["tickets"].append(card)
+                                    break
+                    break
+    except Exception as e:
+        logger.warning("External board detail fetch error: %s", e)
+    response_data = {"name": board_name, "url": board_url, "lanes": lanes, "can_create_ticket": True}
+    response_data.update(local_config)
+    return response_data
 
 
 def create_routes():
@@ -590,7 +1364,7 @@ def create_routes():
         with get_session() as s:
             # Deactivate all boards
             s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             board.in_use = True
@@ -600,7 +1374,7 @@ def create_routes():
             linked_project = None
             if board.default_project_id:
                 from distr.core.db.projects import Project
-                proj = s.query(Project).get(board.default_project_id)
+                proj = orm_get_by_id(s, Project,board.default_project_id)
                 if proj and not proj.in_use:
                     linked_project = {"id": proj.id, "name": proj.name}
 
@@ -628,6 +1402,8 @@ def create_routes():
                     "archived": getattr(b, 'archived', False) or False,
                     "agent_enabled": getattr(b, 'agent_enabled', False) or False,
                     "in_use": getattr(b, 'in_use', False) or False,
+                    "default_project_id": b.default_project_id,
+                    "default_workflow_id": b.default_workflow_id,
                 })
             return JSONResponse(result)
 
@@ -645,7 +1421,7 @@ def create_routes():
     @router.put("/kanban/boards/{board_id}")
     async def update_board(board_id: int, payload: BoardUpdate):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             if payload.name is not None:
@@ -680,7 +1456,7 @@ def create_routes():
     async def update_board_agent_enabled(board_id: int, payload: BoardAgentEnabledUpdate):
         """Board-level agent check-in toggle (not part of BoardUpdate — see property tests)."""
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             board.agent_enabled = payload.agent_enabled
@@ -690,7 +1466,7 @@ def create_routes():
     @router.delete("/kanban/boards/{board_id}")
     async def delete_board(board_id: int):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             s.delete(board)
@@ -699,7 +1475,7 @@ def create_routes():
     @router.post("/kanban/boards/{board_id}/archive")
     async def archive_board(board_id: int):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             board.archived = True
@@ -708,7 +1484,7 @@ def create_routes():
     @router.post("/kanban/boards/{board_id}/unarchive")
     async def unarchive_board(board_id: int):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             board.archived = False
@@ -722,7 +1498,7 @@ def create_routes():
             return JSONResponse({"success": True})
         with get_session() as s:
             for pos, board_id in enumerate(order):
-                board = s.query(KanbanBoard).get(board_id)
+                board = orm_get_by_id(s, KanbanBoard,board_id)
                 if board:
                     board.position = pos
             return JSONResponse({"success": True})
@@ -730,7 +1506,7 @@ def create_routes():
     @router.get("/kanban/boards/{board_id}")
     async def get_board(board_id: int):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             # Get WhatsApp links for this board
@@ -749,6 +1525,7 @@ def create_routes():
                         "external_url": t.external_url,
                         "linked_workflow_id": t.linked_workflow_id,
                         "linked_project_id": t.linked_project_id,
+                        "workflow_status": t.workflow_status,
                         "linked_snippet_id": t.linked_snippet_id,
                         "linked_action_id": t.linked_action_id,
                         "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
@@ -777,11 +1554,11 @@ def create_routes():
     @router.post("/kanban/tickets")
     async def create_ticket(payload: TicketCreate):
         with get_session() as s:
-            lane = s.query(KanbanLane).get(payload.lane_id)
+            lane = orm_get_by_id(s, KanbanLane,payload.lane_id)
             if not lane:
                 raise HTTPException(404, "Lane not found")
             # Get board defaults for new tickets
-            board = s.query(KanbanBoard).get(lane.board_id)
+            board = orm_get_by_id(s, KanbanBoard,lane.board_id)
             max_pos = max([t.position for t in lane.tickets], default=-1)
             ticket = KanbanTicket(
                 lane_id=payload.lane_id, title=payload.title,
@@ -800,9 +1577,16 @@ def create_routes():
     @router.get("/kanban/tickets/{ticket_id}")
     async def get_ticket(ticket_id: int):
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
+            audit_entries = (
+                s.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.ticket_id == t.id)
+                .order_by(KanbanTicketAuditEntry.created_date.desc())
+                .limit(50)
+                .all()
+            )
             return JSONResponse({
                 "id": t.id, "lane_id": t.lane_id, "title": t.title,
                 "description": t.description or "", "priority": t.priority or "medium",
@@ -813,6 +1597,7 @@ def create_routes():
                 "external_url": t.external_url,
                 "linked_workflow_id": t.linked_workflow_id,
                 "linked_project_id": t.linked_project_id,
+                "workflow_status": t.workflow_status,
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
                 "whatsapp_message_id": t.whatsapp_message_id,
@@ -820,8 +1605,204 @@ def create_routes():
                 "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
                 "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                 "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
+                "audit_entries": [
+                    {
+                        "id": entry.id,
+                        "run_id": entry.run_id,
+                        "step_id": entry.step_id,
+                        "step_result_id": entry.step_result_id,
+                        "execution_lane": entry.execution_lane,
+                        "status": entry.status,
+                        "final_verdict": entry.final_verdict,
+                        "summary": entry.summary or "",
+                        "details": entry.details or "",
+                        "created_date": (
+                            entry.created_date.isoformat() if entry.created_date else None
+                        ),
+                    }
+                    for entry in audit_entries
+                ],
                 "source_chat_id": t.source_chat_id,
             })
+
+    @router.get("/kanban/tickets/{ticket_id}/audit-entries")
+    async def get_ticket_audit_entries(ticket_id: int):
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+            rows = (
+                s.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.ticket_id == t.id)
+                .order_by(KanbanTicketAuditEntry.created_date.desc())
+                .all()
+            )
+            return JSONResponse(
+                {
+                    "ticket_id": t.id,
+                    "entries": [
+                        {
+                            "id": row.id,
+                            "run_id": row.run_id,
+                            "step_id": row.step_id,
+                            "step_result_id": row.step_result_id,
+                            "execution_lane": row.execution_lane,
+                            "status": row.status,
+                            "final_verdict": row.final_verdict,
+                            "summary": row.summary or "",
+                            "details": row.details or "",
+                            "created_date": row.created_date.isoformat() if row.created_date else None,
+                        }
+                        for row in rows
+                    ],
+                }
+            )
+
+    @router.get("/kanban/tickets/{ticket_id}/audit-report")
+    async def get_ticket_audit_report(ticket_id: int):
+        def _parse_iso(iso_value: Optional[str]):
+            if not iso_value:
+                return None
+            try:
+                return datetime.fromisoformat(iso_value.replace("Z", "+00:00"))
+            except Exception:
+                return None
+
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+
+            rows = (
+                s.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.ticket_id == t.id)
+                .order_by(KanbanTicketAuditEntry.created_date.asc())
+                .all()
+            )
+            serialized = [
+                {
+                    "id": row.id,
+                    "run_id": row.run_id,
+                    "step_id": row.step_id,
+                    "step_result_id": row.step_result_id,
+                    "execution_lane": row.execution_lane,
+                    "status": row.status,
+                    "final_verdict": row.final_verdict,
+                    "summary": row.summary or "",
+                    "details": row.details or "",
+                    "created_date": row.created_date.isoformat() if row.created_date else None,
+                }
+                for row in rows
+            ]
+
+            runs_map = {}
+            for entry in serialized:
+                run_key = str(entry.get("run_id") if entry.get("run_id") is not None else "no_run")
+                bucket = runs_map.setdefault(
+                    run_key,
+                    {
+                        "run_id": entry.get("run_id"),
+                        "entries": [],
+                        "started_at": None,
+                        "finished_at": None,
+                        "total_duration_seconds": 0,
+                        "step_breakdown": [],
+                        "status_counts": {},
+                    },
+                )
+                bucket["entries"].append(entry)
+
+            report_runs = []
+            for bucket in runs_map.values():
+                entries = bucket["entries"]
+                if not entries:
+                    continue
+                run_start = _parse_iso(entries[0].get("created_date"))
+                run_end = _parse_iso(entries[-1].get("created_date"))
+                bucket["started_at"] = entries[0].get("created_date")
+                bucket["finished_at"] = entries[-1].get("created_date")
+                if run_start and run_end:
+                    bucket["total_duration_seconds"] = max(
+                        0,
+                        int((run_end - run_start).total_seconds()),
+                    )
+
+                for e in entries:
+                    st = (e.get("status") or "unknown").strip().lower()
+                    bucket["status_counts"][st] = int(bucket["status_counts"].get(st, 0)) + 1
+
+                step_starts = {}
+                step_rows = {}
+                for e in entries:
+                    step_id = e.get("step_id")
+                    if step_id is None:
+                        continue
+                    stamp = _parse_iso(e.get("created_date"))
+                    status = (e.get("status") or "").strip().lower()
+                    key = str(step_id)
+                    row = step_rows.setdefault(
+                        key,
+                        {
+                            "step_id": step_id,
+                            "attempts": 0,
+                            "total_seconds": 0,
+                            "wait_seconds": 0,
+                            "statuses": [],
+                        },
+                    )
+                    row["statuses"].append(status)
+                    if status == "running":
+                        step_starts[key] = stamp
+                        row["attempts"] += 1
+                        continue
+                    start_dt = step_starts.get(key)
+                    if start_dt and stamp:
+                        elapsed = max(0, int((stamp - start_dt).total_seconds()))
+                        row["total_seconds"] += elapsed
+                        if status == "waiting":
+                            row["wait_seconds"] += elapsed
+                        step_starts.pop(key, None)
+                bucket["step_breakdown"] = sorted(
+                    step_rows.values(),
+                    key=lambda x: int(x.get("step_id") or 0),
+                )
+                report_runs.append(bucket)
+
+            report_runs.sort(
+                key=lambda r: (r.get("started_at") or ""),
+                reverse=True,
+            )
+
+            return JSONResponse(
+                {
+                    "ticket_id": t.id,
+                    "ticket_title": t.title,
+                    "total_entries": len(serialized),
+                    "runs": report_runs,
+                    "entries": list(reversed(serialized)),
+                }
+            )
+
+    @router.delete("/kanban/tickets/{ticket_id}/audit-report")
+    async def clear_ticket_audit_report(ticket_id: int):
+        """Clear report-tab data by deleting audit history entries for a ticket."""
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+            deleted = (
+                s.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.ticket_id == t.id)
+                .delete(synchronize_session=False)
+            )
+            s.commit()
+            return JSONResponse(
+                {
+                    "ok": True,
+                    "ticket_id": t.id,
+                    "deleted_entries": int(deleted or 0),
+                }
+            )
 
     @router.put("/kanban/tickets/{ticket_id}")
     async def update_ticket(ticket_id: int, payload: TicketUpdate):
@@ -830,7 +1811,7 @@ def create_routes():
         if not _is_valid_time_tracking_value(payload.time_spent):
             raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
             fields_set = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
@@ -841,8 +1822,8 @@ def create_routes():
             if payload.priority is not None:
                 t.priority = payload.priority
             if "linked_workflow_id" in fields_set or "linked_project_id" in fields_set:
-                lane = s.query(KanbanLane).get(t.lane_id) if t.lane_id else None
-                board = s.query(KanbanBoard).get(lane.board_id) if lane else None
+                lane = orm_get_by_id(s, KanbanLane,t.lane_id) if t.lane_id else None
+                board = orm_get_by_id(s, KanbanBoard,lane.board_id) if lane else None
                 if "linked_workflow_id" in fields_set:
                     # Empty selection in UI means "inherit from board default".
                     t.linked_workflow_id = (
@@ -886,18 +1867,18 @@ def create_routes():
     async def move_ticket(ticket_id: int, payload: TicketMove):
         notify_ctx = None
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
-            lane = s.query(KanbanLane).get(payload.lane_id)
+            lane = orm_get_by_id(s, KanbanLane,payload.lane_id)
             if not lane:
                 raise HTTPException(404, "Lane not found")
             old_lane_id = t.lane_id
-            old_lane = s.query(KanbanLane).get(old_lane_id)
+            old_lane = orm_get_by_id(s, KanbanLane,old_lane_id)
             old_lane_name = old_lane.name if old_lane else ""
             board_name = ""
             if old_lane:
-                bd = s.query(KanbanBoard).get(old_lane.board_id)
+                bd = orm_get_by_id(s, KanbanBoard,old_lane.board_id)
                 board_name = bd.name if bd else ""
             new_lane_name = lane.name
             if old_lane_id != payload.lane_id:
@@ -934,7 +1915,7 @@ def create_routes():
     @router.delete("/kanban/tickets/{ticket_id}")
     async def delete_ticket(ticket_id: int):
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
 
@@ -947,7 +1928,7 @@ def create_routes():
 
             # Also clear the direct whatsapp_message_id link
             if t.whatsapp_message_id:
-                wa_msg = s.query(WhatsAppMessage).get(t.whatsapp_message_id)
+                wa_msg = orm_get_by_id(s, WhatsAppMessage,t.whatsapp_message_id)
                 if wa_msg:
                     wa_msg.snapshot_group = None
 
@@ -959,7 +1940,7 @@ def create_routes():
     @router.post("/kanban/tickets/{ticket_id}/files")
     async def upload_ticket_file(ticket_id: int, file: UploadFile = File(...)):
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
             upload_dir = os.path.join(KANBAN_UPLOADS_DIR, str(ticket_id))
@@ -978,7 +1959,7 @@ def create_routes():
     async def attach_existing_file(ticket_id: int, payload: dict):
         """Attach an existing file (e.g. WhatsApp media) to a ticket by path."""
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
             filename = payload.get("filename", "attachment")
@@ -1005,11 +1986,11 @@ def create_routes():
             return JSONResponse({"error": "message_id required"}, status_code=400)
 
         with get_session() as s:
-            ticket = s.query(KanbanTicket).get(ticket_id)
+            ticket = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not ticket:
                 raise HTTPException(404, "Ticket not found")
 
-            msg = s.query(WhatsAppMessage).get(message_id)
+            msg = orm_get_by_id(s, WhatsAppMessage,message_id)
             if not msg or not msg.media_local_path:
                 return JSONResponse({"success": True, "attached": False, "reason": "No media"})
 
@@ -1064,7 +2045,7 @@ def create_routes():
     @router.post("/kanban/tickets/{ticket_id}/links")
     async def add_ticket_link(ticket_id: int, payload: LinkCreate):
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
             link = KanbanTicketLink(ticket_id=ticket_id, title=payload.title, url=payload.url)
@@ -1086,7 +2067,7 @@ def create_routes():
     @router.post("/kanban/tickets/{ticket_id}/todos")
     async def add_ticket_todo(ticket_id: int, payload: TodoCreate):
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
             max_pos = max([td.position for td in t.todos], default=-1)
@@ -1169,6 +2150,12 @@ def create_routes():
             if not first_lane:
                 raise HTTPException(400, "Board has no lanes")
             max_pos = max([t.position for t in first_lane.tickets], default=-1)
+            effective_project_id = (
+                payload.linked_project_id if payload.linked_project_id is not None else board.default_project_id
+            )
+            effective_workflow_id = (
+                payload.linked_workflow_id if payload.linked_workflow_id is not None else board.default_workflow_id
+            )
             ticket = KanbanTicket(
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
@@ -1178,8 +2165,8 @@ def create_routes():
                 external_source=payload.external_source,
                 external_id=payload.external_id,
                 external_url=payload.external_url,
-                linked_workflow_id=board.default_workflow_id,
-                linked_project_id=board.default_project_id,
+                linked_workflow_id=effective_workflow_id,
+                linked_project_id=effective_project_id,
                 source_chat_id=payload.source_chat_id,
             )
             s.add(ticket)
@@ -1191,21 +2178,132 @@ def create_routes():
                 project_id = ticket.linked_project_id or board.default_project_id
                 if project_id:
                     from distr.core.db.projects import Project
-                    project = s.query(Project).get(project_id)
+                    project = orm_get_by_id(s, Project, project_id)
                     if project and project.folder_location:
-                        tickets_folder = os.path.join(project.folder_location, ".tickets")
-                        os.makedirs(tickets_folder, exist_ok=True)
-                        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
-                        content = f"---\nid: ticket_{timestamp}\ntitle: {ticket.title}\nproject: {project.name}\ncreated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\npriority: {ticket.priority}\nstatus: open\nsource: {payload.external_source or 'external'}_{payload.external_id or ''}\n---\n\n## Description\n{ticket.description or '(no description)'}\n\n---\n*Sent from Ticket Board via DecisionsAI*\n"
-                        try:
-                            with open(ticket_path, "w", encoding="utf-8") as f:
-                                f.write(content)
-                            result["sent_to_project"] = True
-                            result["project_name"] = project.name
-                        except Exception as e:
+                        proj_root = os.path.abspath(os.path.expanduser(project.folder_location.strip()))
+                        tickets_folder = None
+                        if not os.path.isdir(proj_root):
                             result["sent_to_project"] = False
-                            result["project_error"] = str(e)
+                            result["project_error"] = (
+                                f"Project folder is missing or not a directory: {proj_root!r}"
+                            )
+                            logger.warning(
+                                "copy-external: auto send skipped — bad project folder kanban_ticket_id=%s path=%r",
+                                ticket.id,
+                                proj_root,
+                            )
+                        else:
+                            tickets_folder = os.path.join(proj_root, ".tickets")
+                            try:
+                                os.makedirs(tickets_folder, exist_ok=True)
+                            except OSError as e:
+                                result["sent_to_project"] = False
+                                result["project_error"] = f"Cannot create .tickets folder: {e}"
+                                tickets_folder = None
+                                logger.warning(
+                                    "copy-external: cannot mkdir .tickets kanban_ticket_id=%s under %r: %s",
+                                    ticket.id,
+                                    proj_root,
+                                    e,
+                                )
+                        if tickets_folder:
+                            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                            ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
+                            desc_raw = ticket.description or ""
+                            try:
+                                desc_plain = (
+                                    _html_to_plain_ticket_description(desc_raw)
+                                    if "<" in desc_raw
+                                    else (desc_raw.strip() or "(no description)")
+                                )
+                            except Exception as e:
+                                logger.warning("copy-external: plain description failed: %s", e)
+                                desc_plain = desc_raw.strip() or "(no description)"
+                            import_md = ""
+                            ext_src = (payload.external_source or "").lower().strip()
+                            ext_id = (payload.external_id or "").strip()
+                            if ext_src in ("jira", "trello") and ext_id:
+                                try:
+                                    if ext_src == "jira":
+                                        import_md, iw = _download_jira_issue_attachments_for_project(
+                                            proj_root, timestamp, ext_id
+                                        )
+                                    else:
+                                        import_md, iw = _download_trello_card_attachments_for_project(
+                                            proj_root, timestamp, ext_id
+                                        )
+                                    if iw:
+                                        result["attachment_import_warning"] = iw
+                                except Exception as e:
+                                    logger.exception(
+                                        "copy-external: attachment import failed (continuing without files)"
+                                    )
+                                    result["attachment_import_warning"] = str(e) or type(e).__name__
+                                    import_md = "\n## Attachments\n_(import failed before ticket write)_\n"
+                            content = (
+                                f"---\nid: ticket_{timestamp}\ntitle: {_yaml_scalar(ticket.title or '')}\n"
+                                f"project: {_yaml_scalar(project.name or '')}\n"
+                                f"created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                                f"priority: {_yaml_scalar(ticket.priority or 'medium')}\n"
+                                f"status: open\nsource: {payload.external_source or 'external'}_{payload.external_id or ''}\n"
+                                f"---\n\n## Description\n{desc_plain}\n{import_md}\n---\n*Sent from Ticket Board via DecisionsAI*\n"
+                            )
+                            try:
+                                with open(ticket_path, "w", encoding="utf-8") as f:
+                                    f.write(content)
+                                result["sent_to_project"] = True
+                                result["project_name"] = project.name
+                                logger.info(
+                                    "copy-external: auto send ok kanban_ticket_id=%s project_id=%s path=%s bytes=%s",
+                                    ticket.id,
+                                    project.id,
+                                    ticket_path,
+                                    len(content.encode("utf-8")),
+                                )
+                            except Exception as e:
+                                logger.exception("copy-external: failed to write %s", ticket_path)
+                                result["sent_to_project"] = False
+                                result["project_error"] = str(e)
+            if payload.auto_send_to_workflow:
+                workflow_id = ticket.linked_workflow_id or board.default_workflow_id
+                if workflow_id:
+                    try:
+                        from distr.core.workflow.service import start_workflow_run
+
+                        context = f"Ticket: {ticket.title}"
+                        if ticket.description:
+                            context += f"\n\nDescription: {ticket.description}"
+                        run_metadata = {
+                            "source_type": "ticket_copy_send_to_workflow",
+                            "board_id": board.id,
+                            "board_name": board.name,
+                            "ticket_id": ticket.id,
+                            "ticket_title": ticket.title or "",
+                            "project_id": str(ticket.linked_project_id) if ticket.linked_project_id else None,
+                            "project_name": None,
+                            "phase": "planning",
+                        }
+                        run_result = start_workflow_run(
+                            workflow_id,
+                            context=context,
+                            board_id=board.id,
+                            ticket_id=ticket.id,
+                            run_metadata=run_metadata,
+                        )
+                        if "error" in run_result:
+                            result["workflow_started"] = False
+                            result["workflow_error"] = run_result["error"]
+                        else:
+                            result["workflow_started"] = True
+                            result["workflow_id"] = workflow_id
+                            result["workflow_run_id"] = run_result.get("run_id")
+                    except Exception as e:
+                        logger.exception("copy-external: auto send to workflow failed")
+                        result["workflow_started"] = False
+                        result["workflow_error"] = str(e)
+                else:
+                    result["workflow_started"] = False
+                    result["workflow_error"] = "No workflow linked to ticket or board"
 
             return JSONResponse(result)
 
@@ -1287,6 +2385,7 @@ def create_routes():
                     if r.status_code not in (200, 201):
                         raise HTTPException(r.status_code, f"Trello API error: {r.text}")
                     card = r.json()
+                    _invalidate_external_board_detail_cache(provider, ext_board_id)
                     return JSONResponse({
                         "success": True,
                         "ticket": {
@@ -1354,6 +2453,7 @@ def create_routes():
                                         break
                         except Exception:
                             pass
+                    _invalidate_external_board_detail_cache(provider, ext_board_id)
                     return JSONResponse({
                         "success": True,
                         "ticket": {
@@ -1365,6 +2465,230 @@ def create_routes():
             raise HTTPException(404, "No valid Jira account found")
 
         raise HTTPException(400, "Unsupported provider")
+
+    @router.put("/kanban/external-boards/{provider}/{board_id}/move-ticket")
+    async def move_external_board_ticket(provider: str, board_id: str, payload: ExternalBoardMoveTicket):
+        """Move/reorder a ticket on Trello (list + pos) or Jira (workflow transition into target column)."""
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        ticket_id = (payload.ticket_id or "").strip()
+        target_lane = (payload.target_lane_id or "").strip()
+        if not ticket_id or not target_lane:
+            raise HTTPException(400, "ticket_id and target_lane_id are required")
+        try:
+            settings = load_settings_from_db()
+            raw = settings.get("connected_accounts") or "[]"
+            accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
+        except Exception:
+            accounts = []
+
+        if provider == "trello":
+            import requests as req_lib
+
+            for acct in accounts:
+                if acct.get("provider", "").lower() != "trello" or not acct.get("api_key") or not acct.get("api_token"):
+                    continue
+                key, token = acct["api_key"], acct["api_token"]
+                gc = req_lib.get(
+                    f"https://api.trello.com/1/cards/{ticket_id}",
+                    params={"key": key, "token": token, "fields": "idList,pos"},
+                    timeout=10,
+                )
+                if gc.status_code != 200:
+                    continue
+                try:
+                    card_json = gc.json()
+                except Exception:
+                    continue
+                if not isinstance(card_json, dict):
+                    continue
+                source_list = card_json.get("idList") or ""
+                lr = req_lib.get(
+                    f"https://api.trello.com/1/lists/{target_lane}/cards",
+                    params={"key": key, "token": token, "fields": "id,pos"},
+                    timeout=15,
+                )
+                if lr.status_code != 200:
+                    raise HTTPException(lr.status_code, f"Trello list cards failed: {lr.text[:500]}")
+                try:
+                    list_cards = lr.json()
+                except Exception:
+                    raise HTTPException(502, "Trello returned invalid JSON for list cards")
+                if not isinstance(list_cards, list):
+                    list_cards = []
+                rows = []
+                for c in list_cards:
+                    if not isinstance(c, dict):
+                        continue
+                    cid = c.get("id")
+                    if not cid:
+                        continue
+                    if cid == ticket_id and source_list == target_lane:
+                        continue
+                    try:
+                        rows.append({"id": cid, "pos": float(c.get("pos", 0))})
+                    except (TypeError, ValueError):
+                        rows.append({"id": cid, "pos": 0.0})
+                rows.sort(key=lambda x: x["pos"])
+                n = len(rows)
+                pos_idx = max(0, min(int(payload.position), n))
+                if n == 0:
+                    new_pos = 16384.0
+                elif pos_idx == 0:
+                    new_pos = max(0.5, rows[0]["pos"] / 2.0)
+                elif pos_idx >= n:
+                    new_pos = rows[-1]["pos"] + 16384.0
+                else:
+                    lo, hi = rows[pos_idx - 1]["pos"], rows[pos_idx]["pos"]
+                    new_pos = (lo + hi) / 2.0 if hi > lo else lo + 1.0
+                put_params = {"key": key, "token": token, "idList": target_lane, "pos": new_pos}
+                pr = req_lib.put(
+                    f"https://api.trello.com/1/cards/{ticket_id}",
+                    params=put_params,
+                    timeout=15,
+                )
+                if pr.status_code != 200:
+                    raise HTTPException(pr.status_code, f"Trello move failed: {pr.text[:500]}")
+                _invalidate_external_board_detail_cache(provider, board_id)
+                return JSONResponse({"success": True})
+            raise HTTPException(
+                404,
+                "No Trello account could access this card. Check that the correct Trello account is connected.",
+            )
+
+        # Jira
+        import requests as req_lib
+        from requests.auth import HTTPBasicAuth
+
+        move_fail_http: Optional[Tuple[int, str]] = None
+
+        for acct in accounts:
+            if acct.get("provider", "").lower() != "jira" or not acct.get("email") or not acct.get("api_token"):
+                continue
+            try:
+                domain = acct.get("domain") or ""
+                if not domain:
+                    server_url = (acct.get("server_url") or "").strip().rstrip("/")
+                    if server_url:
+                        domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                if not domain:
+                    continue
+                auth = HTTPBasicAuth(acct["email"], acct["api_token"])
+                base_url = f"https://{domain}" if not domain.startswith("http") else domain
+                cr = req_lib.get(
+                    f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
+                    auth=auth,
+                    headers={"Accept": "application/json"},
+                    timeout=10,
+                )
+                if cr.status_code != 200:
+                    continue
+                try:
+                    cfg = cr.json()
+                except Exception:
+                    logger.warning(
+                        "Jira board configuration JSON parse failed (HTTP %s, body prefix=%r)",
+                        cr.status_code,
+                        (cr.text or "")[:200],
+                        exc_info=True,
+                    )
+                    continue
+                if not isinstance(cfg, dict):
+                    continue
+                target_status_ids = set()
+                target_status_names_lower = set()
+                column_found = False
+                target_lower = target_lane.lower()
+                for col in _jira_board_column_config_columns(cfg):
+                    if not isinstance(col, dict):
+                        continue
+                    if (col.get("name") or "").strip().lower() != target_lower:
+                        continue
+                    column_found = True
+                    statuses = col.get("statuses")
+                    if not isinstance(statuses, list):
+                        statuses = []
+                    for st in statuses:
+                        if not isinstance(st, dict):
+                            continue
+                        sid = st.get("id")
+                        if sid is not None:
+                            target_status_ids.add(str(sid))
+                        sname = (st.get("name") or "").strip().lower()
+                        if sname:
+                            target_status_names_lower.add(sname)
+                    break
+                if not column_found:
+                    move_fail_http = (400, f"Unknown board column: {target_lane}")
+                    continue
+
+                chosen_transition_id = None
+                for api_ver in ("3", "2"):
+                    tr = req_lib.get(
+                        f"{base_url}/rest/api/{api_ver}/issue/{ticket_id}/transitions",
+                        auth=auth,
+                        headers={"Accept": "application/json"},
+                        timeout=10,
+                    )
+                    if tr.status_code != 200:
+                        continue
+                    try:
+                        tr_body = tr.json()
+                    except Exception:
+                        continue
+                    if not isinstance(tr_body, dict):
+                        continue
+                    transitions = tr_body.get("transitions")
+                    if not isinstance(transitions, list):
+                        continue
+                    for t in transitions:
+                        if not isinstance(t, dict):
+                            continue
+                        to_raw = t.get("to")
+                        to = to_raw if isinstance(to_raw, dict) else {}
+                        tid = str(to.get("id", ""))
+                        tnm = (to.get("name") or "").strip().lower()
+                        if tid in target_status_ids or tnm in target_status_names_lower or tnm == target_lower:
+                            chosen_transition_id = t.get("id")
+                            break
+                    if chosen_transition_id:
+                        break
+                if not chosen_transition_id:
+                    move_fail_http = (
+                        400,
+                        "No workflow transition available into that column for this issue (check permissions or workflow).",
+                    )
+                    continue
+                try:
+                    pr = req_lib.post(
+                        f"{base_url}/rest/api/2/issue/{ticket_id}/transitions",
+                        json={"transition": {"id": str(chosen_transition_id)}},
+                        auth=auth,
+                        headers={"Accept": "application/json", "Content-Type": "application/json"},
+                        timeout=15,
+                    )
+                except req_lib.exceptions.RequestException as e:
+                    logger.warning("Jira transition request failed: %s", e)
+                    continue
+                if pr.status_code not in (200, 204):
+                    move_fail_http = (pr.status_code, f"Jira transition failed: {pr.text[:500]}")
+                    continue
+                _invalidate_external_board_detail_cache(provider, board_id)
+                return JSONResponse({"success": True})
+            except HTTPException:
+                raise
+            except Exception:
+                logger.exception(
+                    "Jira move unexpected error (board_id=%s ticket_id=%s account=%s)",
+                    board_id,
+                    ticket_id,
+                    acct.get("email"),
+                )
+                continue
+
+        if move_fail_http:
+            raise HTTPException(move_fail_http[0], move_fail_http[1])
+        raise HTTPException(404, "No valid Jira account found")
 
     @router.post("/kanban/external-boards/{provider}/{ext_ticket_id}/attach")
     async def attach_to_external_ticket(provider: str, ext_ticket_id: str, file: UploadFile = File(...)):
@@ -1430,54 +2754,15 @@ def create_routes():
     @router.get("/kanban/external-boards/{provider}/proxy-image")
     async def proxy_external_image(provider: str, url: str = ""):
         """Proxy an external image URL that requires authentication (Jira attachments)."""
-        if not url:
-            raise HTTPException(400, "Missing url parameter")
-        if provider not in ("trello", "jira"):
-            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        loop = asyncio.get_running_loop()
         try:
-            from distr.core.settings import load_settings_from_db
-            settings = load_settings_from_db()
-            raw = settings.get("connected_accounts") or "[]"
-            import json
-            accounts = json.loads(raw) if isinstance(raw, str) else (raw if isinstance(raw, list) else [])
-        except Exception:
-            accounts = []
-
-        import requests as req_lib
-
-        if provider == "trello":
-            for acct in accounts:
-                if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
-                    # Trello URLs already include key/token, but ensure they do
-                    sep = "&" if "?" in url else "?"
-                    authed_url = f"{url}{sep}key={acct['api_key']}&token={acct['api_token']}" if "key=" not in url else url
-                    r = req_lib.get(authed_url, timeout=15, stream=True)
-                    if r.status_code == 200:
-                        content_type = r.headers.get("content-type", "image/png")
-                        return Response(content=r.content, media_type=content_type)
-                    raise HTTPException(r.status_code, f"Trello image fetch error: {r.text[:200]}")
-            raise HTTPException(404, "No valid Trello account found")
-
-        elif provider == "jira":
-            for acct in accounts:
-                if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
-                    from requests.auth import HTTPBasicAuth
-                    domain = acct.get("domain") or ""
-                    if not domain:
-                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                        if server_url:
-                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
-                    if not domain:
-                        continue
-                    auth = HTTPBasicAuth(acct["email"], acct["api_token"])
-                    r = req_lib.get(url, auth=auth, timeout=15, stream=True)
-                    if r.status_code == 200:
-                        content_type = r.headers.get("content-type", "image/png")
-                        return Response(content=r.content, media_type=content_type)
-                    raise HTTPException(r.status_code, f"Jira image fetch error: {r.text[:200]}")
-            raise HTTPException(404, "No valid Jira account found")
-
-        raise HTTPException(400, "Unsupported provider")
+            body, content_type = await loop.run_in_executor(
+                None,
+                lambda: _proxy_external_image_sync(provider, url),
+            )
+        except HTTPException:
+            raise
+        return Response(content=body, media_type=content_type)
 
     # ── Linkable entities (for linking tickets to workflows/projects/etc.) ──
 
@@ -1634,324 +2919,353 @@ def create_routes():
             )
 
     @router.get("/kanban/external-boards/{provider}/{board_id}")
-    async def get_external_board_detail(provider: str, board_id: str):
-        """Fetch lanes and tickets from an external Trello or Jira board, enriched with local config."""
-        lanes = []
-        board_name = ""
-        board_url = ""
-        # Check for local board config
-        local_config = {}
+    async def get_external_board_detail(
+        provider: str,
+        board_id: str,
+        force_refresh: bool = False,
+    ):
+        """Return cached external board immediately; refresh from Trello/Jira in a background thread when stale.
+
+        Set force_refresh=true (query) when the user hits Re-sync: drops the server-side detail cache so the
+        next response is a fresh fetch (UI polls until cache_ready).
+        """
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        key = _external_board_detail_cache_key(provider, board_id)
+        if force_refresh:
+            _invalidate_external_board_detail_cache(provider, board_id)
+        now = time.time()
+        with _BOARD_DETAIL_LOCK:
+            ent = _BOARD_DETAIL_CACHE.get(key)
+        if ent and ent.get("ready"):
+            out = dict(ent["body"])
+            lc_only = {}
+            with get_session() as s:
+                lb = (
+                    s.query(KanbanBoard)
+                    .filter(
+                        KanbanBoard.source == provider,
+                        KanbanBoard.external_board_id == board_id,
+                    )
+                    .first()
+                )
+                if lb:
+                    lc_only = {
+                        "local_id": lb.id,
+                        "default_project_id": lb.default_project_id,
+                        "default_workflow_id": lb.default_workflow_id,
+                        "color": lb.color,
+                        "agent_enabled": lb.agent_enabled or False,
+                    }
+            out.update(lc_only)
+            age = now - ent["t"]
+            out["cache_ready"] = True
+            out["cache_stale"] = age > _BOARD_DETAIL_STALE_AFTER_SEC
+            if out["cache_stale"]:
+                _schedule_external_board_detail_refresh(provider, board_id, key)
+            return JSONResponse(out)
+
+        _schedule_external_board_detail_refresh(provider, board_id, key)
+        lc_only = {}
         with get_session() as s:
-            local_board = s.query(KanbanBoard).filter(
-                KanbanBoard.source == provider,
-                KanbanBoard.external_board_id == board_id
-            ).first()
-            if local_board:
-                local_config = {
-                    "local_id": local_board.id,
-                    "default_project_id": local_board.default_project_id,
-                    "default_workflow_id": local_board.default_workflow_id,
-                    "color": local_board.color,
-                    "agent_enabled": local_board.agent_enabled or False,
-                    "can_create_ticket": True,
+            lb = (
+                s.query(KanbanBoard)
+                .filter(
+                    KanbanBoard.source == provider,
+                    KanbanBoard.external_board_id == board_id,
+                )
+                .first()
+            )
+            if lb:
+                lc_only = {
+                    "local_id": lb.id,
+                    "default_project_id": lb.default_project_id,
+                    "default_workflow_id": lb.default_workflow_id,
+                    "color": lb.color,
+                    "agent_enabled": lb.agent_enabled or False,
                 }
-        try:
-            from distr.core.settings import load_settings_from_db
-            import json as _json
-            settings = load_settings_from_db()
-            raw = settings.get("connected_accounts") or "[]"
-            if isinstance(raw, str):
-                try:
-                    accounts = _json.loads(raw)
-                except Exception:
-                    accounts = []
-            else:
-                accounts = raw if isinstance(raw, list) else []
-            if provider == "trello":
-                for acct in accounts:
-                    if acct.get("provider", "").lower() == "trello" and acct.get("api_key") and acct.get("api_token"):
-                        import requests
-                        br = requests.get(f"https://api.trello.com/1/boards/{board_id}",
-                                          params={"key": acct["api_key"], "token": acct["api_token"], "fields": "name,url"}, timeout=10)
-                        if br.status_code == 200:
-                            bd = br.json()
-                            board_name = bd.get("name", "")
-                            board_url = bd.get("url", "")
-                        lr = requests.get(f"https://api.trello.com/1/boards/{board_id}/lists",
-                                          params={"key": acct["api_key"], "token": acct["api_token"], "cards": "open", "card_fields": "name,desc,url,labels,checklists,due"}, timeout=10)
-                        if lr.status_code == 200:
-                            for lst in lr.json():
-                                cards = []
-                                for c in lst.get("cards", []):
-                                    desc_text = c.get("desc", "") or ""
-                                    est_match = None
-                                    spent_match = None
-                                    try:
-                                        import re as _re
-                                        est_match = _re.search(r"(?:^|\n)Estimate:\s*(.+)", desc_text)
-                                        spent_match = _re.search(r"(?:^|\n)Duration:\s*(.+)", desc_text)
-                                    except Exception:
-                                        est_match = None
-                                        spent_match = None
-                                    card_data = {
-                                        "id": c["id"], "title": c["name"],
-                                        "description": desc_text,
-                                        "url": c.get("url", ""),
-                                    }
-                                    if est_match:
-                                        card_data["time_estimate"] = (est_match.group(1) or "").strip()
-                                    if spent_match:
-                                        card_data["time_spent"] = (spent_match.group(1) or "").strip()
-                                    # Fetch card details (labels, checklists, members)
-                                    try:
-                                        cd = requests.get(f"https://api.trello.com/1/cards/{c['id']}",
-                                                          params={"key": acct["api_key"], "token": acct["api_token"],
-                                                                   "fields": "name,desc,url,labels,checklists,due,members,shortUrl"},
-                                                          timeout=5)
-                                        if cd.status_code == 200:
-                                            cd_data = cd.json()
-                                            card_data["labels"] = [lb.get("name", lb.get("color", "")) for lb in cd_data.get("labels", [])]
-                                            card_data["todos"] = [{"text": cl_item.get("name", ""), "done": cl_item.get("state", "") == "complete"}
-                                                                     for cl in cd_data.get("checklists", [])
-                                                                     for cl_item in cl.get("checkItems", [])]
-                                            card_data["due"] = cd_data.get("due")
-                                            card_data["members"] = [m.get("fullName", m.get("username", "")) for m in cd_data.get("members", [])]
-                                            # Fetch Trello card attachments (images)
-                                            try:
-                                                att = requests.get(f"https://api.trello.com/1/cards/{c['id']}/attachments",
-                                                                   params={"key": acct["api_key"], "token": acct["api_token"],
-                                                                            "fields": "name,url,previews,mimeType,isUpload"},
-                                                                   timeout=5)
-                                                if att.status_code == 200:
-                                                    media = []
-                                                    for a in att.json():
-                                                        if a.get("mimeType", "").startswith("image/") or a.get("isUpload", False):
-                                                            # Use preview if available (smaller), otherwise full URL
-                                                            previews = a.get("previews", [])
-                                                            img_url = None
-                                                            if previews and len(previews) > 0:
-                                                                # Find the largest preview
-                                                                for prev in reversed(previews):
-                                                                    if prev.get("width", 0) <= 1200:
-                                                                        img_url = prev.get("url")
-                                                                        break
-                                                                if not img_url:
-                                                                    img_url = previews[-1].get("url")
-                                                            if not img_url:
-                                                                img_url = a.get("url", "")
-                                                            media.append({"url": img_url, "name": a.get("name", ""), "type": a.get("mimeType", "")})
-                                                    if media:
-                                                        card_data["media"] = media
-                                            except Exception:
-                                                pass
-                                    except Exception:
-                                        pass
-                                    cards.append(card_data)
-                                lanes.append({"id": lst["id"], "name": lst["name"], "tickets": cards})
-                        break
-            elif provider == "jira":
-                for acct in accounts:
-                    if acct.get("provider", "").lower() == "jira" and acct.get("email") and acct.get("api_token"):
-                        import requests
-                        from requests.auth import HTTPBasicAuth
-                        domain = acct.get("domain") or ""
-                        if not domain:
-                            server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                            if server_url:
-                                domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
-                        if not domain:
-                            continue
-                        auth = HTTPBasicAuth(acct["email"], acct["api_token"])
-                        base_url = f"https://{domain}" if not domain.startswith("http") else domain
-                        cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
-                                          auth=auth, headers={"Accept": "application/json"}, timeout=10)
-                        if cr.status_code == 200:
-                            cfg = cr.json()
-                            board_name = cfg.get("name", "")
-                            project_key = cfg.get("location", {}).get("projectKey", "")
-                            board_url = f"https://{domain}/jira/software/projects/{project_key}/boards/{board_id}"
-                            for col in cfg.get("columnConfig", {}).get("columns", []):
-                                lanes.append({"id": col["name"], "name": col["name"], "tickets": []})
-                            # Determine per-board create permission for Jira (CREATE_ISSUES on board project).
-                            can_create = True
-                            if project_key:
-                                perm_params = {"projectKey": project_key, "permissions": "CREATE_ISSUES"}
-                                pr = requests.get(
-                                    f"{base_url}/rest/api/3/mypermissions",
-                                    auth=auth,
-                                    headers={"Accept": "application/json"},
-                                    params=perm_params,
-                                    timeout=10,
-                                )
-                                if pr.status_code != 200:
-                                    pr = requests.get(
-                                        f"{base_url}/rest/api/2/mypermissions",
-                                        auth=auth,
-                                        headers={"Accept": "application/json"},
-                                        params=perm_params,
-                                        timeout=10,
-                                    )
-                                if pr.status_code == 200:
-                                    perms = pr.json().get("permissions", {})
-                                    create_issue = perms.get("CREATE_ISSUES", {})
-                                    can_create = bool(create_issue.get("havePermission", True))
-                            local_config["can_create_ticket"] = can_create
-                        ir = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
-                                          auth=auth, headers={"Accept": "application/json"},
-                                          params={"maxResults": 100}, timeout=10)
-                        if ir.status_code == 200:
-                            for issue in ir.json().get("issues", []):
-                                fields = issue.get("fields", {})
-                                status_name = fields.get("status", {}).get("name", "")
-                                # Parse Jira description (ADF or plain text)
-                                raw_desc = fields.get("description", "") or ""
-                                description_text = _parse_jira_description(raw_desc)
-                                card = {
-                                    "id": issue["key"], "title": fields.get("summary", ""),
-                                    "description": description_text,
-                                    "url": f"https://{domain}/browse/{issue['key']}",
-                                }
-                                # Enrich with Jira-specific fields
-                                assignee = fields.get("assignee")
-                                if assignee:
-                                    card["members"] = [assignee.get("displayName", assignee.get("name", ""))]
-                                reporter = fields.get("reporter")
-                                if reporter:
-                                    card["reporter"] = reporter.get("displayName", reporter.get("name", ""))
-                                # Time tracking
-                                timetracking = fields.get("timetracking")
-                                if timetracking:
-                                    card["time_estimate"] = timetracking.get("originalEstimate", "")
-                                    card["time_spent"] = timetracking.get("timeSpent", "")
-                                # Priority
-                                priority = fields.get("priority")
-                                if priority:
-                                    card["priority"] = priority.get("name", "medium").lower()
-                                # Labels
-                                labels = fields.get("labels", [])
-                                if labels:
-                                    card["labels"] = labels
-                                # Subtasks
-                                subtasks = fields.get("subtasks", [])
-                                if subtasks:
-                                    card["todos"] = [{"text": st.get("fields", {}).get("summary", ""), "done": st.get("fields", {}).get("status", {}).get("name", "").lower() in ("done", "closed")} for st in subtasks]
-                                # Fetch Jira issue attachments (images)
-                                try:
-                                    att = requests.get(f"{base_url}/rest/api/2/issue/{issue['key']}/attachment",
-                                                       auth=auth, headers={"Accept": "application/json"}, timeout=5)
-                                    if att.status_code == 200:
-                                        media = []
-                                        for a in att.json():
-                                            ct = a.get("mimeType", "")
-                                            if ct.startswith("image/"):
-                                                media.append({"url": a.get("content", ""), "name": a.get("filename", ""), "type": ct, "thumbnail": a.get("thumbnail", "")})
-                                        if media:
-                                            card["media"] = media
-                                except Exception:
-                                    pass
-                                for lane in lanes:
-                                    if lane["name"].lower() == status_name.lower():
-                                        lane["tickets"].append(card)
-                                        break
-                        break
-        except Exception as e:
-            logger.warning("External board detail fetch error: %s", e)
-        response_data = {"name": board_name, "url": board_url, "lanes": lanes, "can_create_ticket": True}
-        response_data.update(local_config)
-        return JSONResponse(response_data)
+        loading = {"name": "", "url": "", "lanes": [], "can_create_ticket": True, "cache_ready": False}
+        loading.update(lc_only)
+        return JSONResponse(loading)
 
     # ── Send ticket to project (.tickets folder) ──
 
     @router.post("/kanban/tickets/{ticket_id}/send-to-project")
     async def send_ticket_to_project(ticket_id: int):
         """Create a .tickets/ticket_*.md file in the linked project's folder from a Ticket Board ticket."""
-        with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
-            if not t:
-                raise HTTPException(404, "Ticket not found")
+        logger.info("send-to-project: request ticket_id=%s", ticket_id)
+        try:
+            with get_session() as s:
+                return _send_ticket_to_project_impl(s, ticket_id)
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("send-to-project: unhandled failure ticket_id=%s", ticket_id)
+            raise HTTPException(
+                500,
+                "Send to project failed (see server log). "
+                f"{type(e).__name__}: {e}",
+            ) from e
 
-            # Resolve project: ticket-level first, then board-level default
-            project_id = t.linked_project_id
-            if not project_id:
-                lane = s.query(KanbanLane).get(t.lane_id)
-                if lane:
-                    board = s.query(KanbanBoard).get(lane.board_id)
-                    if board:
-                        project_id = board.default_project_id
+    def _send_ticket_to_project_impl(s, ticket_id: int) -> JSONResponse:
+        t = orm_get_by_id(s, KanbanTicket, ticket_id)
+        if not t:
+            logger.warning("send-to-project: ticket not found ticket_id=%s", ticket_id)
+            raise HTTPException(404, "Ticket not found")
 
-            if not project_id:
-                raise HTTPException(400, "No project linked to this ticket or its board")
+        # Resolve project: ticket-level first, then board-level default
+        project_id = t.linked_project_id
+        if not project_id:
+            lane = orm_get_by_id(s, KanbanLane, t.lane_id)
+            if lane:
+                board = orm_get_by_id(s, KanbanBoard, lane.board_id)
+                if board:
+                    project_id = board.default_project_id
 
-            from distr.core.db.projects import Project
-            project = s.query(Project).get(project_id)
-            if not project:
-                raise HTTPException(404, "Linked project not found")
-            if not project.folder_location:
-                raise HTTPException(400, f"Project '{project.name}' has no folder location set")
+        if not project_id:
+            logger.warning(
+                "send-to-project: no project linked ticket_id=%s lane_id=%s",
+                ticket_id,
+                t.lane_id,
+            )
+            raise HTTPException(400, "No project linked to this ticket or its board")
 
-            # Build the markdown ticket file
-            tickets_folder = os.path.join(project.folder_location, ".tickets")
+        from distr.core.db.projects import Project
+        project = orm_get_by_id(s, Project, project_id)
+        if not project:
+            logger.warning("send-to-project: project row missing ticket_id=%s project_id=%s", ticket_id, project_id)
+            raise HTTPException(404, "Linked project not found")
+        if not project.folder_location:
+            logger.warning(
+                "send-to-project: project has no folder_location ticket_id=%s project_id=%s name=%s",
+                ticket_id,
+                project_id,
+                project.name,
+            )
+            raise HTTPException(400, f"Project '{project.name}' has no folder location set")
+
+        proj_root = os.path.abspath(os.path.expanduser(project.folder_location.strip()))
+        if not os.path.isdir(proj_root):
+            logger.warning(
+                "send-to-project: project folder not a directory ticket_id=%s path=%r",
+                ticket_id,
+                proj_root,
+            )
+            raise HTTPException(
+                400,
+                f"Project folder is missing or not a directory: {proj_root!r}. "
+                "Fix the project path in Projects, then try again.",
+            )
+
+        # Build the markdown ticket file
+        tickets_folder = os.path.join(proj_root, ".tickets")
+        try:
             os.makedirs(tickets_folder, exist_ok=True)
+        except OSError as e:
+            logger.exception("send-to-project: cannot create .tickets under %s", proj_root)
+            raise HTTPException(500, f"Cannot create .tickets folder: {e}") from e
 
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            ticket_filename = f"ticket_{timestamp}.md"
-            ticket_path = os.path.join(tickets_folder, ticket_filename)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        ticket_filename = f"ticket_{timestamp}.md"
+        ticket_path = os.path.join(tickets_folder, ticket_filename)
 
-            # Gather sub-items
-            todos_md = ""
-            if t.todos:
-                todos_md = "\n## Checklist\n"
-                for td in t.todos:
-                    mark = "x" if td.done else " "
-                    todos_md += f"- [{mark}] {td.text}\n"
+        # Gather sub-items (null-safe strings for markdown)
+        todos_md = ""
+        if t.todos:
+            todos_md = "\n## Checklist\n"
+            for td in t.todos:
+                mark = "x" if td.done else " "
+                todos_md += f"- [{mark}] {(td.text or '').strip()}\n"
 
-            links_md = ""
-            if t.links:
-                links_md = "\n## Links\n"
-                for lk in t.links:
-                    links_md += f"- [{lk.title}]({lk.url})\n"
+        links_md = ""
+        if t.links:
+            links_md = "\n## Links\n"
+            for lk in t.links:
+                lt = (lk.title or "").strip() or "link"
+                lu = (lk.url or "").strip()
+                links_md += f"- [{lt}]({lu})\n"
 
-            files_md = ""
-            if t.files:
-                files_md = "\n## Attached Files\n"
-                for fl in t.files:
-                    files_md += f"- {fl.filename} (`{fl.file_path}`)\n"
+        files_md = ""
+        if t.files:
+            files_md = "\n## Attached Files\n"
+            for fl in t.files:
+                fn = (fl.filename or "").strip() or "file"
+                fp = (fl.file_path or "").strip()
+                files_md += f"- {fn} (`{fp}`)\n"
 
-            content = f"""---
+        desc_raw = t.description or ""
+        try:
+            desc_body = (
+                _html_to_plain_ticket_description(desc_raw)
+                if "<" in desc_raw
+                else (desc_raw.strip() or "(no description)")
+            )
+        except Exception as e:
+            logger.warning("send-to-project: description plain-text failed: %s", e)
+            desc_body = desc_raw.strip() or "(no description)"
+        import_md = ""
+        import_warn: Optional[str] = None
+        ext_src = (t.external_source or "").lower().strip()
+        ext_id = (t.external_id or "").strip()
+        if ext_src in ("jira", "trello") and ext_id:
+            try:
+                if ext_src == "jira":
+                    import_md, import_warn = _download_jira_issue_attachments_for_project(
+                        proj_root, timestamp, ext_id
+                    )
+                else:
+                    import_md, import_warn = _download_trello_card_attachments_for_project(
+                        proj_root, timestamp, ext_id
+                    )
+            except Exception as e:
+                logger.exception("send-to-project: attachment import failed (continuing) ticket_id=%s", ticket_id)
+                import_md = f"\n## Attachments\n_(import failed before ticket write: {e})_\n"
+        if import_warn:
+            logger.warning(
+                "send-to-project: attachment import note ticket_id=%s ext=%s/%s: %s",
+                ticket_id,
+                ext_src,
+                ext_id,
+                import_warn,
+            )
+
+        content = f"""---
 id: ticket_{timestamp}
-title: {t.title}
-project: {project.name}
+title: {_yaml_scalar(t.title or "")}
+project: {_yaml_scalar(project.name or "")}
 created: {datetime.now().strftime("%Y-%m-%d %H:%M:%S")}
-priority: {t.priority or "medium"}
+priority: {_yaml_scalar(t.priority or "medium")}
 status: open
 source: kanban_ticket_{t.id}
 ---
 
 ## Description
-{t.description or "(no description)"}
-{todos_md}{links_md}{files_md}
+{desc_body}
+{import_md}{todos_md}{links_md}{files_md}
 ## Context
 - **Project:** {project.name} (ID: {project.id})
-- **Folder:** {project.folder_location}
+- **Folder:** `{proj_root}`
 - **Kanban Ticket ID:** {t.id}
 
 ---
 *Sent from Ticket Board via DecisionsAI*
 """
 
-            try:
-                with open(ticket_path, "w", encoding="utf-8") as f:
-                    f.write(content)
-            except Exception as e:
-                raise HTTPException(500, f"Failed to write ticket file: {e}")
+        try:
+            with open(ticket_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except Exception as e:
+            logger.exception("send-to-project: failed to write %s", ticket_path)
+            raise HTTPException(500, f"Failed to write ticket file: {e}") from e
 
-            return JSONResponse({
-                "success": True,
-                "file_path": ticket_path,
-                "project_name": project.name,
-            })
+        logger.info(
+            "send-to-project: ok ticket_id=%s project_id=%s path=%s content_bytes=%s",
+            t.id,
+            project.id,
+            ticket_path,
+            len(content.encode("utf-8")),
+        )
+        return JSONResponse({
+            "success": True,
+            "file_path": ticket_path,
+            "project_name": project.name,
+        })
 
     # ── Send ticket to CLI ──
+
+    @router.post("/kanban/tickets/{ticket_id}/send-to-workflow")
+    async def send_ticket_to_workflow(ticket_id: int, payload: SendToWorkflowRequest):
+        """Start the selected/default workflow for a ticket."""
+        from distr.core.workflow.service import start_workflow_run
+
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+
+            lane = orm_get_by_id(s, KanbanLane, t.lane_id) if t.lane_id else None
+            board = orm_get_by_id(s, KanbanBoard, lane.board_id) if lane else None
+            # Keep only scalar identifiers/names to avoid detached ORM access outside session scope.
+            board_id_value = (lane.board_id if lane else None)
+            board_name_value = board.name if board else None
+            board_default_workflow_id = board.default_workflow_id if board else None
+
+            workflow_id = payload.workflow_id or t.linked_workflow_id or board_default_workflow_id
+            if not workflow_id:
+                raise HTTPException(400, "No workflow linked to this ticket or board")
+
+            if payload.workflow_id:
+                t.linked_workflow_id = payload.workflow_id
+                s.flush()
+
+            context = f"Ticket: {t.title}"
+            if t.description:
+                context += f"\n\nDescription: {t.description}"
+
+            run_metadata = {
+                "source_type": "ticket_send_to_workflow",
+                "board_id": board_id_value,
+                "board_name": board_name_value,
+                "ticket_id": t.id,
+                "ticket_title": t.title or "",
+                "project_id": str(t.linked_project_id) if t.linked_project_id else None,
+                "project_name": None,
+                "phase": "planning",
+            }
+
+            run_result = start_workflow_run(
+                workflow_id,
+                context=context,
+                board_id=board_id_value,
+                ticket_id=ticket_id,
+                run_metadata=run_metadata,
+            )
+            if "error" in run_result:
+                raise HTTPException(400, run_result["error"])
+        return JSONResponse({
+            "success": True,
+            "message": f"Ticket #{ticket_id} sent to workflow.",
+            "workflow_id": workflow_id,
+            "run_id": run_result.get("run_id"),
+        })
+
+    @router.get("/kanban/tickets/{ticket_id}/active-run")
+    async def get_ticket_active_run(ticket_id: int):
+        """Return the active workflow run for a ticket, or {active: false} if none."""
+        from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep, AutoWorkflow as _WF
+        with get_session() as s:
+            run = (
+                s.query(AutoWorkflowRun)
+                .filter(
+                    AutoWorkflowRun.ticket_id == ticket_id,
+                    AutoWorkflowRun.status.in_(["running", "waiting"]),
+                )
+                .order_by(AutoWorkflowRun.started_at.desc())
+                .first()
+            )
+            if not run:
+                return JSONResponse({"active": False})
+            step_name = None
+            if run.current_step_id:
+                step = s.query(AutoWorkflowStep).filter(
+                    AutoWorkflowStep.id == run.current_step_id).first()
+                if step:
+                    step_name = step.name
+            wf = s.query(_WF).filter(_WF.id == run.workflow_id).first()
+            run_data = {}
+            try:
+                run_data = json.loads(run.run_data or "{}")
+            except Exception:
+                pass
+            return JSONResponse({
+                "active": True,
+                "run_id": run.id,
+                "workflow_id": run.workflow_id,
+                "workflow_name": wf.name if wf else None,
+                "status": run.status,
+                "current_step_name": step_name,
+                "phase": run_data.get("phase"),
+            })
 
     @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
     async def send_ticket_to_cli(ticket_id: int):
@@ -1959,7 +3273,7 @@ source: kanban_ticket_{t.id}
         from distr.core.pi_rpc import get_or_create_rpc_session, PiRpcSession
 
         with get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket,ticket_id)
             if not t:
                 raise HTTPException(404, "Ticket not found")
 
@@ -1969,9 +3283,9 @@ source: kanban_ticket_{t.id}
 
             project_id = t.linked_project_id
             if not project_id:
-                lane = s.query(KanbanLane).get(t.lane_id)
+                lane = orm_get_by_id(s, KanbanLane,t.lane_id)
                 if lane:
-                    board = s.query(KanbanBoard).get(lane.board_id)
+                    board = orm_get_by_id(s, KanbanBoard,lane.board_id)
                     if board:
                         project_id = board.default_project_id
 
@@ -1979,7 +3293,7 @@ source: kanban_ticket_{t.id}
                 raise HTTPException(400, "No project linked to this ticket or its board")
 
             from distr.core.db.projects import Project
-            project = s.query(Project).get(project_id)
+            project = orm_get_by_id(s, Project,project_id)
             if not project or not project.folder_location:
                 raise HTTPException(400, "Project has no folder location set")
 
@@ -2045,7 +3359,7 @@ source: kanban_ticket_{t.id}
     @router.post("/kanban/boards/{board_id}/run-agent")
     async def run_agent(board_id: int):
         with get_session() as s:
-            board = s.query(KanbanBoard).get(board_id)
+            board = orm_get_by_id(s, KanbanBoard,board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
             if not board.agent_enabled:

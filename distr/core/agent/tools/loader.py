@@ -551,7 +551,10 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SaveAudioTool": "Convert selected text or clipboard contents to speech and save the audio as a WAV file on the desktop.",
     "AudioTranscriberTool": "Transcribe audio files like MP3, M4A, or WAV to text using AssemblyAI or Whisper.",
     "VideoTranscriberTool": "Extract audio from a video file and transcribe it to text with speaker diarization support.",
-    "TranscriptionDoctorTool": "Run a health check on transcription backends to see which engines and models are available.",
+    "TranscriptionDoctorTool": (
+        "Check speech-to-text setup: saved Settings choice, VibeVoice install status, ffmpeg, file backends. "
+        "Returns a short voice-safe summary then REFERENCE: technical lines — speak only the part above REFERENCE."
+    ),
     "FileConverterTool": "Convert files between formats including audio, video-to-audio, image format conversion, and audio-to-text transcription.",
     # files/
     "FileOperationsTool": "Perform file system operations: list, create, write, read, delete single files only (not folders), copy, move on desktop, documents, downloads, or paths — bulk/recursive delete is disabled.",
@@ -625,7 +628,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "StartProjectTool": "Start a project by running its configured start command or script.",
     "OpenAndStartProjectTool": "Open a project folder and immediately run its start command in one step.",
     # integrations/
-    "GoogleWorkspaceTool": "Interact with Google Workspace services to manage Gmail, Google Calendar, Google Drive, and Google Docs.",
+    "GoogleWorkspaceTool": (
+        "Interact with Google Workspace: Gmail, Google Calendar (create_calendar_event, create_calendar_events_batch "
+        "for many events in one call, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week), "
+        "Google Drive, Google Docs. Use create_calendar_events_batch for multi-day protocols and bulk slots when "
+        "Google is connected."
+    ),
     "MarkdownToGoogleDocTool": "Convert Markdown content from the clipboard into a formatted Google Doc and open it in the browser.",
     "UploadDocToGoogleTool": "Upload a local DOC or DOCX file to Google Drive as a Google Doc.",
     "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",

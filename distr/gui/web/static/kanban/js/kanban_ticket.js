@@ -17,9 +17,8 @@
             var disabled = !!config.disabled;
             var stateClass = disabled ? "text-gray-700 cursor-not-allowed" : "text-white";
             var tooltip = config.tooltip || "";
-            var titleAttr = config.nativeTooltip ? ' title="' + tooltip + '"' : "";
-            return '<span class="kb-card-action-tip" data-tooltip="' + tooltip + '"' + titleAttr + ">" +
-                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" aria-label="' + tooltip + '"' + (disabled ? " disabled" : "") + ">" +
+            return '<span class="kb-card-action-tip">' +
+                '<button class="' + config.keyClass + " kb-card-action-btn " + stateClass + ' transition-colors" title="' + tooltip + '" aria-label="' + tooltip + '"' + (disabled ? " disabled" : "") + ">" +
                 config.iconSvg + "</button></span>";
         }
 
@@ -30,6 +29,12 @@
                     tooltip: "Copy ticket title and description",
                     nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+                }),
+                actionButtonHtml({
+                    keyClass: "kb-act-workflow",
+                    tooltip: "Send to Workflow",
+                    nativeTooltip: true,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-cli",
@@ -55,9 +60,15 @@
                     keyClass: "kb-act-transfer",
                     tooltip: "Copy ticket into a local board",
                     disabled: false,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 16H3v-5"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>',
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
                 }));
             }
+            leftActions.push(actionButtonHtml({
+                keyClass: "kb-act-discuss",
+                tooltip: "Let's talk about it — feeds this ticket into your agent chat (uses your current / last chat, or creates one)",
+                nativeTooltip: true,
+                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>',
+            }));
             var deleteAction = "";
             if (opts.canDelete) {
                 deleteAction = actionButtonHtml({
@@ -81,7 +92,7 @@
             });
             return '<div class="flex items-start justify-between gap-2">' +
                 '<span class="text-[14px] font-medium text-white leading-snug flex-1">' + deps.esc(opts.title) + "</span>" +
-                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + '<span class="' + opts.priorityClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + deps.esc(opts.priority) + "</span>" + extLinkHtml + "</div>" +
+                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + '<span class="' + opts.priorityClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + deps.esc(opts.priority) + "</span>" + (opts.workflowStatusBadgeHtml || "") + extLinkHtml + "</div>" +
                 "</div>" +
                 (opts.description ? '<p class="text-xs text-gray-400 mt-2 mb-1 leading-relaxed line-clamp-2">' + deps.esc(opts.description) + "</p>" : "") +
                 (opts.labelsHtml || "") + (opts.membersHtml || "") + (opts.timeHtml || "") + (opts.mediaHtml || "") +
@@ -140,7 +151,15 @@
         }
 
         function openExternalTicketModal(ticket, source) {
-            document.getElementById("kb-modal-ticket-title").value = ticket.title || "";
+            if (typeof deps.prepareExternalTicketModal === "function") {
+                deps.prepareExternalTicketModal();
+            }
+            var titleEl = document.getElementById("kb-modal-ticket-title");
+            if (titleEl) {
+                titleEl.value = ticket.title || "";
+                titleEl.readOnly = true;
+                titleEl.classList.add("bg-[#152054]/50", "cursor-not-allowed");
+            }
             var estimateInput = document.getElementById("kb-modal-ticket-estimate");
             var durationInput = document.getElementById("kb-modal-ticket-duration");
             if (estimateInput) {
@@ -155,34 +174,16 @@
             }
             var descArea = document.getElementById("kb-modal-ticket-desc");
             var rawDesc = ticket.description || "";
-            if (rawDesc && (rawDesc.includes("<") || (source === "jira" && rawDesc.length > 0))) {
-                descArea.value = "";
-                descArea.readOnly = true;
-                descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
-                descArea.style.display = "none";
-                var existingRich = descArea.parentElement.querySelector(".kb-ext-rich-desc");
-                if (existingRich) existingRich.remove();
-                var richDiv = document.createElement("div");
-                richDiv.className = "kb-ext-rich-desc text-sm text-gray-300 bg-[#152054]/50 rounded p-3 border border-white/10 max-h-64 overflow-y-auto";
-                richDiv.innerHTML = rawDesc;
-                richDiv.querySelectorAll("img").forEach(function(img) {
-                    img.style.maxWidth = "100%";
-                    img.style.borderRadius = "4px";
-                    img.loading = "lazy";
-                });
-                richDiv.querySelectorAll("a").forEach(function(a) {
-                    a.target = "_blank";
-                    a.rel = "noopener noreferrer";
-                });
-                descArea.parentElement.insertBefore(richDiv, descArea.nextSibling);
-            } else {
-                var prevRich = descArea.parentElement.querySelector(".kb-ext-rich-desc");
-                if (prevRich) prevRich.remove();
-                descArea.value = deps.stripHtml(rawDesc);
-                descArea.readOnly = true;
-                descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
-                descArea.style.display = "";
+            var prevRich = descArea.parentElement.querySelector(".kb-ext-rich-desc");
+            if (prevRich) prevRich.remove();
+            descArea.style.display = "";
+            var plainDesc = deps.stripHtml(rawDesc);
+            if (plainDesc.length > 60000) {
+                plainDesc = plainDesc.substring(0, 60000) + "\n…[truncated]";
             }
+            descArea.value = plainDesc;
+            descArea.readOnly = true;
+            descArea.classList.add("bg-[#152054]/50", "cursor-not-allowed");
 
             document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
                 btn.classList.add("opacity-50", "cursor-not-allowed");
@@ -195,28 +196,39 @@
 
             var metaContainer = document.getElementById("kb-modal-external-meta");
             if (metaContainer) {
-                var metaHtml = "";
+                var rowParts = [];
                 if (ticket.url) {
-                    metaHtml += '<div class="flex items-center gap-2"><span class="text-xs text-gray-500">Source:</span><a href="' + deps.esc(ticket.url) + '" target="_blank" class="text-xs text-[#f97316] hover:underline">Open in ' + deps.esc(source.charAt(0).toUpperCase() + source.slice(1)) + "</a></div>";
+                    rowParts.push(
+                        '<div class="flex items-center gap-1.5 flex-shrink-0"><span class="text-gray-500">Source</span>' +
+                        '<a href="' + deps.esc(ticket.url) + '" target="_blank" rel="noopener noreferrer" class="text-[#f97316] hover:underline whitespace-nowrap">Open in ' +
+                        deps.esc(source.charAt(0).toUpperCase() + source.slice(1)) + "</a></div>"
+                    );
                 }
                 if (ticket.members && ticket.members.length) {
-                    metaHtml += '<div class="text-xs text-gray-400">Members: ' + ticket.members.map(deps.esc).join(", ") + "</div>";
+                    rowParts.push(
+                        '<div class="flex items-center gap-1.5 min-w-0 max-w-[220px]"><span class="text-gray-500 flex-shrink-0">Members</span>' +
+                        '<span class="text-gray-200 truncate" title="' + deps.esc(ticket.members.join(", ")) + '">' +
+                        ticket.members.map(deps.esc).join(", ") + "</span></div>"
+                    );
                 }
                 if (ticket.labels && ticket.labels.length) {
-                    metaHtml += '<div class="flex flex-wrap gap-1">' + ticket.labels.map(function(lb) {
-                        return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300">' + deps.esc(lb) + "</span>";
-                    }).join("") + "</div>";
-                }
-                if (ticket.time_estimate || ticket.time_spent) {
-                    metaHtml += '<div class="text-xs text-gray-400">';
-                    if (ticket.time_estimate) metaHtml += "Estimate: " + deps.esc(ticket.time_estimate);
-                    if (ticket.time_spent) metaHtml += " | Spent: " + deps.esc(ticket.time_spent);
-                    metaHtml += "</div>";
+                    rowParts.push(
+                        '<div class="flex items-center gap-1.5 flex-wrap min-w-0"><span class="text-gray-500 flex-shrink-0">Labels</span>' +
+                        '<span class="flex flex-wrap gap-1">' +
+                        ticket.labels.map(function(lb) {
+                            return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-blue-500/20 text-blue-300 whitespace-nowrap">' + deps.esc(lb) + "</span>";
+                        }).join("") +
+                        "</span></div>"
+                    );
                 }
                 if (ticket.reporter) {
-                    metaHtml += '<div class="text-xs text-gray-400">Reporter: ' + deps.esc(ticket.reporter) + "</div>";
+                    rowParts.push(
+                        '<div class="flex items-center gap-1.5 flex-shrink-0"><span class="text-gray-500">Reporter</span>' +
+                        '<span class="text-gray-200">' + deps.esc(ticket.reporter) + "</span></div>"
+                    );
                 }
-                metaContainer.innerHTML = metaHtml;
+                metaContainer.innerHTML =
+                    '<div class="flex flex-wrap items-center gap-x-5 gap-y-2 text-xs">' + rowParts.join("") + "</div>";
                 metaContainer.classList.remove("hidden");
             }
 
@@ -256,7 +268,8 @@
             var card = document.createElement("div");
             card.className = "kb-card bg-[#1a1f3a] rounded-lg border border-white/20 p-4 cursor-pointer hover:border-[#f97316]/50 transition-colors relative";
             card.dataset.ticketId = String(ticket.id);
-            if (isLocal) {
+            var extDnD = !isLocal && currentBoard && (currentBoard.source === "trello" || currentBoard.source === "jira");
+            if (isLocal || extDnD) {
                 card.draggable = true;
                 card.addEventListener("dragstart", function(e) {
                     e.dataTransfer.setData("text/plain", String(ticket.id));
@@ -317,6 +330,17 @@
             }
 
             var hasProject = !!(ticket.linked_project_id || boardData.default_project_id);
+            var workflowStatus = (ticket.workflow_status || "").toLowerCase();
+            var workflowStatusBadgeHtml = "";
+            if (workflowStatus) {
+                var wfIsActive = isLocal && (workflowStatus === "running" || workflowStatus === "waiting");
+                var wfColorClass = "bg-gray-500/25 text-gray-200";
+                if (workflowStatus === "running" || workflowStatus === "waiting") wfColorClass = "bg-sky-500/25 text-sky-200" + (wfIsActive ? " cursor-pointer hover:bg-sky-500/40" : "");
+                else if (workflowStatus === "completed") wfColorClass = "bg-green-500/25 text-green-200";
+                else if (workflowStatus === "failed" || workflowStatus === "cancelled") wfColorClass = "bg-red-500/25 text-red-200";
+                var wfTag = wfIsActive ? "button" : "span";
+                workflowStatusBadgeHtml = '<' + wfTag + ' class="kb-wf-status-badge ' + wfColorClass + ' text-[10px] px-1.5 py-0.5 rounded font-medium">' + deps.esc(workflowStatus) + "</" + wfTag + ">";
+            }
             var canDelete = isLocal;
             var canTransfer = !isLocal;
             card.innerHTML = buildCardMarkup({
@@ -334,12 +358,13 @@
                 source: currentBoard && currentBoard.source ? currentBoard.source : "database",
                 isLocal: isLocal,
                 hasProject: hasProject,
+                workflowStatusBadgeHtml: workflowStatusBadgeHtml,
                 canTransfer: canTransfer,
                 canDelete: canDelete,
             });
 
             card.addEventListener("click", function(e) {
-                if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-act-transfer") || e.target.closest("a")) return;
+                if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-act-transfer") || e.target.closest(".kb-act-discuss") || e.target.closest("a")) return;
                 if (isLocal) deps.openTicketModal(ticket.id);
                 else openExternalTicketModal(ticket, currentBoard.source);
             });
@@ -358,7 +383,7 @@
             var projectBtn = card.querySelector(".kb-act-project");
             if (projectBtn && !projectBtn.disabled) projectBtn.addEventListener("click", function(e) {
                 e.stopPropagation();
-                if (isLocal) deps.sendTicketToProjectById(ticket.id);
+                if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
                 else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project");
             });
             var transferBtn = card.querySelector(".kb-act-transfer");
@@ -366,6 +391,30 @@
                 e.stopPropagation();
                 deps.openCopyModal(ticket);
             });
+            var workflowBtn = card.querySelector(".kb-act-workflow");
+            if (workflowBtn && !workflowBtn.disabled) workflowBtn.addEventListener("click", function(e) {
+                e.stopPropagation();
+                if (typeof deps.openSendWorkflowModal === "function") {
+                    deps.openSendWorkflowModal(ticket, isLocal ? null : currentBoard.source);
+                }
+            });
+            var wfBadge = card.querySelector(".kb-wf-status-badge");
+            if (wfBadge && wfBadge.tagName === "BUTTON" && isLocal && typeof deps.showRunPopover === "function") {
+                wfBadge.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    deps.showRunPopover(wfBadge, ticket.id);
+                });
+            }
+            var discussBtn = card.querySelector(".kb-act-discuss");
+            if (discussBtn && !discussBtn.disabled) {
+                discussBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (typeof deps.startTicketDiscussion === "function") {
+                        deps.startTicketDiscussion(ticket, isLocal);
+                    }
+                });
+            }
             var delBtn = card.querySelector(".kb-act-delete");
             if (delBtn && !delBtn.disabled) delBtn.addEventListener("click", function(e) {
                 e.stopPropagation();
@@ -516,6 +565,11 @@
                 renderModalLinks(t.links || []);
                 renderModalFiles(t.files || []);
                 renderModalTodos(t.todos || []);
+                if (typeof deps.loadModalAuditReport === "function") {
+                    deps.loadModalAuditReport(deps.getModalTicketId(), t.audit_entries || []);
+                } else if (typeof deps.renderModalAuditEntries === "function") {
+                    deps.renderModalAuditEntries(t.audit_entries || []);
+                }
             }).catch(function() {});
         }
 
@@ -628,7 +682,9 @@
             var copyPayload = {
                 board_id: boardId,
                 title: copyTicketData.title,
-                description: deps.stripHtml(copyTicketData.description),
+                description: copyTicketData.external_source
+                    ? (copyTicketData.description || "")
+                    : deps.stripHtml(copyTicketData.description || ""),
                 priority: copyTicketData.priority || "medium",
                 time_estimate: copyTicketData.time_estimate || "",
                 time_spent: copyTicketData.time_spent || "",

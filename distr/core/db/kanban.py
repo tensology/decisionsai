@@ -158,3 +158,19 @@ class KanbanTicketTodo(Base):
     created_date = Column(DateTime, default=datetime.utcnow)
 
     ticket = relationship("KanbanTicket", back_populates="todos")
+
+
+class KanbanTicketAuditEntry(Base):
+    __tablename__ = "kanban_ticket_audit_entries"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("kanban_tickets.id"), nullable=False)
+    run_id = Column(Integer, ForeignKey("auto_workflow_runs.id"), nullable=True)
+    step_id = Column(Integer, ForeignKey("auto_workflow_steps.id"), nullable=True)
+    step_result_id = Column(Integer, ForeignKey("auto_workflow_step_results.id"), nullable=True)
+    execution_lane = Column(String, nullable=False, default="cursor")  # cursor | cli
+    status = Column(String, nullable=False, default="pending")
+    final_verdict = Column(String, nullable=True)
+    summary = Column(Text, nullable=True)
+    details = Column(Text, nullable=True)
+    created_date = Column(DateTime, default=datetime.utcnow)

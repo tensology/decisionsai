@@ -21,6 +21,108 @@ from pydantic import Field
 
 logger = logging.getLogger(__name__)
 
+_REFERENCE_MARKER = "\n\nREFERENCE:\n"
+
+
+def _blank(val: Any) -> bool:
+    s = ("" if val is None else str(val)).strip()
+    return not s or s.lower() == "not set"
+
+
+def _model_spoken(model: Any) -> str:
+    s = ("" if model is None else str(model)).strip().replace("_", " ").replace(":", " ")
+    return s or "not set"
+
+
+def _provider_spoken(provider_id: Any) -> str:
+    p = ("" if provider_id is None else str(provider_id)).strip().lower()
+    return {
+        "ollama": "Ollama on your computer",
+        "openai": "OpenAI in the cloud",
+        "anthropic": "Anthropic in the cloud",
+        "groq": "Groq in the cloud",
+        "openrouter": "OpenRouter in the cloud",
+        "kilocode": "KiloCode in the cloud",
+        "gemini": "Google Gemini in the cloud",
+    }.get(p, p.replace("_", " ") if p else "your saved provider")
+
+
+def _tts_stack_spoken(settings: dict, voice_display: str) -> str:
+    prov = (settings.get("voice_provider") or "kokoro").strip().lower()
+    label = {
+        "kokoro": "Kokoro",
+        "elevenlabs": "ElevenLabs",
+        "openai": "OpenAI TTS",
+        "coqui": "Coqui",
+        "vibevoice": "VibeVoice",
+    }.get(prov, prov or "your TTS provider")
+    vn = voice_display if not _blank(voice_display) else "the default voice"
+    return f"{label} with the {vn} voice"
+
+
+def _build_voice_friendly_config_summary(info: dict, voice_display: str) -> str:
+    """Plain sentences for voice; no lists (system prompt / TTS)."""
+    settings = info.get("settings") or {}
+    if isinstance(settings, dict) and settings.get("error"):
+        return (
+            "I tried to read your saved preferences but hit a snag, so I can't spell out your exact "
+            "models from here. Open Settings from the app and check LLMs and Audio if you need the numbers."
+        )
+
+    llm = settings.get("llm") or {}
+    conv_p = _provider_spoken(llm.get("conversational_provider"))
+    conv_m = _model_spoken(llm.get("conversational_model"))
+    cod_p = _provider_spoken(llm.get("coding_provider"))
+    cod_m = _model_spoken(llm.get("coding_model"))
+    vis_p = _provider_spoken(llm.get("vision_provider"))
+    vis_m = _model_spoken(llm.get("vision_model"))
+    img_p = _provider_spoken(llm.get("image_provider"))
+    img_m = _model_spoken(llm.get("image_model"))
+
+    parts: list[str] = []
+    parts.append(
+        f"For this chat I'm on {conv_p}, using the model {conv_m}. "
+        "That's the brain answering you right now."
+    )
+
+    same_coding = (cod_p == conv_p and cod_m == conv_m) or (
+        _blank(llm.get("coding_model")) and _blank(llm.get("coding_provider"))
+    )
+    if not same_coding and not (_blank(llm.get("coding_model")) and _blank(llm.get("coding_provider"))):
+        parts.append(f"When you ask for code help I switch to {cod_p} with {cod_m}.")
+
+    if not (_blank(llm.get("vision_model")) and _blank(llm.get("vision_provider"))):
+        if (vis_p, vis_m) != (conv_p, conv_m):
+            parts.append(f"For screenshots and vision I have {vis_p} with {vis_m}.")
+
+    if not (_blank(llm.get("image_model")) and _blank(llm.get("image_provider"))):
+        if (img_p, img_m) != (conv_p, conv_m):
+            parts.append(f"For image generation it's {img_p} with {img_m}.")
+
+    tts_line = _tts_stack_spoken(settings if isinstance(settings, dict) else {}, voice_display)
+    parts.append(f"When I speak back to you, audio runs through {tts_line}.")
+
+    stt = settings.get("stt") or {}
+    tm = (stt.get("model") or "").strip()
+    if tm:
+        parts.append(f"Your speech-to-text choice in Settings is {tm}.")
+
+    mode = settings.get("mode") or {}
+    hf = mode.get("hands_free", True)
+    if isinstance(hf, str):
+        hf = hf.lower() in ("1", "true", "yes", "on")
+    parts.append(
+        "You're in hands-free listening so I keep an ear open between turns."
+        if hf
+        else "You're in push-to-talk, so I listen when you hold the key."
+    )
+
+    osys = (info.get("operating_system") or {}).get("system") or ""
+    if osys and osys.lower() != "unknown":
+        parts.append(f"This machine reports {osys}.")
+
+    return " ".join(parts)
+
 
 class SystemInfoTool(BaseTool):
     """
@@ -45,14 +147,15 @@ class SystemInfoTool(BaseTool):
 
     name: str = "system_info"
     description: str = (
-        "🔍 USE THIS TOOL when the user asks about system configuration, models, setup, or internal information. "
+        "USE THIS TOOL when the user asks about system configuration, models, setup, or internal information. "
         "CRITICAL: Use this tool for ANY question about configured models, LLM settings, or system configuration. "
         "Examples: 'what are your models', 'what model are you using', 'what is your setup', 'show me your configuration', "
         "'what LLM are you using', 'what models do you have', 'what's your system info', "
         "'what are your conversational LLM', 'what is your coding model', 'what vision model are you using', "
         "'what image model do you have', 'tell me about your models', 'what models are configured', "
         "'show me your models', 'what are your conversational coding vision or image models'. "
-        "This tool provides comprehensive information about the application's settings, models, and system environment."
+        "Returns a short conversational paragraph FIRST, then a line REFERENCE: and structured details below. "
+        "Speak only the paragraph to the user over voice; never read the REFERENCE block aloud."
     )
     
     def get_triggers(self) -> list:
@@ -207,9 +310,11 @@ class SystemInfoTool(BaseTool):
             }
         except Exception:
             info['api_providers'] = {}
-        
-        # Format as readable text
-        return self._format_system_info(info)
+
+        voice_display = self._get_voice_display_name(settings) if settings else ""
+        spoken = _build_voice_friendly_config_summary(info, voice_display)
+        technical = self._format_system_info_reference_section(info)
+        return spoken + _REFERENCE_MARKER + technical
     
     def _get_voice_display_name(self, settings: dict) -> str:
         """Get the display name for the configured voice."""
@@ -237,8 +342,8 @@ class SystemInfoTool(BaseTool):
             logger.error(f"Error getting voice display name: {e}")
             return 'Not set'
     
-    def _format_system_info(self, info: dict) -> str:
-        """Format system information as readable text."""
+    def _format_system_info_reference_section(self, info: dict) -> str:
+        """Structured details for screen or follow-up; not meant to be read aloud (after REFERENCE:)."""
         lines = []
         lines.append("=== SYSTEM INFORMATION ===\n")
         
@@ -310,82 +415,10 @@ class SystemInfoTool(BaseTool):
             validated = "✓" if status.get('validated', False) else "✗"
             lines.append(f"  {provider.capitalize()}: Enabled={enabled}, Key={validated}")
         lines.append("")
-        
-        # Capabilities and Tutorial
-        lines.append("=== CAPABILITIES & TUTORIAL ===")
+        lines.append(
+            "For spoken tips and everything you can ask, say what can you do or open Help in the app."
+        )
         lines.append("")
-        lines.append("WHAT I CAN DO:")
-        lines.append("")
-        lines.append("1. VOICE CONTROL & INTERACTION:")
-        lines.append("  • Hands-free mode: Continuous listening for voice commands")
-        lines.append("  • Push-to-talk (PTT): Press and hold to speak")
-        lines.append("  • Dictation: Speak text that gets typed into your active application")
-        lines.append("  • Transcription: Convert speech to text and process it")
-        lines.append("  • Text-to-speech: I can speak responses back to you")
-        lines.append("")
-        lines.append("2. APPLICATION CONTROL:")
-        lines.append("  • Open/focus applications: 'open Chrome', 'focus on Cursor'")
-        lines.append("  • Window management: Switch between apps, manage windows")
-        lines.append("  • File operations: Open files, search directories, manage files")
-        lines.append("  • URL shortcuts: 'open Gmail', 'open YouTube'")
-        lines.append("")
-        lines.append("3. TEXT EDITING & NAVIGATION:")
-        lines.append("  • Keyboard shortcuts: Copy, paste, undo, redo, select all")
-        lines.append("  • Text editing: Type text, navigate documents")
-        lines.append("  • Caret movement: Move cursor, navigate text")
-        lines.append("  • Function keys: Press F1-F12, special keys")
-        lines.append("")
-        lines.append("4. MOUSE CONTROL:")
-        lines.append("  • Mouse movement: 'mouse up', 'mouse down', 'mouse left', 'mouse right'")
-        lines.append("  • Precise movement: 'mouse slow up', 'move mouse center'")
-        lines.append("  • Clicks: 'click', 'right click', 'double click'")
-        lines.append("  • Scrolling: 'scroll up', 'scroll down'")
-        lines.append("")
-        lines.append("5. MEDIA CONTROL:")
-        lines.append("  • Playback: 'play', 'pause', 'stop'")
-        lines.append("  • Navigation: 'next track', 'previous track'")
-        lines.append("  • Volume: 'volume up', 'volume down', 'mute'")
-        lines.append("")
-        lines.append("6. AI-POWERED FEATURES:")
-        lines.append("  • Conversational AI: Chat with me naturally")
-        lines.append("  • Code assistance: Help with coding tasks")
-        lines.append("  • Vision analysis: Analyze screenshots and images")
-        lines.append("  • Image understanding: Describe and analyze image files")
-        lines.append("  • Document extraction: Extract text from PDFs and documents")
-        lines.append("  • Audio transcription: Transcribe audio files")
-        lines.append("  • Web search: Search the internet for information")
-        lines.append("")
-        lines.append("7. SKILLS & AUTOMATION:")
-        lines.append("  • Find skills: Search 86 provider-agnostic skills by capability or list all")
-        lines.append("  • Push skills: Install skills into pi (auto-load), Claude, Cursor, Gemini, or Codex")
-        lines.append("  • Create actions: Record and replay action sequences")
-        lines.append("  • Clipboard management: Copy, paste, rework clipboard content")
-        lines.append("  • Code execution: Run Python code directly")
-        lines.append("")
-        lines.append("8. TICKET & TASK MANAGEMENT:")
-        lines.append("  • Create Cursor tickets: 'tell cursor [message]' or 'create a ticket'")
-        lines.append("  • Summarize conversations into tickets")
-        lines.append("  • Create Cursor tickets from clipboard content")
-        lines.append("  • Developer self-update utility (guarded by .env DEBUG=True)")
-        lines.append("")
-        lines.append("9. SYSTEM INFORMATION:")
-        lines.append("  • Query system settings and configuration")
-        lines.append("  • Check model availability and status")
-        lines.append("  • View API provider status")
-        lines.append("")
-        lines.append("GETTING STARTED:")
-        lines.append("  • Say 'agent' or 'hey' to start a conversation")
-        lines.append("  • Use 'dictate' to type text by voice")
-        lines.append("  • Say 'open [app name]' to launch applications")
-        lines.append("  • Ask 'what are your models' to see your configuration")
-        lines.append("  • Try 'tell cursor [your message]' to create a ticket")
-        lines.append("  • Use 'explain' or 'calculate' for AI assistance")
-        lines.append("")
-        lines.append("TIPS:")
-        lines.append("  • Be specific with commands: 'open Chrome' not just 'open'")
-        lines.append("  • Use natural language: 'move mouse to center of screen'")
-        lines.append("  • Combine commands: 'open Cursor then dictate this code'")
-        lines.append("  • Ask for help: 'what can you do?' or 'show me a tutorial'")
-        
+
         return "\n".join(lines)
 

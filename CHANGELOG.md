@@ -18,7 +18,7 @@
 
 ## [2.7.12] - 2026-05-03
 
-### Big stability release (simple summary, only the important stuff)
+### Big stability release
 
 **Live updates and sidecar reliability both leveled up.** The web UI now receives real-time SSE events from `/api/events/stream` instead of relying on polling behavior, and sidecar health/wire-version handling was tightened with cleaner reconnect backoff so mismatch and disconnect failures are less messy.
 

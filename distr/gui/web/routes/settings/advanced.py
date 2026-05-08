@@ -34,6 +34,27 @@ def _relay_headers() -> dict:
     return {}
 
 
+def _whatsapp_relay_base_url() -> str:
+    """
+    Resolve WhatsApp relay API base URL independent of generic DEBUG.
+
+    Local UI development often sets DEBUG without a local relay process, which
+    would otherwise force failing localhost calls.
+    """
+    explicit = str(os.environ.get("DECISIONSAI_WA_API_BASE") or "").strip()
+    if explicit:
+        return explicit.rstrip("/")
+    use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+    if use_local_relay:
+        return "http://localhost:8090/api/whatsapp"
+    return "https://www.decisionsai.net/api/whatsapp"
+
+
 def register_routes(router, templates):
 
     @router.get("/advanced")
@@ -487,7 +508,9 @@ def register_routes(router, templates):
             settings = load_settings_from_db()
             connected_accounts = parse_connected_accounts(settings)
             connected_accounts = [a for a in connected_accounts if not (isinstance(a, dict) and a.get("provider") == "google")]
-            save_settings_to_db({"connected_accounts": json.dumps(connected_accounts)})
+            # Pass a list — save_settings_to_db encrypts per-account secrets then JSON-encodes once.
+            # json.dumps(list) here skipped encryption and double-encoded, so Google tokens could reappear as "connected" incorrectly.
+            save_settings_to_db({"connected_accounts": connected_accounts})
             # Delete the client secret file from canonical location
             from distr.core.paths import GOOGLE_OAUTH_SECRET_PATH
             if os.path.isfile(GOOGLE_OAUTH_SECRET_PATH):
@@ -505,9 +528,7 @@ def register_routes(router, templates):
         """Proxy: get current WhatsApp QR code from the Baileys service."""
         try:
             import httpx
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{base_url}/qr", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
@@ -520,9 +541,7 @@ def register_routes(router, templates):
         """Proxy: get current WhatsApp connection status."""
         try:
             import httpx
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.get(f"{base_url}/status", headers=_relay_headers())
                 return JSONResponse(content=resp.json(), status_code=resp.status_code)
@@ -535,9 +554,7 @@ def register_routes(router, templates):
         """Proxy: disconnect WhatsApp and clear session."""
         try:
             import httpx
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             async with httpx.AsyncClient(timeout=5.0) as client:
                 resp = await client.post(f"{base_url}/disconnect", headers=_relay_headers())
                 data = resp.json()

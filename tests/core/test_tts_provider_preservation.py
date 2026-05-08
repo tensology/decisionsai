@@ -19,8 +19,8 @@ from hypothesis import strategies as st
 # Observed baseline constants (recorded from unfixed code)
 # ---------------------------------------------------------------------------
 
-# The six canonical provider IDs
-ALL_PROVIDER_IDS = {"kokoro", "elevenlabs", "openai", "coqui", "f5tts", "voxcpm"}
+# Canonical provider IDs (must match TTSProviderRegistry / TTS_PROVIDER_BY_ID)
+ALL_PROVIDER_IDS = {"kokoro", "elevenlabs", "openai", "coqui", "f5tts", "voxcpm", "vibevoice_realtime"}
 
 # normalize_voice_provider: observed input -> expected output mappings
 NORMALIZE_PROVIDER_CASES = {
@@ -57,6 +57,10 @@ NORMALIZE_PROVIDER_CASES = {
     "VoxCPM": "voxcpm",
     "VoxCPM (Offline)": "voxcpm",
     "vox cpm": "voxcpm",
+    # VibeVoice Realtime
+    "vibevoice_realtime": "vibevoice_realtime",
+    "VibeVoice Realtime (Local)": "vibevoice_realtime",
+    "vibevoice realtime": "vibevoice_realtime",
     # Edge cases
     "": "kokoro",
     "  ": "kokoro",
@@ -82,6 +86,8 @@ PROVIDER_TO_INTERNAL_CASES = {
     "voxcpm (offline)": "voxcpm",
     "vox cpm": "voxcpm",
     "vox cpm (offline)": "voxcpm",
+    "vibevoice_realtime": "vibevoice_realtime",
+    "vibevoice realtime (local)": "vibevoice_realtime",
     "": "kokoro",
 }
 
@@ -93,6 +99,12 @@ VOICE_SETTINGS_BASELINE = {
     "coqui":      ("coqui",      "coqui_voice",      "p225",     {"device": "coqui_device"}),
     "f5tts":      ("f5tts",      "f5tts_voice",      "default",  {}),
     "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
+    "vibevoice_realtime": (
+        "vibevoice_realtime",
+        "vibevoice_realtime_voice",
+        "en-carter_man",
+        {"device": "vibevoice_device"},
+    ),
 }
 
 # voice_keys: observed baseline mapping
@@ -101,12 +113,18 @@ VOICE_KEYS_BASELINE = {
     "elevenlabs": "elevenlabs_voice",
     "openai": "openai_voice",
     "coqui": "coqui_voice",
+    "f5tts": "f5tts_voice",
     "voxcpm": "voxcpm_voice",
+    "vibevoice_realtime": "vibevoice_realtime_voice",
 }
 
 # valid_voice_providers: observed baseline (both create and update lists)
-VALID_PROVIDERS_CREATE = {"kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", ""}
-VALID_PROVIDERS_UPDATE = {"kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "", None}
+VALID_PROVIDERS_CREATE = {
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", ""
+}
+VALID_PROVIDERS_UPDATE = {
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", "", None
+}
 
 # _display_map in chat.py: observed baseline
 DISPLAY_MAP_CHAT = {
@@ -116,6 +134,7 @@ DISPLAY_MAP_CHAT = {
     "coqui": "Coqui TTS",
     "f5tts": "F5-TTS",
     "voxcpm": "VoxCPM",
+    "vibevoice_realtime": "VibeVoice Realtime",
 }
 
 # _display in main.py: observed baseline
@@ -124,7 +143,9 @@ DISPLAY_MAP_MAIN = {
     "openai": "OpenAI",
     "elevenlabs": "ElevenLabs",
     "coqui": "Coqui TTS",
+    "f5tts": "F5-TTS",
     "voxcpm": "VoxCPM",
+    "vibevoice_realtime": "VibeVoice Realtime",
 }
 
 # SPEED_BOUNDS: observed baseline
@@ -134,6 +155,7 @@ SPEED_BOUNDS_BASELINE = {
     "openai": (0.25, 4.0),
     "coqui": (0.5, 2.0),
     "voxcpm": (0.5, 2.0),
+    "vibevoice_realtime": (0.5, 2.0),
 }
 
 # TTS_SAMPLE_RATES: observed baseline
@@ -143,6 +165,7 @@ SAMPLE_RATES_BASELINE = {
     "elevenlabs": 44100,
     "coqui": 22050,
     "voxcpm": 48000,
+    "vibevoice_realtime": 24000,
 }
 
 
@@ -247,6 +270,8 @@ class TestPreservationTtsProviderToInternal:
             result = "f5tts"
         elif p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
             result = "voxcpm"
+        elif p in ("vibevoice_realtime", "vibevoice realtime (local)", "vibevoice realtime"):
+            result = "vibevoice_realtime"
         else:
             result = p or "kokoro"
 
@@ -270,6 +295,8 @@ class TestPreservationTtsProviderToInternal:
             result = "f5tts"
         elif p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
             result = "voxcpm"
+        elif p in ("vibevoice_realtime", "vibevoice realtime (local)", "vibevoice realtime"):
+            result = "vibevoice_realtime"
         else:
             result = p or "kokoro"
 
@@ -438,14 +465,14 @@ class TestPreservationValidVoiceProviders:
     def test_valid_voice_providers_create_contains_all_providers(self):
         """The create-chat valid_voice_providers list contains all six providers."""
         # Observed from chat.py line 584
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", ""]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", ""]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (create)"
 
     def test_valid_voice_providers_update_contains_all_providers(self):
         """The update-chat valid_voice_providers list contains all six providers."""
         # Observed from chat.py line 842
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "", None]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", "", None]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (update)"
 
@@ -471,7 +498,9 @@ class TestPreservationVoiceKeys:
             "elevenlabs": "elevenlabs_voice",
             "openai": "openai_voice",
             "coqui": "coqui_voice",
+            "f5tts": "f5tts_voice",
             "voxcpm": "voxcpm_voice",
+            "vibevoice_realtime": "vibevoice_realtime_voice",
         }
         assert voice_keys == VOICE_KEYS_BASELINE
 
@@ -503,6 +532,12 @@ class TestPreservationVoiceSettings:
             "coqui":      ("coqui",      "coqui_voice",      "p225",     {"device": "coqui_device"}),
             "f5tts":      ("f5tts",      "f5tts_voice",      "default",  {}),
             "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
+            "vibevoice_realtime": (
+                "vibevoice_realtime",
+                "vibevoice_realtime_voice",
+                "en-carter_man",
+                {"device": "vibevoice_device"},
+            ),
         }
         for provider, expected in VOICE_SETTINGS_BASELINE.items():
             assert _VOICE_SETTINGS[provider] == expected, f"_VOICE_SETTINGS[{provider!r}] mismatch"
@@ -541,6 +576,7 @@ class TestPreservationDisplayMaps:
             "coqui": "Coqui TTS",
             "f5tts": "F5-TTS",
             "voxcpm": "VoxCPM",
+            "vibevoice_realtime": "VibeVoice Realtime",
         }
 
     def test_main_display_map_baseline(self):
@@ -550,7 +586,9 @@ class TestPreservationDisplayMaps:
             "openai": "OpenAI",
             "elevenlabs": "ElevenLabs",
             "coqui": "Coqui TTS",
+            "f5tts": "F5-TTS",
             "voxcpm": "VoxCPM",
+            "vibevoice_realtime": "VibeVoice Realtime",
         }
 
     @given(provider=_canonical_provider_strategy())
@@ -609,9 +647,8 @@ class TestPreservationTtsProviderRegistry:
     def test_tts_providers_contains_all_ids(self):
         """TTS_PROVIDERS contains entries for all expected provider IDs."""
         from distr.core.agent.constants import TTS_PROVIDER_BY_ID
-        # Note: f5tts is not in TTS_PROVIDERS (it was removed), so check what's actually there
         for pid in TTS_PROVIDER_BY_ID:
-            assert pid in ALL_PROVIDER_IDS or pid == "f5tts", f"Unexpected provider {pid}"
+            assert pid in ALL_PROVIDER_IDS, f"Unexpected provider {pid} — update ALL_PROVIDER_IDS"
 
     @given(provider=st.sampled_from(["kokoro", "elevenlabs", "openai", "coqui"]))
     @settings(max_examples=20)

@@ -208,3 +208,37 @@ class TestWorkflowAgentExecute:
             m.get("role") == "assistant" and "Error" in (m.get("content") or "")
             for m in agent.messages
         )
+
+
+# ===========================================================================
+# Ollama chat API: tool_calls.function.arguments must be dict (not JSON string)
+# ===========================================================================
+
+
+class TestWorkflowAgentOllamaMessageNormalization:
+    """Regression: Ollama Pydantic rejects string ``arguments`` on follow-up turns."""
+
+    def test_validated_messages_for_ollama_parses_string_arguments(self):
+        agent = _make_agent()
+        agent._messages = [
+            {"role": "system", "content": "sys"},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "system_info",
+                            "arguments": '{"detail": true}',
+                        },
+                    }
+                ],
+            },
+        ]
+        out = agent._validated_messages_for_ollama()
+        asst = next(m for m in out if m.get("role") == "assistant" and "tool_calls" in m)
+        args = asst["tool_calls"][0]["function"]["arguments"]
+        assert isinstance(args, dict)
+        assert args.get("detail") is True

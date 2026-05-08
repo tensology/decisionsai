@@ -9,6 +9,7 @@ This test file verifies:
 5. Google Docs operations (create from markdown)
 """
 
+import json
 import sys
 import os
 from pathlib import Path
@@ -22,7 +23,11 @@ project_root = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(project_root))
 
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
-from distr.core.agent.tools.integrations.google_workspace_tool import GoogleWorkspaceTool
+from distr.core.agent.tools.integrations.google_workspace_tool import (
+    GoogleWorkspaceInput,
+    GoogleWorkspaceTool,
+    _normalize_calendar_events_raw,
+)
 import logging
 from datetime import datetime, timedelta
 
@@ -374,6 +379,34 @@ This document was created programmatically.
     else:
         print("ERROR: Failed to create document")
         return False
+
+
+def test_google_workspace_input_accepts_top_level_events():
+    """Top-level events must survive Pydantic validation (OpenAI tool calls)."""
+    pytest.importorskip("pydantic")
+    events_list = [
+        {
+            "summary": "Breakfast",
+            "start_time": "2026-05-05T08:00:00",
+            "end_time": "2026-05-05T08:45:00",
+        }
+    ]
+    inp = GoogleWorkspaceInput(
+        action="create_calendar_events_batch",
+        events=events_list,
+    )
+    assert inp.events == events_list
+    assert inp.action == "create_calendar_events_batch"
+
+
+def test_normalize_calendar_events_raw():
+    ev = [
+        {"summary": "A", "start_time": "2026-01-01T10:00:00", "end_time": "2026-01-01T11:00:00"},
+    ]
+    assert _normalize_calendar_events_raw({"events": ev}) == ev
+    assert _normalize_calendar_events_raw({"calendar_events": ev}) == ev
+    assert _normalize_calendar_events_raw({"events": json.dumps(ev)}) == ev
+    assert _normalize_calendar_events_raw({"params": {"events": ev}}) == ev
 
 
 def test_google_workspace_tool():

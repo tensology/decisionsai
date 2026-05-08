@@ -56,6 +56,9 @@ distr/core/db/tool_embeddings_cache.json
 # --- Custom voice audio uploads (user data, not source) ---
 distr/db/custom_voices/
 
+# --- Optional upstream clone (legacy path; default install uses ~/.cache/decisionsai/) ---
+third_party/VibeVoice/
+
 # --- Models (large binaries, downloaded at runtime) ---
 models/*
 distr/core/agent/models/

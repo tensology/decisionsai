@@ -38,7 +38,7 @@ class MetadataStore:
         """
         if db_path is None:
             home_dir = os.path.expanduser("~")
-            db_dir = os.path.join(home_dir, ".decisionsai", "rag_metadata")
+            db_dir = os.path.join(home_dir, ".decisions", "rag_metadata")
             os.makedirs(db_dir, exist_ok=True)
             db_path = os.path.join(db_dir, "metadata.db")
         

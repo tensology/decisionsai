@@ -19,6 +19,9 @@ and return all tools (checked at retrieval time, no restart needed).
 import logging
 import os
 
+# Before sentence_transformers (pulls tokenizers): avoids "forked after parallelism" stderr spam.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 from distr.core.agent.tool_telemetry import log_retrieval_summary
 import re
 import threading

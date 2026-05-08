@@ -17,6 +17,8 @@ DATA_FILES = [
 
 OPTIONS = {
     'argv_emulation': False,
+    # pywhispercpp is bundled for default offline STT. VibeVoice is installed by bin/decisions.sh after pip (not in this file).
+    # and omitted from the py2app bundle (large + upstream dep pins).
     'packages': [
         'PyQt6',
         'distr',

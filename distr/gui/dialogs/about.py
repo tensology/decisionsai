@@ -281,14 +281,18 @@ class AboutWindow(QtWidgets.QMainWindow):
         
         # Convert descriptions to HTML
         descriptions = [
-            ("DecisionsAI is an intelligent digital assistant that understands natural language and executes tasks on your computer. "
-             "Simply speak to your computer in plain English, and DecisionsAI will interpret your commands and carry them out. "
-             "No complex syntax or technical knowledge required—just communicate naturally and let DecisionsAI handle the rest."),
-            ("Built using a plethora of leading-edge libraries and open-source models, DecisionsAI serves as an intelligent "
-             "digital assistant capable of understanding and executing various tasks on your computer. "
-             "It's designed to be more than just an information retrieval tool, with capabilities that "
-             "include automation, voice interaction, and adaptive learning. DecisionsAI aims to streamline "
-             "your workflow and enhance productivity through true, local, intuitive AI-driven assistance.")
+            ("Your computer used to sit there waiting to be told what to do. Now it argues back — helpfully. "
+             "DecisionsAI is a voice-first AI assistant that lives on your machine, understands plain English, "
+             "and actually <i>does things</i>: opens apps, writes code, reads your screen, "
+             "manages tickets, runs workflows, and occasionally surprises you with how little you have to type anymore."),
+            ("It's not a chatbot with delusions of grandeur. It's a proper local agent — with real tools, "
+             "real memory, and the ability to chain tasks together without you having to babysit every step. "
+             "Talk to it, brief it, then go make a coffee. When you come back, "
+             "the thing you asked for is usually done. Sometimes it even did the thing you <i>meant</i> to ask for."),
+            ("Built on an embarrassing number of excellent open-source projects — see the Credits tab for the full "
+             "cast of people we owe a drink — and glued together by <a href='https://www.tensology.com' style='color:#4a9eff;'>Tensology</a> "
+             "with equal parts ambition and caffeine. "
+             "DecisionsAI is what happens when you get tired of clicking."),
         ]
         
         # Build HTML content from descriptions

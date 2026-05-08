@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowRun, AutoWorkflowStepResult
+from distr.core.kanban.result_packet import summarize_packet_for_step_context
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,10 @@ class StepExecutorMixin:
                        action_type: str, run_id: Optional[int] = None) -> Dict[str, Any]:
         """Shared logic for execute_code and playwright steps."""
         exec_code = (config.get("code") or step_data.get("code") or "").strip()
+        # Regenerate if stored code is JavaScript (wrong language for the Python runner).
+        if exec_code and ("require(" in exec_code or "const {" in exec_code or "const " in exec_code[:80]):
+            logger.warning("_run_code_type: stored code appears to be JavaScript, regenerating for step %s", step_data.get("id"))
+            exec_code = ""
         if not exec_code and step_data["instruction"].strip():
             exec_code = self._generate_code(step_data["instruction"], action_type, run_id=run_id)
             if exec_code is None:
@@ -167,6 +172,11 @@ class StepExecutorMixin:
                     if run_obj and run_obj.run_data:
                         try:
                             run_data = json.loads(run_obj.run_data or "{}")
+                            packet_context = summarize_packet_for_step_context(
+                                run_data.get("result_packet") or {},
+                            )
+                            if packet_context:
+                                instruction = f"{packet_context}\n\n{instruction}"
                             run_project_id = run_data.get("project_id")
                             if run_project_id is not None and str(run_project_id).strip():
                                 project_id = int(run_project_id)
@@ -525,7 +535,8 @@ class StepExecutorMixin:
                         AutoWorkflowRun.id == run_id).first()
                     if run and run.run_data:
                         run_data = json.loads(run.run_data or "{}")
-                        ticket_id = run_data.get("ticket_id")
+                        # Prefer direct column (always set) over JSON metadata field
+                        ticket_id = run.ticket_id or run_data.get("ticket_id")
                         if ticket_id:
                             try:
                                 from distr.core.kanban.ticket_cli_context import (
@@ -550,6 +561,16 @@ class StepExecutorMixin:
                                         workflow_input_context = ticket_ctx.strip()
                             except Exception as ce:
                                 logger.debug("_build_agent_prompt: ticket context assembly failed: %s", ce)
+                        packet_context = summarize_packet_for_step_context(
+                            run_data.get("result_packet") or {},
+                        )
+                        if packet_context:
+                            if workflow_input_context:
+                                workflow_input_context = (
+                                    workflow_input_context + "\n\n" + packet_context
+                                )
+                            else:
+                                workflow_input_context = packet_context
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed loading ticket metadata context: %s", e)
 
@@ -560,8 +581,11 @@ class StepExecutorMixin:
                 with _runs_lock:
                     run_ctx_obj = _active_runs.get(run_id)
                 if run_ctx_obj:
-                    # Legacy free-form context string
-                    if (run_ctx_obj.context_prefix or "").strip():
+                    # Legacy free-form context string — only use as fallback when no rich
+                    # ticket context was already assembled from the DB (ticket_cli_context).
+                    # Previously this overwrote the richer context, causing the agent to see
+                    # only "Ticket: title\nDescription: ..." instead of the full structured data.
+                    if (run_ctx_obj.context_prefix or "").strip() and not workflow_input_context:
                         workflow_input_context = run_ctx_obj.context_prefix.strip()
                     # Structured WorkflowRunContext — inject parent session data
                     if run_ctx_obj.run_ctx is not None:

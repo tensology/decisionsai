@@ -94,39 +94,121 @@ class ElevenLabsTTSService(TTSService):
         logger.debug(f"ElevenLabs voice_settings updated: stability={self._stability}, similarity_boost={self._similarity_boost}, style={self._style}, use_speaker_boost={self._use_speaker_boost}")
 
     def _extract_complete_sentences(self, text: str):
-        """Extract complete sentences from text buffer"""
-        sentences = []
-        remaining = text
-        
-        # Require at least one word character before terminal punctuation to avoid matching
-        # single-char fragments like "g." from mid-stream tokens (e.g. "ing." split mid-word).
+        """Extract complete sentences from text buffer.
+
+        Fixes two bugs in the original implementation:
+
+        1. ``remaining[len(match.group(0)):]`` advanced from the START of the
+           string by the match *length*, not by the match *end position*.  For
+           any match that starts in the middle of the string (e.g. 'g.' found
+           at position 17 in "Use tools like e.g. foo.") this left the earlier
+           part of the string in *remaining* on the next iteration, causing a
+           runaway loop that sent the same fragment to ElevenLabs many times.
+
+        2. Abbreviations and decimal numbers were not protected, so "e.g.",
+           "Dr.", "1.2.3", etc. created spurious sentence boundaries that
+           sent single-letter or number fragments ("g.", "3.") to ElevenLabs —
+           short inputs that often produce the characteristic 'aaaaaahhhh'
+           artifact.
+        """
+        _P = "\x00"  # placeholder — replaces protected '.' chars
+
+        # ── Protect decimal / version numbers (1.2, 0.95, 1.2.3, v1.0) ─────
+        # Iterate until stable so that multi-segment numbers like "1.2.3" get
+        # all their internal dots protected (single pass leaves the ".3" exposed).
+        _decimal_re = re.compile(r'(\d)\.(\d)')
+        protected = text
         while True:
-            match = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', remaining)
+            replaced = _decimal_re.sub(lambda m: m.group(1) + _P + m.group(2), protected)
+            if replaced == protected:
+                break
+            protected = replaced
+
+        # ── Protect common abbreviations (ALL dots, not just the trailing one)
+        _ABBREVS = re.compile(
+            r'\b(?:'
+            r'Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|No|Vol|Ch|Fig|Sec|Art|Ref|'
+            r'Ave|Blvd|Dept|Est|Ltd|Inc|Corp|Co|'
+            r'vs|etc|cf|approx|ibid|'
+            r'e\.g|i\.e|op\.cit|'
+            r'Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec'
+            r')\.',
+            re.IGNORECASE,
+        )
+        # Replace every '.' inside the matched abbreviation (including internal
+        # dots in multi-dot abbreviations like "e.g.") with the placeholder.
+        protected = _ABBREVS.sub(
+            lambda m: m.group(0).replace(".", _P),
+            protected,
+        )
+
+        # ── Extract sentence boundaries ──────────────────────────────────────
+        sentences_raw: list[str] = []
+        pos = 0
+        while True:
+            match = re.search(
+                r'([^.!?]*\w[^.!?]*[.!?]+)(\s+|$)',
+                protected[pos:],
+            )
             if not match:
                 break
-            
             sentence = match.group(1).strip()
-            if sentence:
-                sentences.append(sentence)
-            
-            remaining = remaining[len(match.group(0)):]
-            
-        return sentences, remaining
+            # Skip fragments shorter than 2 real chars (stray punctuation,
+            # single letters like "g." from half-protected abbreviations).
+            if len(sentence.replace(_P, "")) >= 2:
+                sentences_raw.append(sentence)
+            pos += match.end()
+
+        remaining_raw = protected[pos:]
+
+        def _restore(s: str) -> str:
+            return s.replace(_P, ".")
+
+        return [_restore(s) for s in sentences_raw], _restore(remaining_raw)
+
+    @staticmethod
+    def _sanitize_for_elevenlabs(text: str) -> str:
+        """Final sanitization pass before sending text to the ElevenLabs API.
+
+        ElevenLabs interprets ``<`` / ``>`` as SSML markup even in plain-text
+        mode, and bare ``&`` triggers HTML-entity parsing.  Either can produce
+        the characteristic elongated "aaaaahhhhh" artifact when the model
+        encounters a malformed tag or entity.  Strip horizontal rules and
+        ensure there is at least one speakable character.
+        """
+        if not text:
+            return ""
+        # Replace angle brackets that could be parsed as SSML
+        text = text.replace("<", "(").replace(">", ")")
+        # Avoid HTML entity mis-parsing
+        text = re.sub(r"&(?=[a-zA-Z#])", "and ", text)
+        # Strip markdown horizontal rules (---/===/~~~) that survive earlier cleaning
+        text = re.sub(r"^[\-=~]{2,}\s*$", "", text, flags=re.MULTILINE)
+        # Collapse excess whitespace left by the above replacements
+        text = re.sub(r"\n{3,}", "\n\n", text)
+        text = text.strip()
+        return text
 
     def _generate_audio(self, text: str):
         """Generate audio from text using ElevenLabs API with retry logic for transient errors"""
+        text = self._sanitize_for_elevenlabs(text)
+        # Skip the API call entirely if there's nothing speakable left.
+        if not text or not re.search(r"[a-zA-Z0-9]", text):
+            return None, 0
+        # Avoid synthesizing tiny low-signal fragments ("g.", "...", single token leftovers)
+        # which are a common source of elongated/glitchy artifacts.
+        alnum_chars = re.sub(r"[^a-zA-Z0-9]", "", text)
+        if len(alnum_chars) < 3:
+            return None, 0
         max_retries = 2
         retry_delay = 0.5
         
         for attempt in range(max_retries + 1):
             try:
-                # ElevenLabs API supports 'speed' parameter (range 0.7-1.2). Default 0.90.
+                # ElevenLabs API supports 'speed' parameter (range 0.7-1.2).
+                # Respect user-selected 1.0 exactly; do not silently remap to 0.90.
                 # Generate audio using text_to_speech.convert
-                # Default voice settings: stability 50%, similarity 60%, speed 0.90
-                default_speed = 0.90
                 api_speed = max(0.7, min(1.2, float(self.playback_speed)))
-                if api_speed == 1.0:
-                    api_speed = default_speed
                 audio_stream = self.client.text_to_speech.convert(
                     text=text,
                     voice_id=self.voice_id,
@@ -613,14 +695,7 @@ class ElevenLabsTTSService(TTSService):
                                 logger.debug("TTS: Cancelled right before push - dropping frame")
                                 break
                             
-                            # CRITICAL: Apply speech volume
-                            if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                                # Apply speech volume
-                                audio_array = np.frombuffer(audio_frame.audio, dtype=np.int16)
-                                audio_array = (audio_array * self._speech_volume).astype(np.int16)
-                                
-                                audio_frame.audio = audio_array.tobytes()
-                            
+                            # Volume is already applied inside run_tts — do NOT scale again here.
                             await self.push_frame(audio_frame, direction)
                             # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
                             if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
@@ -685,14 +760,7 @@ class ElevenLabsTTSService(TTSService):
                             logger.debug(f"TTS: About to push first audio frame from remaining text: {len(audio_frame.audio)} bytes, sample_rate={audio_frame.sample_rate}, direction={direction}")
                     
                     try:
-                        # CRITICAL: Apply speech volume
-                        if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):
-                            # Apply speech volume
-                            audio_array = np.frombuffer(audio_frame.audio, dtype=np.int16)
-                            audio_array = (audio_array * self._speech_volume).astype(np.int16)
-                            
-                            audio_frame.audio = audio_array.tobytes()
-                        
+                        # Volume already applied inside run_tts — do NOT scale again.
                         await self.push_frame(audio_frame, direction)
                         # Count actual audio frames (not TTSStartedFrame/TTSStoppedFrame)
                         if isinstance(audio_frame, AudioRawFrame) or (OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)):

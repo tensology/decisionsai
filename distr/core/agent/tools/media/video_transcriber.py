@@ -380,6 +380,37 @@ def format_transcript(transcript: str, format_type: str, metadata: Optional[Dict
 
 # ==================== Preflight Checks ====================
 
+def _agent_models_dir() -> str:
+    """Same models directory as AgentSession (vosk / whisper weights)."""
+    _root = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..', '..', '..', '..'))
+    return os.path.join(_root, 'distr', 'core', 'agent', 'models')
+
+
+def _vosk_transcription_preflight() -> Tuple[bool, str]:
+    try:
+        from distr.core.agent.constants import DEFAULT_VOSK_MODEL_DIR
+        import vosk  # noqa: F401
+    except ImportError:
+        return False, 'vosk package not installed'
+    path = os.path.join(_agent_models_dir(), DEFAULT_VOSK_MODEL_DIR)
+    if not os.path.isdir(path):
+        return False, f'model not found at {path} (run python bin/setup_vosk.py)'
+    return True, f"model '{DEFAULT_VOSK_MODEL_DIR}' present"
+
+
+def _vibevoice_asr_preflight() -> Tuple[bool, str]:
+    try:
+        from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
+    except Exception as e:
+        return False, f'runtime check import error: {e}'
+    if vibevoice_asr_runtime_ready():
+        return True, 'vibevoice package importable'
+    return (
+        False,
+        'vibevoice not installed or not importable — run ./scripts/install_vibevoice.sh in your venv',
+    )
+
+
 def check_transcription_backends(assemblyai_key: Optional[str] = None, openai_key: Optional[str] = None) -> Dict[str, Any]:
     """Check which transcription backends are available.
     
@@ -413,6 +444,22 @@ def check_transcription_backends(assemblyai_key: Optional[str] = None, openai_ke
         'name': 'OpenAI Whisper API',
         'available': available,
         'reason': reason
+    })
+
+    # Vosk (local STT — same tree as live agent fallback)
+    vosk_available, vosk_reason = _vosk_transcription_preflight()
+    backends.append({
+        'name': 'Vosk (local)',
+        'available': vosk_available,
+        'reason': vosk_reason,
+    })
+
+    # VibeVoice ASR (local — Settings → LLMs; requires separate install)
+    vv_available, vv_reason = _vibevoice_asr_preflight()
+    backends.append({
+        'name': 'VibeVoice ASR (local)',
+        'available': vv_available,
+        'reason': vv_reason,
     })
     
     # Check ffmpeg
@@ -486,7 +533,10 @@ class VideoTranscriberTool(BaseTool):
             from distr.core.settings import load_settings_from_db
             settings = load_settings_from_db()
             assemblyai_key = settings.get('assemblyai_key', '') if settings.get('assemblyai_enabled', False) else None
-            openai_key = settings.get('openai_api_key', '') if settings else None
+            openai_key = None
+            if settings and settings.get('openai_enabled'):
+                k = (settings.get('openai_key') or '').strip()
+                openai_key = k or None
             
             # Preflight check: verify at least one backend is available
             logger.info("Running preflight checks...")

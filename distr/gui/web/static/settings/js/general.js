@@ -201,6 +201,7 @@ function updatePlaybackSpeedLabel(value) {
 
 // Voice playback — audio plays in the browser via HTML5 Audio
 let _voiceAudio = null;
+let _voiceBlobUrl = null;
 let _voiceLoading = false;
 
 function _setVoiceUI(state) {
@@ -243,8 +244,9 @@ async function playVoice() {
     _setVoiceUI('loading');
 
     try {
-        const response = await fetch('/api/play-voice', {
+        const response = await fetch('/api/play-voice?_=' + Date.now(), {
             method: 'POST',
+            cache: 'no-store',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ provider, voice, speed, voice_name: voiceName })
         });
@@ -257,23 +259,43 @@ async function playVoice() {
 
         const blob = await response.blob();
         const url = URL.createObjectURL(blob);
+        _voiceBlobUrl = url;
 
         _voiceAudio = new Audio(url);
         _voiceAudio.onended = function() {
             _setVoiceUI('idle');
-            URL.revokeObjectURL(url);
+            if (_voiceBlobUrl) {
+                try { URL.revokeObjectURL(_voiceBlobUrl); } catch (e) { /* ignore */ }
+                _voiceBlobUrl = null;
+            }
             _voiceAudio = null;
         };
         _voiceAudio.onerror = function() {
             _setVoiceUI('idle');
-            URL.revokeObjectURL(url);
+            if (_voiceBlobUrl) {
+                try { URL.revokeObjectURL(_voiceBlobUrl); } catch (e) { /* ignore */ }
+                _voiceBlobUrl = null;
+            }
             _voiceAudio = null;
             showNotification('Audio playback failed', 'error');
         };
 
         _voiceLoading = false;
         _setVoiceUI('playing');
-        _voiceAudio.play();
+        try {
+            await _voiceAudio.play();
+        } catch (playErr) {
+            console.error('play() failed:', playErr);
+            if (_voiceBlobUrl) {
+                try { URL.revokeObjectURL(_voiceBlobUrl); } catch (e2) { /* ignore */ }
+                _voiceBlobUrl = null;
+            }
+            _voiceAudio = null;
+            _voiceLoading = false;
+            _setVoiceUI('idle');
+            showNotification('Playback blocked or failed — check browser autoplay / audio permissions.', 'error');
+            return;
+        }
     } catch (error) {
         console.error('Error playing voice sample:', error);
         showNotification('Failed to play voice: ' + error.message, 'error');
@@ -289,6 +311,10 @@ function stopVoice() {
         _voiceAudio.pause();
         _voiceAudio.currentTime = 0;
         _voiceAudio = null;
+    }
+    if (_voiceBlobUrl) {
+        try { URL.revokeObjectURL(_voiceBlobUrl); } catch (e) { /* ignore */ }
+        _voiceBlobUrl = null;
     }
     _setVoiceUI('idle');
 }
@@ -388,8 +414,8 @@ function setupGeneralSliders() {
         elevenlabsStyle.addEventListener('change', function() { if (elevenlabsThrottle) { clearTimeout(elevenlabsThrottle); elevenlabsThrottle = null; } applyElevenLabsVoiceSettings(); });
         if (elevenlabsSpeakerBoost) elevenlabsSpeakerBoost.addEventListener('change', function() { applyElevenLabsVoiceSettings(); });
     }
-    const playVoiceButton = document.getElementById('play_voice_button');
-    if (playVoiceButton) playVoiceButton.addEventListener('click', function() { playVoice(); });
+    // play_voice_button uses onclick="toggleVoicePlayback()" in general.html — do not add a second
+    // click listener here or each press runs playVoice() twice (race / stale blob).
     const oraclePositionSelect = document.getElementById('oracle_position');
     if (oraclePositionSelect) {
         oraclePositionSelect.addEventListener('change', function() {

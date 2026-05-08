@@ -20,7 +20,10 @@ from distr.core.db.workflow import (
     AutoWorkflowStepResult,
 )
 from distr.core.workflow.verification import _run_verification
+from distr.core.kanban.result_packet import append_workflow_step_to_packet
+from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 from distr.gui.web.workflow_events import increment_workflow_updated
+from distr.gui.web.kanban_events import increment_kanban_updated
 
 logger = logging.getLogger(__name__)
 
@@ -74,12 +77,14 @@ class StepRouter:
             # ── store result ──
             step.status = status
             step.result = result
-            db.add(AutoWorkflowStepResult(
+            step_result_row = AutoWorkflowStepResult(
                 step_id=step_id,
                 run_id=run_id,
                 agent_response=result,
                 status=status,
-            ))
+            )
+            db.add(step_result_row)
+            db.flush()
 
             run = db.query(AutoWorkflowRun).filter(
                 AutoWorkflowRun.id == run_id,
@@ -91,6 +96,39 @@ class StepRouter:
 
             # ── determine next step ──
             decision = self._determine_next(db, step, run, verified_passed, result)
+            # ── update canonical result packet in run_data ──
+            try:
+                run_data = json.loads(run.run_data or "{}")
+            except Exception:
+                run_data = {}
+            packet = run_data.get("result_packet") or {}
+            packet = append_workflow_step_to_packet(
+                packet,
+                step_name=step.name or f"Step {step.id}",
+                step_status=status,
+                step_result=result or "",
+                run_status=(
+                    decision.get("status")
+                    if decision.get("action") == "end_run"
+                    else "running"
+                ),
+            )
+            run_data["result_packet"] = packet
+
+            if getattr(run, "ticket_id", None):
+                append_ticket_audit_entry(
+                    db,
+                    ticket_id=int(run.ticket_id),
+                    run_id=run_id,
+                    step_id=step_id,
+                    step_result_id=getattr(step_result_row, "id", None),
+                    execution_lane="cursor",
+                    status=status,
+                    final_verdict=((packet.get("audit") or {}).get("final_verdict")),
+                    summary=f"{step.name or f'Step {step_id}'}: {status}",
+                    details=(result or "")[:3000],
+                )
+            run.run_data = json.dumps(run_data)
             db.commit()
 
         increment_workflow_updated()
@@ -135,6 +173,29 @@ class StepRouter:
             # Transition back to running
             run.status = "running"
             step.status = "running"
+            if getattr(run, "ticket_id", None):
+                append_ticket_audit_entry(
+                    db,
+                    ticket_id=int(run.ticket_id),
+                    run_id=run_id,
+                    step_id=step_id,
+                    step_result_id=None,
+                    execution_lane="cursor",
+                    status="running",
+                    final_verdict="cannot_determine",
+                    summary=f"{step.name or f'Step {step_id}'} resumed",
+                    details=(feedback or "").strip()[:3000] or "Run resumed after waiting state.",
+                )
+                increment_kanban_updated(
+                    board_id=getattr(run, "board_id", None),
+                    event_type="ticket_workflow_status",
+                    payload={
+                        "ticket_id": int(run.ticket_id),
+                        "run_id": run_id,
+                        "status": "running",
+                        "step_id": step_id,
+                    },
+                )
             db.commit()
 
         increment_workflow_updated()
@@ -342,6 +403,29 @@ class StepRouter:
             agent_response=handoff["history_entry"],
             status="waiting",
         ))
+        if run and getattr(run, "ticket_id", None):
+            append_ticket_audit_entry(
+                db,
+                ticket_id=int(run.ticket_id),
+                run_id=run_id,
+                step_id=step_id,
+                step_result_id=None,
+                execution_lane="cursor",
+                status="waiting",
+                final_verdict="cannot_determine",
+                summary=f"{step_name or f'Step {step_id}'} waiting for input",
+                details=(result or "")[:3000],
+            )
+            increment_kanban_updated(
+                board_id=getattr(run, "board_id", None),
+                event_type="ticket_workflow_status",
+                payload={
+                    "ticket_id": int(run.ticket_id),
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "step_id": step_id,
+                },
+            )
         db.commit()
 
         increment_workflow_updated()

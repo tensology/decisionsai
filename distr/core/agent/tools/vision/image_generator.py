@@ -38,7 +38,7 @@ def is_image_file(file_path: str) -> bool:
 
 def get_dropped_images() -> List[str]:
     """Get all image files that were dropped on the oracle ball."""
-    storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+    storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
     storage_file = os.path.join(storage_dir, "current_files.json")
     
     if not os.path.exists(storage_file):

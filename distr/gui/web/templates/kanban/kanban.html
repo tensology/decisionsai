@@ -83,6 +83,7 @@
 .kb-act-copy { background: rgba(59,130,246,0.28); }
 .kb-act-cli { background: rgba(249,115,22,0.30); }
 .kb-act-project { background: rgba(168,85,247,0.32); }
+.kb-act-workflow { background: rgba(14,165,233,0.30); }
 .kb-act-transfer { background: rgba(34,197,94,0.28); }
 .kb-act-delete { background: rgba(239,68,68,0.28); }
 .kb-card-action-tip[data-tooltip]:not([data-tooltip=""]):hover::after,
@@ -455,31 +456,23 @@
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
+            <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="report">Report</button>
             <button type="button" class="kb-tm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
         </div>
         <!-- Tab content area with fixed min-height -->
         <div style="min-height: 320px;">
             <!-- Details tab -->
             <div id="kb-tm-tab-details" class="kb-tm-pane p-6 space-y-4">
-                <div id="kb-modal-external-meta" class="hidden space-y-2 mb-3 p-3 bg-[#152054] rounded border border-blue-500/30">
-                    <!-- Populated dynamically for external tickets -->
+                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30">
+                    <!-- Populated dynamically for external tickets (single row: source, members, labels, reporter) -->
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Title</label>
-                    <input type="text" id="kb-modal-ticket-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                    <textarea id="kb-modal-ticket-title" rows="3" class="w-full min-h-[4.5rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
                 </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Description</label>
-                    <textarea id="kb-modal-ticket-desc" rows="4" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
-                </div>
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                    <div class="flex gap-2" id="kb-modal-priority-btns">
-                        <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
-                        <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
-                        <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
-                        <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
-                    </div>
+                    <textarea id="kb-modal-ticket-desc" rows="8" class="w-full min-h-[12rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
                 </div>
                 <div class="grid grid-cols-2 gap-3">
                     <div>
@@ -524,8 +517,28 @@
                     </div>
                 </div>
             </div>
+            <!-- Report tab -->
+            <div id="kb-tm-tab-report" class="kb-tm-pane hidden p-6 space-y-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm text-gray-400">Ticket Execution Report</div>
+                    <button type="button" id="kb-modal-clear-report" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Clear Report</button>
+                </div>
+                <div id="kb-modal-audit-summary" class="grid grid-cols-3 gap-2"></div>
+                <div id="kb-modal-audit-runs" class="space-y-3"></div>
+                <div class="text-xs text-gray-500">Full audit trail</div>
+                <div id="kb-modal-audit-entries" class="space-y-2"></div>
+            </div>
             <!-- Advanced tab -->
             <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-6 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                    <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
+                        <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                        <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                        <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                        <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                    </div>
+                </div>
                 <div>
                     <label class="block text-sm text-gray-400 mb-1">Link to</label>
                     <div class="grid grid-cols-2 gap-2">
@@ -551,20 +564,44 @@
                 <button type="button" id="kb-modal-act-copy" class="text-gray-400 hover:text-white transition-colors" title="Copy title &amp; description">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
                 </button>
+                <button type="button" id="kb-modal-act-discuss" class="text-gray-400 hover:text-[#c4b5fd] transition-colors" title="Let's talk about it — send full ticket context into your agent chat (current / last chat, or a new chat if needed)">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                </button>
                 <button type="button" id="kb-modal-act-cli" class="text-gray-400 hover:text-orange-400 transition-colors" title="Push to CLI">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
                 </button>
                 <button type="button" id="kb-modal-act-project" class="text-gray-400 hover:text-blue-400 transition-colors" title="Send to Project (.tickets)">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
                 </button>
+                <button type="button" id="kb-modal-act-workflow" class="text-gray-400 hover:text-sky-400 transition-colors" title="Send to Workflow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>
+                </button>
                 <button type="button" id="kb-modal-transfer-ext" class="hidden text-gray-400 hover:text-green-400 transition-colors" title="Copy to local board">
-                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M16 3h5v5"/><path d="M8 16H3v-5"/><path d="M21 3l-7 7"/><path d="M3 21l7-7"/></svg>
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
                 </button>
             </div>
             <div class="flex gap-2">
                 <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
                 <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
             </div>
+        </div>
+    </div>
+</div>
+
+<!-- Send ticket to workflow modal -->
+<div id="kb-send-workflow-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-6" style="width: 460px;">
+        <h3 class="text-lg font-semibold text-white mb-2">Send Ticket to Workflow</h3>
+        <p id="kb-send-workflow-hint" class="text-sm text-gray-400 mb-4">Choose which workflow to run for this ticket.</p>
+        <div class="mb-4">
+            <label class="block text-sm text-gray-400 mb-1">Workflow</label>
+            <select id="kb-send-workflow-select" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                <option value="">Select workflow...</option>
+            </select>
+        </div>
+        <div class="flex justify-end gap-2">
+            <button type="button" id="kb-send-workflow-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="kb-send-workflow-confirm" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Send</button>
         </div>
     </div>
 </div>
@@ -841,7 +878,10 @@
 
                     <!-- Hour picker grid (hidden unless frequency is hourly) -->
                     <div id="kb-gs-hour-picker" class="hidden">
-                        <label class="block text-xs text-gray-500 mb-2">Which hours?</label>
+                        <div class="flex items-center justify-between mb-2">
+                            <label class="block text-xs text-gray-500">Which hours?</label>
+                            <button type="button" id="kb-gs-hours-select-all" class="px-2 py-1 rounded border border-white/20 text-xs text-gray-300 hover:border-[#f97316] hover:text-white">Select all</button>
+                        </div>
                         <div class="grid grid-cols-8 gap-1">
                             <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="0">0</button>
                             <button type="button" class="kb-gs-hour py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-[#f97316]" data-hour="1">1</button>

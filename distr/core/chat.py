@@ -94,6 +94,7 @@ def resolve_voice_model_from_global_settings(
         "coqui": "coqui_voice",
         "f5tts": "f5tts_voice",
         "voxcpm": "voxcpm_voice",
+        "vibevoice_realtime": "vibevoice_realtime_voice",
     }
     sk = _VOICE_KEYS.get(nid)
     if sk:
@@ -109,6 +110,7 @@ def resolve_voice_model_from_global_settings(
         "coqui_voice",
         "f5tts_voice",
         "voxcpm_voice",
+        "vibevoice_realtime_voice",
     ):
         v = (_setting_val(settings, key) or "").strip()
         if v:

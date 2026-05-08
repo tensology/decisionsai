@@ -73,7 +73,7 @@ async function loadLLMsSettings() {
             }
 
             if (effectiveProvider) {
-                await loadLLMModels(type, effectiveProvider);
+                await loadLLMModels(type, effectiveProvider, { notifyOnMissingProviderKey: false });
             }
 
             const modelSelect = document.getElementById(`${type}_model`);
@@ -154,7 +154,9 @@ async function saveLLMsSettings() {
 }
 
 // Load available models for a specific LLM type and provider (API returns [{id, name}])
-async function loadLLMModels(type, provider) {
+async function loadLLMModels(type, provider, opts) {
+    opts = opts || {};
+    var notifyOnMissingProviderKey = !!opts.notifyOnMissingProviderKey;
     const modelSelect = document.getElementById(`${type}_model`);
     if (!modelSelect) return;
 
@@ -178,7 +180,9 @@ async function loadLLMModels(type, provider) {
                 option.textContent = `Configure ${provider} API key in Third Party tab`;
                 option.disabled = true;
                 modelSelect.appendChild(option);
-                showNotification(`${provider} API key not configured. Go to Third Party tab.`, 'warning');
+                if (notifyOnMissingProviderKey) {
+                    showNotification(`${provider} API key not configured. Go to Third Party tab.`, 'warning');
+                }
             } else {
                 const option = document.createElement('option');
                 option.value = '';
@@ -432,7 +436,7 @@ if (document.readyState === 'loading') {
                 if (providerSelect) {
                     providerSelect.addEventListener('change', function() {
                         if (this.value) {
-                            loadLLMModels(type, this.value);
+                            loadLLMModels(type, this.value, { notifyOnMissingProviderKey: true });
                         } else {
                             // Empty provider — clear model dropdown
                             const modelSelect = document.getElementById(`${type}_model`);
@@ -463,7 +467,7 @@ if (document.readyState === 'loading') {
             if (providerSelect) {
                 providerSelect.addEventListener('change', function() {
                     if (this.value) {
-                        loadLLMModels(type, this.value);
+                        loadLLMModels(type, this.value, { notifyOnMissingProviderKey: true });
                     } else {
                         const modelSelect = document.getElementById(`${type}_model`);
                         if (modelSelect) modelSelect.innerHTML = '<option value="">Select model...</option>';

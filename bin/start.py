@@ -105,6 +105,8 @@ if sys.platform == 'darwin' and not os.environ.get('_DECISIONS_DYLD_FIXED'):
 
 # Suppress huggingface_hub "Fetching N files" tqdm progress bars (cache validation noise)
 os.environ.setdefault('HF_HUB_DISABLE_PROGRESS_BARS', '1')
+# Before any transformers/sentence_transformers import: avoids fork+tokenizers deadlock spam in logs.
+os.environ.setdefault('TOKENIZERS_PARALLELISM', 'false')
 
 # Fix for Qt WebEngine rendering on macOS - must be set BEFORE any Qt imports
 if sys.platform == 'darwin':

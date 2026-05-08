@@ -594,7 +594,7 @@ Cleaned ticket:"""
             return ""
         try:
             import json as _json
-            api_base = os.environ.get("DECISIONS_API_BASE", "http://localhost:5555")
+            api_base = os.environ.get("DECISIONS_API_BASE", "http://127.0.0.1:8765")
             meta = {
                 "run_id": int(run_id),
                 "step_id": int(step_id) if step_id else 0,

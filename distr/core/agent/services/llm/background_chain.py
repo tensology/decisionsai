@@ -260,7 +260,8 @@ class BackgroundChainRunner:
             return
 
         if not content or not content.strip():
-            content = "Done"
+            logger.info("BackgroundChain: Completed — nothing to announce (empty content)")
+            return
 
         logger.info("BackgroundChain: Completed — announcing result (%d chars)", len(content))
 

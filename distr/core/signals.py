@@ -236,6 +236,9 @@ signal_manager = SignalManager()
 # and without a running Qt event loop, cross-thread signal delivery is unreliable.
 # The multiprocessing Queue (event_queue) works reliably across threads and processes.
 _agent_event_queue = None
+_last_speak_text = ""
+_last_speak_ts = 0.0
+_speak_dedup_lock = threading.Lock()
 
 
 def set_agent_event_queue(event_queue):
@@ -255,16 +258,26 @@ def speak_text_directly_event_queue(text: str):
     Use this instead of signal_manager.speak_text_directly.emit() from any code
     that runs in the agent subprocess (tools, LLM service, workflows, etc.).
     """
-    global _agent_event_queue
+    global _agent_event_queue, _last_speak_text, _last_speak_ts
+    message = (text or "").strip()
+    if not message:
+        return
+    # Guardrail: suppress duplicate short-burst speaks to avoid double confirmations.
+    with _speak_dedup_lock:
+        now = time.time()
+        if message == _last_speak_text and (now - _last_speak_ts) < 1.0:
+            return
+        _last_speak_text = message
+        _last_speak_ts = now
     if _agent_event_queue:
         try:
-            _agent_event_queue.put(('speak_text_directly', {'text': text}), block=False)
+            _agent_event_queue.put(('speak_text_directly', {'text': message}), block=False)
             return
         except Exception:
             pass
     # Fallback: signal_manager only works in the main process or same-thread
     # with DirectConnection in the agent subprocess.
     try:
-        signal_manager.speak_text_directly.emit(text)
+        signal_manager.speak_text_directly.emit(message)
     except Exception:
         pass

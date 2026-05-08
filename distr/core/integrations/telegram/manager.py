@@ -254,9 +254,9 @@ class TelegramWebSocketManager(
             return "Agent"
 
     def _setup_detailed_logging(self):
-        """Setup logging to ~/.decisionsai/logs/telegram_websocket_detailed.log"""
+        """Setup logging to ~/.decisions/logs/telegram_websocket_detailed.log"""
         try:
-            log_dir = Path.home() / ".decisionsai" / "logs"
+            log_dir = Path.home() / ".decisions" / "logs"
             log_dir.mkdir(parents=True, exist_ok=True)
             self._detailed_log_file = log_dir / "telegram_websocket_detailed.log"
             # Ensure file exists

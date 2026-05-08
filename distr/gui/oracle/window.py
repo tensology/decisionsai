@@ -740,7 +740,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self.listen_action.setText("Not Listening")
         signal_manager.voice_set_is_listening.emit(False)
         # Fire idle hook to reset visuals via skin system
-        self._event_dispatcher.fire_hook("idle")
+        self._event_dispatcher.fire_hook("idle", trigger="oracle:disable_tray")
         self._update_tray_icon()
         self.save_listening_state()
 
@@ -766,7 +766,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         signal_manager.hands_free_mode_changed.emit(True)
         self.save_hands_free_state()
         # Fire the hands-free hook — oracle skins will glow, avatar skins won't (glow: false in skin.json)
-        self._event_dispatcher.fire_hook("hands_free_listening")
+        self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:enable_hands_free")
 
     def disable_hands_free(self):
         """Disable hands-free mode"""
@@ -775,7 +775,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.hands_free_action.setChecked(False)
             self.hands_free_action.setText("Hands-Free Mode: OFF")
         # Revert the hands-free hook now that the mode is off
-        self._event_dispatcher.revert_hook("hands_free_listening")
+        self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:disable_hands_free")
         signal_manager.hands_free_mode_changed.emit(False)
         self.save_hands_free_state()
 
@@ -846,8 +846,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Visual feedback via skin system
         logging.info("[ORACLE] PTT: firing ptt_active hook")
         self.hold_to_talk_active = True
-        self._event_dispatcher.fire_hook("ptt_active")
-        
+        self._event_dispatcher.fire_hook("ptt_active", trigger="oracle:ptt_mouse_down")
+
         # Start delay timer - only emit interrupt signal after delay completes
         logging.info(f"[ORACLE] Starting PTT delay timer ({self.ptt_delay_ms}ms) before sending interrupt")
         self.ptt_delay_timer.start(self.ptt_delay_ms)
@@ -954,8 +954,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Skin system already handling visuals via ptt_active hook
         if not self.hold_to_talk_active:
             self.hold_to_talk_active = True
-            self._event_dispatcher.fire_hook("ptt_active")
-    
+            self._event_dispatcher.fire_hook("ptt_active", trigger="oracle:stt_capture_started")
+
     def on_stt_capture_stopped(self):
         """React to STT confirming it stopped capturing - stop visual feedback"""
         logging.info("[ORACLE] ✓ STT confirmed capture stopped")
@@ -984,7 +984,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def on_hands_free_glow_on(self):
         """Enable the slow glow when STT reports hands-free listening."""
         logging.info("[ORACLE] STT requested hands-free glow ON")
-        self._event_dispatcher.fire_hook("hands_free_listening")
+        self._event_dispatcher.fire_hook("hands_free_listening", trigger="oracle:stt_hands_free_glow_on")
 
     def on_hands_free_glow_off(self):
         """Disable the glow when STT reports hands-free listening off.
@@ -996,7 +996,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         logging.info("[ORACLE] STT requested hands-free glow OFF (is_hands_free=%s)", self.is_hands_free)
         if not self.is_hands_free:
             # Hands-free was disabled — fully revert
-            self._event_dispatcher.revert_hook("hands_free_listening")
+            self._event_dispatcher.revert_hook("hands_free_listening", trigger="oracle:stt_hands_free_glow_off")
         # else: still in continuous mode — keep the glow on, just a speech pause
 
 
@@ -1191,9 +1191,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             # Safety: if hook is still ptt_active after cleanup, force idle
             if self._event_dispatcher.get_current_hook() == "ptt_active":
                 logging.warning("[ORACLE] mouseReleaseEvent: hook still ptt_active after cleanup — forcing idle")
-                self._event_dispatcher._current_hook = "idle"
-                self._event_dispatcher._previous_hook = "idle"
-                self._event_dispatcher.event_hook_fired.emit("idle", "ptt_active")
+                self._event_dispatcher.force_idle("ptt_mouse_release_safety")
             
             self.dragging = False
             if hasattr(self, '_drag_notified'):
@@ -1825,9 +1823,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
     def _trigger_drop_success_glow(self):
         """Trigger file drop success visual via skin system."""
-        self._event_dispatcher.fire_hook("file_drop_success")
+        self._event_dispatcher.fire_hook("file_drop_success", trigger="oracle:file_drop_success")
         # Auto-revert after 4 seconds (flash glow handles its own timing for oracle)
-        QTimer.singleShot(4000, lambda: self._event_dispatcher.revert_hook("file_drop_success"))
+        QTimer.singleShot(
+            4000,
+            lambda: self._event_dispatcher.revert_hook("file_drop_success", trigger="oracle:file_drop_success_timer"),
+        )
 
     
 
@@ -2095,8 +2096,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self.disable_hands_free()
         
         # Skin system handles the visual (yellow glow for oracle, working.webm for avatars)
-        self._event_dispatcher.fire_hook("dictation")
-    
+        self._event_dispatcher.fire_hook("dictation", trigger="oracle:dictation_started")
+
     def _on_hands_free_mode_changed(self, enabled: bool):
         """Handle hands-free mode changed signal (from agent during dictation)"""
         if enabled:
@@ -2113,8 +2114,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._update_dictation_menu_state()
         
         # Skin system reverts to previous state
-        self._event_dispatcher.revert_hook("dictation")
-        
+        self._event_dispatcher.revert_hook("dictation", trigger="oracle:dictation_stopped")
+
         # Restore hands-free mode if it was enabled before dictation
         if self._hands_free_before_dictation and self.is_listening:
             self.is_hands_free = True

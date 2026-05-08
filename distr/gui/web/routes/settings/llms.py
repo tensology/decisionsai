@@ -61,6 +61,7 @@ def register_routes(router, templates):
             "assemblyai (nano)": "assemblyai",
             "assemblyai (best)": "assemblyai",
             "openai whisper (whisper-1)": "openai_whisper",
+            "vibevoice asr (local)": "vibevoice_asr",
         }
         _stt_short = _stt_map_to_short.get(
             _raw_stt.lower(),
@@ -68,6 +69,7 @@ def register_routes(router, templates):
             else "vosk" if "vosk" in _raw_stt.lower()
             else "openai_whisper" if "openai" in _raw_stt.lower()
             else "assemblyai" if "assemblyai" in _raw_stt.lower()
+            else "vibevoice_asr" if "vibevoice" in _raw_stt.lower() and "asr" in _raw_stt.lower()
             else "whisper"
         )
 
@@ -97,12 +99,35 @@ def register_routes(router, templates):
 
         settings = load_settings_from_db()
 
+        def _agent_llm_settings_fingerprint(s: dict) -> tuple:
+            """Stable tuple of all LLMs-tab fields that affect the running agent or tools."""
+            return (
+                (s.get("transcription_model") or "").strip(),
+                (s.get("conversational_llm_provider") or "ollama").strip().lower(),
+                (s.get("conversational_llm_model") or "").strip(),
+                (s.get("coding_llm_provider") or "ollama").strip().lower(),
+                (s.get("coding_llm_model") or "").strip(),
+                (s.get("vision_llm_provider") or "ollama").strip().lower(),
+                (s.get("vision_llm_model") or "").strip(),
+                (s.get("image_llm_provider") or "ollama").strip().lower(),
+                (s.get("image_llm_model") or "").strip(),
+                (s.get("workflow_llm_provider") or "").strip().lower(),
+                (s.get("workflow_llm_model") or "").strip(),
+                (s.get("computer_use_provider") or "").strip().lower(),
+                (s.get("computer_use_model") or "").strip(),
+                (s.get("kanban_agent_orchestrator_provider") or "").strip().lower(),
+                (s.get("kanban_agent_orchestrator_model") or "").strip(),
+            )
+
+        _fp_before = _agent_llm_settings_fingerprint(settings)
+
         _stt = (settings_data.stt_model or "whisper").strip().lower()
         _stt_map_to_full = {
             "vosk": "Vosk (Local & Offline)",
             "whisper": "Whisper.cpp (Local & Offline)",
             "assemblyai": "AssemblyAI (universal-2)",
             "openai_whisper": "OpenAI Whisper (whisper-1)",
+            "vibevoice_asr": "VibeVoice ASR (Local)",
         }
         settings["transcription_model"] = _stt_map_to_full.get(_stt, "Whisper.cpp (Local & Offline)")
         settings["conversational_llm_provider"] = (settings_data.conversational_provider or "ollama").strip()
@@ -128,6 +153,28 @@ def register_routes(router, templates):
         settings["kanban_agent_orchestrator_model"] = (settings_data.kanban_model or "").strip()
 
         save_settings_to_db(settings)
+
+        # Hot-swap live agent from web UI (FastAPI thread): marshal onto Qt main thread + agent commands.
+        from distr.core.services.settings_service import (
+            notify_conversational_llm_saved_for_running_agent,
+            notify_stt_model_saved_for_running_agent,
+        )
+
+        notify_stt_model_saved_for_running_agent(settings.get("transcription_model") or "")
+
+        # Hot-swap / recalibrate the live agent when *any* LLMs-tab field changed — not only
+        # conversational provider/model. Vision/coding/kanban/etc. are read from DB in many
+        # tools, but the main session.settings and pipeline still need a refresh so the
+        # orchestrator matches what the user just saved.
+        _fp_after = _agent_llm_settings_fingerprint(settings)
+        if _fp_before != _fp_after:
+            chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
+            notify_conversational_llm_saved_for_running_agent(
+                (settings.get("conversational_llm_provider") or "ollama").strip(),
+                (settings.get("conversational_llm_model") or "").strip(),
+                chat_id,
+            )
+
         return JSONResponse({"success": True, "message": "LLMs settings saved"})
 
     @router.get("/llms/available-providers")

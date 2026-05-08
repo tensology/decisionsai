@@ -151,7 +151,7 @@ class ExecuteCodeTool(BaseTool):
     
     def _get_dropped_files(self) -> Optional[List[str]]:
         """Get files that were dropped on the oracle ball."""
-        storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+        storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
         storage_file = os.path.join(storage_dir, "current_files.json")
         
         if not os.path.exists(storage_file):

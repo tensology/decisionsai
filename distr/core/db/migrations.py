@@ -525,6 +525,23 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add voxcpm_voice column: {e}")
 
+    # VibeVoice Realtime TTS voice preset id (matches demo/voices/streaming_model/*.pt stem)
+    try:
+        with Session() as session:
+            session.execute(text("SELECT vibevoice_realtime_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(
+                    text(
+                        "ALTER TABLE settings ADD COLUMN vibevoice_realtime_voice VARCHAR DEFAULT 'en-carter_man'"
+                    )
+                )
+                conn.commit()
+                logger.info("Added vibevoice_realtime_voice column to settings table")
+            except Exception as e:
+                logger.warning("Could not add vibevoice_realtime_voice column: %s", e)
+
     # Handle database migration for coqui_voice column (Coqui TTS offline voices)
     try:
         with Session() as session:
@@ -1885,6 +1902,37 @@ def run_migrations():
                     logger.debug("Index migration skipped: %s", _ie)
     except Exception as _idx_err:
         logger.warning("Index migration block failed: %s", _idx_err)
+
+    # ── Ticket audit entries table (normalized per-ticket audit rows) ──
+    try:
+        with engine.connect() as conn:
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS kanban_ticket_audit_entries (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ticket_id INTEGER NOT NULL REFERENCES kanban_tickets(id),
+                    run_id INTEGER REFERENCES auto_workflow_runs(id),
+                    step_id INTEGER REFERENCES auto_workflow_steps(id),
+                    step_result_id INTEGER REFERENCES auto_workflow_step_results(id),
+                    execution_lane VARCHAR NOT NULL DEFAULT 'cursor',
+                    status VARCHAR NOT NULL DEFAULT 'pending',
+                    final_verdict VARCHAR,
+                    summary TEXT,
+                    details TEXT,
+                    created_date DATETIME DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_ticket_audit_ticket_created "
+                "ON kanban_ticket_audit_entries (ticket_id, created_date)"
+            ))
+            conn.execute(text(
+                "CREATE INDEX IF NOT EXISTS ix_ticket_audit_run_step "
+                "ON kanban_ticket_audit_entries (run_id, step_id)"
+            ))
+            conn.commit()
+            logger.info("Ensured kanban_ticket_audit_entries table exists")
+    except Exception as e:
+        logger.warning("Could not create kanban_ticket_audit_entries table: %s", e)
 
     # ── BUG-4: Add board_id and ticket_id to AutoWorkflowRun for concurrency ──
     for _wcol, _wtype, _wdef in [

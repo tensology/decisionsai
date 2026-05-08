@@ -147,6 +147,38 @@ def _download_hf_model(repo_id: str, local_dir: str, label: str = "model"):
 
 
 
+def _prefetch_decisions_local_stt_caches() -> None:
+    """Run ``scripts/prefetch_local_models.py`` so STT behaves like Whisper (weights cached before first mic)."""
+    if (os.environ.get("DECISIONS_AI_SKIP_MODEL_PREFETCH") or "").strip() == "1":
+        print("")
+        print("Skipping local STT/TTS prefetch (DECISIONS_AI_SKIP_MODEL_PREFETCH=1).")
+        return
+    root = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
+    script = os.path.join(root, "scripts", "prefetch_local_models.py")
+    if not os.path.isfile(script):
+        print("")
+        print(f"⚠ prefetch script missing: {script}")
+        return
+    print("")
+    print("=" * 60)
+    print("Local STT / TTS model prefetch (Vosk, Whisper, VibeVoice HF)")
+    print("=" * 60)
+    try:
+        r = subprocess.run(
+            [sys.executable, script, "--only", "all"],
+            cwd=root,
+            timeout=7200,
+        )
+        if r.returncode != 0:
+            print(f"⚠ Prefetch exited with code {r.returncode} — first STT/TTS use may still download.")
+        else:
+            print("✓ Local STT/TTS prefetch finished.")
+    except subprocess.TimeoutExpired:
+        print("⚠ Local STT/TTS prefetch timed out — run manually: python scripts/prefetch_local_models.py")
+    except Exception as e:
+        print(f"⚠ Local STT/TTS prefetch failed: {e}")
+
+
 def setup_kanade_models():
     """Pre-download Kanade voice cloning model and WavLM checkpoint.
 
@@ -601,6 +633,9 @@ def setup(skip_model_pull=False, install_optional=False):
 
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
     setup_kanade_models()
+
+    # Local STT/TTS (Vosk tree, Whisper gguf warm, VibeVoice HF if vibevoice is installed)
+    _prefetch_decisions_local_stt_caches()
 
     # --- pi CLI Setup ---
     setup_pi_cli(ram_gb, rec)

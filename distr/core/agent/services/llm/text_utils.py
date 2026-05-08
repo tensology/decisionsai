@@ -8,6 +8,47 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
+# Short phrase for chat + TTS when a raw filesystem path would have appeared.
+_PATH_REDACT_PLACEHOLDER = "I've saved a file on your computer."
+
+
+def redact_filesystem_paths_for_conversation(text: str) -> str:
+    """Replace local filesystem paths with plain prose.
+
+    Raw paths in chat are unreadable and break TTS (slash noise, long tokens, SSML-like
+    artifacts). Use this for assistant bubbles, stream replacement text, and persisted
+    replies — not for tool arguments or code sent to execute_code.
+    """
+    if not text:
+        return ""
+    out = text
+    ph = _PATH_REDACT_PLACEHOLDER
+
+    # file:// URIs
+    out = re.sub(r'file://[^\s<>\'\"]+', ph, out, flags=re.IGNORECASE)
+    # Windows absolute paths
+    out = re.sub(
+        r'(?<![\w/])([A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)+[^\\/:*?"<>|\r\n]+)',
+        ph,
+        out,
+    )
+    # Unix-style absolute paths: /a/b/c — at least two path segments after root.
+    # Require the "/" not to be part of a URL scheme (https://) by rejecting "/" after ":" or another "/".
+    out = re.sub(r'(?<![/:])(/(?:[^\s/]+/){2,}[^\s/]+)', ph, out)
+    # Home-relative (~/, ~user/)
+    out = re.sub(r'~[^\s]+', ph, out)
+
+    # Merge duplicate placeholders from multi-pass or path + line boilerplate
+    out = re.sub(r'(?:' + re.escape(ph) + r'\s*){2,}', ph + ' ', out)
+    out = re.sub(
+        r'(?i)\bfile\s+created\s*:\s*' + re.escape(ph),
+        ph,
+        out,
+    )
+    out = re.sub(r'(?i)\bsaved\s+to\s*:\s*' + re.escape(ph), ph, out)
+    return out
+
+
 # Broader than legacy BMP-only whitelist: letters, numbers, marks, punctuation, symbols, spaces.
 # Excludes category C (controls/format/surrogate) and So (emoji / pictographs) for speakability.
 _ALLOWED_SPOKEN_TTS_CATEGORIES = frozenset({
@@ -52,9 +93,20 @@ def clean_text_for_tts(
     """
     if not text:
         return ""
-        
+
+    # Voice-first tools append a technical block after REFERENCE: — never speak that tail.
+    _ref = "\n\nREFERENCE:\n"
+    if _ref in text:
+        text = text.split(_ref, 1)[0]
+    else:
+        # Be permissive when model emits variant spacing/casing around marker.
+        text = re.split(r'\n\s*REFERENCE\s*:\s*\n', text, maxsplit=1, flags=re.IGNORECASE)[0]
+
     # Strip machine-only suffixes from vision tools (avoid JSON-ish noise in chat/TTS).
     text = re.sub(r'\nPOINTER_RESULT:.*', '', text, flags=re.DOTALL)
+
+    # Strip filesystem paths early so sanitization never preserves slash-heavy tokens for TTS.
+    text = redact_filesystem_paths_for_conversation(text)
 
     # CRITICAL FIX: Remove hallucinated Chain-of-Thought or Prompt Leakage
     text = re.sub(r'Your tool output was:.*?Your response should be:\s*', '', text, flags=re.IGNORECASE | re.DOTALL)
@@ -72,6 +124,11 @@ def clean_text_for_tts(
     text = re.sub(r'<think>\s*.*?\s*</think>', '', text, flags=re.DOTALL)
     text = re.sub(r'<tool_call>.*', '', text, flags=re.DOTALL)
     text = re.sub(r'<think>.*', '', text, flags=re.DOTALL)
+    # Strip any remaining HTML/XML-like tags — angle brackets trigger ElevenLabs SSML parsing
+    # and can produce the characteristic elongated "aaaaaaaahhhhh" artifact.
+    text = re.sub(r'<[^>]{0,80}>', '', text)
+    # Any surviving bare < or > could still confuse ElevenLabs; replace with parens.
+    text = text.replace('<', '(').replace('>', ')')
 
     # Strip leaked Instruction tags from workflow reports that may surface in LLM output
     text = re.sub(r'\[Instruction:.*?\]', '', text, flags=re.IGNORECASE | re.DOTALL)
@@ -79,6 +136,11 @@ def clean_text_for_tts(
     # Normalize smart/curly quotes (do not map U+0060 grave — Markdown/code backticks)
     text = re.sub(r"[\u2018\u2019\u00B4]", "'", text)
     text = re.sub(r"[\u201C\u201D]", '"', text)
+
+    # Remove common filler words/interjections that sound unnatural in TTS.
+    text = re.sub(r'\b(?:uh+|um+|ah+|er+|hmm+)\b[\s,.;:!?-]*', '', text, flags=re.IGNORECASE)
+    # Clamp exaggerated letter elongations ("soooo", "ahhhh") to keep speech natural.
+    text = re.sub(r'([A-Za-z])\1{2,}', r'\1\1', text)
 
     # Remove emojis / unspeakable characters (strict BMP) or category-based (spoken prose)
     sanitized_chars = []
@@ -117,25 +179,18 @@ def clean_text_for_tts(
     # Replace with concise placeholders so users do not hear slash-heavy strings.
     text = re.sub(r'https?://\S+', 'a web link', text, flags=re.IGNORECASE)
     text = re.sub(r'file://\S+', 'a file link', text, flags=re.IGNORECASE)
-    # Unix-like absolute paths
-    text = re.sub(r'(?<!\w)/(?:[^/\s]+/){2,}[^/\s]*', 'a file path', text)
-    # Windows-style paths
-    text = re.sub(r'\b[A-Za-z]:\\(?:[^\\\s]+\\){1,}[^\\\s]*', 'a file path', text)
+    # Paths already redacted via redact_filesystem_paths_for_conversation above.
     # Residual slash runs that are unpleasant for TTS ("slash slash slash")
     text = re.sub(r'(?:\s*/\s*){2,}', ' path ', text)
 
-    # Normalize whitespace
+    # Normalize whitespace — collapse newlines to spaces so TTS never receives bare
+    # newline characters (Kokoro/espeak-ng phonemizer drops whitespace at utterance
+    # boundaries on \n, producing merged words; ElevenLabs can also stall on them).
+    text = text.replace('\r\n', ' ').replace('\r', ' ').replace('\n', ' ')
     text = re.sub(r'[ \t]{2,}', ' ', text)
-    text = text.replace('\r\n', '\n').replace('\r', '\n')
-    text = re.sub(r'\n{3,}', '\n\n', text)
-    
+
     if strip_whitespace:
-        if '\n' in text:
-            lines = text.split('\n')
-            lines = [line.strip() for line in lines]
-            text = '\n'.join(lines)
-        else:
-            text = text.strip()
+        text = text.strip()
 
     # Inject natural pause markers for speech rhythm
     # DISABLED: newline-based pause hints cause espeak-ng phonemizer (used by Kokoro)
@@ -206,6 +261,36 @@ def humanize_silent_navigation_json(result: str) -> Optional[str]:
     if "/settings" in path:
         return "I've opened Settings in your browser."
     return "I've opened that page in your browser."
+
+
+def brief_tool_completion_message(tool_name: Optional[str]) -> str:
+    """Short spoken acknowledgement after a tool when there is no richer assistant reply.
+
+    Avoids bare \"Done\", which sounds abrupt in voice-first mode.
+    """
+    key = (tool_name or "").strip().lower()
+    table = {
+        "open_page": "I've opened that in your browser.",
+        "kanban_ticket": "I've updated the ticket board.",
+        "create_cursor_ticket": "I've saved that ticket.",
+        "find_skill": "I've opened that skill.",
+        "push_skill": "I've pushed that skill.",
+        "type_text": "I've typed that for you.",
+        "summarize_clipboard": "Here's your summary.",
+        "rework_clipboard": "I've reworked that text.",
+        "clipboard_action": "Finished with the clipboard.",
+        "text_editing": "Finished that edit.",
+        "create_action": "I've set that action up.",
+        "start_recording": "Recording started.",
+        "stop_recording": "Recording stopped.",
+        "file_operations": "I've applied those file changes.",
+        "execute_code": "I've run that code.",
+        "play_action": "Playing that action.",
+        "stop_action": "Stopped the action.",
+        "pause_action": "Paused the action.",
+        "resume_action": "Resumed the action.",
+    }
+    return table.get(key, "I've finished that step.")
 
 
 def normalize_text(text: str) -> str:

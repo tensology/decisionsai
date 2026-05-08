@@ -24,6 +24,15 @@ except ImportError as e:
     logger.warning(f"Error importing AssemblyAISTTService: {e}")
     AssemblyAISTTService = None
 
+try:
+    from .stt.vibevoice_asr import VibeVoiceAsrSTTService
+except ImportError as e:
+    logger.warning(
+        "VibeVoiceAsrSTTService not importable (VibeVoice STT disabled until fixed): %s",
+        e,
+    )
+    VibeVoiceAsrSTTService = None
+
 # TTS services
 from .tts.kokoro import KokoroTTSService
 from .tts.elevenlabs import ElevenLabsTTSService

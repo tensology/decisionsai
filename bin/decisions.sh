@@ -34,6 +34,48 @@ fi
 echo -e "${GREEN}DecisionsAI Setup & Run${NC}"
 echo "================================"
 
+# Consolidate legacy home dir (~/.decisionsai) into canonical (~/.decisions)
+migrate_legacy_decisions_home() {
+    local legacy_dir="$HOME/.decisionsai"
+    local canonical_dir="$HOME/.decisions"
+    if [ ! -d "$legacy_dir" ]; then
+        return 0
+    fi
+
+    mkdir -p "$canonical_dir"
+    "$PYTHON_CMD" - <<'PY'
+from pathlib import Path
+import shutil
+
+legacy = Path.home() / ".decisionsai"
+canonical = Path.home() / ".decisions"
+if not legacy.exists():
+    raise SystemExit(0)
+
+for src in sorted(legacy.rglob("*"), key=lambda p: len(p.parts)):
+    rel = src.relative_to(legacy)
+    dst = canonical / rel
+    if src.is_dir():
+        dst.mkdir(parents=True, exist_ok=True)
+        continue
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if dst.exists():
+        # Canonical tree wins; keep legacy copy for now.
+        continue
+    shutil.move(str(src), str(dst))
+
+for d in sorted([p for p in legacy.rglob("*") if p.is_dir()], key=lambda p: len(p.parts), reverse=True):
+    try:
+        d.rmdir()
+    except OSError:
+        pass
+try:
+    legacy.rmdir()
+except OSError:
+    pass
+PY
+}
+
 # Check for repository updates
 echo -e "${YELLOW}Checking for updates...${NC}"
 if [ -d ".git" ]; then
@@ -147,6 +189,8 @@ if [ -z "$PYTHON_CMD" ]; then
     echo -e "${RED}Error: Could not find or install Python 3.12. Exiting.${NC}"
     exit 1
 fi
+
+migrate_legacy_decisions_home
 
 # Check and install system dependencies
 echo -e "${YELLOW}Checking system dependencies...${NC}"
@@ -380,7 +424,9 @@ REQUIREMENTS_MARKER="installer/.requirements_installed_external"
 # package reports.
 check_dependencies_installed() {
     local dep_check_output
-    dep_check_output=$("$VENV_DIR/bin/python" "$SCRIPT_DIR/bin/check_deps.py" 2>&1)
+    # Only stdout lists missing critical packages (one per line). stderr is suppressed so
+    # import-time warnings (e.g. kanade_tokenizer FlashAttention) do not look like missing deps.
+    dep_check_output=$("$VENV_DIR/bin/python" "$SCRIPT_DIR/bin/check_deps.py" 2>/dev/null)
     local exit_code=$?
     # Exit 137 = 128+9 = SIGKILL (macOS jetsam/OOM). Don't treat as missing deps.
     if [ "$exit_code" -eq 137 ]; then
@@ -398,6 +444,25 @@ check_dependencies_installed() {
         return 1
     fi
     return 0
+}
+
+# VibeVoice is not in requirements.txt: its pins downgrade transformers vs coqui-tts / litellm.
+# Same idea as pywhispercpp @ git — install after the main resolver succeeds (see scripts/install_vibevoice.sh).
+# Opt out: DECISIONS_AI_SKIP_VIBEVOICE=1 ./bin/decisions.sh
+bootstrap_vibevoice() {
+    if [ "${DECISIONS_AI_SKIP_VIBEVOICE:-}" = "1" ]; then
+        echo -e "${YELLOW}Skipping VibeVoice bootstrap (DECISIONS_AI_SKIP_VIBEVOICE=1).${NC}"
+        return 0
+    fi
+    if "$VENV_DIR/bin/python" -c "import vibevoice" 2>/dev/null; then
+        return 0
+    fi
+    echo -e "${YELLOW}Bootstrapping VibeVoice (clone + editable install; pip may warn about coqui-tts / litellm pins)...${NC}"
+    if bash "$SCRIPT_DIR/scripts/install_vibevoice.sh"; then
+        echo -e "${GREEN}✓${NC} VibeVoice bootstrap finished"
+    else
+        echo -e "${YELLOW}⚠ VibeVoice bootstrap failed (network or disk). Retry: ./scripts/install_vibevoice.sh${NC}"
+    fi
 }
 
 if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
@@ -536,6 +601,26 @@ else
     echo -e "${GREEN}✓${NC} Dependencies already installed"
 fi
 
+# VibeVoice: same launcher step as main deps (cannot live in requirements.txt — resolver conflict).
+bootstrap_vibevoice
+
+# Local STT/TTS caches (Vosk dir, Whisper gguf warm, VibeVoice HF if installed) — same idea as Whisper’s lazy download, but up front.
+# Opt out: DECISIONS_AI_SKIP_MODEL_PREFETCH=1 ./bin/decisions.sh
+prefetch_local_models_bootstrap() {
+    if [ "${DECISIONS_AI_SKIP_MODEL_PREFETCH:-}" = "1" ]; then
+        echo -e "${YELLOW}Skipping local model prefetch (DECISIONS_AI_SKIP_MODEL_PREFETCH=1).${NC}"
+        return 0
+    fi
+    echo -e "${YELLOW}Prefetching local STT/TTS model caches (Vosk, Whisper, VibeVoice HF if available)...${NC}"
+    if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/scripts/prefetch_local_models.py" --only all \
+        2> >(grep -vE '^objc\[[0-9]+\]: Class AVF(Frame|Audio)Receiver is implemented in both ' >&2); then
+        echo -e "${YELLOW}⚠ Local model prefetch had errors — app will still start; first STT/TTS use may download.${NC}"
+    else
+        echo -e "${GREEN}✓${NC} Local model prefetch finished"
+    fi
+}
+prefetch_local_models_bootstrap
+
 # On macOS ARM (Sequoia+), the kernel's code signing monitor (codeSigningMonitor:2)
 # rejects pages from universal (fat) binaries even when codesign --verify passes.
 # Fix: thin fat binaries to arm64-only, then ad-hoc re-sign everything.
@@ -625,6 +710,13 @@ check_ollama() {
 }
 
 check_ollama
+
+# VibeVoice status after bootstrap (above)
+if ! "$VENV_DIR/bin/python" -c "import vibevoice" 2>/dev/null; then
+    echo -e "${YELLOW}VibeVoice is not importable yet (skipped, failed, or offline). Manual:${NC} ${YELLOW}./scripts/install_vibevoice.sh${NC} or unset DECISIONS_AI_SKIP_VIBEVOICE and re-run."
+else
+    echo -e "${GREEN}✓${NC} VibeVoice importable (set DECISIONSAI_VIBEVOICE_ROOT if Realtime TTS cannot find speaker presets)"
+fi
 
 # Check for NumPy/PyTorch compatibility issues
 check_numpy_torch_compatibility() {
@@ -948,10 +1040,10 @@ start_sidecar() {
     fi
 
     if [ -f "$SIDECAR_BIN" ]; then
-        mkdir -p "$HOME/.decisionsai/logs"
+        mkdir -p "$HOME/.decisions/logs"
         # Run in local-only mode — no relay server needed, just the HTTP tool API
         "$SIDECAR_BIN" --local \
-            > "$HOME/.decisionsai/logs/sidecar.log" 2>&1 &
+            > "$HOME/.decisions/logs/sidecar.log" 2>&1 &
         SIDECAR_PID=$!
         echo -e "${GREEN}✓${NC} Sidecar started (PID: $SIDECAR_PID, HTTP port: 11435)"
     fi
@@ -965,7 +1057,7 @@ stop_sidecar() {
 }
 
 trap stop_sidecar EXIT
-mkdir -p "$HOME/.decisionsai/logs"
+mkdir -p "$HOME/.decisions/logs"
 start_sidecar
 
 # Run the application

@@ -272,6 +272,49 @@ class WorkflowAgent:
                 validated.append({"role": role, "content": m.get("content", "") or ""})
         return validated
 
+    def _validated_messages_for_ollama(self) -> list:
+        """Build chat messages for Ollama; tool ``function.arguments`` must be dict.
+
+        History is stored OpenAI-style with ``arguments`` as JSON strings.
+        Ollama's client (Pydantic v2) rejects strings and requires Mapping — mirror
+        ``OllamaLLMService._normalize_tool_call_arguments``.
+        """
+        validated: List[Dict[str, Any]] = []
+        for m in self._messages:
+            role = m.get("role")
+            if role == "tool":
+                validated.append({
+                    "role": "tool",
+                    "tool_call_id": m.get("tool_call_id", "unknown"),
+                    "content": m.get("content", ""),
+                })
+            elif role == "assistant" and "tool_calls" in m:
+                fixed_calls: List[Dict[str, Any]] = []
+                for tc in m["tool_calls"]:
+                    if not isinstance(tc, dict):
+                        fixed_calls.append(tc)
+                        continue
+                    func = tc.get("function")
+                    if not isinstance(func, dict):
+                        fixed_calls.append(tc)
+                        continue
+                    args = func.get("arguments")
+                    if isinstance(args, str):
+                        try:
+                            args = json.loads(args) if args.strip() else {}
+                        except (json.JSONDecodeError, ValueError, TypeError):
+                            args = {}
+                    elif args is None:
+                        args = {}
+                    fixed_calls.append({
+                        **tc,
+                        "function": {**func, "arguments": args},
+                    })
+                validated.append({**m, "tool_calls": fixed_calls})
+            else:
+                validated.append({"role": role, "content": m.get("content", "") or ""})
+        return validated
+
     # ------------------------------------------------------------------
     #  Ollama
     # ------------------------------------------------------------------
@@ -284,8 +327,8 @@ class WorkflowAgent:
 
         tools_list = self._get_openai_tools()
 
-        # Build messages — Ollama uses the same format as OpenAI
-        messages = self._validated_messages_openai()
+        # Build messages — same shape as OpenAI but arguments must be dicts, not JSON strings.
+        messages = self._validated_messages_for_ollama()
 
         call_kwargs = {
             "model": self._model,
@@ -469,7 +512,16 @@ class WorkflowAgent:
         if not tool:
             return f"Error: Tool '{tool_name}' not found"
         try:
-            result = tool._run(**tool_args)
+            # Strip LLM-hallucinated extra keys not in the tool's schema to prevent
+            # Pydantic validation errors ("Input should be a valid dictionary" / extra fields).
+            filtered_args = tool_args
+            if hasattr(tool, "args_schema") and tool.args_schema is not None:
+                try:
+                    schema_fields = set(tool.args_schema.model_fields.keys())
+                    filtered_args = {k: v for k, v in tool_args.items() if k in schema_fields}
+                except Exception:
+                    pass
+            result = tool._run(**filtered_args)
             return str(result)
         except Exception as exc:
             logger.error("WorkflowAgent: tool %s failed: %s", tool_name, exc, exc_info=True)

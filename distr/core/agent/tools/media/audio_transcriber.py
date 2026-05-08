@@ -234,7 +234,7 @@ class AudioTranscriberTool(BaseTool):
         """
         try:
             import json
-            storage_file = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files", "current_files.json")
+            storage_file = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files", "current_files.json")
             
             if not os.path.exists(storage_file):
                 return []

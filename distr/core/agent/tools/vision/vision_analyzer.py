@@ -6,9 +6,9 @@ Supports commands like "analyze this image", "what's in this picture", "describe
 Can work with dropped files or explicit file paths.
 """
 
+import json
 import logging
 import os
-import base64
 from typing import Optional, Any
 from pathlib import Path
 
@@ -24,95 +24,6 @@ class VisionAnalyzerInput(BaseModel):
     file_path: Optional[str] = Field(default=None, description="Optional: Path to the image file to analyze. If not provided, will use the most recently dropped file.")
 
 
-def image_to_base64(image_path: str, convert_to_webp: bool = True) -> Optional[str]:
-    """
-    Convert an image file to base64 string, optionally converting to WebP for better compression.
-    
-    Args:
-        image_path: Path to the image file
-        convert_to_webp: If True, convert image to WebP format before encoding (default: True)
-    
-    Returns:
-        Base64-encoded string of the image, or None if error
-    """
-    try:
-        if convert_to_webp:
-            try:
-                from PIL import Image
-                import tempfile
-                import os
-                
-                # Open and convert to WebP
-                img = Image.open(image_path)
-                # Convert RGBA to RGB if needed (WebP supports transparency but we'll use RGB for consistency)
-                if img.mode in ('RGBA', 'LA', 'P'):
-                    rgb_img = Image.new('RGB', img.size, (255, 255, 255))
-                    if img.mode == 'P':
-                        img = img.convert('RGBA')
-                    rgb_img.paste(img, mask=img.split()[-1] if img.mode == 'RGBA' else None)
-                    img = rgb_img
-                else:
-                    img = img.convert('RGB')
-                
-                # Save to temporary WebP file
-                with tempfile.NamedTemporaryFile(suffix='.webp', delete=False) as tmp_file:
-                    tmp_webp_path = tmp_file.name
-                
-                # Save as WebP with quality 80 for good compression
-                img.save(tmp_webp_path, 'WEBP', quality=80, method=6)
-                
-                # Read the WebP file
-                with open(tmp_webp_path, 'rb') as webp_file:
-                    image_data = webp_file.read()
-                
-                # Log WebP conversion for verification (human-readable sizes)
-                original_size = os.path.getsize(image_path)
-                webp_size = len(image_data)
-                compression_ratio = (1 - (webp_size / original_size)) * 100 if original_size > 0 else 0
-                
-                # Format sizes for human readability
-                if original_size < 1024:
-                    orig_str = f"{original_size} B"
-                elif original_size < 1024 * 1024:
-                    orig_str = f"{original_size / 1024:.1f} KB"
-                else:
-                    orig_str = f"{original_size / (1024 * 1024):.1f} MB"
-                
-                if webp_size < 1024:
-                    webp_str = f"{webp_size} B"
-                elif webp_size < 1024 * 1024:
-                    webp_str = f"{webp_size / 1024:.1f} KB"
-                else:
-                    webp_str = f"{webp_size / (1024 * 1024):.1f} MB"
-                
-                logger.info(f"[Vision LLM] ✅ Converted image to WebP: {orig_str} → {webp_str} ({compression_ratio:.1f}% smaller)")
-                
-                # Clean up temp file
-                try:
-                    os.unlink(tmp_webp_path)
-                except OSError:
-                    pass
-
-                base64_data = base64.b64encode(image_data).decode('utf-8')
-                return base64_data
-            except Exception as e:
-                logger.warning(f"Failed to convert image to WebP, using original: {e}")
-                # Fallback to original image
-                with open(image_path, 'rb') as image_file:
-                    image_data = image_file.read()
-                    base64_data = base64.b64encode(image_data).decode('utf-8')
-                    return base64_data
-        else:
-            # Original behavior - no conversion
-            with open(image_path, 'rb') as image_file:
-                image_data = image_file.read()
-                base64_data = base64.b64encode(image_data).decode('utf-8')
-                return base64_data
-    except Exception as e:
-        logger.error(f"Error converting image to base64: {e}")
-        return None
-
-
 def is_image_file(file_path: str) -> bool:
     """Check if a file is an image based on extension."""
     image_extensions = {'.png', '.jpg', '.jpeg', '.gif', '.bmp', '.webp', '.tiff', '.tif', '.svg', '.ico', '.heic', '.heif'}
@@ -123,7 +34,7 @@ def is_image_file(file_path: str) -> bool:
 def get_dropped_files() -> Optional[list]:
     """Get files that were dropped on the oracle ball."""
     import json
-    storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+    storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
     storage_file = os.path.join(storage_dir, "current_files.json")
     
     if not os.path.exists(storage_file):
@@ -313,8 +224,9 @@ class VisionAnalyzerTool(BaseTool):
         if not vision_model or not vision_model.strip():
             return "Error: No vision model configured. Please select one in the LLMs settings tab."
         
-        # Convert image to base64 (converted to WebP for better compression)
-        base64_image = image_to_base64(image_path, convert_to_webp=True)
+        from distr.core.agent.services.llm.image_utils import convert_image_to_base64
+
+        base64_image, image_mime = convert_image_to_base64(image_path, convert_to_webp=True)
         if not base64_image:
             return f"Error: Failed to process image file: {image_path}"
         
@@ -326,7 +238,7 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
         # Build OpenAI-compatible vision messages (used by openai, openrouter, kilocode)
         content_items = [
             {"type": "text", "text": enhanced_prompt},
-            {"type": "image_url", "image_url": {"url": f"data:image/webp;base64,{base64_image}"}},
+            {"type": "image_url", "image_url": {"url": f"data:{image_mime};base64,{base64_image}"}},
         ]
         vision_messages = [{"role": "user", "content": content_items}]
         
@@ -543,7 +455,7 @@ Please provide a detailed analysis of this image. Describe what you see, any tex
                                     "type": "image",
                                     "source": {
                                         "type": "base64",
-                                        "media_type": "image/png",
+                                        "media_type": image_mime,
                                         "data": base64_image
                                     }
                                 }

@@ -1,3 +1,5 @@
+# Default offline STT: Whisper.cpp (pywhispercpp). If import/build fails on your platform,
+# the agent falls back to Vosk when configured — see distr/core/agent/libs.py (WHISPER_AVAILABLE).
 pywhispercpp @ git+https://github.com/absadiki/pywhispercpp
 PyQt6
 PyQt6-WebEngine
@@ -99,6 +101,9 @@ openpyxl>=3.1.0
 rarfile>=4.1
 # Audio transcription
 assemblyai>=0.28.0
+# Microsoft VibeVoice is NOT listed here: vibevoice[streamingtts] pins transformers==4.51.3 which
+# conflicts with coqui-tts (transformers>=4.57) and litellm tokenizers pins. After pip install -r,
+# bin/decisions.sh runs scripts/install_vibevoice.sh automatically (opt out: DECISIONS_AI_SKIP_VIBEVOICE=1).
 # Groq SDK for Groq API integration
 groq>=1.0.0
 # MCP SDK

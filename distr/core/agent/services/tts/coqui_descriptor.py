@@ -10,9 +10,11 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 from typing import Any, Optional
 
 from distr.core.agent.services.tts.provider_descriptor import TTSProviderDescriptor
+from distr.core.paths import DB_DIR, DISTR_DIR
 
 logger = logging.getLogger(__name__)
 
@@ -146,28 +148,60 @@ class CoquiDescriptor(TTSProviderDescriptor):
         except ImportError:
             raise ImportError("TTS package is required for Coqui TTS. Install with: pip install TTS")
 
-        # Custom voice — use XTTS v2 with reference audio
+        # Custom voice — use XTTS v2 with reference audio (never silently fall back to VCTK).
         if voice and voice.startswith("custom_"):
             ref_path = self._resolve_reference_audio(voice)
             if ref_path:
-                tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
-                wav = tts.tts(text=text, speaker_wav=ref_path, language="en")
-                audio = np.array(wav, dtype=np.float32)
-                if audio.ndim > 1:
-                    audio = np.mean(audio, axis=1)
-                sr = tts.synthesizer.output_sample_rate
-                from distr.core.audio.tts_handler import _resample_audio
-                audio, sr = _resample_audio(audio, sr, 48000)
-                sf.write(out_file, audio, sr)
-                logger.info("Wrote Coqui XTTS cloned voice sample to %s", out_file)
-                return
-            else:
-                logger.warning("Coqui clone: no reference audio found for %s, falling back to VCTK", voice)
-                voice = DEFAULT_COQUI_VOICE
+                ref_path = os.path.abspath(ref_path)
+                if not os.path.isfile(ref_path):
+                    raise ValueError(
+                        f"Coqui clone: reference file missing for {voice}: {ref_path}. "
+                        "Re-upload reference audio or recreate this custom voice."
+                    )
+                else:
+                    tts = CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=False)
+                    # speaker=None: idiap Synthesizer defaults speaker_name to ""; empty string is
+                    # not None and triggers CloningMixin voice-cache logic incorrectly for previews.
+                    clamped_speed = max(0.5, min(2.0, float(speed)))
+                    try:
+                        wav = tts.tts(
+                            text=text,
+                            speaker=None,
+                            speaker_wav=ref_path,
+                            language="en",
+                            split_sentences=False,
+                            speed=clamped_speed,
+                        )
+                    except TypeError:
+                        wav = tts.tts(
+                            text=text,
+                            speaker=None,
+                            speaker_wav=ref_path,
+                            language="en",
+                            split_sentences=False,
+                        )
+                    if hasattr(wav, "detach"):
+                        wav = wav.detach().cpu().numpy()
+                    elif hasattr(wav, "cpu"):
+                        wav = wav.cpu().numpy()
+                    audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+                    if audio.size and np.max(np.abs(audio)) > 1.0:
+                        np.clip(audio, -1.0, 1.0, out=audio)
+                    sr = tts.synthesizer.output_sample_rate
+                    from distr.core.audio.tts_handler import _resample_audio
+                    audio, sr = _resample_audio(audio, sr, 48000)
+                    sf.write(out_file, audio, sr)
+                    logger.info("Wrote Coqui XTTS cloned voice sample to %s", out_file)
+                    return
+            raise ValueError(self._missing_clone_message(voice))
 
         # Built-in VCTK speaker
         tts = CoquiTTS("tts_models/en/vctk/vits", gpu=False)
-        wav = tts.tts(text=text, speaker=voice)
+        clamped_speed = max(0.5, min(2.0, float(speed)))
+        try:
+            wav = tts.tts(text=text, speaker=voice, speed=clamped_speed)
+        except TypeError:
+            wav = tts.tts(text=text, speaker=voice)
         audio = np.array(wav, dtype=np.float32)
         if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
@@ -216,12 +250,18 @@ class CoquiDescriptor(TTSProviderDescriptor):
         if raw.startswith("custom_"):
             return raw
 
+        # VCTK speaker ids are lowercase p### — normalize case so the UI always matches JSON keys
+        if re.fullmatch(r"p\d+", raw, flags=re.IGNORECASE):
+            raw = raw.lower()
+
         if raw in COQUI_VOICES:
             return raw
 
         configured = (settings.get("coqui_voice") or "").strip()
         if configured.startswith("custom_"):
             return configured
+        if re.fullmatch(r"p\d+", configured, flags=re.IGNORECASE):
+            configured = configured.lower()
         if configured in COQUI_VOICES:
             return configured
 
@@ -326,21 +366,113 @@ class CoquiDescriptor(TTSProviderDescriptor):
     # ------------------------------------------------------------------
 
     @staticmethod
+    def _first_audio_file_in_dir(directory: str) -> Optional[str]:
+        if not directory or not os.path.isdir(directory):
+            return None
+        exts = ('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')
+        names = sorted(
+            (fn for fn in os.listdir(directory) if fn.lower().endswith(exts)),
+            key=lambda f: (0 if f.lower().endswith('.wav') else 1, f.lower()),
+        )
+        if not names:
+            return None
+        return os.path.abspath(os.path.join(directory, names[0]))
+
+    @classmethod
+    def _missing_clone_message(cls, voice_id: str) -> str:
+        """User-visible hint when Coqui XTTS cannot run for a custom_* id."""
+        try:
+            from distr.core.db import get_session, CustomVoice
+
+            db_id = int(voice_id.split("_", 1)[1])
+            with get_session() as session:
+                cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                if cv is None:
+                    return (
+                        f"Coqui custom voice {voice_id} is not in the database (it may have been removed while "
+                        f"the UI still shows it). Recreate the clone or pick another voice. "
+                        f"If you have backup files only under DecisionsAI/distr/db/custom_voices/{db_id}/, "
+                        f"move them to {os.path.join(DB_DIR, 'custom_voices', str(db_id))}/ and add the voice again in Settings."
+                    )
+                prov = (cv.provider or "").strip().lower()
+                stat = (cv.status or "").strip().lower()
+                audio_dir = cv.audio_dir or ""
+                if prov != "coqui":
+                    return (
+                        f"Coqui cannot preview {voice_id}: that slot is provider '{cv.provider}', not coqui. "
+                        f"Pick this voice only when Coqui is the TTS provider, or clone again under Coqui."
+                    )
+                if stat != "ready":
+                    return (
+                        f"Coqui custom voice {voice_id} is not ready (status={cv.status!r}). "
+                        f"Wait for processing or fix the failed clone before preview."
+                    )
+                # DB says ready — distinguish missing files vs unreadable path.
+                resolved = CoquiDescriptor._resolve_reference_audio(voice_id)
+                if resolved and os.path.isfile(resolved):
+                    return (
+                        f"Coqui reference file exists at {resolved} but could not be read or used. "
+                        f"Check file permissions or disk errors, then try again."
+                    )
+                return (
+                    f"No reference audio found for {voice_id}. Re-upload a sample in Settings → Audio, "
+                    f"or add a .wav/.mp3 under {audio_dir or os.path.join(DB_DIR, 'custom_voices', str(db_id))} "
+                    f"(legacy path: {os.path.join(DISTR_DIR, 'db', 'custom_voices', str(db_id))})."
+                )
+        except Exception:
+            return (
+                f"Coqui cannot resolve reference audio for {voice_id}. "
+                f"Re-create the custom voice under Coqui TTS (Offline) in Settings."
+            )
+
+    @staticmethod
     def _resolve_reference_audio(voice_id: str) -> Optional[str]:
         """Find the reference audio file for a Coqui custom voice."""
         try:
             from distr.core.db import get_session, CustomVoice
+
             db_id = int(voice_id.split("_", 1)[1])
             with get_session() as session:
-                cv = session.query(CustomVoice).filter(
-                    CustomVoice.id == db_id,
-                    CustomVoice.provider == "coqui",
-                    CustomVoice.status == "ready",
-                ).first()
-                if cv and cv.audio_dir:
-                    for fn in os.listdir(cv.audio_dir):
-                        if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
-                            return os.path.join(cv.audio_dir, fn)
+                cv = session.query(CustomVoice).filter(CustomVoice.id == db_id).first()
+                if not cv:
+                    logger.warning("Coqui clone: no custom_voices row for %s", voice_id)
+                    return None
+                prov = (cv.provider or "").strip().lower()
+                stat = (cv.status or "").strip().lower()
+                audio_dir = (cv.audio_dir or "").strip()
+                if prov != "coqui":
+                    logger.warning(
+                        "Coqui clone: voice %s is provider %r, not coqui",
+                        voice_id,
+                        cv.provider,
+                    )
+                    return None
+                if stat != "ready":
+                    logger.warning("Coqui clone: voice %s status=%r (need ready)", voice_id, cv.status)
+                    return None
+
+            candidates = []
+            if audio_dir:
+                candidates.append(audio_dir)
+            # Canonical layout (matches settings.db directory).
+            candidates.append(os.path.join(DB_DIR, "custom_voices", str(db_id)))
+            # Legacy bug: uploads used distr/db/custom_voices/<id>/.
+            candidates.append(os.path.join(DISTR_DIR, "db", "custom_voices", str(db_id)))
+
+            seen: set[str] = set()
+            for d in candidates:
+                if not d or d in seen:
+                    continue
+                seen.add(os.path.normpath(d))
+                hit = CoquiDescriptor._first_audio_file_in_dir(d)
+                if hit:
+                    if audio_dir and os.path.normpath(d) != os.path.normpath(audio_dir):
+                        logger.info(
+                            "Coqui clone: resolved %s via fallback dir %s (db audio_dir was empty or stale)",
+                            voice_id,
+                            d,
+                        )
+                    return hit
         except Exception as e:
             logger.warning("Could not resolve Coqui reference audio for %s: %s", voice_id, e)
         return None

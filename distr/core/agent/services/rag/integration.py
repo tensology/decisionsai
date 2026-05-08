@@ -343,7 +343,7 @@ def get_chat_rag_service(chat_id: int, model_name: str = "qwen3:8b", embedding_m
             
             # Create per-chat index directory
             home_dir = os.path.expanduser("~")
-            chat_index_dir = os.path.join(home_dir, ".decisionsai", "chat_indexes", f"chat_{chat_id}")
+            chat_index_dir = os.path.join(home_dir, ".decisions", "chat_indexes", f"chat_{chat_id}")
             
             # CRITICAL: Always start with a fresh/empty index for per-chat indexes
             # This ensures that when switching chats, indexes are cleared and only re-indexed on-demand
@@ -458,7 +458,7 @@ def cleanup_chat_index(chat_id: int) -> bool:
         
         # Delete the index directory
         home_dir = os.path.expanduser("~")
-        chat_index_dir = os.path.join(home_dir, ".decisionsai", "chat_indexes", f"chat_{chat_id}")
+        chat_index_dir = os.path.join(home_dir, ".decisions", "chat_indexes", f"chat_{chat_id}")
         
         if os.path.exists(chat_index_dir):
             import shutil

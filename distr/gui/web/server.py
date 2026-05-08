@@ -695,6 +695,16 @@ def create_app() -> FastAPI:
     async def health_check():
         return {"status": "ok", "services": ["flow", "board", "settings", "chat"]}
     
+    # Cancel any workflow runs left open from a previous session (crash/restart).
+    # Must run before any workflow operations so orphaned runs don't block new pushes.
+    @app.on_event("startup")
+    async def _cancel_orphaned_workflow_runs():
+        try:
+            from distr.core.workflow.dispatcher import _cleanup_orphaned_runs_on_startup
+            _cleanup_orphaned_runs_on_startup()
+        except Exception as e:
+            logger.warning("Orphaned workflow run cleanup could not run: %s", e)
+
     # Run one-time ticket board settings migration on startup
     @app.on_event("startup")
     async def _run_kanban_migration():

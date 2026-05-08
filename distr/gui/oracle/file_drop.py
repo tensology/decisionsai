@@ -121,7 +121,7 @@ class FileDropMixin:
         current_thread = threading.current_thread().name
         logger.info(f"[DROP] _store_dropped_files started on thread: {current_thread}")
         
-        storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+        storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
         os.makedirs(storage_dir, exist_ok=True)
         
         # Separate audio files from other files

@@ -28,7 +28,7 @@ def _get_pid_file() -> str:
             from distr.core.paths import DB_DIR
             _PID_FILE = os.path.join(DB_DIR, "worker_pids.txt")
         except Exception:
-            _PID_FILE = os.path.expanduser("~/.decisionsai/worker_pids.txt")
+            _PID_FILE = os.path.expanduser("~/.decisions/worker_pids.txt")
     return _PID_FILE
 
 

@@ -170,6 +170,7 @@ class Settings(Base):
     qwen3_voice = Column(String, default='aiden')
     f5tts_voice = Column(String, default='default')
     voxcpm_voice = Column(String, default='default')
+    vibevoice_realtime_voice = Column(String, default='en-carter_man')
     replicate_api_token = Column(String, default='')
 
     # Rube Settings (discontinued — columns kept for migration compatibility)

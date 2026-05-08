@@ -26,6 +26,25 @@ _TERMINAL_STATUSES = {"completed", "failed", "cancelled"}
 _POLL_INTERVAL = 2.0
 
 
+def _risk_profile_for_ticket(title: str, description: str) -> Dict[str, Any]:
+    """Cheap Stage-0 risk profile used to route audit depth."""
+    haystack = f"{title}\n{description}".lower()
+    high_risk_terms = [
+        "auth", "authentication", "payment", "secret", "token", "credential",
+        "production", "prod", "migration", "database migration", "infra",
+    ]
+    matched = [term for term in high_risk_terms if term in haystack]
+    level = "high" if matched else "low"
+    required_audits = ["A", "B", "C"] if level == "high" else ["A", "B"]
+    require_cli_validation = level == "high"
+    return {
+        "risk_level": level,
+        "risk_flags": matched,
+        "required_audit_gates": required_audits,
+        "require_cli_validation": require_cli_validation,
+    }
+
+
 @dataclass
 class AgentStatus:
     """Tracks the current state of an Agent Check-In."""
@@ -276,12 +295,14 @@ class KanbanAgentCheckIn:
         workflow_id = None
         # Build context from ticket title and description
         context = f"Ticket: {ticket['title']}"
+        ticket_description = ""
         try:
             with get_session() as db:
                 tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
                 if tk:
                     workflow_id = tk.linked_workflow_id or board.default_workflow_id
                     if tk.description:
+                        ticket_description = tk.description
                         context += f"\n\nDescription: {tk.description}"
         except Exception:
             pass
@@ -299,6 +320,7 @@ class KanbanAgentCheckIn:
         if project_ctx.get("project_folder"):
             context += f"\nProject folder: {project_ctx['project_folder']}"
 
+        risk_profile = _risk_profile_for_ticket(ticket.get("title", ""), ticket_description)
         run_metadata = {
             "source_type": "board_checkin",
             "board_id": board.id,
@@ -309,18 +331,15 @@ class KanbanAgentCheckIn:
             "project_name": project_ctx.get("project_name"),
             "project_folder": project_ctx.get("project_folder"),
             "phase": "planning",
+            "risk_profile": risk_profile,
         }
-        try:
-            run_result = start_workflow_run(
-                workflow_id,
-                context=context,
-                board_id=board.id,
-                ticket_id=ticket["id"],
-                run_metadata=run_metadata,
-            )
-        except TypeError:
-            # Backward-compatible fallback for tests/mocks that still use legacy signature.
-            run_result = start_workflow_run(workflow_id)
+        run_result = start_workflow_run(
+            workflow_id,
+            context=context,
+            board_id=board.id,
+            ticket_id=ticket["id"],
+            run_metadata=run_metadata,
+        )
         if "error" in run_result:
             logger.error("Agent check-in: failed to start workflow for ticket %s: %s", ticket["id"], run_result["error"])
             return "failed"
@@ -559,31 +578,46 @@ class KanbanAgentCheckIn:
         except Exception:
             logger.debug("Agent check-in: ticket chat notify failed", exc_info=True)
 
-    def _wait_for_run(self, run_id: int) -> str:
-        """Poll until the workflow run reaches a terminal status."""
+    def _wait_for_run(self, run_id: int, timeout_seconds: float = 3600.0) -> str:
+        """Poll until the workflow run reaches a terminal status.
+
+        Hard-stops after *timeout_seconds* (default 1 hour) so a stuck run can
+        never hang the entire check-in thread forever.
+        """
+        import json as _json
+        deadline = time.monotonic() + timeout_seconds
         while True:
             if self._cancelled:
                 return "cancelled"
-            with get_session() as db:
-                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-                if run:
-                    try:
-                        import json
-                        run_data = json.loads(run.run_data or "{}")
-                        new_phase = run_data.get("phase") or self._status.current_phase
-                        if new_phase != self._status.current_phase:
-                            self._status.current_phase = new_phase
-                            _emit_board_update(self.board_id, "phase_changed", {
-                                "run_id": run_id,
-                                "phase": new_phase,
-                                "ticket_id": self._status.current_ticket_id,
-                            })
-                        else:
-                            self._status.current_phase = new_phase
-                    except Exception:
-                        pass
-                    if run.status in _TERMINAL_STATUSES:
-                        return run.status
+            if time.monotonic() >= deadline:
+                logger.error(
+                    "_wait_for_run: run %d timed out after %.0fs — forcing 'failed'",
+                    run_id,
+                    timeout_seconds,
+                )
+                return "failed"
+            try:
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+                    if run:
+                        try:
+                            run_data = _json.loads(run.run_data or "{}")
+                            new_phase = run_data.get("phase") or self._status.current_phase
+                            if new_phase != self._status.current_phase:
+                                self._status.current_phase = new_phase
+                                _emit_board_update(self.board_id, "phase_changed", {
+                                    "run_id": run_id,
+                                    "phase": new_phase,
+                                    "ticket_id": self._status.current_ticket_id,
+                                })
+                            else:
+                                self._status.current_phase = new_phase
+                        except Exception:
+                            pass
+                        if run.status in _TERMINAL_STATUSES:
+                            return run.status
+            except Exception:
+                logger.debug("_wait_for_run: DB query failed, will retry", exc_info=True)
             time.sleep(_POLL_INTERVAL)
 
     def _move_ticket_to_done(self, board, ticket: dict):

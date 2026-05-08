@@ -105,15 +105,22 @@ class WorkflowAgentBridge:
         else:
             status_label = "Failed"
 
+        # Failed steps: include enough detail for diagnosis (tracebacks, stderr).
+        # Passed steps: shorter lines keep voice follow-ups and logs manageable.
+        _PASS_SNIPPET = 600
+        _FAIL_SNIPPET = 12000
+
         step_lines = []
         for i, s in enumerate(steps_summary, 1):
             title = s.get("title") or f"Step {i}"
             result = (s.get("result") or "").strip()
             status = s.get("status", "")
-            status_tag = f" [{status}]" if status and status not in ("completed", "passed") else ""
+            st_lower = (status or "").strip().lower()
+            ok = st_lower in ("completed", "passed")
+            status_tag = f" [{status}]" if status and not ok else ""
             if result:
-                # Truncate long results for readability
-                short = result[:200] + ("..." if len(result) > 200 else "")
+                lim = _PASS_SNIPPET if ok else _FAIL_SNIPPET
+                short = result[:lim] + ("..." if len(result) > lim else "")
                 step_lines.append(f"  {i}. {title}{status_tag}: {short}")
             else:
                 step_lines.append(f"  {i}. {title}{status_tag}")

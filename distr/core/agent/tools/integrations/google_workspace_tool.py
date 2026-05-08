@@ -8,8 +8,10 @@ This tool provides comprehensive access to Google Workspace services including:
 - Google Docs (create from markdown)
 """
 
+import json
 import logging
 from typing import Optional, Dict, Any
+
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
@@ -18,10 +20,44 @@ from distr.core.agent.tools.base import LazyToolMixin
 logger = logging.getLogger(__name__)
 
 
+def _normalize_calendar_events_raw(params: Dict[str, Any]) -> Any:
+    """Resolve batch events from params, alternate keys, JSON string, or nested params.params."""
+    raw = params.get("events")
+    if raw in (None, ""):
+        raw = params.get("calendar_events") or params.get("calendarEvents")
+    inner = params.get("params")
+    if raw in (None, "") and isinstance(inner, dict):
+        raw = inner.get("events") or inner.get("calendar_events")
+    if isinstance(raw, str):
+        t = raw.strip()
+        if not t:
+            return None
+        try:
+            raw = json.loads(t)
+        except (json.JSONDecodeError, ValueError):
+            return None
+    return raw
+
+
 class GoogleWorkspaceInput(BaseModel):
     """Input schema for Google Workspace tool."""
-    action: str = Field(description="The action to perform. Options: 'check_inbox', 'read_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'")
-    params: Optional[Dict[str, Any]] = Field(default=None, description="Parameters for the action. For 'draft_email': {'to': 'email@example.com', 'subject': 'Subject text', 'body': 'Email body text'}. For 'send_email': same as draft_email plus optional 'cc' and 'bcc'. For 'check_inbox': optional 'max_results' (default 10) and 'query' (default 'in:inbox'). For other actions, see tool description.")
+
+    action: str = Field(
+        description="The action to perform. Options: 'check_inbox', 'read_email', 'send_email', 'draft_email', 'list_drafts', 'get_draft', 'list_emails_by_type', 'reply_email', 'delete_email', 'list_drive_folders', 'list_drive_files', 'read_drive_file', 'upload_to_drive', 'read_pdf', 'create_calendar_event', 'create_calendar_events_batch', 'get_calendar_events', 'get_schedule_tomorrow', 'get_schedule_this_week', 'create_doc_from_markdown'"
+    )
+    params: Optional[Dict[str, Any]] = Field(
+        default=None,
+        description="Parameters for the action. For 'draft_email': {'to': 'email@example.com', 'subject': 'Subject text', 'body': 'Email body text'}. For 'send_email': same as draft_email plus optional 'cc' and 'bcc'. For 'check_inbox': optional 'max_results' (default 10) and 'query' (default 'in:inbox'). For 'create_calendar_events_batch', you may set params.events OR use the top-level 'events' field (recommended for large lists).",
+    )
+    # Declared so OpenAI-style tool JSON can pass events at top level; unknown extra keys are dropped by Pydantic.
+    events: Optional[Any] = Field(
+        default=None,
+        description=(
+            "Only for action='create_calendar_events_batch': non-empty list of objects, each with "
+            "summary, start_time, end_time (ISO 8601 strings), optional description and location. "
+            "Prefer passing here instead of params.events so the full list is not stripped as an 'unknown' field."
+        ),
+    )
 
 
 class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
@@ -68,7 +104,12 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         "- 'read_pdf': Read PDF from Drive (params: file_id)\n"
         "\n"
         "GOOGLE CALENDAR:\n"
-        "- 'create_calendar_event': Create event (params: summary, start_time, end_time, description, location)\n"
+        "- 'create_calendar_event': Create ONE event (params: summary, start_time, end_time, description, location)\n"
+        "- 'create_calendar_events_batch': Create MANY events in ONE tool call. "
+        "You MUST include a non-empty JSON array named events (top-level next to action is best). "
+        "Shape: {\"action\":\"create_calendar_events_batch\",\"events\":[{\"summary\":\"...\",\"start_time\":\"2026-05-05T08:00:00\",\"end_time\":\"2026-05-05T08:45:00\",\"description\":\"optional\"}, ...]}. "
+        "Alternatively params.events with the same array. Max 500 per call; split by week if larger. "
+        "REQUIRED for multi-day protocols — do not call batch without the events array, and do not stop after one single event.\n"
         "- 'get_calendar_events': Get events (params: time_min, time_max, max_results)\n"
         "- 'get_schedule_tomorrow': Get tomorrow's schedule (no params)\n"
         "- 'get_schedule_this_week': Get this week's schedule (no params)\n"
@@ -107,7 +148,13 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
     def _lazy_init(self):
         object.__setattr__(self, 'connector', GoogleWorkspaceConnector())
     
-    def _run(self, action: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> str:
+    def _run(
+        self,
+        action: str,
+        params: Optional[Dict[str, Any]] = None,
+        events: Optional[Any] = None,
+        **kwargs,
+    ) -> str:
         """Execute Google Workspace action"""
         self._ensure_initialized()
         # Check connection status first
@@ -121,7 +168,6 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         elif isinstance(params, str):
             # Try to parse as JSON
             try:
-                import json
                 params = json.loads(params)
                 # Ensure it's still a dict after parsing
                 if not isinstance(params, dict):
@@ -148,6 +194,7 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
             'folder_id', 'file_id', 'name', 'mime_type', 'summary',
             'start_time', 'end_time', 'description', 'location', 'time_min',
             'time_max', 'title', 'markdown_content', 'convert_to_google_doc',
+            'events', 'calendar_events', 'calendarEvents',
         }
         for key in KNOWN_PARAM_KEYS:
             if key in kwargs and key not in params:
@@ -156,6 +203,14 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
         for key, val in kwargs.items():
             if key not in ('action', 'params', 'last_user_message') and key not in params:
                 params[key] = val
+
+        # Batch calendar: models often pass `events` at top level (must be on args_schema or Pydantic drops it).
+        if events is None and kwargs.get("events") is not None:
+            events = kwargs.get("events")
+        if events is not None:
+            pe = params.get("events")
+            if pe in (None, [], ""):
+                params["events"] = events
 
         try:
             # Gmail actions
@@ -387,7 +442,85 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 
                 event_id = self.connector.create_calendar_event(summary, start_time, end_time, description, location)
                 return f"Event created successfully (ID: {event_id})" if event_id else "Error: Failed to create event"
-            
+
+            elif action == 'create_calendar_events_batch':
+                from datetime import datetime
+
+                raw_events = _normalize_calendar_events_raw(params)
+                if not raw_events or not isinstance(raw_events, list):
+                    return (
+                        "Error: No event list received. Pass a non-empty JSON array as top-level \"events\" "
+                        "(sibling of \"action\", preferred for large protocols) or as params.events. "
+                        "Each object needs summary, start_time, end_time (ISO strings); optional description, location. "
+                        "More than 500 slots: split into multiple create_calendar_events_batch calls (e.g. per week)."
+                    )
+                max_batch = 500
+                if len(raw_events) > max_batch:
+                    return f"Error: at most {max_batch} events per batch; got {len(raw_events)}. Split into multiple calls."
+
+                parsed: list[dict] = []
+                parse_errors: list[str] = []
+
+                def _parse_iso(s: Any) -> datetime | None:
+                    if s is None:
+                        return None
+                    if isinstance(s, datetime):
+                        return s
+                    if not isinstance(s, str):
+                        return None
+                    t = s.strip()
+                    if t.endswith("Z"):
+                        t = t[:-1] + "+00:00"
+                    try:
+                        return datetime.fromisoformat(t)
+                    except (ValueError, TypeError):
+                        return None
+
+                for idx, ev in enumerate(raw_events):
+                    if not isinstance(ev, dict):
+                        parse_errors.append(f"[{idx}] not an object")
+                        continue
+                    summary = ev.get("summary")
+                    st = _parse_iso(ev.get("start_time"))
+                    et = _parse_iso(ev.get("end_time"))
+                    if not summary or st is None or et is None:
+                        parse_errors.append(
+                            f"[{idx}] need summary and valid ISO start_time/end_time; got summary={summary!r}"
+                        )
+                        continue
+                    parsed.append(
+                        {
+                            "_batch_index": idx,
+                            "summary": summary,
+                            "start_time": st,
+                            "end_time": et,
+                            "description": ev.get("description"),
+                            "location": ev.get("location"),
+                        }
+                    )
+
+                if parse_errors and not parsed:
+                    return "Error: no valid events to create.\n" + "\n".join(parse_errors)
+
+                rows = self.connector.create_calendar_events_batch(parsed)
+                ok = sum(1 for r in rows if r.get("event_id"))
+                fail = len(rows) - ok
+                lines = [
+                    f"Batch calendar: created {ok} event(s), failed {fail}, input rows {len(raw_events)}.",
+                ]
+                if parse_errors:
+                    lines.append("Skipped invalid input rows:")
+                    lines.extend(parse_errors)
+                for r in rows:
+                    sid = r.get("summary") or ""
+                    if r.get("event_id"):
+                        lines.append(f"  [{r['index']}] OK id={r['event_id']} — {sid[:80]}")
+                    else:
+                        lines.append(
+                            f"  [{r['index']}] FAILED — {sid[:80]} — {r.get('error', 'unknown')}"
+                        )
+                return "\n".join(lines)
+
             elif action == 'get_calendar_events':
                 from datetime import datetime
                 time_min_str = params.get('time_min')
@@ -476,14 +609,20 @@ class GoogleWorkspaceTool(LazyToolMixin, BaseTool):
                 return f"Document created successfully (ID: {doc_id})" if doc_id else "Error: Failed to create document"
             
             else:
-                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
+                return f"Error: Unknown action '{action}'. Available actions: check_inbox, read_email, send_email, draft_email, list_drafts, get_draft, list_emails_by_type, reply_email, delete_email, list_drive_folders, list_drive_files, read_drive_file, upload_to_drive, read_pdf, create_calendar_event, create_calendar_events_batch, get_calendar_events, get_schedule_tomorrow, get_schedule_this_week, create_doc_from_markdown"
         
         except Exception as e:
             logger.error(f"Error executing Google Workspace action: {e}", exc_info=True)
             return f"Error: {str(e)}"
     
-    async def _arun(self, action: str, params: Optional[Dict[str, Any]] = None, **kwargs) -> str:
+    async def _arun(
+        self,
+        action: str,
+        params: Optional[Dict[str, Any]] = None,
+        events: Optional[Any] = None,
+        **kwargs,
+    ) -> str:
         """Async run method"""
         self._ensure_initialized()
-        return self._run(action, params, **kwargs)
+        return self._run(action, params, events, **kwargs)
 

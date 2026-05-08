@@ -176,6 +176,12 @@ class ChatManagerCore:
                             getattr(settings, "voxcpm_voice", "default") or "default"
                         )
                         agent_name = voxcpm_voice.capitalize() if voxcpm_voice != "default" else "VoxCPM"
+                    elif tts_provider == "VibeVoice Realtime (Local)":
+                        vv = (
+                            getattr(settings, "vibevoice_realtime_voice", "en-carter_man")
+                            or "en-carter_man"
+                        )
+                        agent_name = vv.replace("en-", "").replace("_", " ").title() if vv else "VibeVoice"
         except Exception as e:
             logger.warning(
                 "ChatManagerCore: Could not determine agent from settings: %s", e
@@ -197,7 +203,7 @@ class ChatManagerCore:
             dropped_files_context = "No files have been dropped on the oracle ball yet."
 
             try:
-                storage_dir = os.path.join(home_path, ".decisionsai", "dropped_files")
+                storage_dir = os.path.join(home_path, ".decisions", "dropped_files")
                 storage_file = os.path.join(storage_dir, "current_files.json")
                 if os.path.exists(storage_file):
                     with open(storage_file, "r") as f:

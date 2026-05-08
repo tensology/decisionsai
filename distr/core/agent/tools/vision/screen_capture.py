@@ -6,6 +6,7 @@ Extracted from screenshot_analyzer.py for better organisation.
 """
 
 import base64
+import mimetypes
 import logging
 import os
 import platform
@@ -456,16 +457,14 @@ def capture_screenshot(output_path: str, region: str = "full") -> bool:
 # Image conversion
 # ---------------------------------------------------------------------------
 
-def image_to_base64(image_path: str, convert_to_webp: bool = True) -> Optional[str]:
+def image_to_base64(image_path: str, convert_to_webp: bool = True) -> tuple[Optional[str], str]:
     """
-    Convert an image file to base64 string, optionally converting to WebP.
-
-    Args:
-        image_path: Path to the image file
-        convert_to_webp: If True, convert to WebP before encoding (default: True)
+    Convert an image file to base64, optionally converting to WebP.
 
     Returns:
-        Base64-encoded string of the image, or None if error
+        (base64_data_or_none, mime_type). When WebP conversion fails, the raw file
+        bytes are returned with a guessed MIME (e.g. image/png) — callers must use
+        this MIME in data URLs / Anthropic ``media_type`` (never label PNG as webp).
     """
     try:
         if convert_to_webp:
@@ -508,14 +507,22 @@ def image_to_base64(image_path: str, convert_to_webp: bool = True) -> Optional[s
                 except OSError:
                     pass
 
-                return base64.b64encode(image_data).decode('utf-8')
+                return base64.b64encode(image_data).decode('utf-8'), "image/webp"
             except Exception as e:
-                logger.warning(f"Failed to convert image to WebP, using original: {e}")
+                logger.warning(f"Failed to convert image to WebP, using original bytes: {e}")
                 with open(image_path, 'rb') as f:
-                    return base64.b64encode(f.read()).decode('utf-8')
+                    raw = f.read()
+                mime, _ = mimetypes.guess_type(image_path)
+                if not mime or not mime.startswith("image/"):
+                    mime = "image/png"
+                return base64.b64encode(raw).decode('utf-8'), mime
         else:
             with open(image_path, 'rb') as f:
-                return base64.b64encode(f.read()).decode('utf-8')
+                raw = f.read()
+            mime, _ = mimetypes.guess_type(image_path)
+            if not mime or not mime.startswith("image/"):
+                mime = "application/octet-stream"
+            return base64.b64encode(raw).decode('utf-8'), mime
     except Exception as e:
         logger.error(f"Error converting image to base64: {e}")
-        return None
+        return None, "image/png"

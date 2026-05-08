@@ -12,6 +12,7 @@ Same pipeline contract as KokoroTTSService.
 
 import asyncio
 import logging
+import os
 import time
 import numpy as np
 
@@ -168,60 +169,82 @@ class CoquiTTSService(TTSService):
 
     def _generate_audio(self, text: str):
         """Blocking call — runs in executor. Returns (audio_float32, sample_rate)."""
-        # Custom voice — use XTTS v2 with reference audio
+        # Custom voice — use XTTS v2 with reference audio (never fall back to VCTK silently).
         if self.voice_id and self.voice_id.startswith("custom_"):
-            ref_path = self._resolve_reference_audio()
-            if ref_path:
-                if not hasattr(self, '_xtts') or self._xtts is None:
-                    logger.info("Coqui TTS: loading XTTS v2 for voice cloning")
-                    self._xtts = _CoquiTTS("tts_models/multilingual/multi-dataset/xtts_v2", gpu=(self._device != "cpu"))
-                wav = self._xtts.tts(text=text, speaker_wav=ref_path, language="en")
-                audio = np.array(wav, dtype=np.float32)
-                if audio.ndim > 1:
-                    audio = np.mean(audio, axis=1)
-                sr = self._xtts.synthesizer.output_sample_rate
-                return audio, sr
-            else:
-                logger.warning("Coqui TTS: no reference audio for %s, using default speaker", self.voice_id)
+            from distr.core.agent.services.tts.coqui_descriptor import CoquiDescriptor
+
+            ref_path = CoquiDescriptor._resolve_reference_audio(self.voice_id)
+            if not ref_path or not os.path.isfile(ref_path):
+                raise ValueError(CoquiDescriptor._missing_clone_message(self.voice_id))
+            ref_path = os.path.abspath(ref_path)
+            if not hasattr(self, '_xtts') or self._xtts is None:
+                # Coqui TTS `gpu=True` means CUDA only (asserts torch.cuda.is_available()).
+                # MPS/CPU must use gpu=False — same rule as VCTK init above.
+                xtts_gpu = self._device == "cuda"
+                if self._device == "mps":
+                    logger.info(
+                        "Coqui TTS: XTTS v2 on Apple Silicon — Coqui API has no MPS flag; "
+                        "using CPU inference for XTTS (slower than CUDA)."
+                    )
+                logger.info("Coqui TTS: loading XTTS v2 for voice cloning (gpu=%s)", xtts_gpu)
+                self._xtts = _CoquiTTS(
+                    "tts_models/multilingual/multi-dataset/xtts_v2",
+                    gpu=xtts_gpu,
+                )
+            # speaker=None avoids idiap default speaker_name="" triggering clone cache writes.
+            clamped_speed = max(0.5, min(2.0, float(self.playback_speed)))
+            try:
+                wav = self._xtts.tts(
+                    text=text,
+                    speaker=None,
+                    speaker_wav=ref_path,
+                    language="en",
+                    split_sentences=False,
+                    speed=clamped_speed,
+                )
+            except TypeError:
+                wav = self._xtts.tts(
+                    text=text,
+                    speaker=None,
+                    speaker_wav=ref_path,
+                    language="en",
+                    split_sentences=False,
+                )
+            if hasattr(wav, "detach"):
+                wav = wav.detach().cpu().numpy()
+            elif hasattr(wav, "cpu"):
+                wav = wav.cpu().numpy()
+            audio = np.asarray(wav, dtype=np.float32).reshape(-1)
+            if audio.size and np.max(np.abs(audio)) > 1.0:
+                np.clip(audio, -1.0, 1.0, out=audio)
+            sr = self._xtts.synthesizer.output_sample_rate
+            return audio, sr
 
         # Built-in VCTK speaker
         from distr.core.agent.services.tts.coqui_descriptor import DEFAULT_COQUI_VOICE
 
-        speaker = self.voice_id if not self.voice_id.startswith("custom_") else "p225"
+        speaker = self.voice_id
+        clamped_speed = max(0.5, min(2.0, float(self.playback_speed)))
         try:
-            wav = self._tts.tts(text=text, speaker=speaker)
+            try:
+                wav = self._tts.tts(text=text, speaker=speaker, speed=clamped_speed)
+            except TypeError:
+                wav = self._tts.tts(text=text, speaker=speaker)
         except KeyError as e:
             logger.warning(
                 "Coqui TTS: synthesize failed (%s); retrying with %s",
                 e,
                 DEFAULT_COQUI_VOICE,
             )
-            wav = self._tts.tts(text=text, speaker=DEFAULT_COQUI_VOICE)
+            try:
+                wav = self._tts.tts(text=text, speaker=DEFAULT_COQUI_VOICE, speed=clamped_speed)
+            except TypeError:
+                wav = self._tts.tts(text=text, speaker=DEFAULT_COQUI_VOICE)
         audio = np.array(wav, dtype=np.float32)
         if audio.ndim > 1:
             audio = np.mean(audio, axis=1)
         sr = self._tts.synthesizer.output_sample_rate
         return audio, sr
-
-    def _resolve_reference_audio(self):
-        """Find the reference audio file for the current custom voice."""
-        try:
-            from distr.core.db import get_session, CustomVoice
-            db_id = int(self.voice_id.split("_", 1)[1])
-            with get_session() as session:
-                cv = session.query(CustomVoice).filter(
-                    CustomVoice.id == db_id,
-                    CustomVoice.provider == "coqui",
-                    CustomVoice.status == "ready",
-                ).first()
-                if cv and cv.audio_dir:
-                    import os as _os
-                    for fn in _os.listdir(cv.audio_dir):
-                        if fn.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm')):
-                            return _os.path.join(cv.audio_dir, fn)
-        except Exception as e:
-            logger.warning("Could not resolve Coqui reference audio: %s", e)
-        return None
 
     # ------------------------------------------------------------------
     # Pipeline frame contract

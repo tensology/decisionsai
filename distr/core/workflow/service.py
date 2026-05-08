@@ -576,14 +576,29 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
     with get_session() as db:
         run = db.query(AutoWorkflowRun).filter(
             AutoWorkflowRun.workflow_id == workflow_id,
-            AutoWorkflowRun.status == "running",
+            AutoWorkflowRun.status.in_(["running", "waiting"]),
         ).first()
         if not run:
             return None
+        run_data = _safe_json_loads(run.run_data) or {}
+        step_name = None
+        if run.current_step_id is not None:
+            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == run.current_step_id).first()
+            if step:
+                step_name = step.name
         return {
             "id": run.id,
+            "status": run.status,
             "current_step_id": run.current_step_id,
+            "current_step_name": step_name,
             "started_at": run.started_at.isoformat() if run.started_at else None,
+            "board_id": run.board_id,
+            "board_name": run_data.get("board_name"),
+            "ticket_id": run.ticket_id,
+            "ticket_title": run_data.get("ticket_title"),
+            "project_id": run_data.get("project_id"),
+            "project_name": run_data.get("project_name"),
+            "phase": run_data.get("phase"),
         }
 
 

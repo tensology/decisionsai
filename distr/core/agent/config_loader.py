@@ -53,6 +53,10 @@ def resolve_stt_config(transcription_model: str) -> dict:
             result['model'] = DEFAULT_OPENAI_WHISPER_MODEL
     elif 'Whisper' in transcription_model or 'whisper' in transcription_model.lower():
         result['engine'] = 'whisper'
+    elif 'VibeVoice ASR' in transcription_model or (
+        'vibevoice' in transcription_model.lower() and 'asr' in transcription_model.lower()
+    ):
+        result['engine'] = 'vibevoice_asr'
     else:
         # Caller should handle the fallback (check input_speech setting, etc.)
         result['engine'] = None

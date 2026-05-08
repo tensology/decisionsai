@@ -717,17 +717,27 @@
             document.getElementById("kb-search").addEventListener("input", function() { deps.loadBoards(); });
             document.getElementById("kb-refresh-boards").addEventListener("click", function() {
                 var btn = document.getElementById("kb-refresh-boards");
-                var icon = btn ? btn.querySelector(".kb-refresh-icon") : null;
+                if (!btn) return;
+                var icon = btn.querySelector(".kb-refresh-icon");
                 var prevTitle = btn.getAttribute("title");
                 if (icon) icon.classList.add("animate-spin");
                 btn.disabled = true;
                 btn.setAttribute("title", "Re-syncing external boards...");
+                deps.showSnackbar("Re-syncing external boards... this can take a bit on Jira.", "info");
                 deps.resetExternalCache();
                 deps.loadBoards(true);
                 deps.getExternalBoards(true).then(function(data) {
                     deps.renderExternalBoards("kb-trello-boards", data.trello || [], "trello");
                     deps.renderExternalBoards("kb-jira-boards", data.jira || [], "jira");
                     deps.showSnackbar("External boards re-synced");
+                    var cur = deps.getCurrentBoard && deps.getCurrentBoard();
+                    if (cur && cur.id != null && cur.source) {
+                        if (cur.source === "jira" || cur.source === "trello") {
+                            deps.selectBoard(cur.source, cur.id, cur.extUrl || "", { forceRefresh: true });
+                        } else if (cur.source === "database") {
+                            deps.selectBoard("database", cur.id, "", { forceRefresh: true });
+                        }
+                    }
                 }).catch(function(e) {
                     deps.showSnackbar("Re-sync failed: " + e.message, "error");
                 }).finally(function() {
@@ -752,6 +762,14 @@
                     btn.setAttribute("data-selected", cur ? "0" : "1");
                 });
             });
+            var selectAllHoursBtn = document.getElementById("kb-gs-hours-select-all");
+            if (selectAllHoursBtn) {
+                selectAllHoursBtn.addEventListener("click", function() {
+                    document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
+                        btn.setAttribute("data-selected", "1");
+                    });
+                });
+            }
             document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
                 btn.addEventListener("click", function() {
                     var cur = btn.getAttribute("data-selected") === "1";

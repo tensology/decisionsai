@@ -171,6 +171,63 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     )
                     return (True, msg, True)
 
+            # Google Calendar / scheduling (request_tool fuzzy match often misses GoogleWorkspaceTool).
+            calendar_routing_tokens = (
+                "google calendar",
+                "gcal",
+                "calendar event",
+                "calendar events",
+                "event creation",
+                "create calendar",
+                "bulk event",
+                "recurring event",
+                "create events",
+            )
+            if any(token in qlow for token in calendar_routing_tokens) or (
+                "calendar" in qlow and any(w in qlow for w in ("create", "event", "schedule", "bulk", "recurring"))
+            ):
+                gw_tool = self._tools_dict.get("google_workspace")
+                if gw_tool is not None:
+                    msg = (
+                        "For Google Calendar (create/read events, schedules), use the 'google_workspace' tool "
+                        "directly. For several days or slots in one step use action='create_calendar_events_batch' "
+                        "with params.events = list of {summary, start_time, end_time, description?, location?} (ISO times). "
+                        "For a single event use create_calendar_event. Schedule reads: get_calendar_events / "
+                        "get_schedule_tomorrow / get_schedule_this_week. Tool is already in your active set."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="google_workspace",
+                        model_name=_mn,
+                        injection_performed=False,
+                        message=msg,
+                    )
+                    return (True, msg, False)
+
+                cached_gw_tool = _tool_cache.get("google_workspace")
+                if cached_gw_tool is not None:
+                    self._tools.append(cached_gw_tool)
+                    self._tools_dict[cached_gw_tool.name] = cached_gw_tool
+                    if not hasattr(self, "_sticky_tool_names"):
+                        self._sticky_tool_names = set()
+                    self._sticky_tool_names.add(cached_gw_tool.name)
+                    msg = (
+                        "Tool 'google_workspace' is now available for Google Calendar and other Workspace APIs. "
+                        "For multiple events use action='create_calendar_events_batch' with params.events as a list of "
+                        "{summary, start_time, end_time, description?, location?} (ISO datetimes, max 100 per call). "
+                        "For one event use create_calendar_event."
+                    )
+                    log_request_tool_event(
+                        query=qnorm,
+                        success=True,
+                        injected_tool_name="google_workspace",
+                        model_name=_mn,
+                        injection_performed=True,
+                        message=msg,
+                    )
+                    return (True, msg, True)
+
             # Workflow questions: models often call request_tool with vague text instead of get_workflow.
             wf_topic = "workflow" in qlow or "automation" in qlow
             wf_detail = any(
@@ -232,6 +289,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 best = max(name_score, desc_score)
                 if class_name == "GetWorkflowTool" and wf_topic and wf_detail:
                     best = min(100, best + 28)
+                if class_name == "GoogleWorkspaceTool" and (
+                    "calendar" in qlow
+                    or "gcal" in qlow
+                    or "schedule" in qlow
+                    or "recurring" in qlow
+                ):
+                    best = min(100, best + 24)
                 scores.append((class_name, best))
 
             scores.sort(key=lambda x: x[1], reverse=True)
@@ -353,7 +417,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             # this session, force-expose it even when semantic retrieval missed it.
             qlow = (last_user_message or "").lower()
             gmail_keywords = ("gmail", "email", "inbox", "google workspace")
-            if any(k in qlow for k in gmail_keywords) and "google_workspace" in self._tools_dict:
+            calendar_keywords = (
+                "google calendar",
+                "gcal",
+                "calendar event",
+                "calendar events",
+                "event creation",
+                "create calendar",
+                "bulk event",
+                "recurring event",
+            )
+            workspace_exposure_keywords = gmail_keywords + calendar_keywords
+            if any(k in qlow for k in workspace_exposure_keywords) and "google_workspace" in self._tools_dict:
                 gw_tool = self._tools_dict["google_workspace"]
                 if gw_tool.name not in retrieved_names:
                     retrieved.append(gw_tool)
@@ -519,7 +594,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
     def _get_dropped_files_context(self, chat_id=None) -> str:
         """Get context about recently dropped files for the system prompt."""
-        storage_dir = os.path.join(os.path.expanduser("~"), ".decisionsai", "dropped_files")
+        storage_dir = os.path.join(os.path.expanduser("~"), ".decisions", "dropped_files")
         storage_file = os.path.join(storage_dir, "current_files.json")
 
         logger.debug("_get_dropped_files_context: Checking storage_file=%s, chat_id=%s", storage_file, chat_id)

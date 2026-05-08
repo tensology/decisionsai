@@ -143,7 +143,7 @@ def _build_decisions_meta() -> str:
         return ""
     try:
         import json as _json
-        api_base = os.environ.get("DECISIONS_API_BASE", "http://localhost:5555")
+        api_base = os.environ.get("DECISIONS_API_BASE", "http://127.0.0.1:8765")
         wf_id = int(workflow_id) if workflow_id else 0
         r_id = int(run_id)
         meta = {
@@ -159,6 +159,57 @@ def _build_decisions_meta() -> str:
     except (ValueError, TypeError) as e:
         logger.warning("CreateProjectTicket: Could not build decisions-meta: %s", e)
         return ""
+
+
+def _safe_load_trigger_words(raw_value: Any) -> list[str]:
+    """Parse project trigger words JSON safely."""
+    if not raw_value:
+        return []
+    try:
+        parsed = json.loads(raw_value) if isinstance(raw_value, str) else raw_value
+    except (json.JSONDecodeError, ValueError, TypeError):
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return [str(item).strip() for item in parsed if str(item).strip()]
+
+
+def _project_aliases(project: Any) -> list[str]:
+    """Build lowercase aliases for project matching."""
+    aliases: list[str] = []
+    name = (getattr(project, "name", "") or "").strip().lower()
+    if name:
+        aliases.append(name)
+        aliases.append(name.replace("-", " "))
+        aliases.append(name.replace("_", " "))
+    for trigger in _safe_load_trigger_words(getattr(project, "additional_trigger_words", "")):
+        aliases.append(trigger.strip().lower())
+    # Keep deterministic order while deduplicating.
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for alias in aliases:
+        cleaned = re.sub(r"\s+", " ", alias).strip()
+        if len(cleaned) < 3:
+            continue
+        if cleaned in seen:
+            continue
+        seen.add(cleaned)
+        deduped.append(cleaned)
+    return deduped
+
+
+def _find_explicit_projects_from_instruction(projects: list[Any], instruction_text: str) -> list[Any]:
+    """Find explicit project mentions in a user request."""
+    lower_instruction = f" {re.sub(r'\\s+', ' ', (instruction_text or '').lower()).strip()} "
+    matches: list[Any] = []
+    for project in projects:
+        for alias in _project_aliases(project):
+            # Match whole phrase boundaries so "api" doesn't match "rapid".
+            pattern = rf"(^|[^a-z0-9]){re.escape(alias)}([^a-z0-9]|$)"
+            if re.search(pattern, lower_instruction):
+                matches.append(project)
+                break
+    return matches
 
 
 def _applescript_escape_double_quoted(s: str) -> str:
@@ -801,19 +852,9 @@ class SwitchProjectTool(BaseTool):
 
                 if result.get('success'):
                     logger.info(f"Switched to project: {project.name} (ID: {project.id})")
-
-                    response = f"PROJECT ACTIVATED: {project.name}\n"
+                    response = f"Switched to {project.name}."
                     if project.folder_location:
-                        response += f"Folder: {project.folder_location}\n"
-                    
-                    # Instructions for LLM behavior
-                    response += "\n---\n"
-                    response += "INSTRUCTIONS FOR RESPONSE:\n"
-                    response += "- Confirm the project is now active\n"
-                    response += "- Ask: 'What changes would you like to make?' or similar\n"
-                    response += "- DO NOT presume specific actions\n"
-                    response += "- Optionally mention: 'Say deactivate project mode to switch away'\n"
-
+                        response += f" Working folder: {project.folder_location}."
                     return response
                 else:
                     return f"Error activating project: {result.get('error')}"
@@ -1192,6 +1233,9 @@ class CreateProjectTicketTool(BaseTool):
         """Execute create project ticket action."""
         try:
             from distr.core.agent.services.rag.project import get_active_project
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.agent.services.rag.project import activate_project
 
             # Use text or instruction (whichever is provided)
             instruction_text = instruction or text
@@ -1203,6 +1247,33 @@ class CreateProjectTicketTool(BaseTool):
             project = get_active_project()
             if not project:
                 return "No project is currently active. Switch to a project first to create tickets."
+
+            switched_msg = ""
+            session = get_session()
+            try:
+                candidates = session.query(Project).all()
+            finally:
+                session.close()
+
+            explicit_targets = _find_explicit_projects_from_instruction(candidates, instruction_text)
+            if len(explicit_targets) > 1:
+                top = explicit_targets[:3]
+                names = ", ".join([(p.name or "").strip() for p in top if (p.name or "").strip()])
+                return f"Which project should I write this ticket into: {names}?"
+
+            if len(explicit_targets) == 1:
+                target = explicit_targets[0]
+                active_name = (project.get("name", "") or "").strip().lower()
+                target_name = (target.name or "").strip().lower()
+                if target_name and target_name != active_name:
+                    act = activate_project(target.id)
+                    if act.get("success"):
+                        project = get_active_project() or {
+                            "id": target.id,
+                            "name": target.name,
+                            "folder_location": target.folder_location,
+                        }
+                        switched_msg = f"Switched to {target.name} first. "
 
             if not project.get('folder_location'):
                 return f"Project {project['name']} has no folder location set. Cannot create ticket."
@@ -1271,7 +1342,7 @@ status: open
 
                 logger.info(f"Created ticket: {ticket_path}")
 
-                response = f"Created work ticket in project {project['name']}:"
+                response = f"{switched_msg}Created work ticket in project {project['name']}:"
                 response += f"\n\n**File:** {ticket_path}"
                 response += f"\n**Title:** {title}"
                 response += f"\n\nYou can now use this ticket with Cursor or other editors to implement the feature."

@@ -145,6 +145,23 @@ _TRIGGER_PHRASES = [
     'take screenshot of', 'take picture of', 'capture my screen', 'screenshot screen',
 ]
 
+
+def _wants_screen_description(text: str) -> bool:
+    """True when the user likely wants vision interpretation, not only a file artifact."""
+    if not text:
+        return False
+    tl = text.lower()
+    for trigger in _TRIGGER_PHRASES:
+        if trigger in tl:
+            return True
+    extra = (
+        'describe', 'what is on', "what's on", 'whats on', 'interpret',
+        'tell me what you see', 'explain what', 'read what',
+        'analyze this screen', 'analyze the screen', 'what does this show',
+        'projects page', 'on this page',
+    )
+    return any(e in tl for e in extra)
+
 _ACTION_KEYWORDS = [
     'move mouse', 'move the mouse', 'click', 'click on', 'go to', 'control',
     'move to', 'move cursor', 'position', 'coordinates', 'x and y', 'x, y',
@@ -427,6 +444,66 @@ class ScreenshotAnalyzerTool(BaseTool):
             return f"Error: {e}"
 
     # ------------------------------------------------------------------
+    # Optional vision summary during capture-only (describe + attach chains)
+    # ------------------------------------------------------------------
+
+    def _optional_vision_summary_for_capture_only(
+        self,
+        persistent_paths: list[str],
+        temp_paths_before_persist: list[str],
+        screenshot_to_screen_map: dict[str, int],
+        captured_screen_number: Optional[int],
+        capture_region: str,
+        prompt: str,
+        original_text: str,
+        **kwargs,
+    ) -> str:
+        """When the user wants both a routable file and an on-screen description, run vision."""
+        combined = f"{original_text or ''} {prompt or ''}".strip()
+        if not _wants_screen_description(combined):
+            return ""
+
+        new_map: dict[str, int] = {}
+        for old, new in zip(temp_paths_before_persist, persistent_paths):
+            if old in screenshot_to_screen_map:
+                new_map[new] = screenshot_to_screen_map[old]
+
+        image_screen_info = [new_map.get(p, captured_screen_number or 1) for p in persistent_paths]
+
+        from distr.core.settings import load_settings_from_db
+        from distr.core.agent.tools.vision.vision_api import resolve_vision_llm_config
+        from distr.core.agent.services.vision.intent_classifier import VisionIntent
+
+        settings = load_settings_from_db()
+        vp, vm = resolve_vision_llm_config(settings)
+        err = self._check_vision_support(vp, vm, **kwargs)
+        if err:
+            return f"\n\n--- Screen summary ---\nVision unavailable: {err}"
+
+        summary_prompt = _extract_prompt(prompt, original_text or prompt or "")
+        vr = self._call_vision_llm(
+            screenshot_paths=persistent_paths,
+            prompt=summary_prompt,
+            original_text=original_text or prompt,
+            is_action_request=False,
+            capture_region=capture_region,
+            captured_screen_number=captured_screen_number,
+            screenshot_to_screen_map=new_map,
+            image_screen_info=image_screen_info,
+            should_send_raw=False,
+            vision_provider=vp,
+            vision_model=vm,
+            vision_intent=VisionIntent.DESCRIBE_SCREEN,
+            execute_action=False,
+        )
+        if isinstance(vr, str) and vr.startswith("Error:"):
+            return (
+                f"\n\n--- Screen summary ---\nVision failed ({vp}/{vm}): {vr}\n"
+                "The screenshot file above is still valid for chaining."
+            )
+        return f"\n\n--- Screen summary ---\n{vr}"
+
+    # ------------------------------------------------------------------
     # Capture-only: return file path artifact for tool chaining
     # ------------------------------------------------------------------
 
@@ -461,11 +538,22 @@ class ScreenshotAnalyzerTool(BaseTool):
                     if not pp:
                         return "Error: Failed to persist screenshot."
                     _store_for_telegram(pp, raw=True)
+                    summary_extra = self._optional_vision_summary_for_capture_only(
+                        persistent_paths=[pp],
+                        temp_paths_before_persist=[screenshot_paths[0]],
+                        screenshot_to_screen_map=screenshot_to_screen_map,
+                        captured_screen_number=captured_screen_number,
+                        capture_region=capture_region,
+                        prompt=prompt,
+                        original_text=original_text,
+                        **kwargs,
+                    )
                     # Also return path for chaining
                     return (
                         f"Result: Screenshot captured at {pp}\n"
                         f"[ACTION REQUIRED: The screenshot file is at \"{pp}\". "
                         f"Chain to the next tool(s) the user requested.]"
+                        f"{summary_extra}"
                     )
 
             # Desktop path — capture, persist, return file path with chaining directives
@@ -487,11 +575,23 @@ class ScreenshotAnalyzerTool(BaseTool):
 
                 primary = persistent_paths[0]
 
+                summary_extra = self._optional_vision_summary_for_capture_only(
+                    persistent_paths=persistent_paths,
+                    temp_paths_before_persist=screenshot_paths[: len(persistent_paths)],
+                    screenshot_to_screen_map=screenshot_to_screen_map,
+                    captured_screen_number=captured_screen_number,
+                    capture_region=capture_region,
+                    prompt=prompt,
+                    original_text=original_text,
+                    **kwargs,
+                )
+
                 if len(persistent_paths) == 1:
                     result = (
                         f"Result: Screenshot captured at: {primary}\n"
                         f'[ACTION REQUIRED: The screenshot file is at "{primary}". '
                         f"Continue with the user's request using this file path.]"
+                        f"{summary_extra}"
                     )
                 else:
                     paths_str = ", ".join(f'"{p}"' for p in persistent_paths)
@@ -499,6 +599,7 @@ class ScreenshotAnalyzerTool(BaseTool):
                         f"Result: {len(persistent_paths)} screenshot(s) captured: {paths_str}\n"
                         f'[ACTION REQUIRED: The primary screenshot is at "{primary}". '
                         f"Continue with the user's request using this file path.]"
+                        f"{summary_extra}"
                     )
 
                 logger.info(f"📸 Capture-only returning artifact: {primary}")
@@ -876,15 +977,17 @@ class ScreenshotAnalyzerTool(BaseTool):
         """Convert screenshots to base64, call the vision API, and process the result."""
         vision_provider_key = (vision_provider or "").strip().lower()
 
-        # Convert to base64
+        # Convert to base64 (MIME must match bytes — WebP conversion can fall back to PNG)
         base64_images: list[str] = []
+        image_mimes: list[str] = []
         screen_info_list: list[int] = []
         for sp in screenshot_paths:
             if not os.path.exists(sp):
                 continue
-            b64 = image_to_base64(sp)
+            b64, mime = image_to_base64(sp)
             if b64:
                 base64_images.append(b64)
+                image_mimes.append(mime or "image/webp")
                 sn = screenshot_to_screen_map.get(sp) or captured_screen_number or 1
                 screen_info_list.append(sn)
 
@@ -936,7 +1039,12 @@ class ScreenshotAnalyzerTool(BaseTool):
         # Call the API
         try:
             vision_result = self._call_vision_api(
-                vision_provider_key, vision_model, base64_images, enhanced, is_action_request,
+                vision_provider_key,
+                vision_model,
+                base64_images,
+                enhanced,
+                is_action_request,
+                image_mimes=image_mimes,
             )
             if vision_result.startswith("Error:"):
                 return vision_result
@@ -957,8 +1065,8 @@ class ScreenshotAnalyzerTool(BaseTool):
             return False
         retry_markers = (
             "rate limit", "429", "quota", "insufficient", "credit", "billing",
-            "timeout", "timed out", "connection", "network", "temporarily",
-            "overloaded", "503", "502", "500", "unavailable", "capacity",
+            "balance", "payment", "timeout", "timed out", "connection", "network",
+            "temporarily", "overloaded", "503", "502", "500", "unavailable", "capacity",
         )
         return any(marker in text for marker in retry_markers)
 
@@ -974,6 +1082,7 @@ class ScreenshotAnalyzerTool(BaseTool):
         base64_images: list[str],
         enhanced_prompt: str,
         is_action_request: bool,
+        image_mimes: Optional[list[str]] = None,
     ) -> str:
         """Call the vision API for any supported provider.
 
@@ -984,17 +1093,26 @@ class ScreenshotAnalyzerTool(BaseTool):
 
         # Build OpenAI-compatible content items (used by openai, openrouter, kilocode, groq)
         content_items: list[dict] = [{"type": "text", "text": enhanced_prompt}]
-        for b64 in base64_images:
+        for i, b64 in enumerate(base64_images):
+            mime = "image/webp"
+            if image_mimes and i < len(image_mimes) and image_mimes[i]:
+                mime = image_mimes[i]
             content_items.append({
                 "type": "image_url",
-                "image_url": {"url": f"data:image/webp;base64,{b64}"},
+                "image_url": {"url": f"data:{mime};base64,{b64}"},
             })
         vision_messages = [{"role": "user", "content": content_items}]
 
         # --- OpenAI ---
         if vision_provider_key == "openai":
             try:
-                return call_openai_vision(base64_images, enhanced_prompt, vision_model, is_action_request)
+                return call_openai_vision(
+                    base64_images,
+                    enhanced_prompt,
+                    vision_model,
+                    is_action_request,
+                    image_mimes=image_mimes,
+                )
             except ValueError as ve:
                 return f"Error: {ve}"
             except RuntimeError as re_:
@@ -1104,10 +1222,13 @@ class ScreenshotAnalyzerTool(BaseTool):
                 client = Anthropic(api_key=api_key)
                 # Anthropic uses a different image format
                 content_parts: list[dict] = [{"type": "text", "text": enhanced_prompt}]
-                for b64 in base64_images:
+                for i, b64 in enumerate(base64_images):
+                    mime = "image/webp"
+                    if image_mimes and i < len(image_mimes) and image_mimes[i]:
+                        mime = image_mimes[i]
                     content_parts.append({
                         "type": "image",
-                        "source": {"type": "base64", "media_type": "image/webp", "data": b64},
+                        "source": {"type": "base64", "media_type": mime, "data": b64},
                     })
                 logger.info("ScreenshotAnalyzer: Calling Anthropic vision API with model: %s", vision_model)
                 resp = client.messages.create(
@@ -1731,19 +1852,21 @@ class ScreenshotAnalyzerTool(BaseTool):
             or vision_intent in LOCATE_INTENTS
             or any(kw in text_lower for kw in _ACTION_KEYWORDS)
         )
+        explicit_execute_action = kwargs.get('execute_action')
         execute_action = resolve_execute_action(
-            kwargs.get('execute_action'),
+            explicit_execute_action,
             vision_intent,
             LOCATE_INTENTS,
         )
         # If the user explicitly asked to physically move/click/hover, force action
         # execution even when intent classifier lands on a locate-style intent.
+        # Never override an explicit execute_action=false from the agent (locate-only).
         explicit_pointer_action = bool(re.search(
             r"\b(move|hover|click|double[- ]?click|right[- ]?click|tap|press)\b",
             text_lower,
             re.IGNORECASE,
         ))
-        if explicit_pointer_action and not execute_action:
+        if explicit_pointer_action and not execute_action and explicit_execute_action is not False:
             execute_action = True
             logger.info("ScreenshotAnalyzer: forcing execute_action=True from explicit pointer-action text")
         logger.info(

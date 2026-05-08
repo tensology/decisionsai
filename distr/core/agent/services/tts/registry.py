@@ -119,10 +119,19 @@ class TTSProviderRegistry:
         package_dir = os.path.dirname(__file__)
         package_name = "distr.core.agent.services.tts"
 
+        _skip_discovery = frozenset({
+            "__init__",
+            "registry",
+            "provider_descriptor",
+            # Helpers / service modules (no DESCRIPTOR; avoid import side effects)
+            "vibevoice_streaming_inference",
+            "vibevoice_runtime",
+            "vibevoice_realtime",
+            "vibevoice_asr_inference",
+        })
         for module_info in pkgutil.iter_modules([package_dir]):
             module_name = module_info.name
-            # Skip non-descriptor helper modules
-            if module_name in ("__init__", "registry", "provider_descriptor"):
+            if module_name in _skip_discovery:
                 continue
 
             fqn = f"{package_name}.{module_name}"

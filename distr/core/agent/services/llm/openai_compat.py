@@ -174,6 +174,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 # If the LLM returned text but no more tool calls, we're done
                 if not tool_calls and full_content:
                     self._handle_follow_up_content(full_content)
+                    # Follow-up already pushes Start/Text/End for TTS — do not call
+                    # _send_done_after_tools() afterwards or the user hears an extra \"Done\".
+                    end_frame_sent = True
                     break
 
                 # If LLM returned neither text nor tool calls, we're done
@@ -384,7 +387,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
                             tool_call_detected = True
 
                     if self._speaker_enabled and not tool_call_detected and not getattr(self, '_is_telegram_request', False):
-                        await self.push_frame(TextFrame(text=delta.content))
+                        from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+                        # Keep boundary whitespace in streamed deltas; stripping each chunk
+                        # can merge words across chunks (e.g. "step " + "one" -> "stepone").
+                        tts_chunk = clean_text_for_tts(delta.content, strip_whitespace=False)
+                        if tts_chunk:
+                            await self.push_frame(TextFrame(text=tts_chunk))
                     if self.event_queue and not tool_call_detected:
                         self.event_queue.put(('chat_stream_token', {'token': delta.content}), block=False)
 
@@ -875,9 +883,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
     def _handle_follow_up_content(self, content):
         """Save follow-up content to history and speak it via TTS.
 
-        TTS is suppressed only for raw file paths (e.g. tool returned a path
-        like '/Users/paul/file.mp4') — not for normal conversational responses
-        that happen to follow a tool call.
+        Chat/history store redacted paths (see ``redact_filesystem_paths_for_conversation``).
+        TTS uses ``clean_text_for_tts`` which also redacts paths. Only the explicit tool-chain
+        suppress flag skips speech here.
         """
         import threading
 
@@ -885,33 +893,28 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return
 
         should_suppress = getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False)
-        file_extensions = ('.jpg', '.png', '.pdf', '.mp4', '.mp3', '.doc', '.xls', '.jpeg', '.gif', '.webp', '.mov', '.avi')
-        content_lower = content.lower().strip()
-        looks_like_file_path = (
-            content_lower.startswith('/') or content_lower.startswith('\\') or
-            content_lower.startswith('result:') or
-            any(content_lower.endswith(ext) for ext in file_extensions)
-        )
-        if looks_like_file_path:
-            should_suppress = True
 
-        self._messages.append({"role": "assistant", "content": content})
+        from distr.core.agent.services.llm.text_utils import (
+            clean_text_for_tts,
+            redact_filesystem_paths_for_conversation,
+        )
+
+        display = redact_filesystem_paths_for_conversation(content)
+        self._messages.append({"role": "assistant", "content": display})
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
             if chat:
-                from distr.core.agent.services.llm.text_utils import clean_text_for_tts
-                self.chat_manager.add_assistant_message(chat, clean_text_for_tts(content))
+                self.chat_manager.add_assistant_message(chat, display)
 
         # For Telegram requests, store as fallback since TextFrames aren't pushed to TTS
         if getattr(self, '_is_telegram_request', False):
-            self._telegram_fallback_text = content
+            self._telegram_fallback_text = display
 
         # Push to TTS pipeline so the user hears the follow-up response.
         # Only suppress for raw file paths — normal conversational follow-ups
         # after tool calls (e.g. "Here's the transcription summary...") should be spoken.
         if not should_suppress and self._speaker_enabled and not getattr(self, '_is_telegram_request', False):
             import asyncio
-            from distr.core.agent.services.llm.text_utils import clean_text_for_tts
             cleaned = clean_text_for_tts(content)
             if cleaned and cleaned.strip():
                 try:
@@ -928,17 +931,22 @@ class OpenAICompatibleLLMService(BaseLLMService):
         """Send TTS response after tool execution, using tool results when meaningful. Returns True (end_frame sent)."""
         import json as _json
 
-        from distr.core.agent.services.llm.text_utils import humanize_silent_navigation_json
+        from distr.core.agent.services.llm.text_utils import (
+            brief_tool_completion_message,
+            humanize_silent_navigation_json,
+        )
 
         # Check if the last tool result requested silence (e.g. legacy open_page JSON with silent)
         is_silent = False
         tool_result_text = None
+        last_tool_name = ""
         action_tool_spoke_directly = False
         action_ack_prefixes = ("running action ", "action stopped", "paused", "resumed", "done")
         action_tool_names = {"play_action", "stop_action", "pause_action", "resume_action"}
         for msg in reversed(self._messages):
             if msg.get("role") == "tool":
                 tool_name = (msg.get("name") or "").strip()
+                last_tool_name = tool_name
                 content = msg.get("content", "")
                 effective = content
                 if content:
@@ -959,19 +967,26 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     if lowered.startswith(action_ack_prefixes):
                         action_tool_spoke_directly = True
                 # Collect the last meaningful tool result for TTS/history
-                if effective and len(effective) > 5 and "[ACTION REQUIRED" not in effective:
-                    tool_result_text = effective[:2000]  # Cap at 2000 chars
+                eff_str = str(effective).strip() if effective else ""
+                if (
+                    eff_str
+                    and "[ACTION REQUIRED" not in eff_str
+                    and not eff_str.lower().startswith("error:")
+                ):
+                    tool_result_text = eff_str[:2000]  # Cap at 2000 chars
                 break  # Only check the most recent tool result
+
+        generic_ack = brief_tool_completion_message(last_tool_name)
 
         if getattr(self, '_is_telegram_request', False):
             # For Telegram, include the tool result as context
-            fallback = tool_result_text or "Done"
+            fallback = tool_result_text or generic_ack
             self._telegram_fallback_text = fallback
         elif action_tool_spoke_directly:
             # Tool already spoke via speak_text_directly_event_queue -> command handler
             # and pushed its own Start/Text/End TTS frames. Do not emit extra frames
             # from the LLM fallback path, or we can suppress/close the player UI.
-            fallback = tool_result_text or "Done"
+            fallback = tool_result_text or generic_ack
             if self.chat_manager:
                 chat = self.chat_manager.get_current_chat()
                 if chat:
@@ -979,7 +994,12 @@ class OpenAICompatibleLLMService(BaseLLMService):
             self._messages.append({"role": "assistant", "content": fallback})
             return True
         elif is_silent:
-            fallback = "Done"
+            # Tool asked for no voice UI — close the segment without speaking \"Done\".
+            from distr.core.agent.libs import LLMFullResponseEndFrame, LLMFullResponseStartFrame
+
+            await self.push_frame(LLMFullResponseStartFrame())
+            await self.push_frame(LLMFullResponseEndFrame())
+            return True
         elif tool_result_text:
             # We have a meaningful tool result — use it as the response instead of "Done"
             # so the user actually knows what happened.
@@ -1000,8 +1020,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
         else:
             from distr.core.agent.libs import LLMFullResponseStartFrame
             await self.push_frame(LLMFullResponseStartFrame())
-            await self.push_frame(TextFrame(text="Done"))
-            fallback = "Done"
+            await self.push_frame(TextFrame(text=generic_ack))
+            fallback = generic_ack
 
         await self.push_frame(LLMFullResponseEndFrame())
 
@@ -1088,7 +1108,13 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
             chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if chat_id:
-                result_text = follow_up_content or full_content or ""
+                from distr.core.agent.services.llm.text_utils import (
+                    redact_filesystem_paths_for_conversation,
+                )
+
+                result_text = redact_filesystem_paths_for_conversation(
+                    follow_up_content or full_content or ""
+                )
                 self.event_queue.put(
                     ('chat_stream_finished', {'chat_id': chat_id, 'response_text': result_text}),
                     block=False,

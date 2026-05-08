@@ -397,7 +397,7 @@ class EventHandlerMixin:
             if hasattr(self, 'oracle_window') and self.oracle_window and hasattr(self.oracle_window, '_event_dispatcher'):
                 dispatcher = self.oracle_window._event_dispatcher
                 if dispatcher and dispatcher.get_current_hook() == "thinking":
-                    dispatcher.revert_hook("thinking")
+                    dispatcher.revert_hook("thinking", trigger="events:player_close_thinking_guard")
                 self._force_oracle_idle_if_ptt_stale(f"player_close:{reason}")
         except Exception:
             logger.debug("[EVENT QUEUE] Failed to apply idle-reset guard after %s", reason, exc_info=True)

@@ -130,8 +130,13 @@ class ActionRecorderHost(QObject):
         signal_manager.stop_step_recording.connect(self._on_stop_step_recording)
 
     def _on_start_recording(self):
-        """Handle start recording (no action_id – create new)."""
-        action_id = self.pending_action_id_for_recording or self.current_action_id
+        """Handle start recording.
+
+        Reuse an action only when an explicit action_id was provided
+        (via start_action_recording_with_id from the UI). Plain
+        "start recording" should always create a brand new action row.
+        """
+        action_id = self.pending_action_id_for_recording
         self.pending_action_id_for_recording = None
         if action_id:
             try:

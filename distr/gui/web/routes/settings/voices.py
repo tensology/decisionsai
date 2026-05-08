@@ -6,6 +6,8 @@ from fastapi.responses import JSONResponse
 from typing import Optional
 import os
 
+from distr.core.paths import DB_DIR
+
 from ._shared import logger
 
 
@@ -19,7 +21,8 @@ OPENAI_TTS_VOICES = [
     {"id": "shimmer", "name": "Shimmer"},
 ]
 
-CUSTOM_VOICE_AUDIO_DIR = os.path.abspath(os.path.join(os.path.dirname(os.path.abspath(__file__)), '..', '..', '..', '..', 'db', 'custom_voices'))
+# Same tree as settings.db (distr.core.paths.DB_DIR) — do not use distr/db/custom_voices.
+CUSTOM_VOICE_AUDIO_DIR = os.path.join(DB_DIR, "custom_voices")
 
 
 def _tts_online_provider_verified(settings: dict, provider_id: str) -> bool:
@@ -91,6 +94,14 @@ def register_routes(router, templates):
                 voices = [{"id": "default", "name": "Default (F5-TTS Base)"}]
             elif provider_id == "voxcpm":
                 voices = [{"id": "default", "name": "Default (VoxCPM2)"}]
+            elif provider_id == "vibevoice_realtime":
+                try:
+                    from distr.core.agent.services.tts.registry import tts_registry
+
+                    voices = list(tts_registry.get("vibevoice_realtime").get_voices())
+                except Exception as e:
+                    logger.warning("Could not load VibeVoice Realtime voices: %s", e)
+                    voices = []
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 

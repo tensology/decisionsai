@@ -6,8 +6,12 @@ multiprocessing spawn workers can import it without triggering Qt
 initialisation in a headless subprocess.
 """
 
-import gc
 import os
+
+# Agent subprocess: set before importing distr (which pulls sentence_transformers / HF stacks).
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
+import gc
 import sys
 import time
 

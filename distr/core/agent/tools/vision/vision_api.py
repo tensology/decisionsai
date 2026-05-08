@@ -43,15 +43,18 @@ def call_openai_vision(
     enhanced_prompt: str,
     vision_model: str,
     is_action_request: bool,
+    image_mimes: Optional[list[str]] = None,
 ) -> str:
     """
     Call the OpenAI vision API with one or more base64-encoded images.
 
     Args:
-        base64_images: List of base64-encoded WebP image strings.
+        base64_images: List of base64-encoded image strings.
         enhanced_prompt: The prompt to send alongside the images.
         vision_model: The OpenAI model name to use.
         is_action_request: Whether to request JSON response format.
+        image_mimes: Optional parallel list of MIME types (e.g. image/webp, image/png).
+            When omitted, image/webp is assumed for backward compatibility.
 
     Returns:
         The raw text content from the vision model response.
@@ -70,10 +73,13 @@ def call_openai_vision(
     client = OpenAI(api_key=openai_key)
 
     content_items: list[dict] = [{"type": "text", "text": enhanced_prompt}]
-    for b64 in base64_images:
+    for i, b64 in enumerate(base64_images):
+        mime = "image/webp"
+        if image_mimes and i < len(image_mimes) and image_mimes[i]:
+            mime = image_mimes[i]
         content_items.append({
             "type": "image_url",
-            "image_url": {"url": f"data:image/webp;base64,{b64}"},
+            "image_url": {"url": f"data:{mime};base64,{b64}"},
         })
 
     vision_messages = [{"role": "user", "content": content_items}]

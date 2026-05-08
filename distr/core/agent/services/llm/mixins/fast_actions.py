@@ -17,7 +17,7 @@ import time
 from typing import Optional
 
 from distr.core.signals import signal_manager
-from distr.core.agent.services.llm.text_utils import clean_text_for_tts
+from distr.core.agent.services.llm.text_utils import brief_tool_completion_message, clean_text_for_tts
 
 logger = logging.getLogger(__name__)
 
@@ -145,7 +145,8 @@ class FastActionMixin:
                 await self._fa_push_tts(response_text)
             self._fa_save_to_history(chat_id, response_text, emit_signals=True)
         else:
-            await self._fa_push_tts("Done")
+            ack = brief_tool_completion_message(getattr(tool, "name", ""))
+            await self._fa_push_tts(ack)
             self._fa_save_to_history(chat_id, response_text)
 
         self._messages.append({"role": "assistant", "content": response_text})
@@ -204,7 +205,7 @@ class FastActionMixin:
             else:
                 response_text = "Ticket created"
         else:
-            response_text = "Done"
+            response_text = brief_tool_completion_message(getattr(tool, "name", ""))
             if result and isinstance(result, str) and not is_error:
                 r = result.strip()
                 if getattr(tool, "name", None) == "open_page" and not r.startswith("{"):
@@ -243,7 +244,7 @@ class FastActionMixin:
             self._fa_save_to_history(chat_id, f"[Read aloud: {preview}]")
         else:
             logger.warning("LLM: TTS path fallback, no _read_task and no READ_ACTION, result=%s", result)
-            await self._fa_push_tts("Done")
+            await self._fa_push_tts("I couldn't read that aloud.")
 
         return True
 

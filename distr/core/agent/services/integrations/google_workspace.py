@@ -850,7 +850,63 @@ class GoogleWorkspaceConnector:
         result = self._make_request('POST', url, json=event)
         
         return result.get('id') if result else None
-    
+
+    def create_calendar_events_batch(
+        self,
+        events: List[Dict[str, Any]],
+    ) -> List[Dict[str, Any]]:
+        """Create multiple primary-calendar events in order (one API call each).
+
+        Each dict must include: summary (str), start_time (datetime), end_time (datetime).
+        Optional: description, location (str).
+
+        Returns rows: index, summary, event_id (or None), error (or None).
+        """
+        results: List[Dict[str, Any]] = []
+        for pos, ev in enumerate(events):
+            logical_index = ev.get("_batch_index")
+            if logical_index is None:
+                logical_index = pos
+            summary = ev.get("summary")
+            st = ev.get("start_time")
+            et = ev.get("end_time")
+            if not summary or st is None or et is None:
+                results.append(
+                    {
+                        "index": logical_index,
+                        "summary": summary,
+                        "event_id": None,
+                        "error": "missing summary, start_time, or end_time",
+                    }
+                )
+                continue
+            if not isinstance(st, datetime) or not isinstance(et, datetime):
+                results.append(
+                    {
+                        "index": logical_index,
+                        "summary": summary,
+                        "event_id": None,
+                        "error": "start_time and end_time must be datetime instances",
+                    }
+                )
+                continue
+            eid = self.create_calendar_event(
+                summary,
+                st,
+                et,
+                ev.get("description"),
+                ev.get("location"),
+            )
+            results.append(
+                {
+                    "index": logical_index,
+                    "summary": summary,
+                    "event_id": eid,
+                    "error": None if eid else "calendar API returned no id",
+                }
+            )
+        return results
+
     def get_calendar_events(self, time_min: Optional[datetime] = None, time_max: Optional[datetime] = None, 
                            max_results: int = 10) -> Optional[List[Dict[str, Any]]]:
         """Get calendar events"""

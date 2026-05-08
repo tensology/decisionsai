@@ -59,6 +59,7 @@ def register_routes(router, templates):
             "qwen3_voice": settings.get("qwen3_voice", "aiden"),
             "f5tts_voice": settings.get("f5tts_voice", "default"),
             "voxcpm_voice": settings.get("voxcpm_voice", "default"),
+            "vibevoice_realtime_voice": settings.get("vibevoice_realtime_voice", "en-carter_man"),
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
             "vad_threshold": settings.get("vad_threshold", 50),
@@ -158,8 +159,10 @@ def register_routes(router, templates):
     @route_handler("generate voice sample")
     async def play_voice_endpoint(request: PlayVoiceRequest):
         """Generate a voice sample and serve it as WAV for browser playback."""
+        from pathlib import Path
+
         from distr.core.audio.tts_handler import generate_voice_sample
-        from starlette.responses import FileResponse
+        from starlette.responses import Response
         from distr.core.settings import load_settings_from_db
 
         provider_raw = (request.provider or "").strip().lower()
@@ -213,13 +216,31 @@ def register_routes(router, templates):
                 logger.warning("play-voice ElevenLabs voice normalization failed: %s", resolve_err)
 
         loop = asyncio.get_event_loop()
-        wav_path = await loop.run_in_executor(
-            None,
-            lambda: generate_voice_sample(provider, voice, request.speed, voice_name)
+        try:
+            wav_path = await loop.run_in_executor(
+                None,
+                lambda: generate_voice_sample(provider, voice, request.speed, voice_name),
+            )
+        except ValueError as gen_err:
+            return JSONResponse({"error": str(gen_err)}, status_code=400)
+        logger.info(
+            "play-voice served: provider_raw=%r resolved_provider=%r voice=%r speed=%s file=%s",
+            request.provider,
+            provider,
+            voice,
+            request.speed,
+            wav_path,
         )
 
-        return FileResponse(
-            wav_path,
+        # Read into memory so the response body always matches what was just written (avoids
+        # sendfile / inode reuse edge cases with FileResponse on repeated previews).
+        payload = Path(wav_path).read_bytes()
+        return Response(
+            content=payload,
             media_type="audio/wav",
-            headers={"Cache-Control": "no-cache"},
+            headers={
+                "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+                "Pragma": "no-cache",
+                "Content-Length": str(len(payload)),
+            },
         )

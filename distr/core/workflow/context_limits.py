@@ -8,6 +8,9 @@ from typing import List
 # Max characters from each prior step's agent_response injected into the next step's prompt.
 PRIOR_STEP_RESULT_MAX_CHARS = 2000
 
+# Workflow run summaries shown to the agent / bridge: keep more text when a step failed.
+STEP_SUMMARY_FAILED_MAX_CHARS = 16000
+
 _LINE_FILE = re.compile(
     r"^(?:\s*)([^\s:]+\.(?:py|js|ts|tsx|md|txt|json|yaml|yml|csv|log|pdf|png|jpe?g|webp|ogg|mp3|m4a|opus|mp4|3gp|bin))\s*$",
     re.MULTILINE | re.IGNORECASE,
@@ -24,6 +27,22 @@ def truncate_step_result(text: str) -> str:
     if len(s) <= PRIOR_STEP_RESULT_MAX_CHARS:
         return s
     return s[:PRIOR_STEP_RESULT_MAX_CHARS]
+
+
+def truncate_step_summary(text: str, status: str) -> str:
+    """Bound text stored on workflow run summaries; failures retain more for diagnostics."""
+    if not text:
+        return ""
+    s = text.strip()
+    st = (status or "").strip().lower()
+    limit = (
+        PRIOR_STEP_RESULT_MAX_CHARS
+        if st in ("completed", "passed")
+        else STEP_SUMMARY_FAILED_MAX_CHARS
+    )
+    if len(s) <= limit:
+        return s
+    return s[:limit]
 
 
 def extract_artifact_paths_from_result(text: str, *, max_paths: int = 12) -> List[str]:

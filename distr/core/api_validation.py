@@ -38,33 +38,44 @@ def validate_openai(api_key: str) -> tuple[bool, str]:
 
 
 def validate_anthropic(api_key: str) -> tuple[bool, str]:
-    """Validate Anthropic API key."""
+    """Validate Anthropic API key via GET /v1/models.
+
+    Previously this called ``/v1/messages`` with a fixed Haiku model id; Anthropic
+    retires model ids over time, so a valid key could still get **404** and fail
+    validation. Listing models only checks auth and stays model-id-agnostic.
+    """
     try:
-        data = json.dumps({
-            "model": "claude-3-haiku-20240307",
-            "max_tokens": 1,
-            "messages": [{"role": "user", "content": "hi"}]
-        }).encode('utf-8')
         req = urllib.request.Request(
-            "https://api.anthropic.com/v1/messages",
-            data=data,
+            "https://api.anthropic.com/v1/models?limit=1",
             headers={
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01",
-                "content-type": "application/json"
-            }
+                "accept": "application/json",
+            },
         )
-        with urllib.request.urlopen(req, timeout=10) as response:
+        with urllib.request.urlopen(req, timeout=15) as response:
             if response.status == 200:
                 return True, ""
         return False, "Invalid API key"
     except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        snippet = (body[:280] + "…") if len(body) > 280 else body
         if e.code == 401:
             return False, "Invalid API key"
-        elif e.code == 400:
-            # Bad request might still mean valid key
+        if e.code == 403:
+            return False, (
+                "Forbidden (403): key rejected or lacks access — "
+                "confirm billing and workspace in console.anthropic.com"
+            )
+        if e.code == 429:
+            # Key is accepted; rate-limited
             return True, ""
-        return False, f"HTTP Error: {e.code}"
+        if e.code >= 500:
+            return False, f"Anthropic server error ({e.code})"
+        return False, f"HTTP {e.code}" + (f": {snippet}" if snippet.strip() else "")
     except Exception as e:
         return False, str(e)
 

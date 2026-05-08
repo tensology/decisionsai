@@ -123,7 +123,7 @@ class TestWorkflowInvocation:
 
         call_args = []
 
-        def mock_start_workflow_run(workflow_id):
+        def mock_start_workflow_run(workflow_id, **kwargs):
             call_args.append(workflow_id)
             # Create a completed run record so _wait_for_run terminates
             session = factory()
@@ -186,7 +186,7 @@ class TestFailedRunLeavesTicket:
             factory, num_tickets=1
         )
 
-        def mock_start_workflow_run(workflow_id):
+        def mock_start_workflow_run(workflow_id, **kwargs):
             session = factory()
             run = AutoWorkflowRun(workflow_id=workflow_id, status=fail_status)
             session.add(run)
@@ -248,7 +248,7 @@ class TestSuccessfulRunMovesTicket:
             factory, num_tickets=num_tickets
         )
 
-        def mock_start_workflow_run(workflow_id):
+        def mock_start_workflow_run(workflow_id, **kwargs):
             session = factory()
             run = AutoWorkflowRun(workflow_id=workflow_id, status="completed")
             session.add(run)
@@ -316,7 +316,7 @@ class TestMovedTicketPosition:
             factory, num_tickets=1, done_ticket_positions=existing_positions
         )
 
-        def mock_start_workflow_run(workflow_id):
+        def mock_start_workflow_run(workflow_id, **kwargs):
             session = factory()
             run = AutoWorkflowRun(workflow_id=workflow_id, status="completed")
             session.add(run)
@@ -381,7 +381,7 @@ class TestAllTicketsProcessed:
             factory, num_tickets=num_tickets
         )
 
-        def mock_start_workflow_run(workflow_id):
+        def mock_start_workflow_run(workflow_id, **kwargs):
             session = factory()
             run = AutoWorkflowRun(workflow_id=workflow_id, status="completed")
             session.add(run)
@@ -411,3 +411,68 @@ class TestAllTicketsProcessed:
             agent.run()
 
             assert agent.status.processed_count == num_tickets
+
+
+class TestSequentialTicketProcessing:
+    """Check-in processes tickets one-at-a-time by lane position."""
+
+    def test_tickets_run_in_source_lane_position_order(self):
+        from distr.core.kanban.agent import KanbanAgentCheckIn
+
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        board_id, source_lane_id, done_lane_id, wf_id, ticket_ids = _seed_board(
+            factory,
+            num_tickets=3,
+        )
+
+        # Reorder source-lane ticket positions to verify sorting behavior.
+        session = factory()
+        source_tickets = (
+            session.query(KanbanTicket)
+            .filter(KanbanTicket.id.in_(ticket_ids))
+            .all()
+        )
+        source_tickets[0].position = 2
+        source_tickets[1].position = 0
+        source_tickets[2].position = 1
+        expected_order = [source_tickets[1].id, source_tickets[2].id, source_tickets[0].id]
+        session.commit()
+        session.close()
+
+        observed_order = []
+
+        def mock_start_workflow_run(workflow_id, **kwargs):
+            observed_order.append(kwargs.get("ticket_id"))
+            session = factory()
+            run = AutoWorkflowRun(workflow_id=workflow_id, status="completed")
+            session.add(run)
+            session.commit()
+            run_id = run.id
+            session.close()
+            return {"run_id": run_id}
+
+        mock_settings = {
+            "kanban_agent_enabled": True,
+            "kanban_agent_source_lane": "Source",
+            "kanban_agent_done_lane": "Done",
+            "kanban_agent_orchestrator_provider": "",
+            "kanban_agent_orchestrator_model": "",
+            "kanban_agent_coder_provider": "",
+            "kanban_agent_coder_model": "",
+            "kanban_agent_sub_provider": "",
+            "kanban_agent_sub_model": "",
+        }
+
+        with patch("distr.core.kanban.agent.get_session", patched_get_session), \
+             patch("distr.core.kanban.agent.load_settings_from_db", return_value=mock_settings), \
+             patch("distr.core.kanban.agent.start_workflow_run", side_effect=mock_start_workflow_run), \
+             patch("distr.core.kanban.agent.set_llm_override", return_value=MagicMock()), \
+             patch("distr.core.kanban.agent.clear_llm_override"):
+            agent = KanbanAgentCheckIn(board_id)
+            agent.run()
+
+        assert observed_order == expected_order

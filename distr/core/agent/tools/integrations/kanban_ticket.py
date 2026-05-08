@@ -6,6 +6,7 @@ KanbanBoard / KanbanLane / KanbanTicket models and supports attaching files
 (images, documents, etc.) that were received in the conversation thread
 (e.g. from Telegram).
 """
+import html
 import json
 import logging
 import os
@@ -16,6 +17,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from distr.core.agent.tool_voice_format import voice_then_reference
+from distr.core.db.orm_compat import orm_get_by_id
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -23,17 +25,118 @@ from pydantic import BaseModel, Field
 logger = logging.getLogger(__name__)
 
 
+def _yaml_scalar(s: str) -> str:
+    """YAML front-matter safe string (JSON double-quoted string is valid YAML 1.2)."""
+    return json.dumps(s if s is not None else "", ensure_ascii=False)
+
+
+def _plain_desc_for_ticket_export(raw: str) -> str:
+    """Match web send-to-project: strip HTML-ish ticket descriptions for .tickets markdown."""
+    if not raw:
+        return "(no description)"
+    if "<" not in raw:
+        return (raw.strip() or "(no description)")
+    t = re.sub(r"(?i)<br\s*/?>", "\n", raw)
+    t = re.sub(r"</p\s*>", "\n\n", t)
+    t = re.sub(r"</(h[1-6]|div|li|tr)\s*>", "\n", t)
+    t = re.sub(r"<[^>]+>", "", t)
+    return (html.unescape(t).strip() or "(no description)")
+
+
+def _read_yaml_frontmatter_field(path: str, field: str) -> Optional[str]:
+    """Return a simple `field: value` from YAML front matter (first --- block only)."""
+    try:
+        with open(path, encoding="utf-8") as fh:
+            in_fm = False
+            for line in fh:
+                stripped = line.strip()
+                if stripped == "---":
+                    if not in_fm:
+                        in_fm = True
+                        continue
+                    break
+                if not in_fm:
+                    continue
+                if stripped.startswith(f"{field}:"):
+                    return stripped.split(":", 1)[1].strip().strip('"').strip("'")
+    except OSError:
+        pass
+    return None
+
+
+def _find_existing_export_for_ticket(tickets_folder: str, kanban_ticket_id: int) -> Optional[str]:
+    """Find an existing `.tickets/**/*.md` export for this Kanban ticket (updates in place)."""
+    needle = f"source: kanban_ticket_{kanban_ticket_id}"
+    matches: list[tuple[float, str]] = []
+    try:
+        for root, _, files in os.walk(tickets_folder):
+            for name in files:
+                if not name.endswith(".md"):
+                    continue
+                full = os.path.join(root, name)
+                if not os.path.isfile(full):
+                    continue
+                try:
+                    with open(full, encoding="utf-8") as fh:
+                        head = fh.read(8000)
+                    if needle not in head:
+                        continue
+                    matches.append((os.path.getmtime(full), full))
+                except OSError:
+                    continue
+    except OSError:
+        return None
+    if not matches:
+        return None
+    matches.sort(key=lambda x: x[0])
+    return matches[-1][1]
+
+
+def _sanitize_ticket_title(title: str) -> str:
+    """Keep Kanban titles short and avoid raw instruction dumps."""
+    t = (title or "").strip()
+    if not t:
+        return t
+    tl = t.lower()
+    junk_markers = (
+        "deliverables:", "requirements:", "also review", "reproduce steps",
+        "## ", "```",
+    )
+    if any(m in tl for m in junk_markers) or "\n" in t or len(t) > 140:
+        parts = re.split(r"[.!?]\s+", t)
+        first = parts[0].strip() if parts else t
+        if len(first) >= 8:
+            t = first[:120]
+        else:
+            t = t.split("\n")[0].strip()[:120]
+    meta_prefixes = ("investigate and fix ", "create a ticket", "user wants ", "the user ")
+    for p in meta_prefixes:
+        if tl.startswith(p):
+            t = t[len(p) :].strip()
+            tl = t.lower()
+            break
+    return t[:200]
+
+
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
     title: str = Field(default="", description="Ticket title")
     description: str = Field(default="", description="Ticket description")
     priority: str = Field(default="medium", description="Priority: low, medium, high, critical")
-    ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete actions")
+    ticket_id: int = Field(default=0, description="Ticket ID for get/update/move/delete/discuss actions")
+    external_issue_key: str = Field(
+        default="",
+        description=(
+            "Jira-style issue key (e.g. PROJ-42) for discuss_ticket when only the external key is known; "
+            "matches a local board ticket's external_id. Do not use for keys that only exist on Jira when the user "
+            "message already includes '[Ticket Board — discuss this ticket]' — context is already in-thread."
+        ),
+    )
     file_path: str = Field(default="", description="File path for attach_file action")
     url: str = Field(default="", description="URL for add_link action")
     todo_text: str = Field(default="", description="Text for add_todo/toggle_todo action")
@@ -59,6 +162,7 @@ class KanbanTicketTool(BaseTool):
       create_ticket      — create a ticket (requires board_name or board_id, plus title)
       list_tickets       — list tickets in a board or lane
       get_ticket         — get ticket details (requires ticket_id)
+      discuss_ticket     — load ticket into context for Q&A (ticket_id, external_issue_key, or recent #id / issue key in text); use when user wants to talk through a ticket without sending to project yet
       update_ticket      — update a ticket (requires ticket_id)
       move_ticket        — move ticket to a different lane (requires ticket_id, lane_name)
       delete_ticket      — delete a ticket (requires ticket_id)
@@ -87,7 +191,8 @@ class KanbanTicketTool(BaseTool):
       title        — ticket title
       description  — ticket description
       priority     — low / medium / high / critical
-      ticket_id    — ticket ID for get/update/attach/todo/link actions
+      ticket_id    — ticket ID for get/update/attach/todo/link/discuss actions
+      external_issue_key — Jira key for discuss_ticket when the local numeric id is unknown
       file_path    — local file path for attach_file action
       url          — URL for add_link action
       todo_text    — text for add_todo action
@@ -111,6 +216,12 @@ class KanbanTicketTool(BaseTool):
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
         "Use action='get_active_board' to see the active local board in use. "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
+        "Use action='discuss_ticket' when the user wants to talk through a **local** ticket (numeric id or row copied to "
+        "the board with external_id). Skip discuss_ticket with external_issue_key if the user message already starts "
+        "with '[Ticket Board — discuss this ticket]' from the UI — that message is the source of truth for external "
+        "Jira/Trello cards that were not copied to a local row. "
+        "Also use discuss_ticket when the user says 'let's talk about this ticket' without that banner — pass ticket_id, "
+        "external_issue_key, or text with #id / Jira key. "
         "Use action='create_board' with board_name to create a new board. "
         "Use action='activate_board' with board_name to set a board as the active/default board. "
         "Use action='delete_ticket' with ticket_id to delete a ticket. "
@@ -162,6 +273,9 @@ class KanbanTicketTool(BaseTool):
             "active board", "current board", "board in use", "in use board",
             "which board is active", "what is the active board",
             "list tickets", "show tickets",
+            "let's talk about this ticket", "lets talk about this ticket",
+            "talk about this ticket", "discuss this ticket", "load this ticket",
+            "let's discuss this ticket", "help me think through this ticket",
         ]
 
     # ── DB helpers ────────────────────────────────────────────────────────
@@ -183,7 +297,15 @@ class KanbanTicketTool(BaseTool):
     def _all_boards(self) -> List[Dict]:
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
-            boards = s.query(KanbanBoard).order_by(KanbanBoard.name).all()
+            boards = (
+                s.query(KanbanBoard)
+                .filter(
+                    KanbanBoard.source == "database",
+                    (KanbanBoard.archived == False) | (KanbanBoard.archived == None),
+                )
+                .order_by(KanbanBoard.name)
+                .all()
+            )
             return [{"id": b.id, "name": b.name, "description": b.description or "",
                      "default_project_id": b.default_project_id} for b in boards]
 
@@ -192,7 +314,7 @@ class KanbanTicketTool(BaseTool):
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
             if board_id:
-                b = s.query(KanbanBoard).get(board_id)
+                b = orm_get_by_id(s, KanbanBoard, board_id)
                 if b:
                     return {"id": b.id, "name": b.name, "description": b.description or "",
                             "default_project_id": b.default_project_id}
@@ -201,7 +323,14 @@ class KanbanTicketTool(BaseTool):
                 name_lower = board_name.strip().lower()
                 # Strip spaces/punctuation for loose comparison
                 name_stripped = re.sub(r'[^a-z0-9]', '', name_lower)
-                boards = s.query(KanbanBoard).all()
+                boards = (
+                    s.query(KanbanBoard)
+                    .filter(
+                        KanbanBoard.source == "database",
+                        (KanbanBoard.archived == False) | (KanbanBoard.archived == None),
+                    )
+                    .all()
+                )
                 # Exact match first
                 for b in boards:
                     if b.name.lower() == name_lower:
@@ -248,7 +377,11 @@ class KanbanTicketTool(BaseTool):
         with self._get_session() as s:
             active = (
                 s.query(KanbanBoard)
-                .filter(KanbanBoard.in_use == True)
+                .filter(
+                    KanbanBoard.in_use == True,
+                    KanbanBoard.source == "database",
+                    (KanbanBoard.archived == False) | (KanbanBoard.archived == None),
+                )
                 .order_by(KanbanBoard.modified_date.desc(), KanbanBoard.id.desc())
                 .first()
             )
@@ -262,7 +395,10 @@ class KanbanTicketTool(BaseTool):
 
             boards = (
                 s.query(KanbanBoard)
-                .filter(KanbanBoard.archived == False)
+                .filter(
+                    KanbanBoard.source == "database",
+                    (KanbanBoard.archived == False) | (KanbanBoard.archived == None),
+                )
                 .order_by(KanbanBoard.modified_date.desc(), KanbanBoard.id.desc())
                 .all()
             )
@@ -455,6 +591,8 @@ class KanbanTicketTool(BaseTool):
                     "- Write the description as an actionable work item (e.g. 'Investigate why Iridium is rejecting emails...').\n"
                     "- Do NOT write 'Create a ticket about...' or 'The user wants...' — write the actual task.\n"
                     "- Do NOT reference the conversation or the user — just describe the work.\n"
+                    "- Do NOT paste the user's full instruction into the title — summarize into a short headline.\n"
+                    "- Do NOT put markdown headings, bullet lists, or section labels like Deliverables or Requirements in the title.\n"
                     "- If files or images are mentioned as relevant to the issue, note them.\n"
                     "- Do NOT reference .tickets/*.md files — those are internal artifacts.\n\n"
                     "Reply ONLY in this exact format:\n"
@@ -469,13 +607,14 @@ class KanbanTicketTool(BaseTool):
                     title = title_match.group(1).strip() if title_match else ""
                     desc = desc_match.group(1).strip() if desc_match else result
                     if title:
+                        title = _sanitize_ticket_title(title)
                         return {"title": title, "description": desc}
             except Exception as e:
                 logger.warning("LLM summarisation failed, using fallback: %s", e)
 
         # Fallback
         lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
-        title = lines[0][:80] if lines else "New Ticket"
+        title = _sanitize_ticket_title(lines[0][:80] if lines else "New Ticket")
         desc = "\n".join(lines[1:]) if len(lines) > 1 else raw_text[:500]
         return {"title": title, "description": desc}
 
@@ -546,6 +685,7 @@ class KanbanTicketTool(BaseTool):
         message_ids: Optional[List[int]] = None,
         message_limit: int = 50,
         unprocessed_only: bool = False,
+        external_issue_key: str = "",
         **kwargs,
     ) -> str:
         try:
@@ -570,6 +710,24 @@ class KanbanTicketTool(BaseTool):
                 )
             ):
                 return self._action_get_active_board()
+
+            # Natural phrasing: user wants to explore a ticket in chat without a formal action name.
+            if action == "create_ticket" and any(
+                phrase in text_norm
+                for phrase in (
+                    "let's talk about this ticket",
+                    "lets talk about this ticket",
+                    "talk about this ticket",
+                    "discuss this ticket",
+                    "let's discuss this ticket",
+                    "lets discuss this ticket",
+                    "load this ticket",
+                    "open this ticket",
+                    "think through this ticket",
+                    "help me with this ticket",
+                )
+            ):
+                action = "discuss_ticket"
 
             if action == "list_boards":
                 return self._action_list_boards()
@@ -619,6 +777,12 @@ class KanbanTicketTool(BaseTool):
                 return voice_then_reference(spoken, ref)
             elif action == "get_ticket":
                 return self._action_get_ticket(ticket_id or self._last_ticket_id)
+            elif action in ("discuss_ticket", "talk_about_ticket", "prepare_ticket_discussion"):
+                return self._action_discuss_ticket(
+                    ticket_id=ticket_id,
+                    text=text,
+                    external_issue_key=external_issue_key,
+                )
             elif action == "update_ticket":
                 return self._action_update_ticket(
                     ticket_id or self._last_ticket_id, title=title,
@@ -674,7 +838,7 @@ class KanbanTicketTool(BaseTool):
             else:
                 ref = (
                     f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
-                    "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, update_ticket, "
+                    "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
                     "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message"
@@ -694,6 +858,92 @@ class KanbanTicketTool(BaseTool):
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)
 
+    # ── Ticket text helpers (get_ticket / discuss_ticket) ───────────────────
+
+    def _plain_ticket_description(self, raw: Optional[str]) -> str:
+        s = (raw or "").strip()
+        if not s:
+            return "(none)"
+        if "<" not in s and ">" not in s:
+            return s
+        plain = re.sub(r"<[^>]+>", " ", s)
+        plain = re.sub(r"\s+", " ", plain).strip()
+        return plain or "(none)"
+
+    def _parse_jira_key_from_text(self, txt: str) -> Optional[str]:
+        if not txt:
+            return None
+        m = re.search(r"\b([A-Z][A-Z0-9]+-\d+)\b", txt.upper())
+        return m.group(1) if m else None
+
+    def _parse_numeric_ticket_id_from_text(self, txt: str) -> Optional[int]:
+        if not txt:
+            return None
+        for pat in (r"\bticket\s*#?\s*(\d+)\b", r"#\s*(\d+)\b"):
+            m = re.search(pat, txt, re.I)
+            if m:
+                return int(m.group(1))
+        return None
+
+    def _find_ticket_id_by_external_key(self, key: str) -> Optional[int]:
+        key_u = (key or "").strip().upper()
+        if not key_u:
+            return None
+        from sqlalchemy import func
+
+        from distr.core.db.kanban import KanbanTicket
+
+        with self._get_session() as s:
+            t = (
+                s.query(KanbanTicket)
+                .filter(KanbanTicket.external_id.isnot(None))
+                .filter(func.upper(KanbanTicket.external_id) == key_u)
+                .first()
+            )
+            return int(t.id) if t else None
+
+    def _discuss_ticket_no_local_shadow_for_key(self, key: str) -> str:
+        """External Jira/Trello key with no local KanbanTicket row — do not sound like missing chat context."""
+        key = (key or "").strip()
+        return voice_then_reference(
+            "That issue is not copied onto a local Ticket Board row yet, but the ticket details the user already "
+            "put in this chat are enough to discuss — continue from there.",
+            (
+                f"[discuss_ticket] No KanbanTicket with external_id '{key}'. "
+                "If this thread began with '[Ticket Board — discuss this ticket]', the user message already carries "
+                "title, URL, priority, and labels for that external issue — do not report missing context or call this "
+                "tool again for the same key. Suggest **Copy to local board** only if they need a database ticket id or "
+                "send-to-project from the app."
+            ),
+        )
+
+    def _ticket_detail_parts(self, t) -> List[str]:
+        """Body lines for get_ticket / discuss_ticket (ORM KanbanTicket inside an open session)."""
+        files = [(f.filename or "").strip() for f in t.files] if t.files else []
+        todos = [
+            f"{'[x]' if td.done else '[ ]'} {(td.text or '').strip()}"
+            for td in t.todos
+        ] if t.todos else []
+        links = [f"{(l.title or '').strip()}: {(l.url or '').strip()}" for l in t.links] if t.links else []
+        desc = self._plain_ticket_description(t.description)
+        parts = [
+            f"Ticket #{t.id}: {t.title}",
+            f"Lane: {t.lane.name if t.lane else '?'}",
+            f"Priority: {t.priority}",
+            f"Description: {desc}",
+            f"Send to CLI: {'Yes' if t.send_to_cli else 'No'}",
+        ]
+        ext_id = getattr(t, "external_id", None)
+        if ext_id:
+            parts.append(f"External ID: {ext_id}")
+        if files:
+            parts.append(f"Files: {', '.join(files)}")
+        if todos:
+            parts.append(f"Todos: {'; '.join(todos)}")
+        if links:
+            parts.append(f"Links: {'; '.join(links)}")
+        return parts
+
     # ── Action implementations ────────────────────────────────────────────
 
     def _action_list_boards(self) -> str:
@@ -708,9 +958,18 @@ class KanbanTicketTool(BaseTool):
         # Also fetch external boards
         try:
             ext = self._fetch_external_boards()
+            seen = set()
             for b in ext.get("trello", []):
+                key = ("trello", str(b.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
                 lines.append(f"Board '{b['name']}' (Trello, ID {b['id']})")
             for b in ext.get("jira", []):
+                key = ("jira", str(b.get("id") or ""))
+                if key in seen:
+                    continue
+                seen.add(key)
                 lines.append(f"Board '{b['name']}' (Jira, ID {b['id']})")
         except Exception as e:
             logger.debug("Could not fetch external boards: %s", e)
@@ -933,14 +1192,16 @@ class KanbanTicketTool(BaseTool):
         elif not description:
             description = text or title
 
+        title = _sanitize_ticket_title(title or "") or "New Ticket"
+
         # Create the ticket in DB
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         with self._get_session() as s:
-            lane_obj = s.query(KanbanLane).get(lane["id"])
+            lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
             max_pos = max([t.position for t in lane_obj.tickets], default=-1) if lane_obj else -1
 
             # Check if board has a default project
-            board_obj = s.query(KB).get(board["id"])
+            board_obj = orm_get_by_id(s, KB, board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
             effective_workflow_id = linked_workflow_id or None
             effective_send_to_cli = send_to_cli or (board_obj.send_to_cli if board_obj else False)
@@ -988,9 +1249,9 @@ class KanbanTicketTool(BaseTool):
 
         created = []
         with self._get_session() as s:
-            lane_obj = s.query(KanbanLane).get(lane["id"])
+            lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
             max_pos = max([t.position for t in lane_obj.tickets], default=-1) if lane_obj else -1
-            board_obj = s.query(KB).get(board["id"])
+            board_obj = orm_get_by_id(s, KB, board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
             effective_workflow_id = linked_workflow_id or None
             effective_send_to_cli = board_obj.send_to_cli if board_obj else False
@@ -1000,7 +1261,7 @@ class KanbanTicketTool(BaseTool):
             for item in tickets_data:
                 if not isinstance(item, dict):
                     continue
-                t_title = (item.get("title") or "Untitled")[:200]
+                t_title = _sanitize_ticket_title((item.get("title") or "Untitled")[:200])
                 t_desc = (item.get("description") or "")[:2000]
                 t_priority = item.get("priority", "medium")
                 if t_priority not in ("low", "medium", "high", "critical"):
@@ -1068,31 +1329,78 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
                     f"Ticket #{ticket_id} not found.",
                 )
-            files = [f.filename for f in t.files] if t.files else []
-            todos = [f"{'[x]' if td.done else '[ ]'} {td.text}" for td in t.todos] if t.todos else []
-            links = [f"{l.title}: {l.url}" for l in t.links] if t.links else []
-            parts = [
-                f"Ticket #{t.id}: {t.title}",
-                f"Lane: {t.lane.name if t.lane else '?'}",
-                f"Priority: {t.priority}",
-                f"Description: {t.description or '(none)'}",
-                f"Send to CLI: {'Yes' if t.send_to_cli else 'No'}",
-            ]
-            if files:
-                parts.append(f"Files: {', '.join(files)}")
-            if todos:
-                parts.append(f"Todos: {'; '.join(todos)}")
-            if links:
-                parts.append(f"Links: {'; '.join(links)}")
-            ref = "\n".join(parts)
-            spoken = f"Opened ticket {t.title}."
-            return voice_then_reference(spoken, ref)
+            ref = "\n".join(self._ticket_detail_parts(t))
+            spoken_title = t.title
+        return voice_then_reference(f"Opened ticket {spoken_title}.", ref)
+
+    def _action_discuss_ticket(
+        self,
+        ticket_id: int = 0,
+        text: str = "",
+        external_issue_key: str = "",
+    ) -> str:
+        """Load full ticket context for conversational exploration (not send_to_project)."""
+        tid = int(ticket_id or 0)
+        ext = (external_issue_key or "").strip()
+        txt = text or ""
+        resolved: int = 0
+
+        if tid:
+            resolved = tid
+        elif ext:
+            found = self._find_ticket_id_by_external_key(ext)
+            if not found:
+                return self._discuss_ticket_no_local_shadow_for_key(ext)
+            resolved = found
+        else:
+            jk = self._parse_jira_key_from_text(txt)
+            if jk:
+                found = self._find_ticket_id_by_external_key(jk)
+                if not found:
+                    return self._discuss_ticket_no_local_shadow_for_key(jk)
+                resolved = found
+            else:
+                nid = self._parse_numeric_ticket_id_from_text(txt)
+                if nid:
+                    resolved = nid
+                elif self._last_ticket_id:
+                    resolved = int(self._last_ticket_id)
+                else:
+                    return voice_then_reference(
+                        "I need a ticket number, a Jira-style key on the board, or a ticket we touched earlier in this chat.",
+                        "discuss_ticket: pass ticket_id, external_issue_key, or text with #42 / PROJ-123; or create/list a ticket first.",
+                    )
+
+        from distr.core.db.kanban import KanbanTicket
+
+        with self._get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, resolved)
+            if not t:
+                return voice_then_reference(
+                    "I could not find that ticket.",
+                    f"Ticket #{resolved} not found.",
+                )
+            self._last_ticket_id = t.id
+            ref_body = "\n".join(self._ticket_detail_parts(t))
+            spoken_title = t.title
+
+        preamble = (
+            "[Ticket discussion mode — loaded via discuss_ticket]\n"
+            "The user wants to explore this ticket in conversation (scope, risks, next steps).\n"
+            "Briefly acknowledge the ticket, ask a few focused questions if helpful, and do not "
+            "send_to_project, move_ticket, or attach files unless they explicitly ask.\n"
+            "---\n"
+        )
+        return voice_then_reference(
+            f"I loaded {spoken_title} for discussion.",
+            preamble + ref_body,
+        )
 
     def _action_update_ticket(self, ticket_id, title="", description="",
                                priority="", lane_name="",
@@ -1105,7 +1413,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1167,7 +1475,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket, KanbanTicketTodo
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1194,7 +1502,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket, KanbanTicketLink
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1239,7 +1547,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanBoard
         with self._get_session() as s:
-            b = s.query(KanbanBoard).get(board["id"])
+            b = orm_get_by_id(s, KanbanBoard, board["id"])
             if not b:
                 return voice_then_reference(
                     "I could not find that board.",
@@ -1259,7 +1567,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1282,7 +1590,7 @@ class KanbanTicketTool(BaseTool):
             )
         from distr.core.db.kanban import KanbanTicket, KanbanLane
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1440,11 +1748,12 @@ class KanbanTicketTool(BaseTool):
                 "I need a ticket number to export that.",
                 "No ticket ID provided.",
             )
+        logger.info("send_to_project tool: begin ticket_id=%s", ticket_id)
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         from distr.core.db.projects import Project
 
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1454,7 +1763,7 @@ class KanbanTicketTool(BaseTool):
             # Resolve project: ticket-level first, then board-level default
             project_id = t.linked_project_id
             if not project_id and t.lane:
-                board = s.query(KB).get(t.lane.board_id)
+                board = orm_get_by_id(s, KB, t.lane.board_id)
                 if board:
                     project_id = board.default_project_id
 
@@ -1464,7 +1773,7 @@ class KanbanTicketTool(BaseTool):
                     "No project linked to this ticket or its board.",
                 )
 
-            project = s.query(Project).get(project_id)
+            project = orm_get_by_id(s, Project, project_id)
             if not project:
                 return voice_then_reference(
                     "The linked project record is missing.",
@@ -1476,11 +1785,37 @@ class KanbanTicketTool(BaseTool):
                     f"Project '{project.name}' has no folder location set.",
                 )
 
-            tickets_folder = os.path.join(project.folder_location, ".tickets")
-            os.makedirs(tickets_folder, exist_ok=True)
+            proj_root = os.path.abspath(os.path.expanduser(project.folder_location.strip()))
+            if not os.path.isdir(proj_root):
+                return voice_then_reference(
+                    "That project's folder path does not exist on disk or is not a directory.",
+                    f"Project folder missing or not a directory: {proj_root!r}",
+                )
+
+            tickets_folder = os.path.join(proj_root, ".tickets")
+            try:
+                os.makedirs(tickets_folder, exist_ok=True)
+            except OSError as e:
+                logger.exception("send_to_project tool: cannot mkdir %s", tickets_folder)
+                return voice_then_reference(
+                    "I could not create the .tickets folder under that project path.",
+                    f"Cannot create .tickets: {e}",
+                )
 
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
+            existing_export = _find_existing_export_for_ticket(tickets_folder, t.id)
+            if existing_export:
+                ticket_path = existing_export
+                logger.info(
+                    "send_to_project tool: updating existing export for ticket %s → %s",
+                    t.id,
+                    ticket_path,
+                )
+            else:
+                ticket_path = os.path.join(tickets_folder, f"ticket_{timestamp}.md")
+
+            preserved_id = _read_yaml_frontmatter_field(ticket_path, "id") if existing_export else None
+            export_doc_id = preserved_id if preserved_id else f"ticket_{timestamp}"
 
             # Build markdown
             todos_md = ""
@@ -1488,35 +1823,59 @@ class KanbanTicketTool(BaseTool):
                 todos_md = "\n## Checklist\n"
                 for td in t.todos:
                     mark = "x" if td.done else " "
-                    todos_md += f"- [{mark}] {td.text}\n"
+                    todos_md += f"- [{mark}] {(td.text or '').strip()}\n"
 
             links_md = ""
             if t.links:
                 links_md = "\n## Links\n"
                 for lk in t.links:
-                    links_md += f"- [{lk.title}]({lk.url})\n"
+                    lt = (lk.title or "").strip() or "link"
+                    lu = (lk.url or "").strip()
+                    links_md += f"- [{lt}]({lu})\n"
 
             files_md = ""
             if t.files:
                 files_md = "\n## Attached Files\n"
                 for fl in t.files:
-                    files_md += f"- {fl.filename} (`{fl.file_path}`)\n"
+                    fn = (fl.filename or "").strip() or "file"
+                    fp = (fl.file_path or "").strip()
+                    files_md += f"- {fn} (`{fp}`)\n"
+
+            try:
+                desc_body = _plain_desc_for_ticket_export(t.description or "")
+            except Exception as e:
+                logger.warning("send_to_project tool: plain description failed: %s", e)
+                desc_body = (t.description or "").strip() or "(no description)"
 
             content = (
-                f"---\nid: ticket_{timestamp}\ntitle: {t.title}\n"
-                f"project: {project.name}\ncreated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
-                f"priority: {t.priority or 'medium'}\nstatus: open\n"
+                f"---\nid: {_yaml_scalar(export_doc_id)}\ntitle: {_yaml_scalar(t.title or '')}\n"
+                f"project: {_yaml_scalar(project.name or '')}\n"
+                f"created: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
+                f"priority: {_yaml_scalar(t.priority or 'medium')}\nstatus: open\n"
                 f"source: kanban_ticket_{t.id}\n---\n\n"
-                f"## Description\n{t.description or '(no description)'}\n"
+                f"## Description\n{desc_body}\n"
                 f"{todos_md}{links_md}{files_md}\n"
+                f"## Context\n- **Folder:** `{proj_root}`\n\n"
                 f"---\n*Sent from Ticket Board via DecisionsAI*\n"
             )
 
-            with open(ticket_path, "w", encoding="utf-8") as f:
-                f.write(content)
+            try:
+                with open(ticket_path, "w", encoding="utf-8") as f:
+                    f.write(content)
+            except Exception as e:
+                logger.exception("send_to_project tool: failed to write %s", ticket_path)
+                return voice_then_reference(
+                    "Something went wrong writing the ticket file to the project folder.",
+                    f"Failed to write ticket file: {e}",
+                )
 
             project_name = project.name
 
+        logger.info(
+            "send_to_project tool: ok ticket_id=%s path=%s",
+            ticket_id,
+            ticket_path,
+        )
         ref = f"Sent ticket #{ticket_id} to project '{project_name}' → {ticket_path}"
         spoken = f"I exported that ticket into your {project_name} project folder."
         return voice_then_reference(spoken, ref)
@@ -1536,7 +1895,7 @@ class KanbanTicketTool(BaseTool):
         with self._get_session() as s:
             # Deactivate all boards
             s.query(KB).filter(KB.in_use == True).update({"in_use": False})
-            b = s.query(KB).get(board["id"])
+            b = orm_get_by_id(s, KB, board["id"])
             if not b:
                 return voice_then_reference(
                     "I could not find that board.",
@@ -1587,7 +1946,7 @@ class KanbanTicketTool(BaseTool):
             )
 
         with self._get_session() as s:
-            t = s.query(KanbanTicket).get(ticket_id)
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
             if not t:
                 return voice_then_reference(
                     "I could not find that ticket.",
@@ -1601,7 +1960,7 @@ class KanbanTicketTool(BaseTool):
             # Resolve project
             project_id = t.linked_project_id
             if not project_id and t.lane:
-                board = s.query(KB).get(t.lane.board_id)
+                board = orm_get_by_id(s, KB, t.lane.board_id)
                 if board:
                     project_id = board.default_project_id
 
@@ -1611,7 +1970,7 @@ class KanbanTicketTool(BaseTool):
                     "No project linked to this ticket or its board. Link a project first.",
                 )
 
-            project = s.query(Project).get(project_id)
+            project = orm_get_by_id(s, Project, project_id)
             if not project:
                 return voice_then_reference(
                     "The linked project record is missing.",
@@ -1951,7 +2310,7 @@ class KanbanTicketTool(BaseTool):
                     "No WhatsApp messages found for snapshot.",
                 )
 
-            lane_obj = s.query(KanbanLane).get(lane["id"])
+            lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
             if not lane_obj:
                 return voice_then_reference(
                     "The board lane for that snapshot is missing.",

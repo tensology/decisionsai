@@ -5,7 +5,7 @@ Route handlers should call these functions instead of inlining the same
 load/save/signal boilerplate everywhere.
 """
 import logging
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Callable, Dict, Optional, Tuple
 
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.signals import signal_manager
@@ -30,6 +30,114 @@ def _safe_emit(signal, *args, label: str = "signal"):
         logger.info("Emitted %s", label)
     except Exception as e:
         logger.warning("Failed to emit %s: %s", label, e)
+
+
+_qt_main_invoker: Any = None
+_qt_call_event_tid: Optional[int] = None
+
+
+def _run_on_qt_main_thread(fn: Callable[[], None], *, label: str) -> None:
+    """Run *fn* on the Qt GUI thread.
+
+    The web server runs on a worker thread; ``QTimer.singleShot(0, fn)`` would still run *fn*
+    on that worker. We ``postEvent`` to a ``QObject`` affined to ``app.thread()`` instead.
+    """
+    global _qt_main_invoker, _qt_call_event_tid
+    try:
+        from PyQt6.QtCore import QEvent, QObject
+        from PyQt6.QtWidgets import QApplication
+
+        app = QApplication.instance()
+        if app is None:
+            fn()
+            return
+
+        if _qt_main_invoker is None:
+            _qt_call_event_tid = QEvent.registerEventType()
+            tid = _qt_call_event_tid
+
+            class _CallOnMainEvent(QEvent):
+                def __init__(self, callback: Callable[[], None]):
+                    super().__init__(QEvent.Type(tid))
+                    self.callback = callback
+
+            class _MainThreadInvoker(QObject):
+                def event(self, a0: QEvent) -> bool:
+                    if _qt_call_event_tid is not None and a0.type() == _qt_call_event_tid:
+                        cb = getattr(a0, "callback", None)
+                        if callable(cb):
+                            try:
+                                cb()
+                            except Exception:
+                                logger.exception("Qt main-thread callback failed (%s)", label)
+                        return True
+                    return super().event(a0)
+
+            _qt_main_invoker = _MainThreadInvoker()
+            _qt_main_invoker.moveToThread(app.thread())
+            # Stash event class for posting (same tid as invoker expects)
+            _qt_main_invoker._CallOnMainEvent = _CallOnMainEvent  # type: ignore[attr-defined]
+
+        ev_cls = getattr(_qt_main_invoker, "_CallOnMainEvent", None)
+        if ev_cls is None:
+            fn()
+            return
+        QApplication.postEvent(_qt_main_invoker, ev_cls(fn))
+        logger.info("Posted to Qt main thread: %s", label)
+        return
+    except Exception as e:
+        logger.debug("Qt main-thread post unavailable (%s); running inline", e)
+    fn()
+
+
+def notify_stt_model_saved_for_running_agent(full_transcription_model: str) -> None:
+    """After the web LLMs API persists ``transcription_model``, notify the Qt app.
+
+    ``Application.update_agent_stt_model`` updates in-memory settings and sends
+    ``update_stt_model`` to the live agent (same path as the desktop signal).
+    """
+    full = (full_transcription_model or "").strip()
+    if not full:
+        return
+
+    def _do():
+        _safe_emit(
+            signal_manager.stt_model_changed,
+            full,
+            label="stt_model_changed (llms web save)",
+        )
+
+    _run_on_qt_main_thread(_do, label="stt_model_changed")
+
+
+def notify_conversational_llm_saved_for_running_agent(
+    provider: str,
+    model_name: str,
+    chat_id: Optional[Any] = None,
+) -> None:
+    """After web LLMs save changes conversational provider/model, hot-swap the live agent LLM.
+
+    Mirrors ``signal_manager.model_hot_reload`` → ``hot_swap_llm`` on the app (see ``signals.py``).
+    """
+    p = (provider or "ollama").strip()
+    m = (model_name or "").strip()
+    ci: Optional[int] = None
+    if chat_id is not None and chat_id != "":
+        try:
+            ci = int(chat_id)
+        except (TypeError, ValueError):
+            ci = None
+
+    def _do():
+        _safe_emit(
+            signal_manager.model_hot_reload,
+            p,
+            m,
+            ci,
+            label="model_hot_reload (llms web save)",
+        )
+
+    _run_on_qt_main_thread(_do, label="model_hot_reload")
 
 
 def update_setting(key: str, value: Any, *, signal=None, signal_args: tuple = (), signal_label: str = "") -> dict:
@@ -100,6 +208,7 @@ def save_general_settings(data) -> None:
         "qwen3_voice",
         "f5tts_voice",
         "voxcpm_voice",
+        "vibevoice_realtime_voice",
     )
     should_reload_agent = any(
         previous_settings.get(field) != settings.get(field)

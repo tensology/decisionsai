@@ -29,6 +29,9 @@ Key Components:
 import sys
 import os
 
+# Before transformers/sentence_transformers (tool retriever, VibeVoice, etc.): fork-safe tokenizers.
+os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+
 # Fix for Qt WebEngine rendering on macOS - must be set BEFORE Qt imports
 if sys.platform == 'darwin':
     os.environ.setdefault('QT_MAC_WANTS_LAYER', '1')
@@ -179,7 +182,7 @@ def _setup_crash_logging():
     global _crash_log_file
     try:
         import faulthandler
-        crash_dir = os.path.expanduser("~/.decisionsai/logs")
+        crash_dir = os.path.expanduser("~/.decisions/logs")
         os.makedirs(crash_dir, exist_ok=True)
         crash_file = os.path.join(crash_dir, f"crash_{os.getpid()}.log")
         _crash_log_file = open(crash_file, "a")
@@ -589,6 +592,15 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
             logger.info("StepRunner migration check passed — ready for workflow operations.")
         else:
             logger.warning("StepRunner migration failed — running in degraded mode. Will retry on next startup.")
+
+        # Cancel any workflow runs that were left in "running" or "waiting" state from a
+        # previous session (crash, force-quit, etc.).  Without this, those zombie runs block
+        # every subsequent "Send to Workflow" for the same ticket forever.
+        try:
+            from distr.core.workflow.dispatcher import _cleanup_orphaned_runs_on_startup
+            _cleanup_orphaned_runs_on_startup()
+        except Exception as _cleanup_err:
+            logger.warning("Orphaned workflow run cleanup failed: %s", _cleanup_err)
 
         # Workflow scheduler: check for due scheduled workflows every minute
         self.workflow_scheduler_timer = QTimer()

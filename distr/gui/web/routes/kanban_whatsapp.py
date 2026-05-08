@@ -34,6 +34,26 @@ _wa_sse_loop = None
 
 
 def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_identity):
+    def _whatsapp_relay_base_url() -> str:
+        """
+        Resolve WhatsApp relay API base URL.
+
+        Do not couple this to generic DEBUG mode: many local web-ui runs set DEBUG
+        without running a local WhatsApp relay. Prefer explicit relay env overrides.
+        """
+        explicit = str(os.environ.get("DECISIONSAI_WA_API_BASE") or "").strip()
+        if explicit:
+            return explicit.rstrip("/")
+        use_local_relay = str(os.environ.get("DECISIONSAI_USE_LOCAL_RELAY", "")).strip().lower() in (
+            "1",
+            "true",
+            "yes",
+            "on",
+        )
+        if use_local_relay:
+            return "http://localhost:8090/api/whatsapp"
+        return "https://www.decisionsai.net/api/whatsapp"
+
     def _is_voice_type(media_type: str, media_mime_type: str) -> bool:
         t = str(media_type or "").lower()
         m = str(media_mime_type or "").lower()
@@ -131,9 +151,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             async with httpx.AsyncClient(timeout=10.0) as client:
                 headers = relay_auth_headers("")
                 resp = await client.get(
@@ -157,9 +175,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             async with httpx.AsyncClient(timeout=5.0) as client:
                 headers = relay_auth_headers("")
                 resp = await client.post(f"{base_url}/messages/{message_id}/processed", headers=headers)
@@ -174,9 +190,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
 
             attempted = []
             async with httpx.AsyncClient(timeout=12.0) as client:
@@ -235,9 +249,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             audio = payload.get("audio") if isinstance(payload.get("audio"), dict) else None
             media = payload.get("media") if isinstance(payload.get("media"), dict) else None
             relay_payload = {
@@ -276,9 +288,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         try:
             import httpx
 
-            base_url = "https://www.decisionsai.net/api/whatsapp"
-            if os.environ.get("DEBUG", "").upper() == "TRUE":
-                base_url = "http://localhost:8090/api/whatsapp"
+            base_url = _whatsapp_relay_base_url()
             relay_payload = {"app_user_id": payload.get("app_user_id", "local-ui"), "subscribe_phones": payload.get("subscribe_phones") or []}
             payload_str = json.dumps(relay_payload, separators=(",", ":"), sort_keys=True)
             headers = relay_auth_headers(payload_str)
@@ -543,9 +553,7 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
         """
         import requests as req_lib
 
-        relay_base = "https://www.decisionsai.net/api/whatsapp"
-        if os.environ.get("DEBUG", "").upper() == "TRUE":
-            relay_base = "http://localhost:8090/api/whatsapp"
+        relay_base = _whatsapp_relay_base_url()
 
         def _hints_from_raw(msg_row: WhatsAppMessage) -> tuple[str, str]:
             """Return (whatsapp_message_id, relay_media_path) from row + raw_data JSON."""
