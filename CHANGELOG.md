@@ -30,9 +30,9 @@ That means more work on orchestration quality, ticket parsing, tool selection, w
 
 **Clipboard and typing tools were expanded.** The tool layer now includes explicit clipboard-writing support and stronger typing/text-entry plumbing, covering the missing path where the agent needed to place generated text onto the clipboard or type dictated/generated content reliably.
 
-**Hotkeys were rebuilt around configurable defaults.** Shortcut settings now use a canonical hotkey profile shared by backend validation and the web UI. Defaults are editable in Preferences, and saving shortcut settings now immediately notifies the live Oracle hotkey listener instead of requiring a restart. The current default push-to-talk hold combo is `Option + Command`; the current default hold-to-dictate shortcut is `Control + Command + D` and is disabled until enabled in Preferences.
+**Hotkeys were rebuilt around configurable defaults.** Shortcut settings now use a canonical hotkey profile shared by backend validation and the web UI. Defaults are editable in Preferences, and saving shortcut settings now immediately notifies the live Oracle hotkey listener instead of requiring a restart. The current default push-to-talk hold combo is `Option + Command`; the current default hold-to-dictate combo is `Control + Command` and is disabled until enabled in Preferences.
 
-**Hold-to-dictate was fixed end to end.** Dictation hotkeys now use the dynamically configured shortcut, correctly handle `Ctrl + letter` key events, switch the Oracle into the dictation visual state immediately on press, reset the Oracle state on release, and route the transcript through the dictation path instead of dropping it when normal listening is disabled.
+**Hold-to-dictate was fixed end to end.** Dictation hotkeys now use the dynamically configured shortcut, including modifier-only hold combos, switch the Oracle into the dictation visual state immediately on press, reset the Oracle state on release, and route the transcript through the dictation path instead of dropping it when normal listening is disabled.
 
 **The web UI shortcut settings now match the runtime.** The Shortcuts settings page and backend validation now share the same option lists and defaults for push-to-talk, Oracle sizing, action recording, web navigation, skin navigation, skin selection, and dictation.
 

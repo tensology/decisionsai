@@ -3,6 +3,7 @@ Shortcut key routes — /shortcuts
 """
 
 from fastapi.responses import JSONResponse
+from fastapi import HTTPException
 
 from ._shared import ShortcutSettings, route_handler
 from distr.core.hotkeys import (
@@ -62,5 +63,12 @@ def register_routes(router, templates):
     async def save_shortcut_settings_route(settings_data: ShortcutSettings):
         from distr.core.services.settings_service import save_shortcut_settings
 
-        save_shortcut_settings(settings_data)
-        return JSONResponse({"success": True, "message": "Shortcut settings saved"})
+        try:
+            saved_settings = save_shortcut_settings(settings_data)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc))
+        return JSONResponse({
+            "success": True,
+            "message": "Shortcut settings saved",
+            "settings": saved_settings,
+        })

@@ -16,7 +16,7 @@ def test_dictation_hotkey_defaults_in_hotkeys_py():
     assert "dictation_hotkey_modifier" in DEFAULTS
     assert DEFAULTS["dictation_hotkey_modifier"] == "control_command"
     assert "dictation_hotkey_key" in DEFAULTS
-    assert DEFAULTS["dictation_hotkey_key"] == "d"
+    assert DEFAULTS["dictation_hotkey_key"] == ""
 
 
 # ---------------------------------------------------------------------------
@@ -51,7 +51,7 @@ def test_dictation_hotkey_defaults_in_settings_py():
         assert "dictation_hotkey_modifier" in DEFAULT_SETTINGS
         assert DEFAULT_SETTINGS["dictation_hotkey_modifier"] == "control_command"
         assert "dictation_hotkey_key" in DEFAULT_SETTINGS
-        assert DEFAULT_SETTINGS["dictation_hotkey_key"] == "d"
+        assert DEFAULT_SETTINGS["dictation_hotkey_key"] == ""
     finally:
         for name, mod in _saved.items():
             if mod is None:
@@ -217,7 +217,81 @@ def test_dictation_hotkey_uses_dynamic_combo_from_settings_callback():
     assert listener._dictation_active is False
 
 
-def test_global_hotkey_refresh_releases_active_dictation():
+def test_dictation_hotkey_accepts_modifier_only_hold_combo():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    pressed_cb = MagicMock()
+    released_cb = MagicMock()
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_dictation_combo=MagicMock(return_value=("control_command", "")),
+        on_dictation_pressed=pressed_cb,
+        on_dictation_released=released_cb,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class CommandKey:
+        name = "cmd"
+        char = None
+        vk = None
+
+    listener._on_press(ControlKey())
+    pressed_cb.assert_not_called()
+
+    listener._on_press(CommandKey())
+    pressed_cb.assert_called_once()
+    assert listener._dictation_active is True
+
+    listener._on_release(CommandKey())
+    released_cb.assert_called_once()
+    assert listener._dictation_active is False
+
+
+def test_modifier_only_non_dictation_shortcut_fires_once_per_hold():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    record_cb = MagicMock()
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=False),
+        get_combo=MagicMock(return_value=set()),
+        get_record_toggle_combo=MagicMock(return_value=("control_command", "")),
+        on_record_toggle=record_cb,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class CommandKey:
+        name = "cmd"
+        char = None
+        vk = None
+
+    listener._on_press(ControlKey())
+    listener._on_press(CommandKey())
+    listener._on_press(CommandKey())
+
+    record_cb.assert_called_once()
+
+    listener._on_release(CommandKey())
+    listener._on_press(CommandKey())
+
+    assert record_cb.call_count == 2
+
+
+def test_global_hotkey_refresh_releases_active_dictation_without_restart():
     from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
 
     released_cb = MagicMock()
@@ -232,12 +306,15 @@ def test_global_hotkey_refresh_releases_active_dictation():
         on_dictation_released=released_cb,
     )
     listener._dictation_active = True
-    listener._listener = None
+    listener.start = MagicMock()
+    listener.stop = MagicMock()
 
-    listener.stop()
+    listener.refresh()
 
     released_cb.assert_called_once()
     assert listener._dictation_active is False
+    listener.start.assert_not_called()
+    listener.stop.assert_not_called()
 
 
 # ---------------------------------------------------------------------------

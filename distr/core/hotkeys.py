@@ -2,17 +2,30 @@
 
 from __future__ import annotations
 
+from itertools import combinations
 from typing import Dict, List
 
-MODIFIER_LABELS: Dict[str, str] = {
-    "option": "Option (Alt)",
-    "command": "Command",
+MODIFIER_ORDER = ("control", "option", "shift", "command")
+_BASE_MODIFIER_LABELS: Dict[str, str] = {
     "control": "Control",
+    "option": "Option (Alt)",
     "shift": "Shift",
-    "option_command": "Option + Command",
-    "control_command": "Control + Command",
-    "option_control": "Option + Control",
-    "command_shift": "Command + Shift",
+    "command": "Command",
+}
+
+
+def _modifier_combo_value(parts) -> str:
+    part_set = set(parts)
+    return "_".join(mod for mod in MODIFIER_ORDER if mod in part_set)
+
+
+def _modifier_combo_label(value: str) -> str:
+    return " + ".join(_BASE_MODIFIER_LABELS[token] for token in value.split("_"))
+
+MODIFIER_LABELS: Dict[str, str] = {
+    _modifier_combo_value(combo): _modifier_combo_label(_modifier_combo_value(combo))
+    for length in range(1, len(MODIFIER_ORDER) + 1)
+    for combo in combinations(MODIFIER_ORDER, length)
 }
 
 PTT_MODIFIERS = {"option", "command", "control", "shift"}
@@ -48,7 +61,7 @@ VALID_HOTKEY_KEYS = set(KEY_LABELS.keys())
 DEFAULTS = {
     "dictation_hotkey_enabled": False,
     "dictation_hotkey_modifier": "control_command",
-    "dictation_hotkey_key": "d",
+    "dictation_hotkey_key": "",
     "global_ptt_hotkey_combo": "option_command",
     "oracle_size_hotkey_decrease_modifier": "control_command",
     "oracle_size_hotkey_decrease_key": "down_arrow",

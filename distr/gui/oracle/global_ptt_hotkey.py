@@ -58,6 +58,7 @@ class GlobalPttHotkeyListener:
         self._pressed_keys: Set[str] = set()
         self._combo_active = False
         self._dictation_active = False
+        self._active_modifier_only_shortcuts: Set[Tuple[str, str]] = set()
         self._listener = None
         self._lock = threading.Lock()
 
@@ -86,6 +87,7 @@ class GlobalPttHotkeyListener:
             was_dictating = self._dictation_active
             self._combo_active = False
             self._dictation_active = False
+            self._active_modifier_only_shortcuts.clear()
 
         if was_active:
             try:
@@ -107,8 +109,35 @@ class GlobalPttHotkeyListener:
                 self._listener = None
 
     def refresh(self) -> None:
-        """Restart listener after settings changes."""
-        self.start()
+        """Refresh settings-backed hotkey state without restarting pynput.
+
+        The listener callbacks read settings dynamically, so a save does not
+        need a stop/start cycle. Restarting pynput on macOS can crash inside
+        the system input-source APIs when it happens from an app callback.
+        """
+        self.reset_state()
+
+    def reset_state(self) -> None:
+        """Clear pressed-key bookkeeping while keeping the OS listener alive."""
+        with self._lock:
+            self._pressed_modifiers.clear()
+            self._pressed_keys.clear()
+            was_active = self._combo_active
+            was_dictating = self._dictation_active
+            self._combo_active = False
+            self._dictation_active = False
+            self._active_modifier_only_shortcuts.clear()
+
+        if was_active:
+            try:
+                self._on_combo_released()
+            except Exception:
+                logger.debug("[PTT HOTKEY] Combo release callback failed during reset", exc_info=True)
+        if was_dictating and self._on_dictation_released:
+            try:
+                self._on_dictation_released()
+            except Exception:
+                logger.debug("[PTT HOTKEY] Dictation release callback failed during reset", exc_info=True)
 
     def _on_press(self, key) -> None:
         normalized_key = self._normalize_key(key)
@@ -162,7 +191,7 @@ class GlobalPttHotkeyListener:
                 if dict_combo and len(dict_combo) == 2:
                     dict_modifier, dict_key = dict_combo
                     dict_modifiers = self._modifier_tokens(dict_modifier)
-                    if dict_modifiers.issubset(self._pressed_modifiers) and normalized_key == dict_key:
+                    if dict_key and dict_modifiers.issubset(self._pressed_modifiers) and normalized_key == dict_key:
                         if not self._dictation_active:
                             self._dictation_active = True
                             emit_dictation_pressed = True
@@ -175,6 +204,47 @@ class GlobalPttHotkeyListener:
                 enabled = bool(self._get_enabled())
                 combo = self._get_combo()
                 matched = enabled and combo.issubset(self._pressed_modifiers)
+                if self._get_dictation_combo and self._on_dictation_pressed:
+                    dict_combo = self._get_dictation_combo()
+                    if dict_combo and len(dict_combo) == 2:
+                        dict_modifier, dict_key = dict_combo
+                        dict_modifiers = self._modifier_tokens(dict_modifier)
+                        if not dict_key and dict_modifiers.issubset(self._pressed_modifiers):
+                            if not self._dictation_active:
+                                self._dictation_active = True
+                                emit_dictation_pressed = True
+                for action_name, combo_tuple, callback_enabled in (
+                    ("__size_down__", down_combo, bool(self._on_size_down)),
+                    ("__size_up__", up_combo, bool(self._on_size_up)),
+                    ("__record_toggle__", record_combo, bool(self._on_record_toggle)),
+                ):
+                    if not callback_enabled or not combo_tuple or len(combo_tuple) != 2:
+                        continue
+                    action_modifier, action_key = combo_tuple
+                    if action_key:
+                        continue
+                    action_modifiers = self._modifier_tokens(action_modifier)
+                    signature = (action_name, action_modifier)
+                    if action_modifiers.issubset(self._pressed_modifiers) and signature not in self._active_modifier_only_shortcuts:
+                        self._active_modifier_only_shortcuts.add(signature)
+                        if action_name == "__size_down__":
+                            emit_size_down = True
+                        elif action_name == "__size_up__":
+                            emit_size_up = True
+                        elif action_name == "__record_toggle__":
+                            emit_record_toggle = True
+                if self._get_action_combos and self._on_hotkey_action:
+                    for action_name, combo_tuple in (self._get_action_combos() or {}).items():
+                        if not combo_tuple or len(combo_tuple) != 2:
+                            continue
+                        action_modifier, action_key = combo_tuple
+                        if action_key:
+                            continue
+                        action_modifiers = self._modifier_tokens(action_modifier)
+                        signature = (action_name, action_modifier)
+                        if action_modifiers.issubset(self._pressed_modifiers) and signature not in self._active_modifier_only_shortcuts:
+                            self._active_modifier_only_shortcuts.add(signature)
+                            emit_action_names.append(action_name)
                 if matched and not self._combo_active:
                     self._combo_active = True
                     emit_combo_pressed = True
@@ -231,10 +301,15 @@ class GlobalPttHotkeyListener:
                 if dict_combo and len(dict_combo) == 2:
                     dict_modifier, dict_key = dict_combo
                     dict_modifiers = self._modifier_tokens(dict_modifier)
-                    still_dict_active = (
-                        dict_modifiers.issubset(self._pressed_modifiers)
-                        and dict_key in self._pressed_keys
-                    )
+                    if not dict_key and mod:
+                        remaining_modifiers = set(self._pressed_modifiers)
+                        remaining_modifiers.discard(mod)
+                        still_dict_active = dict_modifiers.issubset(remaining_modifiers)
+                    else:
+                        still_dict_active = (
+                            dict_modifiers.issubset(self._pressed_modifiers)
+                            and dict_key in self._pressed_keys
+                        )
                     if not still_dict_active:
                         self._dictation_active = False
                         dictation_released = True
@@ -247,6 +322,11 @@ class GlobalPttHotkeyListener:
 
         with self._lock:
             self._pressed_modifiers.discard(mod)
+            for signature in list(self._active_modifier_only_shortcuts):
+                _name, action_modifier = signature
+                action_modifiers = self._modifier_tokens(action_modifier)
+                if not action_modifiers.issubset(self._pressed_modifiers):
+                    self._active_modifier_only_shortcuts.discard(signature)
             combo = self._get_combo()
             still_matched = combo.issubset(self._pressed_modifiers)
             if self._combo_active and not still_matched:

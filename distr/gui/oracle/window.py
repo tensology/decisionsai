@@ -957,6 +957,12 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def on_stt_capture_started(self):
         """React to STT confirming it started capturing - confirm visual feedback"""
         logging.info("[ORACLE] ✓ STT confirmed capture started")
+        if getattr(self, "is_dictating", False) or getattr(self, "_dictation_hotkey_active", False):
+            logging.info("[ORACLE] STT capture started for dictation - keeping dictation visual state")
+            return
+        if not self.hold_to_talk_active and not self.ptt_requested:
+            logging.info("[ORACLE] Ignoring stale STT capture started after PTT release")
+            return
         # Skin system already handling visuals via ptt_active hook
         if not self.hold_to_talk_active:
             self.hold_to_talk_active = True
@@ -1246,7 +1252,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
 
         self._global_ptt_listener.refresh()
-        logger.info("[HOTKEY] Shortcut settings changed; global listener refreshed")
+        logger.info("[HOTKEY] Shortcut settings changed; live listener state refreshed")
 
     def _is_global_ptt_hotkey_enabled(self) -> bool:
         try:
@@ -1295,10 +1301,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             current_settings = self.settings
 
         modifier = str(current_settings.get("oracle_size_hotkey_decrease_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"])).strip().lower()
-        key = str(current_settings.get("oracle_size_hotkey_decrease_key", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"])).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_decrease_key", "") or "").strip().lower()
         if modifier not in valid_modifiers:
             modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]
-        if key not in valid_keys:
+        if key and key not in valid_keys:
             key = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]
         return (modifier, key)
 
@@ -1311,10 +1317,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             current_settings = self.settings
 
         modifier = str(current_settings.get("oracle_size_hotkey_increase_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"])).strip().lower()
-        key = str(current_settings.get("oracle_size_hotkey_increase_key", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"])).strip().lower()
+        key = str(current_settings.get("oracle_size_hotkey_increase_key", "") or "").strip().lower()
         if modifier not in valid_modifiers:
             modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]
-        if key not in valid_keys:
+        if key and key not in valid_keys:
             key = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]
         return (modifier, key)
 
@@ -1380,10 +1386,10 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             current_settings = self.settings
 
         modifier = str(current_settings.get("recording_hotkey_modifier", HOTKEY_DEFAULTS["recording_hotkey_modifier"])).strip().lower()
-        key = str(current_settings.get("recording_hotkey_key", HOTKEY_DEFAULTS["recording_hotkey_key"])).strip().lower()
+        key = str(current_settings.get("recording_hotkey_key", "") or "").strip().lower()
         if modifier not in valid_modifiers:
             modifier = HOTKEY_DEFAULTS["recording_hotkey_modifier"]
-        if key not in valid_keys:
+        if key and key not in valid_keys:
             key = HOTKEY_DEFAULTS["recording_hotkey_key"]
         return (modifier, key)
 
@@ -1395,9 +1401,15 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if not current_settings.get("dictation_hotkey_enabled", False):
             return None
         modifier = str(current_settings.get("dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"])).strip().lower()
-        key = str(current_settings.get("dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"])).strip().lower()
-        if modifier not in CHORD_MODIFIERS or key not in VALID_HOTKEY_KEYS:
+        key = str(current_settings.get("dictation_hotkey_key", "") or "").strip().lower()
+        if modifier not in CHORD_MODIFIERS or (key and key not in VALID_HOTKEY_KEYS):
             return None
+        if self._is_global_ptt_hotkey_enabled():
+            ptt_combo = self._get_global_ptt_hotkey_combo()
+            dict_mods = GlobalPttHotkeyListener._modifier_tokens(modifier)
+            if dict_mods and dict_mods == ptt_combo:
+                logging.warning("[HOTKEY] Dictation hotkey ignored because it overlaps Push-to-Talk: %s + %s", modifier, key)
+                return None
         return (modifier, key)
 
     def _on_dictation_hotkey_pressed(self):
@@ -1446,6 +1458,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             if current == "dictation":
                 logging.warning("[ORACLE] dictation hook still active after revert — forcing idle")
                 self._event_dispatcher.force_idle("dictation_hotkey_release_safety")
+            elif current == "ptt_active":
+                logging.warning("[ORACLE] stale ptt_active after dictation release — forcing idle")
+                self._event_dispatcher.force_idle("dictation_hotkey_release_stale_ptt")
         except Exception as exc:
             logging.debug("[ORACLE] dictation cleanup check failed: %s", exc)
 
@@ -2227,6 +2242,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         
         # Skin system reverts to previous state
         self._event_dispatcher.revert_hook("dictation", trigger="oracle:dictation_stopped")
+        if self._event_dispatcher.get_current_hook() == "ptt_active":
+            logging.warning("[ORACLE] stale ptt_active after dictation stopped — forcing idle")
+            self._event_dispatcher.force_idle("dictation_stopped_stale_ptt")
 
         # Restore hands-free mode if it was enabled before dictation
         if self._hands_free_before_dictation and self.is_listening:

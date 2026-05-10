@@ -161,6 +161,64 @@ function _encodeModifiers(mods) {
     return _MOD_ORDER.filter(m => mods.has(m)).join('_');
 }
 
+function _sameModifierSet(a, b) {
+    const aa = _decodeModifierValue(a);
+    const bb = _decodeModifierValue(b);
+    if (aa.size !== bb.size) return false;
+    for (const mod of aa) {
+        if (!bb.has(mod)) return false;
+    }
+    return aa.size > 0;
+}
+
+function _shortcutLabel(modifierValue, keyValue = null) {
+    const mods = _decodeModifierValue(modifierValue);
+    const badges = _MOD_ORDER.filter(m => mods.has(m)).map(_modLabel);
+    if (keyValue) badges.push(_keyLabel(keyValue));
+    return badges.join(' + ');
+}
+
+function _valueOrDefault(value, fallback) {
+    return value === undefined || value === null ? fallback : value;
+}
+
+function _shortcutSignature(modifierValue, keyValue = '') {
+    const mods = _MOD_ORDER.filter(m => _decodeModifierValue(modifierValue).has(m));
+    if (mods.length === 0) return null;
+    return `${mods.join('_')}::${keyValue || ''}`;
+}
+
+function _validateShortcutCollisions(shortcuts) {
+    const seen = new Map();
+    const seenChanged = new Map();
+    for (const shortcut of shortcuts) {
+        if (!shortcut.enabled) continue;
+        const signature = _shortcutSignature(shortcut.modifier, shortcut.key);
+        if (!signature) {
+            return `${shortcut.name} requires at least one modifier key`;
+        }
+        const enabledChanged = shortcut.enabledField
+            ? String(shortcut.enabled) !== (_savedValues[shortcut.enabledField] || '')
+            : false;
+        const modifierChanged = shortcut.modifierField
+            ? (shortcut.modifier || '') !== (_savedValues[shortcut.modifierField] || '')
+            : false;
+        const keyChanged = shortcut.keyField
+            ? (shortcut.key || '') !== (_savedValues[shortcut.keyField] || '')
+            : false;
+        const changed = enabledChanged || modifierChanged || keyChanged;
+        if (seen.has(signature)) {
+            const other = seen.get(signature);
+            if (changed || seenChanged.get(signature)) {
+                return `${shortcut.name} overlaps ${other.name} (${_shortcutLabel(shortcut.modifier, shortcut.key)}). Choose a different shortcut combo.`;
+            }
+        }
+        seen.set(signature, shortcut);
+        seenChanged.set(signature, changed);
+    }
+    return null;
+}
+
 // ---------------------------------------------------------------------------
 // "Saved" baseline — used to detect unsaved changes
 // ---------------------------------------------------------------------------
@@ -524,71 +582,84 @@ function initHotkeyCapture() {
 // ---------------------------------------------------------------------------
 // Load
 // ---------------------------------------------------------------------------
+function _applyShortcutSettings(s) {
+    function _setMK(mid, kid, mVal, kVal) {
+        const mi = document.getElementById(mid);
+        const ki = document.getElementById(kid);
+        if (mi) { mi.value = mVal || ''; _recordSaved(mid, mVal || ''); }
+        if (ki) { ki.value = kVal || ''; _recordSaved(kid, kVal || ''); }
+        const el = document.querySelector(`.hotkey-capture[data-modifier-field="${mid}"][data-key-field="${kid}"]`);
+        if (el) {
+            _setHotkeyDisplay(el, mVal || '', kVal || '');
+            el.querySelector('.hotkey-display')?.classList.remove('changed');
+        }
+    }
+    function _setMO(fid, val) {
+        const inp = document.getElementById(fid);
+        if (inp) { inp.value = val || ''; _recordSaved(fid, val || ''); }
+        const el = document.querySelector(`.hotkey-capture[data-field="${fid}"]`);
+        if (el) {
+            _setHotkeyDisplay(el, val || '', null);
+            el.querySelector('.hotkey-display')?.classList.remove('changed');
+        }
+    }
+
+    // PTT — single modifier-only field
+    _setMO('shortcuts_global_ptt_hotkey_combo', _valueOrDefault(s.global_ptt_hotkey_combo, 'option_command'));
+
+    // Dictation
+    _setMK('shortcuts_dictation_hotkey_modifier', 'shortcuts_dictation_hotkey_key',
+           _valueOrDefault(s.dictation_hotkey_modifier, 'control_command'), _valueOrDefault(s.dictation_hotkey_key, ''));
+
+    // Recording
+    _setMK('shortcuts_recording_hotkey_modifier', 'shortcuts_recording_hotkey_key',
+           _valueOrDefault(s.recording_hotkey_modifier, 'option_command'), _valueOrDefault(s.recording_hotkey_key, 's'));
+
+    // Skin nav
+    _setMK('shortcuts_skin_nav_hotkey_previous_modifier', 'shortcuts_skin_nav_hotkey_previous_key',
+           _valueOrDefault(s.skin_nav_hotkey_previous_modifier, 'control_command'), _valueOrDefault(s.skin_nav_hotkey_previous_key, 'left_arrow'));
+    _setMK('shortcuts_skin_nav_hotkey_next_modifier', 'shortcuts_skin_nav_hotkey_next_key',
+           _valueOrDefault(s.skin_nav_hotkey_next_modifier, 'control_command'), _valueOrDefault(s.skin_nav_hotkey_next_key, 'right_arrow'));
+    _setMO('shortcuts_skin_select_hotkey_modifier', _valueOrDefault(s.skin_select_hotkey_modifier, 'option_command'));
+
+    // Web hotkeys
+    _setMK('shortcuts_web_hotkey_chat_modifier',        'shortcuts_web_hotkey_chat_key',
+           _valueOrDefault(s.web_hotkey_chat_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_chat_key, 'c'));
+    _setMK('shortcuts_web_hotkey_projects_modifier',    'shortcuts_web_hotkey_projects_key',
+           _valueOrDefault(s.web_hotkey_projects_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_projects_key, 'j'));
+    _setMK('shortcuts_web_hotkey_actions_modifier',     'shortcuts_web_hotkey_actions_key',
+           _valueOrDefault(s.web_hotkey_actions_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_actions_key, 'a'));
+    _setMK('shortcuts_web_hotkey_snippets_modifier',    'shortcuts_web_hotkey_snippets_key',
+           _valueOrDefault(s.web_hotkey_snippets_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_snippets_key, 'n'));
+    _setMK('shortcuts_web_hotkey_workflows_modifier',   'shortcuts_web_hotkey_workflows_key',
+           _valueOrDefault(s.web_hotkey_workflows_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_workflows_key, 'w'));
+    _setMK('shortcuts_web_hotkey_preferences_modifier', 'shortcuts_web_hotkey_preferences_key',
+           _valueOrDefault(s.web_hotkey_preferences_modifier, 'option_command'), _valueOrDefault(s.web_hotkey_preferences_key, 'grave'));
+
+    // Oracle size
+    _setMK('shortcuts_oracle_size_hotkey_decrease_modifier', 'shortcuts_oracle_size_hotkey_decrease_key',
+           _valueOrDefault(s.oracle_size_hotkey_decrease_modifier, 'control_command'), _valueOrDefault(s.oracle_size_hotkey_decrease_key, 'down_arrow'));
+    _setMK('shortcuts_oracle_size_hotkey_increase_modifier', 'shortcuts_oracle_size_hotkey_increase_key',
+           _valueOrDefault(s.oracle_size_hotkey_increase_modifier, 'control_command'), _valueOrDefault(s.oracle_size_hotkey_increase_key, 'up_arrow'));
+
+    // Checkboxes
+    const pttCb  = document.getElementById('shortcuts_global_ptt_hotkey_enabled');
+    const recCb  = document.getElementById('shortcuts_recording_hotkey_enabled');
+    const dictCb = document.getElementById('shortcuts_dictation_hotkey_enabled');
+    const pttEnabled = s.global_ptt_hotkey_enabled !== undefined ? s.global_ptt_hotkey_enabled : true;
+    const recEnabled = s.recording_hotkey_enabled !== undefined ? s.recording_hotkey_enabled : true;
+    const dictEnabled = s.dictation_hotkey_enabled !== undefined ? s.dictation_hotkey_enabled : false;
+    if (pttCb)  { pttCb.checked = pttEnabled; _recordSaved('shortcuts_global_ptt_hotkey_enabled', String(pttEnabled)); }
+    if (recCb)  { recCb.checked = recEnabled; _recordSaved('shortcuts_recording_hotkey_enabled', String(recEnabled)); }
+    if (dictCb) { dictCb.checked = dictEnabled; _recordSaved('shortcuts_dictation_hotkey_enabled', String(dictEnabled)); }
+}
+
 async function loadShortcutSettings() {
     try {
         const r = await fetch('/api/shortcuts');
         if (!r.ok) throw new Error('Failed to load shortcut settings');
         const s = await r.json();
-
-        function _setMK(mid, kid, mVal, kVal) {
-            const mi = document.getElementById(mid);
-            const ki = document.getElementById(kid);
-            if (mi) { mi.value = mVal || ''; _recordSaved(mid, mVal || ''); }
-            if (ki) { ki.value = kVal || ''; _recordSaved(kid, kVal || ''); }
-            const el = document.querySelector(`.hotkey-capture[data-modifier-field="${mid}"][data-key-field="${kid}"]`);
-            if (el) _setHotkeyDisplay(el, mVal || '', kVal || '');
-        }
-        function _setMO(fid, val) {
-            const inp = document.getElementById(fid);
-            if (inp) { inp.value = val || ''; _recordSaved(fid, val || ''); }
-            const el = document.querySelector(`.hotkey-capture[data-field="${fid}"]`);
-            if (el) _setHotkeyDisplay(el, val || '', null);
-        }
-        // PTT — single modifier-only field
-        _setMO('shortcuts_global_ptt_hotkey_combo', s.global_ptt_hotkey_combo || 'option_command');
-
-        // Dictation
-        _setMK('shortcuts_dictation_hotkey_modifier', 'shortcuts_dictation_hotkey_key',
-               s.dictation_hotkey_modifier || 'control_command', s.dictation_hotkey_key || 'd');
-
-        // Recording
-        _setMK('shortcuts_recording_hotkey_modifier', 'shortcuts_recording_hotkey_key',
-               s.recording_hotkey_modifier || 'option_command', s.recording_hotkey_key || 's');
-
-        // Skin nav
-        _setMK('shortcuts_skin_nav_hotkey_previous_modifier', 'shortcuts_skin_nav_hotkey_previous_key',
-               s.skin_nav_hotkey_previous_modifier || 'control_command', s.skin_nav_hotkey_previous_key || 'left_arrow');
-        _setMK('shortcuts_skin_nav_hotkey_next_modifier', 'shortcuts_skin_nav_hotkey_next_key',
-               s.skin_nav_hotkey_next_modifier || 'control_command', s.skin_nav_hotkey_next_key || 'right_arrow');
-        _setMO('shortcuts_skin_select_hotkey_modifier', s.skin_select_hotkey_modifier || 'option_command');
-
-        // Web hotkeys
-        _setMK('shortcuts_web_hotkey_chat_modifier',        'shortcuts_web_hotkey_chat_key',
-               s.web_hotkey_chat_modifier        || 'option_command', s.web_hotkey_chat_key        || 'c');
-        _setMK('shortcuts_web_hotkey_projects_modifier',    'shortcuts_web_hotkey_projects_key',
-               s.web_hotkey_projects_modifier    || 'option_command', s.web_hotkey_projects_key    || 'j');
-        _setMK('shortcuts_web_hotkey_actions_modifier',     'shortcuts_web_hotkey_actions_key',
-               s.web_hotkey_actions_modifier     || 'option_command', s.web_hotkey_actions_key     || 'a');
-        _setMK('shortcuts_web_hotkey_snippets_modifier',    'shortcuts_web_hotkey_snippets_key',
-               s.web_hotkey_snippets_modifier    || 'option_command', s.web_hotkey_snippets_key    || 'n');
-        _setMK('shortcuts_web_hotkey_workflows_modifier',   'shortcuts_web_hotkey_workflows_key',
-               s.web_hotkey_workflows_modifier   || 'option_command', s.web_hotkey_workflows_key   || 'w');
-        _setMK('shortcuts_web_hotkey_preferences_modifier', 'shortcuts_web_hotkey_preferences_key',
-               s.web_hotkey_preferences_modifier || 'option_command', s.web_hotkey_preferences_key || 'grave');
-
-        // Oracle size
-        _setMK('shortcuts_oracle_size_hotkey_decrease_modifier', 'shortcuts_oracle_size_hotkey_decrease_key',
-               s.oracle_size_hotkey_decrease_modifier || 'control_command', s.oracle_size_hotkey_decrease_key || 'down_arrow');
-        _setMK('shortcuts_oracle_size_hotkey_increase_modifier', 'shortcuts_oracle_size_hotkey_increase_key',
-               s.oracle_size_hotkey_increase_modifier || 'control_command', s.oracle_size_hotkey_increase_key || 'up_arrow');
-
-        // Checkboxes
-        const pttCb  = document.getElementById('shortcuts_global_ptt_hotkey_enabled');
-        const recCb  = document.getElementById('shortcuts_recording_hotkey_enabled');
-        const dictCb = document.getElementById('shortcuts_dictation_hotkey_enabled');
-        if (pttCb)  pttCb.checked  = s.global_ptt_hotkey_enabled  !== undefined ? s.global_ptt_hotkey_enabled  : true;
-        if (recCb)  recCb.checked  = s.recording_hotkey_enabled    !== undefined ? s.recording_hotkey_enabled   : true;
-        if (dictCb) dictCb.checked = s.dictation_hotkey_enabled    !== undefined ? s.dictation_hotkey_enabled   : false;
+        _applyShortcutSettings(s);
 
     } catch (err) {
         console.error('Error loading shortcut settings:', err);
@@ -642,9 +713,25 @@ async function saveShortcutSettings() {
             web_hotkey_preferences_key:      _v('shortcuts_web_hotkey_preferences_key'),
         };
 
-        if (!settings.global_ptt_hotkey_combo) {
+        const collisionMessage = _validateShortcutCollisions([
+            { name: 'Push-to-Talk', enabled: settings.global_ptt_hotkey_enabled, modifier: settings.global_ptt_hotkey_combo, key: '', enabledField: 'shortcuts_global_ptt_hotkey_enabled', modifierField: 'shortcuts_global_ptt_hotkey_combo' },
+            { name: 'Dictation', enabled: settings.dictation_hotkey_enabled, modifier: settings.dictation_hotkey_modifier, key: settings.dictation_hotkey_key, enabledField: 'shortcuts_dictation_hotkey_enabled', modifierField: 'shortcuts_dictation_hotkey_modifier', keyField: 'shortcuts_dictation_hotkey_key' },
+            { name: 'Recording', enabled: settings.recording_hotkey_enabled, modifier: settings.recording_hotkey_modifier, key: settings.recording_hotkey_key, enabledField: 'shortcuts_recording_hotkey_enabled', modifierField: 'shortcuts_recording_hotkey_modifier', keyField: 'shortcuts_recording_hotkey_key' },
+            { name: 'Oracle size decrease', enabled: true, modifier: settings.oracle_size_hotkey_decrease_modifier, key: settings.oracle_size_hotkey_decrease_key, modifierField: 'shortcuts_oracle_size_hotkey_decrease_modifier', keyField: 'shortcuts_oracle_size_hotkey_decrease_key' },
+            { name: 'Oracle size increase', enabled: true, modifier: settings.oracle_size_hotkey_increase_modifier, key: settings.oracle_size_hotkey_increase_key, modifierField: 'shortcuts_oracle_size_hotkey_increase_modifier', keyField: 'shortcuts_oracle_size_hotkey_increase_key' },
+            { name: 'Previous skin', enabled: true, modifier: settings.skin_nav_hotkey_previous_modifier, key: settings.skin_nav_hotkey_previous_key, modifierField: 'shortcuts_skin_nav_hotkey_previous_modifier', keyField: 'shortcuts_skin_nav_hotkey_previous_key' },
+            { name: 'Next skin', enabled: true, modifier: settings.skin_nav_hotkey_next_modifier, key: settings.skin_nav_hotkey_next_key, modifierField: 'shortcuts_skin_nav_hotkey_next_modifier', keyField: 'shortcuts_skin_nav_hotkey_next_key' },
+            { name: 'Skin number modifier', enabled: true, modifier: settings.skin_select_hotkey_modifier, key: '', modifierField: 'shortcuts_skin_select_hotkey_modifier' },
+            { name: 'Chat launcher', enabled: true, modifier: settings.web_hotkey_chat_modifier, key: settings.web_hotkey_chat_key, modifierField: 'shortcuts_web_hotkey_chat_modifier', keyField: 'shortcuts_web_hotkey_chat_key' },
+            { name: 'Projects launcher', enabled: true, modifier: settings.web_hotkey_projects_modifier, key: settings.web_hotkey_projects_key, modifierField: 'shortcuts_web_hotkey_projects_modifier', keyField: 'shortcuts_web_hotkey_projects_key' },
+            { name: 'Actions launcher', enabled: true, modifier: settings.web_hotkey_actions_modifier, key: settings.web_hotkey_actions_key, modifierField: 'shortcuts_web_hotkey_actions_modifier', keyField: 'shortcuts_web_hotkey_actions_key' },
+            { name: 'Snippets launcher', enabled: true, modifier: settings.web_hotkey_snippets_modifier, key: settings.web_hotkey_snippets_key, modifierField: 'shortcuts_web_hotkey_snippets_modifier', keyField: 'shortcuts_web_hotkey_snippets_key' },
+            { name: 'Workflows launcher', enabled: true, modifier: settings.web_hotkey_workflows_modifier, key: settings.web_hotkey_workflows_key, modifierField: 'shortcuts_web_hotkey_workflows_modifier', keyField: 'shortcuts_web_hotkey_workflows_key' },
+            { name: 'Preferences launcher', enabled: true, modifier: settings.web_hotkey_preferences_modifier, key: settings.web_hotkey_preferences_key, modifierField: 'shortcuts_web_hotkey_preferences_modifier', keyField: 'shortcuts_web_hotkey_preferences_key' },
+        ]);
+        if (collisionMessage) {
             if (typeof showNotification === 'function')
-                showNotification('Push-to-Talk requires at least one modifier key', 'error');
+                showNotification(collisionMessage, 'error');
             return;
         }
 
@@ -658,7 +745,12 @@ async function saveShortcutSettings() {
             throw new Error(err.detail || 'Failed to save shortcut settings');
         }
 
-        _markAllSaved();
+        const payload = await resp.json();
+        if (payload && payload.settings) {
+            _applyShortcutSettings(payload.settings);
+        } else {
+            await loadShortcutSettings();
+        }
         if (typeof showNotification === 'function')
             showNotification('Shortcut settings saved', 'success');
     } catch (err) {

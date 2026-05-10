@@ -87,13 +87,92 @@ class TestSaveShortcutSettings:
         from distr.core.services.settings_service import save_shortcut_settings
         from distr.core.signals import signal_manager
 
-        save_shortcut_settings(SimpleNamespace(
+        saved = save_shortcut_settings(SimpleNamespace(
+            global_ptt_hotkey_enabled=True,
+            global_ptt_hotkey_combo="option_command",
             dictation_hotkey_enabled=True,
-            dictation_hotkey_modifier="option_command",
+            dictation_hotkey_modifier="control_command",
             dictation_hotkey_key="m",
         ))
 
+        assert saved["global_ptt_hotkey_combo"] == "option_command"
+        assert saved["dictation_hotkey_enabled"] is True
+        assert saved["dictation_hotkey_modifier"] == "control_command"
+        assert saved["dictation_hotkey_key"] == "m"
         mock_emit.assert_any_call(
             signal_manager.shortcut_settings_changed,
             label="shortcut_settings_changed",
         )
+
+    @patch("distr.core.services.settings_service.save_settings_to_db")
+    @patch("distr.core.services.settings_service.load_settings_from_db", return_value={
+        "global_ptt_hotkey_enabled": True,
+        "global_ptt_hotkey_combo": "option_command",
+        "dictation_hotkey_enabled": True,
+        "dictation_hotkey_modifier": "control_command",
+        "dictation_hotkey_key": "",
+    })
+    def test_rejects_dictation_modifier_overlap_with_ptt(self, _load, mock_save):
+        from distr.core.services.settings_service import save_shortcut_settings
+
+        try:
+            save_shortcut_settings(SimpleNamespace(
+                global_ptt_hotkey_enabled=True,
+                global_ptt_hotkey_combo="option_command",
+                dictation_hotkey_enabled=True,
+                dictation_hotkey_modifier="option_command",
+                dictation_hotkey_key="",
+            ))
+        except ValueError as exc:
+            assert "overlaps Push-to-Talk" in str(exc)
+        else:
+            raise AssertionError("Expected overlapping dictation/PTT modifiers to be rejected")
+
+        mock_save.assert_not_called()
+
+    @patch("distr.core.services.settings_service.save_settings_to_db")
+    @patch("distr.core.services.settings_service.load_settings_from_db", return_value={
+        "recording_hotkey_enabled": True,
+        "recording_hotkey_modifier": "option_command",
+        "recording_hotkey_key": "s",
+        "web_hotkey_chat_modifier": "option_command",
+        "web_hotkey_chat_key": "c",
+    })
+    def test_rejects_any_changed_shortcut_overlap(self, _load, mock_save):
+        from distr.core.services.settings_service import save_shortcut_settings
+
+        try:
+            save_shortcut_settings(SimpleNamespace(
+                global_ptt_hotkey_enabled=False,
+                global_ptt_hotkey_combo="option_command",
+                recording_hotkey_enabled=True,
+                recording_hotkey_modifier="option_command",
+                recording_hotkey_key="c",
+                dictation_hotkey_enabled=False,
+            ))
+        except ValueError as exc:
+            message = str(exc)
+            assert "overlaps" in message
+            assert "Recording" in message
+            assert "Chat launcher" in message
+        else:
+            raise AssertionError("Expected duplicate shortcut combo to be rejected")
+
+        mock_save.assert_not_called()
+
+    @patch("distr.core.services.settings_service.save_settings_to_db")
+    @patch("distr.core.services.settings_service.load_settings_from_db", return_value={})
+    def test_accepts_enabled_dictation_modifier_only_hold_combo(self, _load, mock_save):
+        from distr.core.services.settings_service import save_shortcut_settings
+
+        saved = save_shortcut_settings(SimpleNamespace(
+            global_ptt_hotkey_enabled=True,
+            global_ptt_hotkey_combo="option_command",
+            dictation_hotkey_enabled=True,
+            dictation_hotkey_modifier="control_command",
+            dictation_hotkey_key="",
+        ))
+
+        assert saved["dictation_hotkey_modifier"] == "control_command"
+        assert saved["dictation_hotkey_key"] == ""
+        mock_save.assert_called_once()

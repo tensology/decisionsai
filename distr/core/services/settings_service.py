@@ -18,6 +18,38 @@ from distr.core.hotkeys import (
 
 logger = logging.getLogger(__name__)
 
+SHORTCUT_SETTING_KEYS = (
+    "global_ptt_hotkey_enabled",
+    "global_ptt_hotkey_combo",
+    "oracle_size_hotkey_decrease_modifier",
+    "oracle_size_hotkey_decrease_key",
+    "oracle_size_hotkey_increase_modifier",
+    "oracle_size_hotkey_increase_key",
+    "recording_hotkey_enabled",
+    "recording_hotkey_modifier",
+    "recording_hotkey_key",
+    "skin_nav_hotkey_previous_modifier",
+    "skin_nav_hotkey_previous_key",
+    "skin_nav_hotkey_next_modifier",
+    "skin_nav_hotkey_next_key",
+    "skin_select_hotkey_modifier",
+    "web_hotkey_chat_modifier",
+    "web_hotkey_chat_key",
+    "web_hotkey_projects_modifier",
+    "web_hotkey_projects_key",
+    "web_hotkey_actions_modifier",
+    "web_hotkey_actions_key",
+    "web_hotkey_snippets_modifier",
+    "web_hotkey_snippets_key",
+    "web_hotkey_workflows_modifier",
+    "web_hotkey_workflows_key",
+    "web_hotkey_preferences_modifier",
+    "web_hotkey_preferences_key",
+    "dictation_hotkey_enabled",
+    "dictation_hotkey_modifier",
+    "dictation_hotkey_key",
+)
+
 
 # ---------------------------------------------------------------------------
 # Generic helpers
@@ -217,27 +249,86 @@ def save_general_settings(data) -> None:
         logger.warning("Failed to update autostart setting: %s", e)
 
 
-def save_shortcut_settings(data) -> None:
+def save_shortcut_settings(data) -> Dict[str, Any]:
     """Persist shortcut-related settings with validation."""
     valid_ptt_modifiers = PTT_MODIFIERS
     valid_chord_modifiers = CHORD_MODIFIERS
     valid_keys = VALID_HOTKEY_KEYS
+    modifier_order = ("control", "option", "shift", "command")
+
+    def _tokens(value: str) -> set[str]:
+        return {p for p in str(value or "").strip().lower().split("_") if p in valid_ptt_modifiers}
 
     def _norm_modifier(value: str, default: str = HOTKEY_DEFAULTS["recording_hotkey_modifier"]) -> str:
-        v = str(value or default).strip().lower()
+        parts = _tokens(value)
+        if not parts:
+            parts = _tokens(default)
+        v = "_".join(mod for mod in modifier_order if mod in parts)
         return v if v in valid_chord_modifiers else default
 
-    def _norm_key(value: str, default: str = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]) -> str:
-        v = str(value or default).strip().lower()
+    def _norm_key(value: str, default: str = "") -> str:
+        v = str(value or "").strip().lower()
+        if not v:
+            return ""
         return v if v in valid_keys else default
+
+    def _shortcut_label(modifier: str, key: str = "") -> str:
+        labels = {
+            "control": "Control",
+            "option": "Option",
+            "shift": "Shift",
+            "command": "Command",
+        }
+        parts = [labels[p] for p in modifier_order if p in _tokens(modifier)]
+        if key:
+            parts.append(str(key).replace("_", " ").title())
+        return " + ".join(parts)
+
+    def _validate_shortcut_collisions(shortcuts: list[dict[str, Any]], previous_settings: dict[str, Any]) -> None:
+        seen: dict[tuple[tuple[str, ...], str], str] = {}
+        seen_changed: dict[tuple[tuple[str, ...], str], bool] = {}
+        for shortcut in shortcuts:
+            name = shortcut["name"]
+            enabled = bool(shortcut["enabled"])
+            modifier = shortcut["modifier"]
+            key = shortcut["key"]
+            if not enabled:
+                continue
+            mods = tuple(mod for mod in modifier_order if mod in _tokens(modifier))
+            if not mods:
+                raise ValueError(f"{name} shortcut requires at least one modifier key.")
+            signature = (mods, str(key or "").strip().lower())
+            enabled_field = shortcut.get("enabled_field")
+            modifier_field = shortcut.get("modifier_field")
+            key_field = shortcut.get("key_field")
+            previous_enabled = bool(previous_settings.get(enabled_field, enabled)) if enabled_field else True
+            previous_modifier = _norm_modifier(previous_settings.get(modifier_field, modifier), modifier) if modifier_field else modifier
+            previous_key = _norm_key(previous_settings.get(key_field, key)) if key_field else str(key or "")
+            previous_signature = (
+                tuple(mod for mod in modifier_order if mod in _tokens(previous_modifier)),
+                str(previous_key or "").strip().lower(),
+            )
+            changed = (previous_enabled != enabled) or (previous_signature != signature)
+            if signature in seen:
+                other_name = seen[signature]
+                if changed or seen_changed.get(signature, False):
+                    raise ValueError(
+                        f"{name} shortcut overlaps {other_name} ({_shortcut_label(modifier, key)}). "
+                        "Choose a different shortcut combo."
+                    )
+            seen[signature] = name
+            seen_changed[signature] = changed
 
     # PTT: unified combo field (e.g. "option_command", "control_command_option")
     # Parse each token and keep only valid modifier names.
     _raw_combo = str(getattr(data, "global_ptt_hotkey_combo", HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]) or "").strip().lower()
     _ptt_parts = [p for p in _raw_combo.split("_") if p in valid_ptt_modifiers]
+    ptt_enabled = bool(getattr(data, "global_ptt_hotkey_enabled", True))
     if not _ptt_parts:
-        _ptt_parts = ["option", "command"]
-    ptt_combo = "_".join(dict.fromkeys(_ptt_parts))  # deduplicate, preserve order
+        if ptt_enabled:
+            raise ValueError("Push-to-Talk requires at least one modifier key.")
+        _ptt_parts = [p for p in HOTKEY_DEFAULTS["global_ptt_hotkey_combo"].split("_") if p in valid_ptt_modifiers]
+    ptt_combo = _norm_modifier(_raw_combo, HOTKEY_DEFAULTS["global_ptt_hotkey_combo"])
 
     down_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_decrease_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]), HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"])
     up_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_increase_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]), HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"])
@@ -245,34 +336,32 @@ def save_shortcut_settings(data) -> None:
         down_modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]
     if up_modifier not in valid_chord_modifiers:
         up_modifier = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]
-    down_key = _norm_key(getattr(data, "oracle_size_hotkey_decrease_key", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]), HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"])
-    up_key = _norm_key(getattr(data, "oracle_size_hotkey_increase_key", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]), HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"])
+    down_key = _norm_key(getattr(data, "oracle_size_hotkey_decrease_key", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]))
+    up_key = _norm_key(getattr(data, "oracle_size_hotkey_increase_key", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"]))
     record_modifier = _norm_modifier(getattr(data, "recording_hotkey_modifier", HOTKEY_DEFAULTS["recording_hotkey_modifier"]), HOTKEY_DEFAULTS["recording_hotkey_modifier"])
-    record_key = _norm_key(getattr(data, "recording_hotkey_key", HOTKEY_DEFAULTS["recording_hotkey_key"]), HOTKEY_DEFAULTS["recording_hotkey_key"])
+    record_key = _norm_key(getattr(data, "recording_hotkey_key", HOTKEY_DEFAULTS["recording_hotkey_key"]))
     if record_modifier not in valid_chord_modifiers:
         record_modifier = HOTKEY_DEFAULTS["recording_hotkey_modifier"]
     skin_prev_modifier = _norm_modifier(getattr(data, "skin_nav_hotkey_previous_modifier", HOTKEY_DEFAULTS["skin_nav_hotkey_previous_modifier"]), HOTKEY_DEFAULTS["skin_nav_hotkey_previous_modifier"])
-    skin_prev_key = _norm_key(getattr(data, "skin_nav_hotkey_previous_key", HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"]), HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"])
+    skin_prev_key = _norm_key(getattr(data, "skin_nav_hotkey_previous_key", HOTKEY_DEFAULTS["skin_nav_hotkey_previous_key"]))
     skin_next_modifier = _norm_modifier(getattr(data, "skin_nav_hotkey_next_modifier", HOTKEY_DEFAULTS["skin_nav_hotkey_next_modifier"]), HOTKEY_DEFAULTS["skin_nav_hotkey_next_modifier"])
-    skin_next_key = _norm_key(getattr(data, "skin_nav_hotkey_next_key", HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"]), HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"])
+    skin_next_key = _norm_key(getattr(data, "skin_nav_hotkey_next_key", HOTKEY_DEFAULTS["skin_nav_hotkey_next_key"]))
     skin_select_modifier = _norm_modifier(getattr(data, "skin_select_hotkey_modifier", HOTKEY_DEFAULTS["skin_select_hotkey_modifier"]), HOTKEY_DEFAULTS["skin_select_hotkey_modifier"])
     web_chat_modifier = _norm_modifier(getattr(data, "web_hotkey_chat_modifier", HOTKEY_DEFAULTS["web_hotkey_chat_modifier"]), HOTKEY_DEFAULTS["web_hotkey_chat_modifier"])
-    web_chat_key = _norm_key(getattr(data, "web_hotkey_chat_key", HOTKEY_DEFAULTS["web_hotkey_chat_key"]), HOTKEY_DEFAULTS["web_hotkey_chat_key"])
+    web_chat_key = _norm_key(getattr(data, "web_hotkey_chat_key", HOTKEY_DEFAULTS["web_hotkey_chat_key"]))
     web_projects_modifier = _norm_modifier(getattr(data, "web_hotkey_projects_modifier", HOTKEY_DEFAULTS["web_hotkey_projects_modifier"]), HOTKEY_DEFAULTS["web_hotkey_projects_modifier"])
-    web_projects_key = _norm_key(getattr(data, "web_hotkey_projects_key", HOTKEY_DEFAULTS["web_hotkey_projects_key"]), HOTKEY_DEFAULTS["web_hotkey_projects_key"])
+    web_projects_key = _norm_key(getattr(data, "web_hotkey_projects_key", HOTKEY_DEFAULTS["web_hotkey_projects_key"]))
     web_actions_modifier = _norm_modifier(getattr(data, "web_hotkey_actions_modifier", HOTKEY_DEFAULTS["web_hotkey_actions_modifier"]), HOTKEY_DEFAULTS["web_hotkey_actions_modifier"])
-    web_actions_key = _norm_key(getattr(data, "web_hotkey_actions_key", HOTKEY_DEFAULTS["web_hotkey_actions_key"]), HOTKEY_DEFAULTS["web_hotkey_actions_key"])
+    web_actions_key = _norm_key(getattr(data, "web_hotkey_actions_key", HOTKEY_DEFAULTS["web_hotkey_actions_key"]))
     web_snippets_modifier = _norm_modifier(getattr(data, "web_hotkey_snippets_modifier", HOTKEY_DEFAULTS["web_hotkey_snippets_modifier"]), HOTKEY_DEFAULTS["web_hotkey_snippets_modifier"])
-    web_snippets_key = _norm_key(getattr(data, "web_hotkey_snippets_key", HOTKEY_DEFAULTS["web_hotkey_snippets_key"]), HOTKEY_DEFAULTS["web_hotkey_snippets_key"])
+    web_snippets_key = _norm_key(getattr(data, "web_hotkey_snippets_key", HOTKEY_DEFAULTS["web_hotkey_snippets_key"]))
     web_workflows_modifier = _norm_modifier(getattr(data, "web_hotkey_workflows_modifier", HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"]), HOTKEY_DEFAULTS["web_hotkey_workflows_modifier"])
-    web_workflows_key = _norm_key(getattr(data, "web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"]), HOTKEY_DEFAULTS["web_hotkey_workflows_key"])
+    web_workflows_key = _norm_key(getattr(data, "web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"]))
     web_preferences_modifier = _norm_modifier(getattr(data, "web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]), HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"])
-    web_preferences_key = _norm_key(getattr(data, "web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"]), HOTKEY_DEFAULTS["web_hotkey_preferences_key"])
-
-    if down_modifier == up_modifier and down_key == up_key:
-        up_key = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"] if down_key != HOTKEY_DEFAULTS["oracle_size_hotkey_increase_key"] else HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]
+    web_preferences_key = _norm_key(getattr(data, "web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"]))
 
     settings = load_settings_from_db()
+    previous_settings = dict(settings)
     settings["global_ptt_hotkey_enabled"] = bool(getattr(data, "global_ptt_hotkey_enabled", True))
     settings["global_ptt_hotkey_combo"] = ptt_combo
     settings["oracle_size_hotkey_decrease_modifier"] = down_modifier
@@ -299,11 +388,30 @@ def save_shortcut_settings(data) -> None:
     settings["web_hotkey_workflows_key"] = web_workflows_key
     settings["web_hotkey_preferences_modifier"] = web_preferences_modifier
     settings["web_hotkey_preferences_key"] = web_preferences_key
-    dictation_modifier = _norm_modifier(getattr(data, "dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]), HOTKEY_DEFAULTS["dictation_hotkey_modifier"])
-    dictation_key = _norm_key(getattr(data, "dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]), HOTKEY_DEFAULTS["dictation_hotkey_key"])
+    raw_dictation_modifier = str(getattr(data, "dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]) or "").strip().lower()
+    raw_dictation_key = str(getattr(data, "dictation_hotkey_key", "") or "").strip().lower()
+    dictation_modifier = _norm_modifier(raw_dictation_modifier, HOTKEY_DEFAULTS["dictation_hotkey_modifier"])
+    dictation_key = _norm_key(raw_dictation_key)
     if dictation_modifier not in valid_chord_modifiers:
         dictation_modifier = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
-    settings["dictation_hotkey_enabled"] = bool(getattr(data, "dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]))
+    dictation_enabled = bool(getattr(data, "dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]))
+    _validate_shortcut_collisions([
+        {"name": "Push-to-Talk", "enabled": ptt_enabled, "modifier": ptt_combo, "key": "", "enabled_field": "global_ptt_hotkey_enabled", "modifier_field": "global_ptt_hotkey_combo"},
+        {"name": "Dictation", "enabled": dictation_enabled, "modifier": dictation_modifier, "key": dictation_key, "enabled_field": "dictation_hotkey_enabled", "modifier_field": "dictation_hotkey_modifier", "key_field": "dictation_hotkey_key"},
+        {"name": "Recording", "enabled": bool(getattr(data, "recording_hotkey_enabled", True)), "modifier": record_modifier, "key": record_key, "enabled_field": "recording_hotkey_enabled", "modifier_field": "recording_hotkey_modifier", "key_field": "recording_hotkey_key"},
+        {"name": "Oracle size decrease", "enabled": True, "modifier": down_modifier, "key": down_key, "modifier_field": "oracle_size_hotkey_decrease_modifier", "key_field": "oracle_size_hotkey_decrease_key"},
+        {"name": "Oracle size increase", "enabled": True, "modifier": up_modifier, "key": up_key, "modifier_field": "oracle_size_hotkey_increase_modifier", "key_field": "oracle_size_hotkey_increase_key"},
+        {"name": "Previous skin", "enabled": True, "modifier": skin_prev_modifier, "key": skin_prev_key, "modifier_field": "skin_nav_hotkey_previous_modifier", "key_field": "skin_nav_hotkey_previous_key"},
+        {"name": "Next skin", "enabled": True, "modifier": skin_next_modifier, "key": skin_next_key, "modifier_field": "skin_nav_hotkey_next_modifier", "key_field": "skin_nav_hotkey_next_key"},
+        {"name": "Skin number modifier", "enabled": True, "modifier": skin_select_modifier, "key": "", "modifier_field": "skin_select_hotkey_modifier"},
+        {"name": "Chat launcher", "enabled": True, "modifier": web_chat_modifier, "key": web_chat_key, "modifier_field": "web_hotkey_chat_modifier", "key_field": "web_hotkey_chat_key"},
+        {"name": "Projects launcher", "enabled": True, "modifier": web_projects_modifier, "key": web_projects_key, "modifier_field": "web_hotkey_projects_modifier", "key_field": "web_hotkey_projects_key"},
+        {"name": "Actions launcher", "enabled": True, "modifier": web_actions_modifier, "key": web_actions_key, "modifier_field": "web_hotkey_actions_modifier", "key_field": "web_hotkey_actions_key"},
+        {"name": "Snippets launcher", "enabled": True, "modifier": web_snippets_modifier, "key": web_snippets_key, "modifier_field": "web_hotkey_snippets_modifier", "key_field": "web_hotkey_snippets_key"},
+        {"name": "Workflows launcher", "enabled": True, "modifier": web_workflows_modifier, "key": web_workflows_key, "modifier_field": "web_hotkey_workflows_modifier", "key_field": "web_hotkey_workflows_key"},
+        {"name": "Preferences launcher", "enabled": True, "modifier": web_preferences_modifier, "key": web_preferences_key, "modifier_field": "web_hotkey_preferences_modifier", "key_field": "web_hotkey_preferences_key"},
+    ], previous_settings)
+    settings["dictation_hotkey_enabled"] = dictation_enabled
     settings["dictation_hotkey_modifier"] = dictation_modifier
     settings["dictation_hotkey_key"] = dictation_key
     save_settings_to_db(settings)
@@ -315,6 +423,7 @@ def save_shortcut_settings(data) -> None:
         )
 
     _run_on_qt_main_thread(_do, label="shortcut_settings_changed")
+    return {key: settings.get(key) for key in SHORTCUT_SETTING_KEYS}
 
 
 def apply_voice_selection_to_settings(
