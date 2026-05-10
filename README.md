@@ -239,6 +239,7 @@ Defaults are editable in **Preferences → Shortcut Keys**.
 | Shortcut | Action |
 |---|---|
 | Hold `Option + Command` | Push-to-talk |
+| Hold `Control + Command` | Hold-to-dictate |
 | `Cmd + Option + C` | Open Chat web UI |
 | `Cmd + Option + J` | Open Projects web UI |
 | `Cmd + Option + A` | Open Actions web UI |
