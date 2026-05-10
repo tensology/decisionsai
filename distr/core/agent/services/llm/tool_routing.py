@@ -42,6 +42,7 @@ def _build_tool_triggers() -> frozenset:
         'list files', 'show files', 'create file', 'read file', 'delete file',
         'open file', 'copy file', 'move file',
         # Ticket board and external integrations (Jira/Trello)
+        'create ticket', 'create a ticket', 'make a ticket', 'add a ticket',
         'ticket board', 'kanban board', 'list boards', 'external board', 'external boards',
         'jira', 'trello', 'jira board', 'trello board', 'jira ticket', 'trello ticket',
         'jira tickets', 'trello tickets', 'list jira tickets', 'list trello tickets',

@@ -1063,6 +1063,33 @@ def _dispatch_step(
         signal_manager.play_recording_file.emit(recording_name)
         return {"success": True, "async": True, "message": "Playing recording."}
 
+    if normalized_action == "computer_use":
+        goal = (instruction or "").strip()
+        if not goal:
+            try:
+                update_step(step_id, status="failed", result="No goal provided for computer_use step.")
+            except Exception:
+                pass
+            return {"error": "No goal provided for computer_use step"}
+        from distr.core.workflow.dispatcher import StepDispatcher
+
+        dispatcher = StepDispatcher()
+        result = dispatcher._run_computer_use(
+            {
+                "id": step_id,
+                "name": step_name,
+                "action_type": "computer_use",
+                "instruction": goal,
+                "config": {"goal": goal},
+            },
+            {"goal": goal},
+            run_id=None,
+        )
+        output_text = result.get("output", "")
+        passed = bool(result.get("passed", False))
+        done = complete_step(step_id, output_text, passed)
+        return {"success": passed, "output": output_text, "status": done.get("status", "failed")}
+
     step_type = StepType.PLAYWRIGHT if normalized_action == "playwright" else StepType.EXECUTE_CODE
     executable_code = (code or "").strip()
     if not executable_code:
@@ -1246,4 +1273,3 @@ def _speak_result(result: str):
         signal_manager.speak_text_directly.emit(result.strip()[:500])
     except Exception:
         pass
-

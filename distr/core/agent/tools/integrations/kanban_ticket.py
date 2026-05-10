@@ -22,6 +22,11 @@ from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_p
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
+from distr.core.agent.ticket_intent import (
+    format_skill_recommendations_markdown,
+    recommend_skills_for_ticket,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -41,6 +46,15 @@ def _plain_desc_for_ticket_export(raw: str) -> str:
     t = re.sub(r"</(h[1-6]|div|li|tr)\s*>", "\n", t)
     t = re.sub(r"<[^>]+>", "", t)
     return (html.unescape(t).strip() or "(no description)")
+
+
+def _append_recommended_skills(title: str, description: str, text: str = "") -> tuple[str, list]:
+    recommendations = recommend_skills_for_ticket(f"{title}\n\n{description}\n\n{text}")
+    skills_markdown = format_skill_recommendations_markdown(recommendations)
+    if skills_markdown and "## Recommended Skills" not in (description or ""):
+        description = (description or "").strip()
+        description = f"{description}\n\n{skills_markdown}".strip()
+    return description, recommendations
 
 
 def _read_yaml_frontmatter_field(path: str, field: str) -> Optional[str]:
@@ -121,7 +135,7 @@ def _sanitize_ticket_title(title: str) -> str:
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, checkin_overview, whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     lane_name: str = Field(default="", description="Lane name (fuzzy matched, defaults to Backlog)")
@@ -137,6 +151,8 @@ class KanbanTicketInput(BaseModel):
             "message already includes '[Ticket Board — discuss this ticket]' — context is already in-thread."
         ),
     )
+    external_item_id: str = Field(default="", description="Remote Trello card ID or Jira issue key for external ticket update/move/comment actions")
+    comment_text: str = Field(default="", description="Comment body for comment_external_ticket")
     file_path: str = Field(default="", description="File path for attach_file action")
     url: str = Field(default="", description="URL for add_link action")
     todo_text: str = Field(default="", description="Text for add_todo/toggle_todo action")
@@ -165,6 +181,9 @@ class KanbanTicketTool(BaseTool):
       discuss_ticket     — load ticket into context for Q&A (ticket_id, external_issue_key, or recent #id / issue key in text); use when user wants to talk through a ticket without sending to project yet
       update_ticket      — update a ticket (requires ticket_id)
       move_ticket        — move ticket to a different lane (requires ticket_id, lane_name)
+      update_external_ticket  — update a remote Trello/Jira item (requires external_item_id or external_issue_key)
+      move_external_ticket    — move a remote Trello/Jira item (requires external_item_id or external_issue_key and lane_name/status)
+      comment_external_ticket — add a comment to a remote Trello/Jira item
       delete_ticket      — delete a ticket (requires ticket_id)
       attach_file        — attach a local file to a ticket (requires ticket_id, file_path)
       delete_file        — remove an attached file (requires ticket_id, file_path as filename)
@@ -193,6 +212,8 @@ class KanbanTicketTool(BaseTool):
       priority     — low / medium / high / critical
       ticket_id    — ticket ID for get/update/attach/todo/link/discuss actions
       external_issue_key — Jira key for discuss_ticket when the local numeric id is unknown
+      external_item_id — Trello card ID or Jira issue key for remote update/move/comment actions
+      comment_text — comment body for remote comments
       file_path    — local file path for attach_file action
       url          — URL for add_link action
       todo_text    — text for add_todo action
@@ -213,6 +234,8 @@ class KanbanTicketTool(BaseTool):
     description: str = (
         "Full CRUD for Ticket boards and tickets. "
         "Use action='create_ticket' with board_name and title to create a ticket. "
+        "When the user asks for a Trello card or Jira ticket, still use action='create_ticket'; "
+        "the tool will create it on the matching remote board instead of the local Kanban database. "
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
         "Use action='get_active_board' to see the active local board in use. "
         "Use action='list_trello_tickets' or action='list_jira_tickets' with board_name to read external board tickets. "
@@ -226,6 +249,8 @@ class KanbanTicketTool(BaseTool):
         "Use action='activate_board' with board_name to set a board as the active/default board. "
         "Use action='delete_ticket' with ticket_id to delete a ticket. "
         "Use action='move_ticket' with ticket_id and lane_name to move a ticket. "
+        "Use action='update_external_ticket', 'move_external_ticket', or 'comment_external_ticket' for follow-up changes "
+        "to Trello/Jira items; pass external_item_id or external_issue_key plus provider context in text/board_name. "
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
         "Use action='send_to_cli' with ticket_id to send ticket to pi coding agent for execution. "
@@ -661,6 +686,447 @@ class KanbanTicketTool(BaseTool):
             pass
         return None
 
+    def _load_connected_accounts(self) -> list[dict]:
+        """Return configured third-party accounts in a consistent shape."""
+        import json as _json
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        raw = settings.get("connected_accounts") or "[]"
+        if isinstance(raw, str):
+            try:
+                accounts = _json.loads(raw)
+            except Exception:
+                return []
+        else:
+            accounts = raw if isinstance(raw, list) else []
+        return [acct for acct in accounts if isinstance(acct, dict)]
+
+    def _account_for_provider(self, provider: str) -> Optional[dict]:
+        provider = (provider or "").lower().strip()
+        for acct in self._load_connected_accounts():
+            if (acct.get("provider") or "").lower() != provider:
+                continue
+            if acct.get("is_valid") is False:
+                continue
+            if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
+                return acct
+            if provider == "jira" and acct.get("email") and acct.get("api_token"):
+                return acct
+        return None
+
+    def _remote_provider_from_request(self, text: str, board_name: str = "") -> Optional[str]:
+        haystack = f"{text or ''} {board_name or ''}".lower()
+        if "trello" in haystack:
+            return "trello"
+        if "jira" in haystack:
+            return "jira"
+        return None
+
+    def _external_item_id_from_request(self, provider: str, external_item_id: str = "", external_issue_key: str = "", text: str = "") -> str:
+        explicit = (external_item_id or external_issue_key or "").strip()
+        if explicit:
+            return explicit
+        if provider == "jira":
+            return self._parse_jira_key_from_text(text or "") or ""
+        if provider == "trello":
+            patterns = (
+                r"\b(?:card|trello\s+card)\s+(?:id\s+)?([a-f0-9]{8,32})\b",
+                r"\btrello\.com/c/([A-Za-z0-9]+)\b",
+                r"\b([a-f0-9]{24})\b",
+            )
+            for pattern in patterns:
+                match = re.search(pattern, text or "", re.IGNORECASE)
+                if match:
+                    return match.group(1)
+        return ""
+
+    def _find_external_board(self, provider: str, board_id: Any = None, board_name: str = "", text: str = "") -> tuple[Optional[dict], list[dict]]:
+        boards = self._fetch_external_boards().get(provider, [])
+        if not boards:
+            return None, []
+
+        wanted_id = str(board_id or "").strip()
+        if wanted_id:
+            for board in boards:
+                if str(board.get("id") or "") == wanted_id:
+                    return board, boards
+
+        candidates = [board_name or ""]
+        cleaned_text = (text or "").lower()
+        for marker in (provider, "board", "card", "ticket", "issue"):
+            cleaned_text = cleaned_text.replace(marker, " ")
+        candidates.append(cleaned_text)
+
+        for candidate in candidates:
+            candidate = re.sub(r"\s+", " ", candidate.lower()).strip()
+            if not candidate:
+                continue
+            for board in boards:
+                external_name = (board.get("name") or "").lower()
+                if external_name and (external_name in candidate or candidate in external_name):
+                    return board, boards
+
+        if len(boards) == 1:
+            return boards[0], boards
+        return None, boards
+
+    def _jira_domain(self, acct: dict) -> str:
+        domain = (acct.get("domain") or "").strip()
+        if domain:
+            return domain.replace("https://", "").replace("http://", "").strip("/")
+        server_url = (acct.get("server_url") or "").strip().rstrip("/")
+        if server_url:
+            return server_url.replace("https://", "").replace("http://", "").split("/")[0]
+        return ""
+
+    def _jira_project_key_for_board(self, acct: dict, board: dict) -> str:
+        key = (board.get("project_key") or board.get("projectKey") or "").strip()
+        if key:
+            return key
+        domain = self._jira_domain(acct)
+        if not domain or not board.get("id"):
+            return ""
+        try:
+            import requests
+            from requests.auth import HTTPBasicAuth
+
+            resp = requests.get(
+                f"https://{domain}/rest/agile/1.0/board/{board['id']}/configuration",
+                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                headers={"Accept": "application/json"},
+                timeout=10,
+            )
+            if resp.status_code == 200:
+                location = (resp.json() or {}).get("location") or {}
+                return (location.get("projectKey") or "").strip()
+        except Exception:
+            logger.debug("Could not fetch Jira board configuration", exc_info=True)
+        return ""
+
+    def _create_external_ticket(
+        self,
+        provider: str,
+        board: dict,
+        text: str = "",
+        lane_name: str = "",
+        title: str = "",
+        description: str = "",
+        priority: str = "medium",
+    ) -> str:
+        provider = provider.lower().strip()
+        acct = self._account_for_provider(provider)
+        if not acct:
+            return voice_then_reference(
+                f"Connect a valid {provider.title()} account before I create that remotely.",
+                f"No valid {provider.title()} account is configured. Open Settings → Advanced → {provider.title()} and validate the account.",
+            )
+
+        if not title and not description:
+            summary = self._summarise_for_ticket(text)
+            if isinstance(summary, list):
+                summary = summary[0] if summary else {}
+            title = (summary or {}).get("title") or ""
+            description = (summary or {}).get("description") or ""
+        elif not title:
+            title = description[:80]
+        elif not description:
+            description = text or title
+
+        title = _sanitize_ticket_title(title or "") or "New Ticket"
+        description = (description or text or title).strip()
+        description, skill_recommendations = _append_recommended_skills(title, description, text)
+
+        if provider == "trello":
+            from distr.core.integrations.trello_api import TrelloAPI
+
+            api = TrelloAPI(acct["api_key"], acct["api_token"])
+            lists = api.get_lists(str(board["id"]))
+            if not lists:
+                return voice_then_reference(
+                    "I found that Trello board, but it has no writable lists.",
+                    f"Trello board '{board.get('name')}' has no open lists.",
+                )
+            target_list = None
+            if lane_name:
+                lane_lower = lane_name.lower().strip()
+                for item in lists:
+                    list_name = (item.get("name") or "").lower()
+                    if lane_lower == list_name or lane_lower in list_name or list_name in lane_lower:
+                        target_list = item
+                        break
+            target_list = target_list or lists[0]
+            created = api.create_card(str(target_list["id"]), title, description)
+            if not created:
+                return voice_then_reference(
+                    "Trello did not create the card.",
+                    f"Trello create failed for board '{board.get('name')}', list '{target_list.get('name')}'.",
+                )
+            card_id = created.get("id") or ""
+            card_url = created.get("url") or ""
+            ref = (
+                f"Created Trello card '{created.get('name') or title}' on board '{board.get('name')}', "
+                f"list '{target_list.get('name')}' (ID {card_id})"
+            )
+            if card_url:
+                ref += f"\nURL: {card_url}"
+            if skill_recommendations:
+                ref += "\nRecommended skills: " + ", ".join(rec.name for rec in skill_recommendations)
+            return voice_then_reference(f"I created the Trello card {title}.", ref)
+
+        if provider == "jira":
+            import requests
+            from requests.auth import HTTPBasicAuth
+
+            domain = self._jira_domain(acct)
+            project_key = self._jira_project_key_for_board(acct, board)
+            if not domain or not project_key:
+                return voice_then_reference(
+                    "I found Jira, but I could not determine the project key for that board.",
+                    f"Missing Jira domain or project key for board '{board.get('name')}' (ID {board.get('id')}).",
+                )
+            payload = {
+                "fields": {
+                    "project": {"key": project_key},
+                    "summary": title,
+                    "description": {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [
+                            {
+                                "type": "paragraph",
+                                "content": [{"type": "text", "text": description or title}],
+                            }
+                        ],
+                    },
+                    "issuetype": {"name": "Task"},
+                }
+            }
+            resp = requests.post(
+                f"https://{domain}/rest/api/3/issue",
+                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code not in (200, 201):
+                return voice_then_reference(
+                    "Jira did not create the issue.",
+                    f"Jira create failed with HTTP {resp.status_code}: {resp.text[:500]}",
+                )
+            data = resp.json() or {}
+            issue_key = data.get("key") or data.get("id") or ""
+            issue_url = f"https://{domain}/browse/{issue_key}" if issue_key else ""
+            ref = f"Created Jira issue '{title}' on board '{board.get('name')}' (Project {project_key}, Key {issue_key})"
+            if issue_url:
+                ref += f"\nURL: {issue_url}"
+            if skill_recommendations:
+                ref += "\nRecommended skills: " + ", ".join(rec.name for rec in skill_recommendations)
+            return voice_then_reference(f"I created the Jira issue {issue_key or title}.", ref)
+
+        return voice_then_reference(
+            "I do not know how to create tickets for that remote provider yet.",
+            f"Unsupported external ticket provider: {provider}",
+        )
+
+    def _trello_list_for_lane(self, board: dict, lane_name: str) -> tuple[Optional[dict], list[dict]]:
+        from distr.core.integrations.trello_api import TrelloAPI
+
+        acct = self._account_for_provider("trello")
+        if not acct:
+            return None, []
+        api = TrelloAPI(acct["api_key"], acct["api_token"])
+        lists = api.get_lists(str(board["id"]))
+        if not lists:
+            return None, []
+        lane_lower = (lane_name or "").lower().strip()
+        if lane_lower:
+            for item in lists:
+                list_name = (item.get("name") or "").lower()
+                if lane_lower == list_name or lane_lower in list_name or list_name in lane_lower:
+                    return item, lists
+        return lists[0], lists
+
+    def _jira_transition_id_for_status(self, acct: dict, issue_key: str, status_name: str) -> tuple[str, list[str]]:
+        import requests
+        from requests.auth import HTTPBasicAuth
+
+        domain = self._jira_domain(acct)
+        if not domain:
+            return "", []
+        resp = requests.get(
+            f"https://{domain}/rest/api/3/issue/{issue_key}/transitions",
+            auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+            headers={"Accept": "application/json"},
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return "", []
+        transitions = (resp.json() or {}).get("transitions") or []
+        wanted = (status_name or "").lower().strip()
+        names = [(item.get("name") or "").strip() for item in transitions]
+        for item in transitions:
+            name = (item.get("name") or "").lower().strip()
+            if wanted and (wanted == name or wanted in name or name in wanted):
+                return str(item.get("id") or ""), names
+        return "", names
+
+    def _action_external_ticket(
+        self,
+        action: str,
+        text: str = "",
+        board_name: str = "",
+        board_id: Any = None,
+        lane_name: str = "",
+        title: str = "",
+        description: str = "",
+        external_item_id: str = "",
+        external_issue_key: str = "",
+        comment_text: str = "",
+    ) -> str:
+        provider = self._remote_provider_from_request(text, board_name)
+        if not provider:
+            return voice_then_reference(
+                "Tell me whether this is for Trello or Jira.",
+                "Remote ticket action requires provider context: include Trello or Jira in text/board_name.",
+            )
+
+        item_id = self._external_item_id_from_request(
+            provider,
+            external_item_id=external_item_id,
+            external_issue_key=external_issue_key,
+            text=text,
+        )
+        if not item_id:
+            return voice_then_reference(
+                f"I need the {provider.title()} item id before I can change it.",
+                f"Missing remote item id. Pass external_item_id for Trello or external_issue_key for Jira.",
+            )
+
+        acct = self._account_for_provider(provider)
+        if not acct:
+            return voice_then_reference(
+                f"Connect a valid {provider.title()} account before I change that remotely.",
+                f"No valid {provider.title()} account is configured.",
+            )
+
+        if provider == "trello":
+            from distr.core.integrations.trello_api import TrelloAPI
+
+            api = TrelloAPI(acct["api_key"], acct["api_token"])
+            if action == "update_external_ticket":
+                updated = api.update_card(item_id, name=title or None, desc=description or None)
+                if not updated:
+                    return voice_then_reference(
+                        "Trello did not update the card.",
+                        f"Trello update failed for card {item_id}.",
+                    )
+                ref = f"Updated Trello card {item_id}"
+                if updated.get("url"):
+                    ref += f"\nURL: {updated['url']}"
+                return voice_then_reference("I updated that Trello card.", ref)
+
+            if action == "move_external_ticket":
+                external_board, external_boards = self._find_external_board(provider, board_id=board_id, board_name=board_name, text=text)
+                if not external_board:
+                    if external_boards:
+                        names = ", ".join(f"'{b.get('name')}' (ID {b.get('id')})" for b in external_boards[:8])
+                        return voice_then_reference("Tell me which Trello board that card is on.", f"Available Trello boards: {names}")
+                    return voice_then_reference("I could not find connected Trello boards.", "No Trello boards are available.")
+                target_list, lists = self._trello_list_for_lane(external_board, lane_name)
+                if not target_list:
+                    return voice_then_reference(
+                        "I could not find that Trello list.",
+                        f"Available lists: {', '.join((item.get('name') or '') for item in lists) or '(none)'}",
+                    )
+                moved = api.move_card(item_id, str(target_list["id"]))
+                if not moved:
+                    return voice_then_reference("Trello did not move the card.", f"Trello move failed for card {item_id}.")
+                return voice_then_reference(
+                    f"I moved that Trello card to {target_list.get('name')}.",
+                    f"Moved Trello card {item_id} to list '{target_list.get('name')}' on board '{external_board.get('name')}'.",
+                )
+
+            comment = (comment_text or description or text or "").strip()
+            if not comment:
+                return voice_then_reference("Give me the comment text to add.", "Missing comment_text.")
+            created = api.add_comment_to_card(item_id, comment)
+            if not created:
+                return voice_then_reference("Trello did not add the comment.", f"Trello comment failed for card {item_id}.")
+            return voice_then_reference("I added the comment to that Trello card.", f"Commented on Trello card {item_id}.")
+
+        if provider == "jira":
+            import requests
+            from requests.auth import HTTPBasicAuth
+
+            domain = self._jira_domain(acct)
+            if not domain:
+                return voice_then_reference("I could not find the Jira domain.", "Jira account is missing domain/server_url.")
+
+            if action == "update_external_ticket":
+                fields: dict[str, Any] = {}
+                if title:
+                    fields["summary"] = title
+                if description:
+                    fields["description"] = {
+                        "type": "doc",
+                        "version": 1,
+                        "content": [{"type": "paragraph", "content": [{"type": "text", "text": description}]}],
+                    }
+                if not fields:
+                    return voice_then_reference("Tell me what to update on the Jira issue.", "No Jira update fields were provided.")
+                resp = requests.put(
+                    f"https://{domain}/rest/api/3/issue/{item_id}",
+                    auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    json={"fields": fields},
+                    timeout=10,
+                )
+                if resp.status_code not in (200, 204):
+                    return voice_then_reference("Jira did not update the issue.", f"Jira update failed with HTTP {resp.status_code}: {resp.text[:500]}")
+                return voice_then_reference("I updated that Jira issue.", f"Updated Jira issue {item_id}\nURL: https://{domain}/browse/{item_id}")
+
+            if action == "move_external_ticket":
+                transition_id, transition_names = self._jira_transition_id_for_status(acct, item_id, lane_name)
+                if not transition_id:
+                    return voice_then_reference(
+                        "I could not find a matching Jira transition.",
+                        f"Available Jira transitions for {item_id}: {', '.join(transition_names) or '(none)'}",
+                    )
+                resp = requests.post(
+                    f"https://{domain}/rest/api/3/issue/{item_id}/transitions",
+                    auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                    headers={"Accept": "application/json", "Content-Type": "application/json"},
+                    json={"transition": {"id": transition_id}},
+                    timeout=10,
+                )
+                if resp.status_code not in (200, 204):
+                    return voice_then_reference("Jira did not transition the issue.", f"Jira transition failed with HTTP {resp.status_code}: {resp.text[:500]}")
+                return voice_then_reference(f"I moved that Jira issue to {lane_name}.", f"Transitioned Jira issue {item_id} using transition {transition_id}.")
+
+            comment = (comment_text or description or "").strip()
+            if not comment:
+                return voice_then_reference("Give me the comment text to add.", "Missing comment_text.")
+            payload = {
+                "body": {
+                    "type": "doc",
+                    "version": 1,
+                    "content": [{"type": "paragraph", "content": [{"type": "text", "text": comment}]}],
+                }
+            }
+            resp = requests.post(
+                f"https://{domain}/rest/api/3/issue/{item_id}/comment",
+                auth=HTTPBasicAuth(acct["email"], acct["api_token"]),
+                headers={"Accept": "application/json", "Content-Type": "application/json"},
+                json=payload,
+                timeout=10,
+            )
+            if resp.status_code not in (200, 201, 204):
+                return voice_then_reference("Jira did not add the comment.", f"Jira comment failed with HTTP {resp.status_code}: {resp.text[:500]}")
+            return voice_then_reference("I added the comment to that Jira issue.", f"Commented on Jira issue {item_id}.")
+
+        return voice_then_reference("I do not know that remote provider.", f"Unsupported external ticket provider: {provider}")
+
     # ── Main dispatch ─────────────────────────────────────────────────────
 
     def _run(
@@ -686,6 +1152,8 @@ class KanbanTicketTool(BaseTool):
         message_limit: int = 50,
         unprocessed_only: bool = False,
         external_issue_key: str = "",
+        external_item_id: str = "",
+        comment_text: str = "",
         **kwargs,
     ) -> str:
         try:
@@ -775,6 +1243,19 @@ class KanbanTicketTool(BaseTool):
                 ref = f"{provider.title()} board tickets ({len(tickets)}):\n" + "\n".join(lines)
                 spoken = f"I pulled your {provider} board; there are {len(tickets)} items. Details are below."
                 return voice_then_reference(spoken, ref)
+            elif action in ("update_external_ticket", "move_external_ticket", "comment_external_ticket"):
+                return self._action_external_ticket(
+                    action=action,
+                    text=text,
+                    board_name=board_name,
+                    board_id=board_id or None,
+                    lane_name=lane_name,
+                    title=title,
+                    description=description,
+                    external_item_id=external_item_id or kwargs.get("external_card_id", ""),
+                    external_issue_key=external_issue_key,
+                    comment_text=comment_text or kwargs.get("comment", ""),
+                )
             elif action == "get_ticket":
                 return self._action_get_ticket(ticket_id or self._last_ticket_id)
             elif action in ("discuss_ticket", "talk_about_ticket", "prepare_ticket_discussion"):
@@ -839,7 +1320,8 @@ class KanbanTicketTool(BaseTool):
                 ref = (
                     f"Unknown action '{action}'. Valid actions: list_boards, get_active_board, create_board, delete_board, "
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
-                    "move_ticket, delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
+                    "move_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
+                    "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
                     "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_snapshot_to_ticket, whatsapp_send_message"
                 )
@@ -1005,20 +1487,8 @@ class KanbanTicketTool(BaseTool):
 
     def _fetch_external_boards(self) -> Dict:
         """Fetch Trello and Jira boards from connected accounts."""
-        import json as _json
-        from distr.core.settings import load_settings_from_db
-        settings = load_settings_from_db()
-        raw = settings.get("connected_accounts") or "[]"
-        if isinstance(raw, str):
-            try:
-                accounts = _json.loads(raw)
-            except Exception:
-                accounts = []
-        else:
-            accounts = raw if isinstance(raw, list) else []
-
         result = {"trello": [], "jira": []}
-        for acct in accounts:
+        for acct in self._load_connected_accounts():
             provider = (acct.get("provider") or "").lower()
             if provider == "trello" and acct.get("api_key") and acct.get("api_token"):
                 try:
@@ -1038,11 +1508,7 @@ class KanbanTicketTool(BaseTool):
                 try:
                     import requests
                     from requests.auth import HTTPBasicAuth
-                    domain = acct.get("domain") or ""
-                    if not domain:
-                        server_url = (acct.get("server_url") or "").strip().rstrip("/")
-                        if server_url:
-                            domain = server_url.replace("https://", "").replace("http://", "").split("/")[0]
+                    domain = self._jira_domain(acct)
                     if domain:
                         resp = requests.get(
                             f"https://{domain}/rest/agile/1.0/board",
@@ -1051,7 +1517,12 @@ class KanbanTicketTool(BaseTool):
                         )
                         if resp.status_code == 200:
                             for b in resp.json().get("values", []):
-                                result["jira"].append({"id": str(b["id"]), "name": b["name"]})
+                                location = b.get("location") or {}
+                                result["jira"].append({
+                                    "id": str(b["id"]),
+                                    "name": b["name"],
+                                    "project_key": location.get("projectKey") or "",
+                                })
                 except Exception:
                     pass
         return result
@@ -1136,6 +1607,38 @@ class KanbanTicketTool(BaseTool):
                                priority="medium",
                                linked_project_id=None, linked_workflow_id=None,
                                send_to_cli=False) -> str:
+        remote_provider = self._remote_provider_from_request(text, board_name)
+        if remote_provider:
+            external_board, external_boards = self._find_external_board(
+                remote_provider,
+                board_id=board_id,
+                board_name=board_name,
+                text=text,
+            )
+            if not external_board:
+                if external_boards:
+                    board_list = ", ".join(
+                        f"'{b.get('name')}' (ID {b.get('id')})"
+                        for b in external_boards[:8]
+                    )
+                    return voice_then_reference(
+                        f"Tell me which {remote_provider.title()} board to use.",
+                        f"Available {remote_provider.title()} boards: {board_list}",
+                    )
+                return voice_then_reference(
+                    f"I could not find any connected {remote_provider.title()} boards.",
+                    f"No {remote_provider.title()} boards are available. Check the account connection in Settings.",
+                )
+            return self._create_external_ticket(
+                remote_provider,
+                external_board,
+                text=text,
+                lane_name=lane_name,
+                title=title,
+                description=description,
+                priority=priority,
+            )
+
         # Resolve board
         board = self._find_board(board_id, board_name)
         if not board:
@@ -1195,6 +1698,8 @@ class KanbanTicketTool(BaseTool):
         title = _sanitize_ticket_title(title or "") or "New Ticket"
 
         # Create the ticket in DB
+        description, skill_recommendations = _append_recommended_skills(title, description, text)
+
         from distr.core.db.kanban import KanbanTicket, KanbanLane, KanbanBoard as KB
         with self._get_session() as s:
             lane_obj = orm_get_by_id(s, KanbanLane, lane["id"])
@@ -1236,6 +1741,8 @@ class KanbanTicketTool(BaseTool):
         result = f"Created ticket '{title}' in board '{board['name']}', lane '{lane['name']}' (ID {ticket_id})"
         if attached:
             result += f". Attached {len(attached)} file(s): {', '.join(attached)}"
+        if skill_recommendations:
+            result += ". Recommended skills: " + ", ".join(rec.name for rec in skill_recommendations)
         logger.info("KanbanTicketTool: %s", result)
         spoken = f"I added a ticket called {title} on {board['name']}."
         if attached:
@@ -1263,6 +1770,7 @@ class KanbanTicketTool(BaseTool):
                     continue
                 t_title = _sanitize_ticket_title((item.get("title") or "Untitled")[:200])
                 t_desc = (item.get("description") or "")[:2000]
+                t_desc, _skill_recs = _append_recommended_skills(t_title, t_desc, "")
                 t_priority = item.get("priority", "medium")
                 if t_priority not in ("low", "medium", "high", "critical"):
                     t_priority = "medium"

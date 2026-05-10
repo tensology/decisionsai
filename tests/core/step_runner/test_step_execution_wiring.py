@@ -422,7 +422,7 @@ class TestDirectExecutionTypes:
 
     def test_direct_execution_types(self):
         assert _DIRECT_EXECUTION_TYPES == {
-            "run_command", "http_request", "execute_code", "playwright", "play_recording"
+            "run_command", "http_request", "execute_code", "playwright", "computer_use", "play_recording"
         }
 
 

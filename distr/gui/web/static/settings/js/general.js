@@ -141,8 +141,7 @@ async function saveGeneralSettings() {
             restore_position: document.getElementById('restore_position').checked,
             oracle_position: document.getElementById('oracle_position').value,
             global_ptt_hotkey_enabled: document.getElementById('shortcuts_global_ptt_hotkey_enabled') ? document.getElementById('shortcuts_global_ptt_hotkey_enabled').checked : true,
-            global_ptt_hotkey_primary: document.getElementById('shortcuts_global_ptt_hotkey_primary') ? document.getElementById('shortcuts_global_ptt_hotkey_primary').value : 'option',
-            global_ptt_hotkey_secondary: document.getElementById('shortcuts_global_ptt_hotkey_secondary') ? document.getElementById('shortcuts_global_ptt_hotkey_secondary').value : 'command'
+            global_ptt_hotkey_combo: document.getElementById('shortcuts_global_ptt_hotkey_combo') ? document.getElementById('shortcuts_global_ptt_hotkey_combo').value : 'option_command'
         };
 
         // Set voice for each provider from the registry (active provider gets

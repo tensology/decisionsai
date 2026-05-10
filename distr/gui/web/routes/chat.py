@@ -7,7 +7,8 @@ from fastapi.responses import JSONResponse, FileResponse
 from starlette.requests import ClientDisconnect, Request
 from pydantic import BaseModel, ConfigDict
 from pathlib import Path
-from typing import Optional, List, Dict, Any, Set
+from typing import Optional, List, Dict, Any, Set, Iterable
+from collections import defaultdict
 import logging
 import json
 import asyncio
@@ -47,6 +48,148 @@ def _voice_model_to_display_name(
     tts = (settings.get("tts_provider") or "").strip()
     vp = normalize_voice_provider(voice_provider or tts)
     return resolve_voice_to_display_name(vp, voice_model or "", settings)
+
+
+def _safe_json_obj(raw: Optional[str]) -> Dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _chat_tool_event_messages(chat: Chat) -> List[Dict[str, Any]]:
+    params = _safe_json_obj(getattr(chat, "params", None))
+    events = params.get("tool_events")
+    if not isinstance(events, list):
+        return []
+    messages: List[Dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        if not _is_visible_tool_event(event):
+            continue
+        messages.append(
+            {
+                "role": "tool",
+                "content": event.get("result_summary") or "",
+                "timestamp": event.get("timestamp"),
+                "turn_chat_id": event.get("turn_chat_id"),
+                "tool_event": {
+                    "tool_name": event.get("tool_name") or "tool",
+                    "title": event.get("title") or "Tool executed",
+                    "status": event.get("status") or "completed",
+                    "result_summary": event.get("result_summary") or "",
+                    "routing_path": event.get("routing_path") or "",
+                    "user_text": event.get("user_text") or "",
+                    "compact": _is_compact_tool_event(event),
+                },
+            }
+        )
+    return messages
+
+
+def _is_visible_tool_event(event: Dict[str, Any]) -> bool:
+    if event.get("chat_suppressed") is True:
+        return False
+    return True
+
+
+def _is_compact_tool_event(event: Dict[str, Any]) -> bool:
+    if event.get("chat_compact") is not None:
+        return bool(event.get("chat_compact"))
+    tool_name = (event.get("tool_name") or "").strip()
+    return tool_name in {"execute_code", "file_operations", "mode_control"}
+
+
+def _chat_workflow_event_messages(chat: Chat) -> List[Dict[str, Any]]:
+    params = _safe_json_obj(getattr(chat, "params", None))
+    events = params.get("workflow_events")
+    if not isinstance(events, list):
+        return []
+    messages: List[Dict[str, Any]] = []
+    for event in events:
+        if not isinstance(event, dict):
+            continue
+        messages.append(
+            {
+                "role": "workflow",
+                "content": event.get("summary") or "",
+                "timestamp": event.get("timestamp"),
+                "workflow_event": {
+                    "run_id": event.get("run_id"),
+                    "workflow_id": event.get("workflow_id"),
+                    "workflow_name": event.get("workflow_name") or "Workflow",
+                    "type": event.get("type") or "event",
+                    "status": event.get("status") or "running",
+                    "summary": event.get("summary") or "",
+                    "phase": event.get("phase") or "",
+                    "step_id": event.get("step_id"),
+                    "step_name": event.get("step_name") or "",
+                },
+            }
+        )
+    return messages
+
+
+def _message_sort_key(message: Dict[str, Any]) -> str:
+    ts = message.get("timestamp")
+    if ts is None:
+        return ""
+    return ts.isoformat() if hasattr(ts, "isoformat") else str(ts)
+
+
+def _merge_thread_rows_with_tool_and_workflow_events(
+    rows: Iterable[Any], root_chat: Chat
+) -> List[Dict[str, Any]]:
+    """Interleave tool cards with the chat row they belong to; avoid sorting all messages by timestamp."""
+    tool_msgs = _chat_tool_event_messages(root_chat)
+    tools_by_turn: Dict[int, List[Dict[str, Any]]] = defaultdict(list)
+    orphan_tools: List[Dict[str, Any]] = []
+    for tm in tool_msgs:
+        tid = tm.get("turn_chat_id")
+        if tid is None:
+            orphan_tools.append(tm)
+        else:
+            tools_by_turn[int(tid)].append(tm)
+
+    messages: List[Dict[str, Any]] = []
+    for row in rows:
+        if row.input:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": row.input,
+                    "timestamp": row.created_date if row.created_date else None,
+                    "chat_row_id": row.id,
+                }
+            )
+        if row.response:
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": row.response,
+                    "timestamp": row.modified_date if row.modified_date else None,
+                    "chat_row_id": row.id,
+                }
+            )
+        for tm in tools_by_turn.pop(row.id, []):
+            messages.append(tm)
+
+    leftover: List[Dict[str, Any]] = []
+    for lst in tools_by_turn.values():
+        leftover.extend(lst)
+    orphan_tools.extend(leftover)
+    orphan_tools.sort(key=_message_sort_key)
+    messages.extend(orphan_tools)
+
+    workflow_msgs = _chat_workflow_event_messages(root_chat)
+    workflow_msgs.sort(key=_message_sort_key)
+    messages.extend(workflow_msgs)
+
+    return messages
 
 
 class SendMessageRequest(ChatRequestModel):
@@ -403,28 +546,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                 """)
                 rows = session.execute(thread_query, {"root_id": chat_id}).fetchall()
 
-                messages = []
-                for row in rows:
-                    if row.input:
-                        messages.append(
-                            {
-                                "role": "user",
-                                "content": row.input,
-                                "timestamp": row.created_date
-                                if row.created_date
-                                else None,
-                            }
-                        )
-                    if row.response:
-                        messages.append(
-                            {
-                                "role": "assistant",
-                                "content": row.response,
-                                "timestamp": row.modified_date
-                                if row.modified_date
-                                else None,
-                            }
-                        )
+                messages = _merge_thread_rows_with_tool_and_workflow_events(rows, root_chat)
 
                 settings = load_settings_from_db()
                 # Use chat row first; fall back to settings so UI always has a value

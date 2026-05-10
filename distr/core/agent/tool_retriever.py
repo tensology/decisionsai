@@ -352,9 +352,25 @@ class ToolRetriever:
         else:
             return None
 
-        # Merge with always-on, append request_tool
-        merged = retrieved | ALWAYS_ON_NAMES
-        result = [name for name in merged if name != "request_tool"]
+        # Merge with deterministic hints and always-on, append request_tool.
+        # Hints are first so obvious commands like "read my clipboard" survive
+        # embedding noise.
+        try:
+            from distr.core.agent.tool_intents import forced_tool_names_for_text
+
+            forced = [
+                name for name in forced_tool_names_for_text(user_message)
+                if name in self._names
+            ]
+        except Exception:
+            forced = []
+        merged = retrieved | ALWAYS_ON_NAMES | set(forced)
+        result = []
+        seen = set()
+        for name in forced + [name for name in merged if name != "request_tool"]:
+            if name not in seen:
+                result.append(name)
+                seen.add(name)
         result.append("request_tool")
 
         logger.debug("Tool retrieval (%s): query=%r tier=%s tools=%s",

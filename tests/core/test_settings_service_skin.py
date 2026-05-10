@@ -4,6 +4,7 @@ Validates:
 - update_oracle_skin runs migration before persisting (Requirements 11.2, 11.8)
 - save_general_settings no longer emits oracle skin/size signals (Requirement 8.8)
 """
+from types import SimpleNamespace
 from unittest.mock import patch, MagicMock, call
 
 
@@ -73,3 +74,26 @@ class TestSaveGeneralSettingsNoOracleSignals:
         assert "oracle_size_changed" not in emitted_labels
         # But oracle_position_changed should still be emitted
         assert "oracle_position_changed" in emitted_labels
+
+
+class TestSaveShortcutSettings:
+    """Shortcut saves should notify the live hotkey listener immediately."""
+
+    @patch("distr.core.services.settings_service._run_on_qt_main_thread", side_effect=lambda fn, *, label: fn())
+    @patch("distr.core.services.settings_service._safe_emit")
+    @patch("distr.core.services.settings_service.save_settings_to_db")
+    @patch("distr.core.services.settings_service.load_settings_from_db", return_value={})
+    def test_emits_shortcut_settings_changed(self, _load, _save, mock_emit, _run_qt):
+        from distr.core.services.settings_service import save_shortcut_settings
+        from distr.core.signals import signal_manager
+
+        save_shortcut_settings(SimpleNamespace(
+            dictation_hotkey_enabled=True,
+            dictation_hotkey_modifier="option_command",
+            dictation_hotkey_key="m",
+        ))
+
+        mock_emit.assert_any_call(
+            signal_manager.shortcut_settings_changed,
+            label="shortcut_settings_changed",
+        )

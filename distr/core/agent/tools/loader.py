@@ -109,6 +109,7 @@ def _get_tool_definitions(
         ("AddWorkflowStepTool", {}),
         ("UpdateWorkflowStepTool", {}),
         ("GenerateWorkflowTool", {}),
+        ("CreateStepRunnerTool", {}),
         ("ResetWorkflowTool", {}),
         ("ClearWorkflowHistoryTool", {}),
         ("ContinueWorkflowTool", {}),
@@ -143,7 +144,7 @@ def _get_tool_definitions(
         ("OpenFileTool", {}),
         # Execute Code
         ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-        # Create Cursor Ticket (legacy — kept for backward compat)
+        # Create Cursor Ticket (legacy explicit Cursor/.tickets, plus DEBUG DecisionsAI self tickets)
         ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
         # Ticket Board Ticket (primary ticket tool)
         ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
@@ -459,6 +460,7 @@ TOOL_REGISTRY = {
     "AddWorkflowStepTool":        ("step_runner.workflow_tools", "AddWorkflowStepTool"),
     "UpdateWorkflowStepTool":     ("step_runner.workflow_tools", "UpdateWorkflowStepTool"),
     "GenerateWorkflowTool":       ("step_runner.workflow_tools", "GenerateWorkflowTool"),
+    "CreateStepRunnerTool":       ("step_runner.workflow_tools", "CreateStepRunnerTool"),
     "ResetWorkflowTool":          ("step_runner.workflow_tools", "ResetWorkflowTool"),
     "ClearWorkflowHistoryTool":   ("step_runner.workflow_tools", "ClearWorkflowHistoryTool"),
     "ContinueWorkflowTool":       ("step_runner.workflow_tools", "ContinueWorkflowTool"),
@@ -586,6 +588,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "AddWorkflowStepTool": "Add a new step to an existing workflow at a specified position.",
     "UpdateWorkflowStepTool": "Update the configuration of an existing workflow step.",
     "GenerateWorkflowTool": "Auto-generate a complete workflow from a natural language description of the desired process.",
+    "CreateStepRunnerTool": "Create a workflow or step-runner automation from a natural language instruction.",
     "ResetWorkflowTool": "Reset a workflow to its initial state, clearing all step statuses and run data.",
     "ClearWorkflowHistoryTool": "Clear the run history of a workflow while keeping its step definitions intact.",
     "ContinueWorkflowTool": "Resume a paused or waiting workflow run, optionally providing user input.",
@@ -639,7 +642,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
-    "CreateCursorTicketTool": "Create a development task ticket from clipboard content or conversation context for the Cursor IDE.",
+    "CreateCursorTicketTool": "Create a legacy Cursor/.tickets work item only when the user explicitly asks for Cursor or .tickets. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes to DecisionsAI/.tickets; ordinary ticket requests use create_ticket.",
     "KanbanTicketTool": "Create, update, list, move, or manage tickets, tasks, or cards on project ticket boards, including external Jira and Trello boards/tickets.",
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",

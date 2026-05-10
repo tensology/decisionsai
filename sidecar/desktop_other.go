@@ -15,6 +15,9 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 		"list_windows", "get_window_tree", "click_element",
 		"type_text", "press_keys", "launch_app", "focus_window", "find_element",
 		"move_mouse", "drag_to", "scroll", "wait_for_element",
+		// New tools
+		"click_at", "double_click_at", "right_click_at",
+		"get_screen_info", "get_cursor_pos", "capture_annotated", "type_clipboard",
 	} {
 		m[name] = stub(name)
 	}
@@ -27,6 +30,15 @@ func platformCaptureScreen(outputPath string) error {
 	import_cmd := fmt.Sprintf("import -window root %s", outputPath)
 	_ = import_cmd
 	return fmt.Errorf("screenshot not implemented on this platform — install scrot or ImageMagick")
+}
+
+// getScreenDimensions — Linux stub.
+func getScreenDimensions(pngData []byte) (screenDimInfo, error) {
+	return screenDimInfo{}, fmt.Errorf("screen dimension metadata not available on this platform")
+}
+
+func platformMoveMouse(x, y int) (any, error) {
+	return nil, fmt.Errorf("move_mouse is not supported on this platform")
 }
 
 func handleGetClipboardLinux(params map[string]any) (any, error) {

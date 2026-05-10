@@ -142,7 +142,7 @@ def build_tools_description(tools: List) -> str:
         'ACTIONS & SKILLS': ['create_action', 'play_action', 'stop_action', 'list_actions', 'find_skill', 'push_skill', 'start_recording', 'stop_recording'],
         'CHAT': ['new_chat', 'clear_chat', 'open_page'],
         'APPLICATION': ['exit_app', 'wake_up', 'system_info'],
-        'INTEGRATIONS': ['send_file_to_telegram', 'send_voice_note_to_telegram', 'git_operations', 'create_cursor_ticket', 'google_workspace', 'markdown_to_google_doc', 'upload_doc_to_google', 'playwright_browser'],
+        'INTEGRATIONS': ['send_file_to_telegram', 'send_voice_note_to_telegram', 'git_operations', 'create_ticket', 'create_cursor_ticket', 'google_workspace', 'markdown_to_google_doc', 'upload_doc_to_google', 'playwright_browser'],
         'PROJECTS': ['list_projects', 'get_project_details', 'switch_project', 'query_current_project', 'deactivate_project', 'create_project_from_folder', 'add_files_to_project', 'create_project_ticket', 'open_project', 'start_project', 'open_and_start_project'],
     }
     all_categorized = {n for names in categories.values() for n in names}

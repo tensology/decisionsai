@@ -22,6 +22,9 @@ def build_step_config(step_data: dict) -> dict:
     if action_type in ("execute_code", "playwright"):
         config.setdefault("code", step_data.get("code", ""))
         config.setdefault("instruction", step_data.get("instruction", ""))
+    elif action_type == "computer_use":
+        config.setdefault("goal", step_data.get("instruction", ""))
+        config.setdefault("instruction", step_data.get("instruction", ""))
     elif action_type == "send_to_project_cli":
         config.setdefault("instruction", step_data.get("instruction", ""))
     elif action_type == "play_recording":

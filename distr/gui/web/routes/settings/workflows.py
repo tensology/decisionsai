@@ -350,12 +350,14 @@ def register_routes(router, templates):
                 "Valid action_type values and when to use them:\n"
                 '- "agent_instruction" — general-purpose desktop/UI automation (default for most tasks)\n'
                 '- "playwright" — browser automation: navigate, login, fill forms, click, scrape, screenshot\n'
+                '- "computer_use" — local vision-action loop for mechanical GUI tasks when browser automation is unavailable\n'
                 '- "execute_code" — run a Python script (data processing, file I/O, computation)\n'
                 '- "run_command" — execute a shell command (mkdir, cp, ls, app launch)\n'
                 '- "http_request" — make an HTTP request (GET, POST, PUT, DELETE)\n'
                 '- "play_recording" — replay a previously recorded macro\n\n'
                 "Rules:\n"
                 "- Use \"playwright\" for all web browser tasks.\n"
+                "- Use \"computer_use\" for repetitive local GUI/screen-control tasks that need screenshots and sidecar actions.\n"
                 "- Use \"agent_instruction\" for desktop app tasks and general automation.\n"
                 "- Use \"execute_code\" for data/file processing.\n"
                 "- The last step's on_pass_goto_position should be null (end workflow).\n"
@@ -947,4 +949,3 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow export preset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
-

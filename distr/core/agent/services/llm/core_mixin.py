@@ -1338,6 +1338,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             text = frame.text.strip()
             if not text:
                 logger.info("LLM: Received empty TranscriptionFrame — ignoring")
+                if self._is_dictating and getattr(self, '_dictation_one_shot', False):
+                    self._stop_dictation()
                 return
 
             logger.info("LLM: Received transcription: '%s'", text[:100])
@@ -1351,6 +1353,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     "LLM: Duplicate TranscriptionFrame within 2.5s — ignoring (%.50s…)",
                     text,
                 )
+                if self._is_dictating and getattr(self, '_dictation_one_shot', False):
+                    self._stop_dictation()
                 return
             self._last_ptt_transcription_text = text
             self._last_ptt_transcription_mono = _now
@@ -1361,11 +1365,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 self._notify_transcription_progress(int(cid), text, False, False)
             text_lower = text.lower().strip()
 
-            # When listening is disabled, only "start listening" can get through
+            # When listening is disabled, only wake phrases get through — unless we are in
+            # hold-to-dictate mode, which must still receive transcripts for typing.
             if not self._is_listening:
                 if self._check_start_listening_command(text_lower):
                     return
-                return
+                if not self._is_dictating:
+                    return
 
             # Dictation mode takes priority
             if self._check_dictation_commands(text_lower, text):
@@ -1374,6 +1380,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 text_to_type = self._process_dictation_text(text)
                 if text_to_type:
                     await self._type_dictation_text(text_to_type)
+                if getattr(self, '_dictation_one_shot', False):
+                    self._stop_dictation()
                 return
 
             # Voice commands

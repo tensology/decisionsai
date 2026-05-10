@@ -141,6 +141,33 @@ class TestStepValidator(unittest.TestCase):
         self.assertEqual(errors[0].field, "instruction")
         self.assertIn("Playwright", errors[0].message)
 
+    # --- Computer Use ---
+
+    def test_computer_use_with_goal(self):
+        errors = self.validator.validate("computer_use", {"goal": "Click Submit"})
+        self.assertEqual(errors, [])
+
+    def test_computer_use_with_instruction(self):
+        errors = self.validator.validate("computer_use", {"instruction": "Fill out the visible form"})
+        self.assertEqual(errors, [])
+
+    def test_computer_use_missing_goal_and_instruction(self):
+        errors = self.validator.validate("computer_use", {})
+        self.assertEqual(len(errors), 1)
+        self.assertEqual(errors[0].field, "goal")
+
+    def test_computer_use_rejects_bad_loop_limits(self):
+        errors = self.validator.validate("computer_use", {
+            "goal": "Click Submit",
+            "max_iterations": 0,
+            "stuck_threshold": "many",
+            "screenshot_resize_width": 100,
+        })
+        fields = {e.field for e in errors}
+        self.assertIn("max_iterations", fields)
+        self.assertIn("stuck_threshold", fields)
+        self.assertIn("screenshot_resize_width", fields)
+
     # --- ValidationError structure ---
 
     def test_validation_error_has_field_and_message(self):

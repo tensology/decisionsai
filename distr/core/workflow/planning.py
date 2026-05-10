@@ -27,11 +27,13 @@ You can choose from these step types (action_type):
 - "http_request" — make an HTTP request (GET, POST, PUT, DELETE, etc.).
 - "execute_code" — run a Python script (code is auto-generated from your instruction). Use for data processing, file I/O, or computation tasks.
 - "playwright" — browser automation with Playwright (code is auto-generated from your instruction). Use for web tasks like navigating sites, filling forms, clicking buttons, scraping data, taking screenshots.
+- "computer_use" — tight local vision-action loop for mechanical desktop/browser UI tasks when Playwright cannot be used; captures screenshots, asks the configured vision model for one action, executes through the sidecar, then repeats.
 - "play_recording" — replay a previously recorded macro/action.
 
 Rules:
 - Keep each step atomic (one clear action per step).
 - Use "playwright" for all web browser tasks (navigate, login, fill forms, scrape, screenshot).
+- Use "computer_use" for local GUI tasks that require screen control but are mechanical/repetitive and do not need orchestration reasoning on every click.
 - Use "agent_instruction" for desktop app interaction and general-purpose tasks.
 - Use "send_to_project_cli" when work should run in the linked project's terminal context.
 - Use "execute_code" for data processing, file I/O, or computation.
@@ -79,6 +81,71 @@ def _is_simple_instruction(instruction: str) -> bool:
         " and navigate ", " and click ", " and type ", " and save ",
     ]
     return not any(m in text for m in multi_markers)
+
+
+_GENERIC_STEP_TITLES = {
+    "",
+    "step",
+    "step 1",
+    "instruction",
+    "instruction from user",
+    "user instruction",
+    "task",
+    "do task",
+    "execute task",
+}
+
+
+def _derive_step_title(instruction: str, index: int) -> str:
+    text = re.sub(r"\s+", " ", (instruction or "").strip())
+    text = re.sub(r"^(please\s+|can you\s+|could you\s+)", "", text, flags=re.I)
+    if not text:
+        return f"Step {index + 1}"
+    words = text.split()
+    title = " ".join(words[:8]).strip(" .,:;")
+    if len(title) > 70:
+        title = title[:67].rstrip() + "..."
+    return title[:1].upper() + title[1:] if title else f"Step {index + 1}"
+
+
+def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: str) -> List[Dict[str, Any]]:
+    """Clean LLM-planned steps before persisting them.
+
+    This is deliberately deterministic: the workflow database should never get
+    vague labels like "instruction from user" when we have enough instruction
+    text to derive a concrete title.
+    """
+    normalized: List[Dict[str, Any]] = []
+    valid_action_types = {
+        "agent_instruction",
+        "run_command",
+        "send_to_project_cli",
+        "http_request",
+        "execute_code",
+        "playwright",
+        "computer_use",
+        "play_recording",
+    }
+    for i, raw_step in enumerate(steps_data or []):
+        if isinstance(raw_step, str):
+            raw_step = {"instruction": raw_step, "action_type": "agent_instruction"}
+        if not isinstance(raw_step, dict):
+            continue
+        instruction = str(raw_step.get("instruction") or raw_step.get("text") or "").strip()
+        if not instruction:
+            instruction = (source_instruction or "").strip()
+        title = str(raw_step.get("title") or raw_step.get("label") or "").strip()
+        if title.lower() in _GENERIC_STEP_TITLES or re.fullmatch(r"step\s*\d+", title.lower() or ""):
+            title = _derive_step_title(instruction, i)
+        action_type = str(raw_step.get("action_type") or "agent_instruction").strip().lower()
+        if action_type not in valid_action_types:
+            action_type = "agent_instruction"
+        step = dict(raw_step)
+        step["title"] = title or f"Step {i + 1}"
+        step["instruction"] = instruction
+        step["action_type"] = action_type
+        normalized.append(step)
+    return normalized
 
 
 def _litellm_model(provider: str, model: str, settings: dict) -> str:
@@ -151,7 +218,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
             logger.warning("LLM returned non-array: %s", type(parsed))
             return None
         steps = []
-        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "play_recording"}
+        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "computer_use", "play_recording"}
         for i, item in enumerate(parsed):
             if isinstance(item, dict):
                 title = str(item.get("title") or item.get("label") or f"Step {i + 1}")
@@ -168,7 +235,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
                     steps.append(step)
             elif isinstance(item, str):
                 steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
-        return steps if steps else None
+        return _normalize_plan_steps(steps, instruction) if steps else None
     except Exception as e:
         logger.error("Workflow plan LLM call failed: %s", e, exc_info=True)
         return None
@@ -200,6 +267,7 @@ def plan_workflow(
     if not steps_data:
         steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]  # Fallback single-step
         planning_mode = "fallback_single_step"
+    steps_data = _normalize_plan_steps(steps_data, instruction)
 
     # Serialize workflow_input to JSON if provided
     workflow_input_json = None
@@ -373,6 +441,7 @@ def generate_steps(workflow_id: int, instruction: str) -> List[Dict[str, Any]]:
             steps_data = _call_llm_for_plan(instruction)  # Retry once
     if not steps_data:
         steps_data = [{"title": "Step 1", "instruction": instruction.strip(), "action_type": "agent_instruction"}]  # Fallback
+    steps_data = _normalize_plan_steps(steps_data, instruction)
 
     created: List[Dict[str, Any]] = []
     with get_session() as db:

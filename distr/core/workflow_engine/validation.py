@@ -36,6 +36,7 @@ class StepValidator:
             StepType.EXECUTE_CODE.value: self.validate_execute_code,
             StepType.PLAYWRIGHT.value: self.validate_playwright,
             StepType.SEND_TO_PROJECT_CLI.value: self.validate_send_to_project_cli,
+            StepType.COMPUTER_USE.value: self.validate_computer_use,
         }
 
         validator = validators.get(step_type)
@@ -143,4 +144,36 @@ class StepValidator:
                 field="instruction",
                 message="Instruction is required for Send to Project CLI",
             ))
+        return errors
+
+    def validate_computer_use(self, config: dict) -> List[ValidationError]:
+        """Require a non-empty goal/instruction and sane loop limits."""
+        errors: List[ValidationError] = []
+        goal = config.get("goal") or config.get("instruction") or ""
+        if not str(goal).strip():
+            errors.append(ValidationError(
+                field="goal",
+                message="Goal or instruction is required for Computer Use",
+            ))
+
+        for field, min_value, max_value in (
+            ("max_iterations", 1, 25),
+            ("stuck_threshold", 1, 10),
+            ("screenshot_resize_width", 320, 4096),
+        ):
+            if field not in config or config.get(field) in (None, ""):
+                continue
+            try:
+                value = int(config.get(field))
+            except (TypeError, ValueError):
+                errors.append(ValidationError(
+                    field=field,
+                    message=f"{field} must be an integer",
+                ))
+                continue
+            if value < min_value or value > max_value:
+                errors.append(ValidationError(
+                    field=field,
+                    message=f"{field} must be between {min_value} and {max_value}",
+                ))
         return errors

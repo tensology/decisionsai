@@ -3198,9 +3198,26 @@ source: kanban_ticket_{t.id}
                 t.linked_workflow_id = payload.workflow_id
                 s.flush()
 
+            project_id_value = str(t.linked_project_id) if t.linked_project_id else None
             context = f"Ticket: {t.title}"
-            if t.description:
-                context += f"\n\nDescription: {t.description}"
+            workflow_brief = None
+            try:
+                from distr.core.kanban.ticket_workflow_brief import (
+                    build_ticket_workflow_brief,
+                    render_ticket_workflow_brief,
+                )
+                workflow_brief = build_ticket_workflow_brief(
+                    s,
+                    t.id,
+                    board_id=board_id_value,
+                    board_name=board_name_value,
+                    project_id=project_id_value,
+                )
+                context = render_ticket_workflow_brief(workflow_brief)
+            except Exception:
+                logger.debug("send-to-workflow: structured brief failed", exc_info=True)
+                if t.description:
+                    context += f"\n\nDescription: {t.description}"
 
             run_metadata = {
                 "source_type": "ticket_send_to_workflow",
@@ -3208,10 +3225,12 @@ source: kanban_ticket_{t.id}
                 "board_name": board_name_value,
                 "ticket_id": t.id,
                 "ticket_title": t.title or "",
-                "project_id": str(t.linked_project_id) if t.linked_project_id else None,
+                "project_id": project_id_value,
                 "project_name": None,
                 "phase": "planning",
             }
+            if workflow_brief:
+                run_metadata["ticket_workflow_brief"] = workflow_brief
 
             run_result = start_workflow_run(
                 workflow_id,

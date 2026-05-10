@@ -22,6 +22,7 @@ from distr.core.db.workflow import (
 from distr.core.workflow.verification import _run_verification
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
+from distr.core.workflow.chat_trace import record_workflow_chat_event
 from distr.gui.web.workflow_events import increment_workflow_updated
 from distr.gui.web.kanban_events import increment_kanban_updated
 
@@ -429,6 +430,14 @@ class StepRouter:
         db.commit()
 
         increment_workflow_updated()
+        record_workflow_chat_event(
+            run_id,
+            "waiting",
+            status="waiting",
+            step_id=step_id,
+            step_name=step_name,
+            summary=result or "Workflow is waiting for input.",
+        )
         self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
         self._notify_main_agent(workflow_id, run_id, handoff)
 

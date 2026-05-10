@@ -165,14 +165,12 @@ class GeneralSettings(BaseModel):
     restore_position: bool = True
     oracle_position: str = "custom"
     global_ptt_hotkey_enabled: bool = True
-    global_ptt_hotkey_primary: str = "option"
-    global_ptt_hotkey_secondary: str = "command"
+    global_ptt_hotkey_combo: str = "option_command"
 
 
 class ShortcutSettings(BaseModel):
     global_ptt_hotkey_enabled: bool = True
-    global_ptt_hotkey_primary: str = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
-    global_ptt_hotkey_secondary: str = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
+    global_ptt_hotkey_combo: str = HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]
     oracle_size_hotkey_decrease_modifier: str = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]
     oracle_size_hotkey_decrease_key: str = HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]
     oracle_size_hotkey_increase_modifier: str = HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]
@@ -197,9 +195,9 @@ class ShortcutSettings(BaseModel):
     web_hotkey_workflows_key: str = HOTKEY_DEFAULTS["web_hotkey_workflows_key"]
     web_hotkey_preferences_modifier: str = HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]
     web_hotkey_preferences_key: str = HOTKEY_DEFAULTS["web_hotkey_preferences_key"]
-    dictation_hotkey_enabled: bool = False
-    dictation_hotkey_modifier: str = "control_command"
-    dictation_hotkey_key: str = "d"
+    dictation_hotkey_enabled: bool = HOTKEY_DEFAULTS["dictation_hotkey_enabled"]
+    dictation_hotkey_modifier: str = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
+    dictation_hotkey_key: str = HOTKEY_DEFAULTS["dictation_hotkey_key"]
 
 
 class AudioSettings(BaseModel):

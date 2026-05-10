@@ -26,6 +26,7 @@ import hashlib
 import logging
 import os
 import platform
+import time
 
 
 logger = logging.getLogger(__name__)
@@ -156,6 +157,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # Connect to dictation signals
         signal_manager.dictation_started.connect(self.on_dictation_started)
         signal_manager.dictation_stopped.connect(self.on_dictation_stopped)
+        signal_manager.shortcut_settings_changed.connect(self._on_shortcut_settings_changed)
         
         # Window flags already set above — don't call setWindowFlags again
         # as it recreates the native window and can break on-top state on macOS.
@@ -1231,6 +1233,21 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if self._global_ptt_listener is not None:
             self._global_ptt_listener.stop()
 
+    def _on_shortcut_settings_changed(self):
+        """Reload live shortcut state after Settings saves hotkey changes."""
+        try:
+            self.settings = load_settings_from_db()
+        except Exception as exc:
+            logger.warning("[HOTKEY] Failed to reload shortcut settings: %s", exc)
+
+        if self._global_ptt_listener is None:
+            self._setup_global_ptt_hotkey()
+            logger.info("[HOTKEY] Shortcut settings changed; global listener started")
+            return
+
+        self._global_ptt_listener.refresh()
+        logger.info("[HOTKEY] Shortcut settings changed; global listener refreshed")
+
     def _is_global_ptt_hotkey_enabled(self) -> bool:
         try:
             current_settings = load_settings_from_db()
@@ -1239,20 +1256,20 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return bool(self.settings.get("global_ptt_hotkey_enabled", True))
 
     def _get_global_ptt_hotkey_combo(self):
-        valid = {"option", "command", "control", "shift"}
+        """Return the PTT modifier set parsed from ``global_ptt_hotkey_combo``.
+
+        The combo string (e.g. ``option_command``, ``control_command_option``) is
+        split on ``_`` and each token that is a valid modifier name is kept.
+        """
+        valid_mods = {"option", "command", "control", "shift"}
         try:
             current_settings = load_settings_from_db()
         except Exception:
             current_settings = self.settings
-        primary = str(current_settings.get("global_ptt_hotkey_primary", HOTKEY_DEFAULTS["global_ptt_hotkey_primary"])).strip().lower()
-        secondary = str(current_settings.get("global_ptt_hotkey_secondary", HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"])).strip().lower()
-        if primary not in valid:
-            primary = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
-        if secondary not in valid:
-            secondary = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
-        if primary == secondary:
-            secondary = "command" if primary != "command" else "option"
-        return {primary, secondary}
+
+        combo_str = str(current_settings.get("global_ptt_hotkey_combo", HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]) or "").strip().lower()
+        parts = {p for p in combo_str.split("_") if p in valid_mods}
+        return parts if parts else {"option", "command"}
 
     def _on_global_ptt_pressed(self):
         """Map global key hold to regular PTT press behavior."""
@@ -1261,6 +1278,13 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _on_global_ptt_released(self):
         """Map global key release to regular PTT release behavior."""
         self.stop_hold_to_talk()
+        # Safety: if the oracle hook is still ptt_active after cleanup (e.g. race
+        # between delay timer and key release), force it back to idle so the
+        # animation never gets stuck glowing.
+        if self._event_dispatcher.get_current_hook() == "ptt_active":
+            logging.warning("[ORACLE] _on_global_ptt_released: hook still ptt_active — forcing idle")
+            self._event_dispatcher.force_idle("global_ptt_hotkey_release_safety")
+        self.update()
 
     def _get_oracle_size_down_hotkey_combo(self):
         valid_modifiers = CHORD_MODIFIERS
@@ -1377,7 +1401,21 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         return (modifier, key)
 
     def _on_dictation_hotkey_pressed(self):
-        """Start dictation via hold-to-dictate hotkey."""
+        """Start dictation via hold-to-dictate hotkey.
+
+        Fires the 'dictation' visual hook so the oracle shows the right
+        animation while the user is speaking.
+        """
+        self._dictation_hotkey_active = True
+        self._dictation_started_from_hotkey = True
+        self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        if not getattr(self, "is_dictating", False):
+            self.is_dictating = True
+            self._update_dictation_menu_state()
+        try:
+            self._event_dispatcher.fire_hook("dictation", trigger="oracle:dictation_hotkey_press")
+        except Exception as exc:
+            logging.debug("[ORACLE] dictation hook fire failed: %s", exc)
         try:
             from distr.core.signals import signal_manager
             signal_manager.dictation_hotkey_pressed.emit()
@@ -1385,7 +1423,34 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             pass
 
     def _on_dictation_hotkey_released(self):
-        """Stop dictation via hold-to-dictate hotkey release."""
+        """Stop dictation via hold-to-dictate hotkey release.
+
+        Reverts the visual hook and guarantees the oracle is NOT left in a
+        suspended/glowing state regardless of what the animation system did.
+        """
+        # Revert the dictation hook first
+        self._dictation_hotkey_active = False
+        self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        if getattr(self, "is_dictating", False):
+            self.is_dictating = False
+            self._update_dictation_menu_state()
+        try:
+            self._event_dispatcher.revert_hook("dictation", trigger="oracle:dictation_hotkey_release")
+        except Exception as exc:
+            logging.debug("[ORACLE] dictation hook revert failed: %s", exc)
+
+        # Safety net: if we're still on dictation (revert didn't fire or hook
+        # stack was unexpected), force back to idle so glow never gets stuck.
+        try:
+            current = self._event_dispatcher.get_current_hook()
+            if current == "dictation":
+                logging.warning("[ORACLE] dictation hook still active after revert — forcing idle")
+                self._event_dispatcher.force_idle("dictation_hotkey_release_safety")
+        except Exception as exc:
+            logging.debug("[ORACLE] dictation cleanup check failed: %s", exc)
+
+        self.update()
+
         try:
             from distr.core.signals import signal_manager
             signal_manager.dictation_hotkey_released.emit()
@@ -2123,6 +2188,17 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     
     def on_dictation_started(self):
         """Handle dictation started signal"""
+        hotkey_started = bool(getattr(self, "_dictation_started_from_hotkey", False))
+        hotkey_active = bool(getattr(self, "_dictation_hotkey_active", False))
+        hotkey_deadline = float(getattr(self, "_dictation_started_from_hotkey_deadline", 0.0) or 0.0)
+        if hotkey_started and (hotkey_active or time.monotonic() <= hotkey_deadline):
+            self._dictation_started_from_hotkey = False
+            logging.debug("[ORACLE] Dictation started signal ignored — hotkey path already handled visual state")
+            return
+        self._dictation_started_from_hotkey = False
+        if getattr(self, "is_dictating", False):
+            logging.debug("[ORACLE] Dictation started signal ignored — already dictating")
+            return
         logging.info("[ORACLE] Dictation started")
         self.is_dictating = True
         self._update_dictation_menu_state()

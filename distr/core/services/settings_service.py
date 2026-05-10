@@ -157,18 +157,6 @@ def update_setting(key: str, value: Any, *, signal=None, signal_args: tuple = ()
 
 def save_general_settings(data) -> None:
     """Persist all general-tab fields and emit every relevant signal."""
-    valid_modifiers = CHORD_MODIFIERS
-    primary = str(getattr(data, "global_ptt_hotkey_primary", HOTKEY_DEFAULTS["global_ptt_hotkey_primary"])).strip().lower()
-    secondary = str(getattr(data, "global_ptt_hotkey_secondary", HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"])).strip().lower()
-    if primary not in valid_modifiers:
-        primary = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
-    if secondary not in valid_modifiers:
-        secondary = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
-    if primary == secondary:
-        secondary = "command" if primary != "command" else "option"
-    data.global_ptt_hotkey_primary = primary
-    data.global_ptt_hotkey_secondary = secondary
-
     settings = load_settings_from_db()
     previous_settings = dict(settings)
 
@@ -235,7 +223,7 @@ def save_shortcut_settings(data) -> None:
     valid_chord_modifiers = CHORD_MODIFIERS
     valid_keys = VALID_HOTKEY_KEYS
 
-    def _norm_modifier(value: str, default: str = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]) -> str:
+    def _norm_modifier(value: str, default: str = HOTKEY_DEFAULTS["recording_hotkey_modifier"]) -> str:
         v = str(value or default).strip().lower()
         return v if v in valid_chord_modifiers else default
 
@@ -243,14 +231,13 @@ def save_shortcut_settings(data) -> None:
         v = str(value or default).strip().lower()
         return v if v in valid_keys else default
 
-    primary = _norm_modifier(getattr(data, "global_ptt_hotkey_primary", HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]), HOTKEY_DEFAULTS["global_ptt_hotkey_primary"])
-    secondary = _norm_modifier(getattr(data, "global_ptt_hotkey_secondary", HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]), HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"])
-    if primary not in valid_ptt_modifiers:
-        primary = HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]
-    if secondary not in valid_ptt_modifiers:
-        secondary = HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]
-    if primary == secondary:
-        secondary = "command" if primary != "command" else "option"
+    # PTT: unified combo field (e.g. "option_command", "control_command_option")
+    # Parse each token and keep only valid modifier names.
+    _raw_combo = str(getattr(data, "global_ptt_hotkey_combo", HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]) or "").strip().lower()
+    _ptt_parts = [p for p in _raw_combo.split("_") if p in valid_ptt_modifiers]
+    if not _ptt_parts:
+        _ptt_parts = ["option", "command"]
+    ptt_combo = "_".join(dict.fromkeys(_ptt_parts))  # deduplicate, preserve order
 
     down_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_decrease_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]), HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"])
     up_modifier = _norm_modifier(getattr(data, "oracle_size_hotkey_increase_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]), HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"])
@@ -287,8 +274,7 @@ def save_shortcut_settings(data) -> None:
 
     settings = load_settings_from_db()
     settings["global_ptt_hotkey_enabled"] = bool(getattr(data, "global_ptt_hotkey_enabled", True))
-    settings["global_ptt_hotkey_primary"] = primary
-    settings["global_ptt_hotkey_secondary"] = secondary
+    settings["global_ptt_hotkey_combo"] = ptt_combo
     settings["oracle_size_hotkey_decrease_modifier"] = down_modifier
     settings["oracle_size_hotkey_decrease_key"] = down_key
     settings["oracle_size_hotkey_increase_modifier"] = up_modifier
@@ -317,10 +303,18 @@ def save_shortcut_settings(data) -> None:
     dictation_key = _norm_key(getattr(data, "dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]), HOTKEY_DEFAULTS["dictation_hotkey_key"])
     if dictation_modifier not in valid_chord_modifiers:
         dictation_modifier = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
-    settings["dictation_hotkey_enabled"] = bool(getattr(data, "dictation_hotkey_enabled", False))
+    settings["dictation_hotkey_enabled"] = bool(getattr(data, "dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]))
     settings["dictation_hotkey_modifier"] = dictation_modifier
     settings["dictation_hotkey_key"] = dictation_key
     save_settings_to_db(settings)
+
+    def _do():
+        _safe_emit(
+            signal_manager.shortcut_settings_changed,
+            label="shortcut_settings_changed",
+        )
+
+    _run_on_qt_main_thread(_do, label="shortcut_settings_changed")
 
 
 def apply_voice_selection_to_settings(

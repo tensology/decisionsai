@@ -9,11 +9,16 @@ from typing import Any, Optional
 from langchain.tools import BaseTool
 from pydantic import Field
 import logging
-import pyautogui
-# Disable pyautogui FAILSAFE to prevent mouse operations from being blocked
-pyautogui.FAILSAFE = False
+import re
 import time
 from distr.core.agent.tools.base import get_platform_modifier_key
+
+try:
+    import pyautogui
+    # Disable pyautogui FAILSAFE to prevent mouse operations from being blocked
+    pyautogui.FAILSAFE = False
+except Exception:
+    pyautogui = None
 
 logger = logging.getLogger(__name__)
 
@@ -73,18 +78,52 @@ def get_clipboard_content():
         return None
 
 
+def set_clipboard_content(text: str) -> bool:
+    """Write text to clipboard using platform-specific methods."""
+    try:
+        import platform
+        import subprocess
+
+        system = platform.system()
+        payload = text if text is not None else ""
+
+        if system == "Darwin":
+            result = subprocess.run(["pbcopy"], input=payload, text=True, timeout=1)
+            return result.returncode == 0
+        if system == "Windows":
+            result = subprocess.run(
+                ["powershell", "-command", "Set-Clipboard"],
+                input=payload,
+                text=True,
+                timeout=1,
+            )
+            return result.returncode == 0
+
+        for cmd in (["xclip", "-selection", "clipboard"], ["xsel", "--clipboard", "--input"]):
+            try:
+                result = subprocess.run(cmd, input=payload, text=True, timeout=1)
+                if result.returncode == 0:
+                    return True
+            except Exception:
+                continue
+        return False
+    except Exception as e:
+        logger.error("Error setting clipboard content: %s", e, exc_info=True)
+        return False
+
+
 class ClipboardActionTool(BaseTool):
     """Tool for clipboard-based actions: explain, elaborate, read."""
     
     name: str = "clipboard_action"
-    description: str = """EXECUTE clipboard actions: explain, elaborate, or get clipboard content.
+    description: str = """EXECUTE clipboard actions: explain, elaborate, get clipboard content, or write text into the clipboard.
     
     CRITICAL: This tool is ONLY for "explain this", "elaborate this", and "get clipboard" - NOT for copy/cut/paste.
     For "copy this", "cut this", "paste" → Use text_editing tool instead.
     
     DO NOT call this tool for copy/cut/paste operations - use text_editing tool.
     
-    When user says "explain this", "elaborate this", "what's in the clipboard", "get the clipboard", "show clipboard" - YOU MUST CALL THIS TOOL IMMEDIATELY.
+    When user says "explain this", "elaborate this", "what's in the clipboard", "get the clipboard", "show clipboard", "set clipboard to ...", or "write ... to clipboard" - YOU MUST CALL THIS TOOL IMMEDIATELY.
     DO NOT explain what the tool does. DO NOT describe the tool. DO NOT ask questions. JUST CALL IT.
     
     NOTE: "read this" is handled automatically and should NOT be called via this tool.
@@ -92,13 +131,15 @@ class ClipboardActionTool(BaseTool):
     The tool automatically:
     - For "explain this" / "elaborate this": Copies current selection (Cmd+C), gets clipboard content, processes it (explain/elaborate -> LLM)
     - For "get clipboard" / "what's in the clipboard": Returns clipboard content directly to conversation
+    - For "set clipboard to X" / "write X to clipboard": Writes X directly into the clipboard
     
     REQUIRED CALLS:
     - "explain this" -> CALL with action="explain" (do not explain, just call)
     - "elaborate this" -> CALL with action="elaborate" (do not explain, just call)
     - "what's in the clipboard" / "get the clipboard" / "show clipboard" -> CALL with action="get" (returns clipboard content)
+    - "set clipboard to hello" / "write hello to clipboard" -> CALL with action="set", content="hello"
     
-    Available actions: explain, elaborate, get.
+    Available actions: explain, elaborate, get, set, write.
     DO NOT use this tool for copy/cut/paste - use text_editing tool instead.
     CALL THE TOOL - never describe it."""
     
@@ -127,6 +168,7 @@ class ClipboardActionTool(BaseTool):
             # Extract action from text if not provided
             # Also check if action is empty but we have a user request - try to infer from the last user message
             if not action:
+                text_lower = ""
                 if text:
                     text_lower = text.lower().strip()
                     logger.info(f"Extracting action from text: '{text_lower}'")
@@ -151,6 +193,11 @@ class ClipboardActionTool(BaseTool):
                 elif "read" in text_lower and "this" in text_lower:
                     action = "read"
                     logger.info("Detected: read")
+                elif any(phrase in text_lower for phrase in ["set clipboard", "write clipboard", "put clipboard", "copy clipboard"]) or (
+                    "clipboard" in text_lower and any(word in text_lower for word in [" to clipboard", " into clipboard", " onto clipboard"])
+                ):
+                    action = "set"
+                    logger.info("Detected: set clipboard")
                 elif any(phrase in text_lower for phrase in ["what's in the clipboard", "what is in the clipboard", "get the clipboard", "get clipboard", "get what's in", "get what is in", "go get", "go get what", "go get what's", "go get what is", "show clipboard", "show me clipboard", "what's on the clipboard", "read my clipboard", "read the clipboard", "see my clipboard"]):
                     action = "get"
                     logger.info("Detected: get clipboard")
@@ -170,9 +217,19 @@ class ClipboardActionTool(BaseTool):
             
             if not action:
                 logger.warning(f"Could not extract action from: action='{action}', text='{text}'")
-                return "Error: No action specified. Available: explain, elaborate, read, get"
+                return "Error: No action specified. Available: explain, elaborate, read, get, set"
             
             logger.info(f"Executing clipboard action: {action}")
+
+            if action in ("set", "write"):
+                content = kwargs.get("content") or kwargs.get("clipboard_text") or kwargs.get("value") or ""
+                if not content and text:
+                    content = self._extract_set_content(text)
+                if content is None or content == "":
+                    return "Error: No clipboard text provided. Say 'set clipboard to ...' or pass content."
+                if not set_clipboard_content(str(content)):
+                    return "Error: Could not write to clipboard."
+                return f"Clipboard updated ({len(str(content))} characters)."
             
             # For "get" action, use existing clipboard content directly (no copy needed)
             if action == "get":
@@ -186,6 +243,8 @@ class ClipboardActionTool(BaseTool):
             
             # Step 1: Press Cmd+C to copy (for explain/elaborate/read)
             # Use keyDown/keyUp separately for more reliable execution on macOS
+            if pyautogui is None:
+                return "Error: pyautogui is not available, so I cannot copy the current selection. I can still get or set clipboard content directly."
             cmd_key = get_platform_modifier_key()
             logger.info(f"Pressing {cmd_key}+C to copy selection")
             
@@ -230,11 +289,31 @@ class ClipboardActionTool(BaseTool):
                 logger.info(f"Got clipboard content ({len(clipboard_text)} chars): '{clipboard_text[:100]}...'")
                 return self._handle_elaborate(clipboard_text)
             else:
-                return f"Error: Unknown action '{action}'. Available: explain, elaborate, read"
+                return f"Error: Unknown action '{action}'. Available: explain, elaborate, read, get, set"
             
         except Exception as e:
             logger.error(f"Error in ClipboardActionTool: {e}", exc_info=True)
             return f"Error executing clipboard action: {str(e)}"
+
+    @staticmethod
+    def _extract_set_content(text: str) -> str:
+        """Extract clipboard payload from natural set/write phrasing."""
+        if not text:
+            return ""
+        patterns = [
+            r"\b(?:set|write|put|copy)\s+(?:the\s+)?clipboard\s+(?:to|as)\s+(.+)$",
+            r"\b(?:set|write|put|copy)\s+(.+?)\s+(?:to|into|onto)\s+(?:my\s+|the\s+)?clipboard\b",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, text, re.IGNORECASE | re.DOTALL)
+            if match:
+                content = match.group(1).strip()
+                if (content.startswith('"') and content.endswith('"')) or (
+                    content.startswith("'") and content.endswith("'")
+                ):
+                    content = content[1:-1]
+                return content
+        return ""
     
     def _handle_explain(self, text: str) -> str:
         """Send text to LLM for explanation."""

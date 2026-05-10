@@ -38,6 +38,16 @@ func buildHandlers() map[string]ToolHandler {
 	// Desktop tools — platform-specific
 	addDesktopHandlers(m)
 
+	// New coordinate-input tools (registered after addDesktopHandlers so
+	// platform stubs can override if needed — darwin provides real impl)
+	m["click_at"]          = handleClickAt
+	m["double_click_at"]   = handleDoubleClickAt
+	m["right_click_at"]    = handleRightClickAt
+	m["get_screen_info"]   = handleGetScreenInfo
+	m["get_cursor_pos"]    = handleGetCursorPos
+	m["capture_annotated"] = handleCaptureAnnotated
+	m["type_clipboard"]    = handleTypeClipboard
+
 	// API relay — forward HTTP calls to the desktop app's local server
 	m["api_relay"] = handleAPIRelay
 
@@ -210,11 +220,22 @@ func handleCaptureScreen(params map[string]any) (any, error) {
 		return nil, err
 	}
 
-	return map[string]any{
+	result := map[string]any{
 		"type":      "screenshot",
 		"mime_type": "image/png",
 		"data":      base64.StdEncoding.EncodeToString(data),
-	}, nil
+	}
+
+	// Enrich with scale/dimension metadata on platforms that support it
+	if info, err := getScreenDimensions(data); err == nil {
+		result["scale_factor"]    = info.scaleFactor
+		result["logical_width"]   = info.logicalW
+		result["logical_height"]  = info.logicalH
+		result["physical_width"]  = info.physicalW
+		result["physical_height"] = info.physicalH
+	}
+
+	return result, nil
 }
 
 // ── System Info ───────────────────────────────────────────────────────────────
@@ -251,6 +272,23 @@ func toInt(v any) int {
 		return n
 	}
 	return 0
+}
+
+func toFloat(v any) float64 {
+	switch n := v.(type) {
+	case float64:
+		return n
+	case int:
+		return float64(n)
+	}
+	return 0
+}
+
+func stringOrDefault(v any, def string) string {
+	if s, ok := v.(string); ok && s != "" {
+		return s
+	}
+	return def
 }
 
 // ── API Relay ─────────────────────────────────────────────────────────────────
@@ -434,3 +472,14 @@ func handleRunPython(params map[string]any) (any, error) {
 	}, nil
 }
 
+// ── screenDimensions — platform-provided ──────────────────────────────────────
+// getScreenDimensions is implemented per-platform (darwin returns real info;
+// other platforms return a stub/error so the caller omits the fields).
+
+type screenDimInfo struct {
+	scaleFactor float64
+	logicalW    int
+	logicalH    int
+	physicalW   int
+	physicalH   int
+}

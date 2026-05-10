@@ -83,6 +83,7 @@ class GlobalPttHotkeyListener:
             self._pressed_modifiers.clear()
             self._pressed_keys.clear()
             was_active = self._combo_active
+            was_dictating = self._dictation_active
             self._combo_active = False
             self._dictation_active = False
 
@@ -91,6 +92,11 @@ class GlobalPttHotkeyListener:
                 self._on_combo_released()
             except Exception:
                 logger.debug("[PTT HOTKEY] Combo release callback failed during stop", exc_info=True)
+        if was_dictating and self._on_dictation_released:
+            try:
+                self._on_dictation_released()
+            except Exception:
+                logger.debug("[PTT HOTKEY] Dictation release callback failed during stop", exc_info=True)
 
         if self._listener is not None:
             try:
@@ -214,6 +220,28 @@ class GlobalPttHotkeyListener:
         mod = self._normalize_modifier(key)
         if not mod and normalized_key in {"option", "command", "control", "shift"}:
             mod = normalized_key
+
+        # Dictation release — must run when the letter key lifts too (mod may be None).
+        # Previously we returned early on non-modifier releases, so release never fired if
+        # the user let go of D before the modifiers.
+        dictation_released = False
+        with self._lock:
+            if self._dictation_active and self._get_dictation_combo and self._on_dictation_released:
+                dict_combo = self._get_dictation_combo()
+                if dict_combo and len(dict_combo) == 2:
+                    dict_modifier, dict_key = dict_combo
+                    dict_modifiers = self._modifier_tokens(dict_modifier)
+                    still_dict_active = (
+                        dict_modifiers.issubset(self._pressed_modifiers)
+                        and dict_key in self._pressed_keys
+                    )
+                    if not still_dict_active:
+                        self._dictation_active = False
+                        dictation_released = True
+
+        if dictation_released:
+            self._on_dictation_released()
+
         if not mod:
             return
 
@@ -236,26 +264,19 @@ class GlobalPttHotkeyListener:
         if should_emit:
             self._on_combo_released()
 
-        # Dictation release — fires when either the modifier or key is released
-        if self._dictation_active and self._get_dictation_combo and self._on_dictation_released:
-            dict_combo = self._get_dictation_combo()
-            if dict_combo and len(dict_combo) == 2:
-                dict_modifier, dict_key = dict_combo
-                dict_modifiers = self._modifier_tokens(dict_modifier)
-                # Release if the modifier set no longer satisfies OR the key was released
-                still_dict_active = (
-                    dict_modifiers.issubset(self._pressed_modifiers)
-                    and dict_key in self._pressed_keys
-                )
-                if not still_dict_active:
-                    self._dictation_active = False
-                    self._on_dictation_released()
-
     @staticmethod
     def _normalize_key(key) -> Optional[str]:
         key_name = str(getattr(key, "name", "") or "").lower()
         key_char = str(getattr(key, "char", "") or "")
         key_char = key_char.lower()
+
+        # Ctrl+letter often arrives from pynput as ASCII control characters
+        # (Ctrl+D => "\x04") rather than the printable letter. Hotkey chords
+        # are configured as letters, so map those back before matching.
+        if len(key_char) == 1:
+            code = ord(key_char)
+            if 1 <= code <= 26:
+                return chr(ord("a") + code - 1)
 
         # macOS Option/Alt modified glyphs (with or without Command pressed)
         # should still map back to the intended base shortcut key.

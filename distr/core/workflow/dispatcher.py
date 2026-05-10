@@ -37,8 +37,18 @@ from distr.core.workflow.risk_and_audit import (
     validation_rules_for_risk,
     enforce_validation_requirements,
 )
-from distr.gui.web.workflow_events import increment_workflow_updated
-from distr.gui.web.kanban_events import increment_kanban_updated
+from distr.core.workflow.chat_trace import record_workflow_chat_event
+try:
+    from distr.gui.web.workflow_events import increment_workflow_updated
+except Exception:  # pragma: no cover - tests may stub distr.gui.web
+    def increment_workflow_updated(*args, **kwargs):
+        return None
+
+try:
+    from distr.gui.web.kanban_events import increment_kanban_updated
+except Exception:  # pragma: no cover - tests may stub distr.gui.web
+    def increment_kanban_updated(*args, **kwargs):
+        return None
 
 logger = logging.getLogger(__name__)
 
@@ -480,6 +490,7 @@ def start_workflow_run(
         # run_in_workflow idempotency guard sees running + current_step_id match and skips the
         # initial dispatch (start_workflow_run always loads DB then dispatches once).
         first_step_id = first_step.id
+        first_step_name = first_step.name
         # Mark the ticket as "running" immediately so the board reflects in-progress state
         if ticket_id:
             from distr.core.db.kanban import KanbanTicket as _KT
@@ -488,6 +499,15 @@ def start_workflow_run(
                 _ticket.workflow_status = "running"
         db.commit()
 
+    record_workflow_chat_event(
+        run_id,
+        "started",
+        status="running",
+        step_id=first_step_id,
+        step_name=first_step_name,
+        summary=f"Started workflow {workflow_id}.",
+        phase="planning",
+    )
     _tid = threading.get_ident()
     _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
     # Also keep os.environ for backward compat with tools that read it directly.
@@ -543,6 +563,12 @@ def cancel_run(run_id: int) -> bool:
         _run_id, _wf_id = run.id, run.workflow_id
         db.commit()
     increment_workflow_updated()
+    record_workflow_chat_event(
+        _run_id,
+        "cancelled",
+        status="cancelled",
+        summary="Workflow run cancelled.",
+    )
     _finalize_terminal_run(_run_id, _wf_id, "cancelled")
     return True
 
@@ -581,6 +607,13 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
 
     router = StepRouter()
     decision = router.resume_from_feedback(step_id, run_id, optional_input)
+    record_workflow_chat_event(
+        run_id,
+        "resumed",
+        status="running",
+        step_id=step_id,
+        summary="Workflow resumed with user input." if optional_input else "Workflow resumed.",
+    )
 
     # Resume must continue execution, not only update run state.
     action = (decision or {}).get("action")
@@ -651,6 +684,12 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         ticket_id = run.ticket_id
         db.commit()
     increment_workflow_updated()
+    record_workflow_chat_event(
+        run_id,
+        "completed",
+        status=status,
+        summary=f"Workflow run finished with status: {status}.",
+    )
     try:
         if board_id is not None:
             from distr.gui.web.kanban_events import increment_kanban_updated
@@ -770,8 +809,25 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         errors = self._validate_before_dispatch(step_data)
         if errors:
             self._fail_step(step_id, f"Validation failed: {errors}")
+            record_workflow_chat_event(
+                run_id,
+                "step_failed",
+                status="failed",
+                step_id=step_id,
+                step_name=step_data.get("name"),
+                summary=f"Validation failed: {errors}",
+            )
             return {"error": errors}
         self._set_status(step_id, "running")
+        record_workflow_chat_event(
+            run_id,
+            "step_started",
+            status="running",
+            step_id=step_id,
+            step_name=step_data.get("name"),
+            summary=f"Started {step_data.get('name') or f'step {step_id}'}.",
+            phase=step_data.get("phase"),
+        )
         try:
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -794,6 +850,14 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
         result = self._execute(step_data, run_id=run_id)
         if result.get("async"):
             return {"success": True, "message": result.get("message", "Step dispatched.")}
+        record_workflow_chat_event(
+            run_id,
+            "step_completed" if result.get("passed") else "step_failed",
+            status="passed" if result.get("passed") else "failed",
+            step_id=step_id,
+            step_name=step_data.get("name"),
+            summary=result.get("output", "") or ("Step completed." if result.get("passed") else "Step failed."),
+        )
         self._record_result_and_route(
             step_id,
             run_id=run_id,

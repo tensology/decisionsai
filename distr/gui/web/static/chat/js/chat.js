@@ -532,6 +532,14 @@ function startChatWebSocket(force) {
                     handleChatEventStreamError(msg);
                     return;
                 }
+                if (msg.event === 'tool_executed') {
+                    handleChatEventToolExecuted(msg);
+                    return;
+                }
+                if (msg.event === 'workflow_event') {
+                    handleChatEventWorkflow(msg);
+                    return;
+                }
                 if (msg.event === 'transcription_progress') {
                     if (msg.chat_id === currentChatId) {
                         showTranscriptionStatus(
@@ -738,7 +746,19 @@ function handleChatEventMessageAdded(msg) {
         scrollToBottom();
         return;
     }
-    if (role === 'assistant' && streamingChatId === currentChatId) return;
+    if (role === 'assistant' && streamingChatId === currentChatId) {
+        const wrap = document.getElementById('streamingAssistantMessage');
+        const textEl = document.getElementById('streamingAssistantText');
+        const streamedPlain = _normalizeMsgPlain(textEl ? textEl.textContent : '');
+        const incomingPlain = _normalizeMsgPlain(content);
+        if (!incomingPlain) return;
+        if (wrap && !streamedPlain) {
+            wrap.remove();
+            streamingChatId = null;
+        } else {
+            return;
+        }
+    }
     if (role === 'assistant') {
         const plainA = _normalizeMsgPlain(content);
         if (plainA && _lastStreamFinalizedPlain && plainA === _lastStreamFinalizedPlain) {
@@ -834,6 +854,11 @@ function handleChatEventStreamFinished(msg) {
         const textEl = document.getElementById('streamingAssistantText');
         // Prefer response_text from event (clean, tool_call tags stripped) over raw streamed DOM text
         const raw = (msg.response_text != null && msg.response_text !== '') ? msg.response_text : (textEl ? textEl.textContent : '');
+        if (!_normalizeMsgPlain(raw)) {
+            wrap.remove();
+            _lastStreamFinalizedPlain = null;
+            _suppressChatUpdatedFetchUntil = 0;
+        } else {
         wrap.id = '';
         const finishedAt = Date.now();
         const clock = _formatTimestamp(finishedAt);
@@ -853,6 +878,7 @@ function handleChatEventStreamFinished(msg) {
         _lastStreamFinalizedPlain = _normalizeMsgPlain(raw);
         _suppressChatUpdatedFetchUntil = Date.now() + 2500;
         scrollToBottom();
+        }
     } else {
         // Streaming element was destroyed (e.g. by polling race) - fetch final state from DB
         const chatId = currentChatId;
@@ -932,6 +958,122 @@ function handleChatEventStreamError(msg) {
         window._agentStreamResolve = null;
     }
     streamingChatId = null;
+}
+
+function handleChatEventToolExecuted(msg) {
+    if (msg.chat_id !== currentChatId) return;
+    if (!chatMessages) return;
+    const toolMessage = {
+        role: 'tool',
+        timestamp: msg.timestamp || Date.now(),
+        content: msg.result_summary || '',
+        tool_event: {
+            tool_name: msg.tool_name || 'tool',
+            title: msg.title || `Executed ${msg.tool_name || 'tool'}`,
+            status: msg.status || 'completed',
+            result_summary: msg.result_summary || '',
+            routing_path: msg.routing_path || '',
+            user_text: msg.user_text || '',
+            compact: Boolean(msg.chat_compact)
+        }
+    };
+    const block = appendToolToActivityGroup(toolMessage);
+
+    const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const typingInd = document.getElementById('typingIndicator');
+    const turnRowId = msg.turn_chat_id != null ? String(msg.turn_chat_id) : null;
+
+    function tryInsertBefore(el) {
+        if (el && el.parentNode === chatMessages) {
+            if (block.parentNode !== chatMessages || block.nextSibling !== el) {
+                chatMessages.insertBefore(block, el);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    let placed = false;
+    if (streamingMsg) {
+        placed = tryInsertBefore(streamingMsg);
+    } else if (turnRowId) {
+        const matches = [...chatMessages.querySelectorAll(`[data-turn-chat-id="${turnRowId}"]`)];
+        const finalAssistant = matches.reverse().find(el => el.classList.contains('assistant'));
+        placed = tryInsertBefore(finalAssistant);
+    }
+    if (!placed) {
+        const nodes = [...chatMessages.children].filter(el =>
+            el.classList && el.classList.contains('message') && el.id !== 'transcriptionStatus'
+        );
+        let lastAssistant = null;
+        for (let i = nodes.length - 1; i >= 0; i--) {
+            if (nodes[i].classList.contains('assistant')) {
+                lastAssistant = nodes[i];
+                break;
+            }
+        }
+        placed = tryInsertBefore(lastAssistant);
+    }
+    if (!placed && block.parentNode !== chatMessages) {
+        if (typingInd && typingInd.parentNode === chatMessages) {
+            chatMessages.insertBefore(block, typingInd);
+        } else {
+            chatMessages.appendChild(block);
+        }
+    }
+    syncRenderedMessageCountFromDom();
+    scrollToBottom();
+}
+
+function appendToolToActivityGroup(message) {
+    const anchor = getLateToolInsertAnchor();
+    let group = null;
+    if (anchor && anchor.previousElementSibling && anchor.previousElementSibling.classList.contains('tool-execution-group')) {
+        group = anchor.previousElementSibling;
+    }
+    if (!group) {
+        const last = chatMessages ? chatMessages.lastElementChild : null;
+        if (last && last.classList.contains('tool-execution-group')) group = last;
+    }
+    if (!group) {
+        group = createToolExecutionGroupElement({ role: 'tool_group', timestamp: message.timestamp, tools: [] });
+    }
+    const list = group.querySelector('.tool-execution-list');
+    if (list) list.insertAdjacentHTML('beforeend', toolExecutionItemHtml(message));
+    const count = group.querySelectorAll('.tool-execution-item').length;
+    const countEl = group.querySelector('.tool-execution-count');
+    if (countEl) countEl.textContent = `${count} ${count === 1 ? 'step' : 'steps'}`;
+    return group;
+}
+
+function handleChatEventWorkflow(msg) {
+    if (msg.chat_id !== currentChatId) return;
+    const block = createWorkflowEventElement({
+        role: 'workflow',
+        timestamp: msg.timestamp || Date.now(),
+        content: msg.summary || '',
+        workflow_event: {
+            run_id: msg.run_id,
+            workflow_id: msg.workflow_id,
+            workflow_name: msg.workflow_name || 'Workflow',
+            type: msg.type || 'event',
+            status: msg.status || 'running',
+            summary: msg.summary || '',
+            phase: msg.phase || '',
+            step_id: msg.step_id,
+            step_name: msg.step_name || ''
+        }
+    });
+    const streamingMsg = document.getElementById('streamingAssistantMessage');
+    const typingInd = document.getElementById('typingIndicator');
+    const insertBefore = streamingMsg || typingInd;
+    if (insertBefore) {
+        chatMessages.insertBefore(block, insertBefore);
+    } else {
+        chatMessages.appendChild(block);
+    }
+    syncRenderedMessageCountFromDom();
+    scrollToBottom();
 }
 
 function showTranscriptionStatus(text, done, clearLivePreview) {
@@ -1668,6 +1810,49 @@ function syncRenderedMessageCountFromDom() {
     ).length;
 }
 
+function isTraceMessage(message) {
+    return message && (message.role === 'tool' || message.role === 'workflow');
+}
+
+function normalizeTraceMessages(messages) {
+    const reordered = [];
+    for (let i = 0; i < messages.length; i++) {
+        const current = messages[i];
+        if (current && current.role === 'assistant') {
+            const trace = [];
+            let j = i + 1;
+            while (j < messages.length && isTraceMessage(messages[j])) {
+                trace.push(messages[j]);
+                j++;
+            }
+            if (trace.length) {
+                reordered.push(...trace, current);
+                i = j - 1;
+                continue;
+            }
+        }
+        reordered.push(current);
+    }
+
+    const grouped = [];
+    for (let i = 0; i < reordered.length; i++) {
+        const message = reordered[i];
+        if (message && message.role === 'tool') {
+            const tools = [];
+            const startTs = message.timestamp;
+            while (i < reordered.length && reordered[i] && reordered[i].role === 'tool') {
+                tools.push(reordered[i]);
+                i++;
+            }
+            i -= 1;
+            grouped.push({ role: 'tool_group', timestamp: startTs, tools });
+            continue;
+        }
+        grouped.push(message);
+    }
+    return grouped;
+}
+
 function renderMessages(messages, preserveOnEmpty) {
     // Always clean up streaming/typing state when rendering messages
     removeTypingIndicator();
@@ -1676,6 +1861,8 @@ function renderMessages(messages, preserveOnEmpty) {
     // Incremental reload from API does not wipe innerHTML — remove live STT preview so
     // "Listening…" never sits next to persisted rows from the socket.
     _discardLiveTranscriptionUi();
+
+    messages = normalizeTraceMessages(messages || []);
 
     if (messages.length === 0) {
         if (preserveOnEmpty && chatMessages.children.length > 0) return;
@@ -1905,7 +2092,11 @@ async function playTTS(button) {
 function _formatTimestamp(ts) {
     if (!ts) return '';
     try {
-        const d = new Date(ts);
+        let value = ts;
+        if (typeof value === 'string' && /^\d{4}-\d{2}-\d{2}T/.test(value) && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(value)) {
+            value = value + 'Z';
+        }
+        const d = new Date(value);
         if (isNaN(d.getTime())) return '';
         const h = d.getHours();
         const m = d.getMinutes().toString().padStart(2, '0');
@@ -1915,8 +2106,20 @@ function _formatTimestamp(ts) {
 }
 
 function createMessageElement(message) {
+    if (message && message.role === 'tool_group') {
+        return createToolExecutionGroupElement(message);
+    }
+    if (message && message.role === 'tool') {
+        return createToolExecutionGroupElement({ role: 'tool_group', timestamp: message.timestamp, tools: [message] });
+    }
+    if (message && message.role === 'workflow') {
+        return createWorkflowEventElement(message);
+    }
     const div = document.createElement('div');
     div.className = `message ${message.role}`;
+    if (message.chat_row_id != null && message.chat_row_id !== '') {
+        div.dataset.turnChatId = String(message.chat_row_id);
+    }
     const avatarSvg = message.role === 'user' ? AVATAR_SVG_USER : AVATAR_SVG_ASSISTANT;
     const actionsHtml = message.role === 'assistant'
         ? `<button class="message-action-btn" onclick="copyMessage(this)">Copy</button>
@@ -1938,6 +2141,176 @@ function createMessageElement(message) {
             <div class="message-actions">
                 ${actionsHtml}
             </div>
+        </div>
+    `;
+    return div;
+}
+
+function createWorkflowEventElement(message) {
+    const event = (message && message.workflow_event) || {};
+    const status = String(event.status || 'running').toLowerCase();
+    const type = String(event.type || 'event').replace(/_/g, ' ');
+    const safeStatus = ['running', 'waiting', 'completed', 'failed', 'cancelled', 'passed'].includes(status) ? status : 'running';
+    const workflowName = event.workflow_name || 'Workflow';
+    const stepName = event.step_name || '';
+    const summary = event.summary || message.content || '';
+    const phase = event.phase || '';
+    let tsRaw = message.timestamp;
+    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
+    const ts = _formatTimestamp(tsRaw);
+
+    const meta = [];
+    if (phase) meta.push(`<span>${escapeHtml(phase)}</span>`);
+    if (stepName) meta.push(`<span>${escapeHtml(stepName)}</span>`);
+    const metaHtml = meta.length ? `<div class="workflow-event-meta">${meta.join('')}</div>` : '';
+    const summaryHtml = summary ? `<div class="workflow-event-summary">${formatMessage(summary)}</div>` : '';
+
+    const div = document.createElement('div');
+    div.className = `message workflow-event workflow-event--${safeStatus}`;
+    div.setAttribute('data-speakable', 'false');
+    div.innerHTML = `
+        <div class="workflow-event-rail" aria-hidden="true"></div>
+        <div class="workflow-event-card">
+            <div class="workflow-event-header">
+                <div class="workflow-event-title-wrap">
+                    <span class="workflow-event-kicker">${escapeHtml(type)}</span>
+                    <span class="workflow-event-title">${escapeHtml(workflowName)}</span>
+                </div>
+                <div class="workflow-event-right">
+                    ${ts ? `<span class="workflow-event-time">${ts}</span>` : ''}
+                    <span class="workflow-event-status">${escapeHtml(safeStatus)}</span>
+                </div>
+            </div>
+            ${summaryHtml}
+            ${metaHtml}
+        </div>
+    `;
+    return div;
+}
+
+function getLateToolInsertAnchor() {
+    if (!chatMessages) return null;
+    const nodes = [...chatMessages.children].filter(el =>
+        el.classList && el.classList.contains('message') && el.id !== 'transcriptionStatus'
+    );
+    const last = nodes[nodes.length - 1];
+    if (last && last.classList.contains('assistant')) {
+        return last;
+    }
+    return null;
+}
+
+function toolStatusLabel(status) {
+    const s = String(status || 'completed').toLowerCase();
+    if (s === 'completed' || s === 'passed') return '';
+    if (s === 'failed') return 'Failed';
+    return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function toolDisplayTitle(event) {
+    const toolName = event.tool_name || 'tool';
+    const raw = event.title || toolName.replace(/_/g, ' ');
+    return String(raw)
+        .replace(/^Executed\s+/i, '')
+        .replace(/_/g, ' ')
+        .trim();
+}
+
+function normalizedTraceText(value) {
+    return String(value || '')
+        .replace(/\s+/g, ' ')
+        .replace(/[.。]+$/g, '')
+        .trim()
+        .toLowerCase();
+}
+
+function toolExecutionItemHtml(message) {
+    const event = (message && message.tool_event) || {};
+    const status = String(event.status || 'completed').toLowerCase();
+    const safeStatus = ['completed', 'failed', 'running', 'cancelled', 'skipped', 'passed'].includes(status) ? status : 'completed';
+    const title = toolDisplayTitle(event);
+    const summary = event.result_summary || message.content || '';
+    const compact = Boolean(event.compact);
+    const statusLabel = toolStatusLabel(safeStatus);
+    const showSummary = summary && normalizedTraceText(summary) !== normalizedTraceText(title);
+    const summaryHtml = showSummary ? `<div class="tool-execution-item-summary">${formatMessage(summary)}</div>` : '';
+    const statusHtml = statusLabel ? `<span class="tool-execution-item-status">${escapeHtml(statusLabel)}</span>` : '';
+    return `
+        <div class="tool-execution-item tool-execution-item--${safeStatus}${compact ? ' tool-execution-item--compact' : ''}">
+            <div class="tool-execution-item-dot" aria-hidden="true"></div>
+            <div class="tool-execution-item-body">
+                <div class="tool-execution-item-head">
+                    <span class="tool-execution-item-title">${escapeHtml(title)}</span>
+                    ${statusHtml}
+                </div>
+                ${summaryHtml}
+            </div>
+        </div>
+    `;
+}
+
+function createToolExecutionGroupElement(message) {
+    const tools = Array.isArray(message.tools) ? message.tools : [];
+    let tsRaw = message.timestamp;
+    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
+    const ts = _formatTimestamp(tsRaw);
+    const div = document.createElement('div');
+    div.className = 'message tool-execution-group';
+    div.setAttribute('data-speakable', 'false');
+    div.innerHTML = `
+        <div class="tool-execution-group-card">
+            <div class="tool-execution-group-header">
+                <span class="tool-execution-group-title">Activity</span>
+                <span class="tool-execution-count">${tools.length} ${tools.length === 1 ? 'step' : 'steps'}</span>
+                ${ts ? `<span class="tool-execution-group-time">${ts}</span>` : ''}
+            </div>
+            <div class="tool-execution-list">
+                ${tools.map(toolExecutionItemHtml).join('')}
+            </div>
+        </div>
+    `;
+    return div;
+}
+
+function createToolExecutionElement(message) {
+    const event = (message && message.tool_event) || {};
+    const status = String(event.status || 'completed').toLowerCase();
+    const safeStatus = ['completed', 'failed', 'running', 'cancelled', 'skipped'].includes(status) ? status : 'completed';
+    const toolName = event.tool_name || 'tool';
+    const title = event.title || toolName.replace(/_/g, ' ');
+    const summary = event.result_summary || message.content || '';
+    const route = event.routing_path || '';
+    const userText = event.user_text || '';
+    const compact = Boolean(event.compact);
+    let tsRaw = message.timestamp;
+    if (tsRaw === undefined || tsRaw === null || tsRaw === '') tsRaw = Date.now();
+    const ts = _formatTimestamp(tsRaw);
+
+    const details = [];
+    if (route) details.push(`<span>${escapeHtml(route)}</span>`);
+    if (userText) details.push(`<span>${escapeHtml(userText)}</span>`);
+    const detailsHtml = details.length ? `<div class="tool-execution-meta">${details.join('')}</div>` : '';
+    const summaryHtml = summary ? `<div class="tool-execution-summary">${formatMessage(summary)}</div>` : '';
+
+    const div = document.createElement('div');
+    div.className = `message tool-execution tool-execution--${safeStatus}${compact ? ' tool-execution--compact' : ''}`;
+    div.setAttribute('data-speakable', 'false');
+    div.innerHTML = `
+        <div class="tool-execution-rail" aria-hidden="true"></div>
+        <div class="tool-execution-card">
+            <div class="tool-execution-header">
+                <div class="tool-execution-title-wrap">
+                    <span class="tool-execution-kicker">Action</span>
+                    <span class="tool-execution-title">${escapeHtml(title)}</span>
+                </div>
+                <div class="tool-execution-right">
+                    ${ts ? `<span class="tool-execution-time">${ts}</span>` : ''}
+                    <span class="tool-execution-status">${escapeHtml(safeStatus)}</span>
+                </div>
+            </div>
+            <div class="tool-execution-tool">${escapeHtml(toolName)}</div>
+            ${summaryHtml}
+            ${detailsHtml}
         </div>
     `;
     return div;

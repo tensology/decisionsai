@@ -37,6 +37,7 @@ class StepExecutorMixin:
             "play_recording": lambda: self._run_recording(step_data, config, run_id=run_id),
             "send_to_project_cli": lambda: self._run_send_to_project_cli(step_data, config, run_id=run_id),
             "agent_instruction": lambda: self._run_agent(step_data, run_id),
+            "computer_use": lambda: self._run_computer_use(step_data, config, run_id=run_id),
         }
         handler = handlers.get(action_type)
         if handler is None:
@@ -332,6 +333,21 @@ class StepExecutorMixin:
         except Exception as e:
             return {"output": f"Recording playback error: {e}", "passed": False}
 
+    # ── Keywords that signal a step wants computer/screen control ──────
+    _CU_KEYWORDS = (
+        "click", "type ", "type in", "press ", "scroll", "drag",
+        "open app", "launch app", "navigate to", "go to url",
+        "fill in", "fill out", "submit form", "log in", "login",
+        "screenshot", "screen", "window", "button", "checkbox",
+        "on screen", "on my screen", "in the app", "in the browser",
+    )
+
+    @classmethod
+    def _is_computer_use_instruction(cls, instruction: str) -> bool:
+        """Heuristic: does this instruction sound like computer/screen control?"""
+        tl = instruction.lower()
+        return any(kw in tl for kw in cls._CU_KEYWORDS)
+
     def _run_agent(self, step_data: Dict[str, Any], run_id: Optional[int]) -> Dict[str, Any]:
         """Send instruction to the workflow agent (or main agent as fallback)."""
         step_id = step_data["id"]
@@ -339,8 +355,18 @@ class StepExecutorMixin:
         prompt = self._build_agent_prompt(step_data, run_id)
         run_ctx = self._get_run_context(step_id, run_id)
 
+        # Detect computer-use intent from instruction or explicit flag
+        raw_instruction = (step_data.get("instruction") or "").strip()
+        computer_use = (
+            step_data.get("computer_use_mode", False)
+            or self._is_computer_use_instruction(raw_instruction)
+        )
+
         if run_ctx is not None:
-            logger.info("_run_agent: using WorkflowAgent for step %s (run_id=%s)", step_id, run_id)
+            logger.info("_run_agent: using WorkflowAgent for step %s (run_id=%s, computer_use=%s)",
+                        step_id, run_id, computer_use)
+            if computer_use:
+                run_ctx.workflow_agent.enable_computer_use(goal=raw_instruction)
             try:
                 future = asyncio.run_coroutine_threadsafe(
                     run_ctx.workflow_agent.execute(prompt), run_ctx.event_loop)
@@ -402,6 +428,8 @@ class StepExecutorMixin:
             from distr.core.workflow_agent import WorkflowAgent
             import concurrent.futures
             agent = WorkflowAgent()
+            if computer_use:
+                agent.enable_computer_use(goal=raw_instruction)
 
             def _run_agent_sync():
                 """Run agent.execute() in an isolated thread with its own loop."""
@@ -742,6 +770,300 @@ class StepExecutorMixin:
             if p not in deduped:
                 deduped.append(p)
         return deduped
+
+    # ── computer_use step type ────────────────────────────────────────────────
+
+    def _run_computer_use(
+        self,
+        step_data: Dict[str, Any],
+        config: dict,
+        run_id: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """Autonomous vision-action loop for the computer_use step type.
+
+        Unlike agent_instruction (which burns orchestration LLM tokens on every
+        micro-decision), this handler owns the loop itself:
+
+          screenshot → qwen3-vl decides action → sidecar executes → repeat
+
+        The orchestration model is only called when the loop escalates.
+        """
+        goal = (config.get("goal") or step_data.get("instruction") or "").strip()
+        if not goal:
+            return {"output": "No goal provided for computer_use step.", "passed": False}
+
+        max_iter = min(int(config.get("max_iterations", 15)), 25)
+        stuck_threshold = int(config.get("stuck_threshold", 3))
+        escalate = bool(config.get("escalate_on_ambiguity", True))
+        resize_w = int(config.get("screenshot_resize_width", 1280))
+
+        iteration_log: List[Dict[str, Any]] = []
+        consecutive_stuck = 0
+
+        logger.info("ComputerUse[%s]: starting — goal=%r max_iter=%d", run_id, goal[:80], max_iter)
+
+        for i in range(max_iter):
+            # ── 1. Capture + resize screenshot ──────────────────────────────
+            screenshot_b64 = self._cu_capture_screenshot(resize_w)
+            if not screenshot_b64:
+                return {"output": "Failed to capture screenshot — is the sidecar running?", "passed": False}
+
+            # ── 2. Ask vision model what to do next ─────────────────────────
+            action = self._cu_decide_action(goal, screenshot_b64, iteration_log, i)
+
+            action_type = action.get("type", "unknown")
+            logger.info("ComputerUse[%s]: iter %d action=%s desc=%r",
+                        run_id, i + 1, action_type, action.get("description", "")[:60])
+
+            # ── 3. Check terminal states ─────────────────────────────────────
+            if action_type == "finished":
+                summary = self._cu_format_summary(goal, iteration_log, action.get("reason", "Goal achieved."))
+                return {"output": summary, "passed": True}
+
+            if action_type == "stuck":
+                consecutive_stuck += 1
+                iteration_log.append({"i": i + 1, "type": "stuck", "description": action.get("reason", "")})
+                if consecutive_stuck >= stuck_threshold:
+                    if escalate:
+                        escalation = self._cu_escalate(goal, screenshot_b64, iteration_log, step_data, run_id)
+                        if escalation:
+                            return escalation
+                    return {
+                        "output": self._cu_format_summary(
+                            goal, iteration_log,
+                            f"Stuck after {i + 1} iterations: {action.get('reason', '')}",
+                        ),
+                        "passed": False,
+                    }
+                continue
+            else:
+                consecutive_stuck = 0
+
+            # ── 4. Execute the action via sidecar ────────────────────────────
+            exec_result = self._cu_execute_action(action)
+            iteration_log.append({
+                "i": i + 1,
+                "type": action_type,
+                "description": action.get("description", ""),
+                "result": exec_result[:200],
+            })
+
+            import time as _time
+            _time.sleep(0.4)  # Let the UI settle before next screenshot
+
+        return {
+            "output": self._cu_format_summary(
+                goal, iteration_log,
+                f"Reached max iterations ({max_iter}) without completing goal.",
+            ),
+            "passed": False,
+        }
+
+    # ── ComputerUse helpers ───────────────────────────────────────────────────
+
+    def _cu_capture_screenshot(self, max_width: int = 1280) -> Optional[str]:
+        """Capture the screen and return a base64 JPEG resized to max_width."""
+        try:
+            from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
+            result = call_sidecar_tool("capture_screen", {}, timeout=15)
+            raw_b64 = result.get("data", "")
+            if not raw_b64:
+                return None
+
+            import base64, io
+            from PIL import Image
+            raw = base64.b64decode(raw_b64)
+            img = Image.open(io.BytesIO(raw)).convert("RGB")
+            w, h = img.size
+            if w > max_width:
+                scale = max_width / w
+                img = img.resize((int(w * scale), int(h * scale)), Image.LANCZOS)
+            buf = io.BytesIO()
+            img.save(buf, format="JPEG", quality=80)
+            return base64.b64encode(buf.getvalue()).decode()
+        except Exception as exc:
+            logger.error("ComputerUse: screenshot failed: %s", exc)
+            return None
+
+    _CU_DECIDE_PROMPT = """\
+You are a GUI automation agent. Your goal is: {goal}
+
+Previous actions ({n} so far):
+{history}
+
+Look at the current screenshot and decide the single next action.
+
+Respond with ONLY a JSON object — no text before or after it:
+
+If you need to click something:
+  {{"type":"click","description":"what you're clicking","norm_x":0.5,"norm_y":0.3}}
+
+If you need to type text:
+  {{"type":"type","text":"the text to type","description":"typing into X"}}
+
+If you need to press keys:
+  {{"type":"keys","keys":"cmd,s","description":"save the file"}}
+
+If you need to scroll:
+  {{"type":"scroll","direction":"down","norm_x":0.5,"norm_y":0.5,"description":"scrolling the list"}}
+
+If the goal is fully achieved:
+  {{"type":"finished","reason":"brief description of what was accomplished"}}
+
+If you genuinely cannot proceed (error, wrong app, blocked):
+  {{"type":"stuck","reason":"what is wrong and why you cannot continue"}}
+
+IMPORTANT: norm_x and norm_y are 0.0–1.0 fractions of screen width/height.\
+"""
+
+    def _cu_decide_action(
+        self,
+        goal: str,
+        screenshot_b64: str,
+        iteration_log: List[Dict[str, Any]],
+        iteration: int,
+    ) -> Dict[str, Any]:
+        """Ask the vision model to decide the next action. Returns a dict."""
+        history = "\n".join(
+            f"  {e['i']}. {e['type']}: {e.get('description', '')} → {e.get('result', '')[:80]}"
+            for e in iteration_log[-6:]  # last 6 entries to stay within context
+        ) or "  (none yet)"
+
+        prompt = self._CU_DECIDE_PROMPT.format(
+            goal=goal, n=iteration, history=history,
+        )
+
+        try:
+            from distr.core.settings import load_settings_from_db
+            settings = load_settings_from_db()
+            ollama_url = settings.get("ollama_url", "http://localhost:11434/")
+            vision_model = settings.get("vision_llm_model") or "qwen3-vl:2b"
+
+            import requests as _req
+            resp = _req.post(
+                ollama_url.rstrip("/") + "/api/chat",
+                json={
+                    "model": vision_model,
+                    "messages": [{"role": "user", "content": prompt, "images": [screenshot_b64]}],
+                    "stream": False,
+                },
+                timeout=60,
+            )
+            content = resp.json()["message"]["content"].strip()
+
+            # Extract JSON from response (model may wrap it in markdown)
+            import re
+            m = re.search(r'\{.*\}', content, re.DOTALL)
+            if m:
+                return json.loads(m.group())
+            return {"type": "stuck", "reason": f"Vision model returned non-JSON: {content[:200]}"}
+        except Exception as exc:
+            logger.error("ComputerUse: vision decision failed: %s", exc)
+            return {"type": "stuck", "reason": f"Vision API error: {exc}"}
+
+    def _cu_execute_action(self, action: Dict[str, Any]) -> str:
+        """Execute a single computer-use action via the sidecar HTTP API."""
+        try:
+            from distr.core.agent.tools.input.sidecar_http import call_sidecar_tool
+            action_type = action.get("type", "")
+
+            if action_type == "click":
+                result = call_sidecar_tool("click_at", {
+                    "norm_x": action.get("norm_x", 0.5),
+                    "norm_y": action.get("norm_y", 0.5),
+                    "action": "click",
+                }, timeout=10)
+                return f"Clicked at ({action.get('norm_x'):.2f}, {action.get('norm_y'):.2f}): {result.get('success', False)}"
+
+            elif action_type == "type":
+                result = call_sidecar_tool("type_clipboard", {
+                    "text": action.get("text", ""),
+                }, timeout=15)
+                return f"Typed {len(action.get('text',''))} chars: {result.get('success', False)}"
+
+            elif action_type == "keys":
+                result = call_sidecar_tool("press_keys", {
+                    "keys": action.get("keys", ""),
+                }, timeout=10)
+                return f"Pressed {action.get('keys')}: {result.get('success', False)}"
+
+            elif action_type == "scroll":
+                params: Dict[str, Any] = {
+                    "direction": action.get("direction", "down"),
+                    "amount": int(action.get("amount", 3)),
+                }
+                if "norm_x" in action:
+                    params["norm_x"] = action["norm_x"]
+                    params["norm_y"] = action.get("norm_y", 0.5)
+                result = call_sidecar_tool("scroll", params, timeout=10)
+                return f"Scrolled {action.get('direction')}: {result.get('success', False)}"
+
+            else:
+                return f"Unknown action type: {action_type}"
+        except Exception as exc:
+            logger.error("ComputerUse: action execution failed: %s", exc)
+            return f"Execution error: {exc}"
+
+    def _cu_escalate(
+        self,
+        goal: str,
+        screenshot_b64: str,
+        iteration_log: List[Dict[str, Any]],
+        step_data: Dict[str, Any],
+        run_id: Optional[int],
+    ) -> Optional[Dict[str, Any]]:
+        """Escalate to the orchestration LLM when the vision loop is stuck.
+
+        Builds a rich prompt summarising what has been tried and asks the main
+        model for guidance or a corrective action, then re-enters the loop.
+        """
+        logger.info("ComputerUse[%s]: escalating to orchestration model", run_id)
+        history_text = "\n".join(
+            f"  {e['i']}. {e['type']}: {e.get('description', '')} → {e.get('result', '')[:120]}"
+            for e in iteration_log
+        )
+        escalation_instruction = (
+            f"A computer-use automation step is stuck trying to achieve this goal:\n"
+            f"  {goal}\n\n"
+            f"Actions taken so far:\n{history_text}\n\n"
+            f"Look at the current screen state and tell me: what should happen next? "
+            f"Either provide a specific action instruction or explain what is blocking progress."
+        )
+        try:
+            from distr.core.workflow_agent import WorkflowAgent
+            import concurrent.futures
+            agent = WorkflowAgent()
+
+            def _run():
+                loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(loop)
+                try:
+                    return loop.run_until_complete(agent.execute(escalation_instruction))
+                finally:
+                    loop.close()
+                    agent.shutdown()
+
+            with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                guidance = pool.submit(_run).result(timeout=120)
+
+            if guidance:
+                iteration_log.append({"i": "ESC", "type": "escalation", "description": guidance[:300]})
+                # Don't return yet — let the caller decide based on guidance content
+                logger.info("ComputerUse: orchestration guidance: %s", guidance[:200])
+        except Exception as exc:
+            logger.error("ComputerUse: escalation failed: %s", exc)
+
+        return None  # Caller will handle the stuck return
+
+    @staticmethod
+    def _cu_format_summary(goal: str, iteration_log: List[Dict[str, Any]], final_status: str) -> str:
+        """Format a human-readable run summary for the step result."""
+        lines = [f"Goal: {goal}", f"Status: {final_status}", "", "Steps taken:"]
+        for e in iteration_log:
+            desc = e.get("description", "")
+            result = e.get("result", "")
+            lines.append(f"  {e['i']}. [{e['type']}] {desc}" + (f" → {result}" if result else ""))
+        return "\n".join(lines)
 
     def _augment_agent_result_with_tool_evidence(self, result_text: str, workflow_agent) -> str:
         """Append tool evidence + attachments so workflow history/audit is actionable."""

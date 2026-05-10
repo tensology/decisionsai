@@ -90,8 +90,13 @@ class VoiceDictationMixin:
         except Exception as e:
             logger.error("Dictation: Error typing text: %s", e, exc_info=True)
 
-    def _start_dictation(self):
-        """Start dictation mode."""
+    def _start_dictation(self, one_shot: bool = False):
+        """Start dictation mode.
+
+        Args:
+            one_shot: When True (hold-to-dictate hotkey), exit dictation after the next
+                transcript is typed — release runs push_to_talk_stop before LLM sees text.
+        """
         if self._is_dictating:
             return
 
@@ -107,7 +112,8 @@ class VoiceDictationMixin:
                     logger.debug("Error emitting hands_free_mode_changed: %s", e)
 
         self._is_dictating = True
-        logger.info("Dictation: Dictation mode started")
+        self._dictation_one_shot = bool(one_shot)
+        logger.info("Dictation: Dictation mode started (one_shot=%s)", self._dictation_one_shot)
 
         if self.event_queue:
             try:
@@ -125,6 +131,7 @@ class VoiceDictationMixin:
             return
 
         self._is_dictating = False
+        self._dictation_one_shot = False
         logger.info("Dictation: Dictation mode stopped")
 
         if self.event_queue:

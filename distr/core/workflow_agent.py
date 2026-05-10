@@ -18,6 +18,41 @@ from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
 
+# Tools that physically change the machine state — a screenshot is injected
+# automatically after each one in computer-use mode so the agent always sees
+# the result of its last action before deciding what to do next.
+_CU_ACTION_TOOLS = frozenset({
+    "click_at", "double_click_at", "right_click_at",
+    "click_element", "move_to_element",
+    "type_text", "type_clipboard", "press_keys",
+    "scroll", "drag_to", "mouse_actions",
+})
+
+_CU_SUCCESS_SIGNALS = (
+    "task complete", "successfully completed", "goal achieved",
+    "done.", "finished.", "step complete", "all done",
+    "confirmed", "logged in", "submitted", "saved",
+)
+
+_CU_STUCK_SIGNALS = (
+    "i cannot", "unable to", "i'm stuck", "cannot proceed",
+    "failed to complete", "don't know how", "can't find",
+    "not visible", "not found on screen",
+)
+
+_CU_SYSTEM_PROMPT = """\
+You are a computer-use automation agent executing a workflow step on the user's machine.
+
+RULES — read carefully:
+1. ALWAYS take a screenshot before deciding what to do next.
+2. Execute ONE physical action per turn, then STOP and wait. Never chain multiple clicks or keystrokes.
+3. After every physical action (click, type, scroll, drag, hotkey), call screenshot_analyzer to observe the result.
+4. If the goal is achieved, say "Task complete: <what happened>" and stop calling tools.
+5. If you are stuck (same screen for 3+ turns, error message, wrong app), say "I cannot proceed: <reason>" and stop.
+6. Do not explain — act. Use the tools.
+
+GOAL: {goal}"""
+
 
 class WorkflowAgent:
     """Lightweight LLM agent dedicated to a single workflow execution.
@@ -64,11 +99,23 @@ class WorkflowAgent:
         self._load_tools()
 
         self._shutdown = False
+        self._computer_use_mode = False
+        self._computer_use_goal = ""
 
         logger.info(
             "WorkflowAgent initialised: provider=%s model=%s tools=%d",
             self._provider, self._model, len(self._tools),
         )
+
+    def enable_computer_use(self, goal: str) -> None:
+        """Switch this agent into computer-use mode for a specific goal.
+
+        Must be called before execute(). Sets a tighter iteration cap, injects
+        a GUI-automation system prompt, and enables auto-screenshot injection
+        after every physical action tool call.
+        """
+        self._computer_use_mode = True
+        self._computer_use_goal = goal
 
     # ------------------------------------------------------------------
     #  Tool loading
@@ -106,21 +153,30 @@ class WorkflowAgent:
         format converters as the main chat) so the LLM can actually invoke
         tools. Loops until the LLM produces a final text response or hits
         the iteration cap.
+
+        In computer-use mode (set via enable_computer_use()) the agent uses a
+        tighter system prompt, a lower iteration cap, and auto-injects a
+        screenshot observation after every physical action tool call.
         """
         if self._shutdown:
             raise RuntimeError("WorkflowAgent has been shut down")
 
         # Inject system prompt on first call
         if not self._messages or self._messages[0].get("role") != "system":
-            self._messages.insert(0, {"role": "system", "content": (
-                "You are a workflow step executor. Execute the given instruction using "
-                "the tools available to you. Do not explain what you would do — actually "
-                "do it by calling the appropriate tools. When done, provide a brief summary."
-            )})
+            if self._computer_use_mode:
+                sys_content = _CU_SYSTEM_PROMPT.format(goal=self._computer_use_goal)
+            else:
+                sys_content = (
+                    "You are a workflow step executor. Execute the given instruction using "
+                    "the tools available to you. Do not explain what you would do — actually "
+                    "do it by calling the appropriate tools. When done, provide a brief summary."
+                )
+            self._messages.insert(0, {"role": "system", "content": sys_content})
 
         self._messages.append({"role": "user", "content": instruction})
 
-        max_iterations = 25
+        # Computer-use mode: tighter cap; standard mode: generous cap
+        max_iterations = 12 if self._computer_use_mode else 25
 
         for iteration in range(max_iterations):
             text, tool_calls = await self._call_llm_with_tools()
@@ -128,6 +184,15 @@ class WorkflowAgent:
             if not tool_calls:
                 if text:
                     self._messages.append({"role": "assistant", "content": text})
+                # Computer-use: check for explicit success or stuck signals
+                if self._computer_use_mode and text:
+                    tl = text.lower()
+                    if any(s in tl for s in _CU_SUCCESS_SIGNALS):
+                        logger.info("WorkflowAgent[CU]: success signal detected at iteration %d", iteration + 1)
+                        return text
+                    if any(s in tl for s in _CU_STUCK_SIGNALS):
+                        logger.warning("WorkflowAgent[CU]: stuck signal detected at iteration %d", iteration + 1)
+                        return text
                 return text or "Step completed."
 
             # Execute tool calls and feed results back
@@ -146,8 +211,34 @@ class WorkflowAgent:
                 result = self._execute_tool_call(tool_name, tool_args)
                 self._append_tool_result(tc, tool_name, result)
 
-        # Hit cap — force final
-        self._messages.append({"role": "user", "content": "Provide your final answer now."})
+                # Computer-use: after every physical action, inject a screenshot
+                # observation so the agent sees the result before its next decision.
+                if self._computer_use_mode and tool_name in _CU_ACTION_TOOLS:
+                    obs = self._execute_tool_call(
+                        "screenshot_analyzer",
+                        {"prompt": (
+                            "Briefly describe what is currently on screen after the last action. "
+                            "Has the goal been achieved? What should happen next?"
+                        )},
+                    )
+                    self._messages.append({
+                        "role": "user",
+                        "content": f"[Screen observation after {tool_name}]: {obs}",
+                    })
+                    logger.info("WorkflowAgent[CU]: auto-screenshot injected after %s", tool_name)
+
+        # Hit cap
+        if self._computer_use_mode:
+            self._messages.append({
+                "role": "user",
+                "content": (
+                    f"You have reached the maximum of {max_iterations} actions. "
+                    "State clearly: was the goal achieved, and what is the current screen state?"
+                ),
+            })
+        else:
+            self._messages.append({"role": "user", "content": "Provide your final answer now."})
+
         text, _ = await self._call_llm_with_tools()
         if text:
             self._messages.append({"role": "assistant", "content": text})

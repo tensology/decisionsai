@@ -227,6 +227,12 @@ class TrelloAPI:
         params = {'value': label_id}
         return self._make_request(endpoint, method='POST', params=params)
 
+    def add_comment_to_card(self, card_id: str, text: str) -> Optional[Dict[str, Any]]:
+        """Add a comment to a card."""
+        endpoint = f"/cards/{card_id}/actions/comments"
+        params = {'text': text}
+        return self._make_request(endpoint, method='POST', params=params)
+
     # --- Board Metadata ---
     def get_board_members(self, board_id: str) -> List[Dict[str, Any]]:
         """Get members of a board."""
@@ -249,5 +255,4 @@ class TrelloAPI:
         if result:
             return result if isinstance(result, list) else []
         return []
-
 

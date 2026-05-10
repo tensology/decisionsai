@@ -14,13 +14,13 @@ import (
 )
 
 var (
-	user32               = syscall.NewLazyDLL("user32.dll")
-	procSetCursorPos     = user32.NewProc("SetCursorPos")
-	procMouseEvent       = user32.NewProc("mouse_event")
-	procGetForeground    = user32.NewProc("GetForegroundWindow")
-	procGetWindowPid     = user32.NewProc("GetWindowThreadProcessId")
-	procSetForeground    = user32.NewProc("SetForegroundWindow")
-	procShowWindow       = user32.NewProc("ShowWindow")
+	user32            = syscall.NewLazyDLL("user32.dll")
+	procSetCursorPos  = user32.NewProc("SetCursorPos")
+	procMouseEvent    = user32.NewProc("mouse_event")
+	procGetForeground = user32.NewProc("GetForegroundWindow")
+	procGetWindowPid  = user32.NewProc("GetWindowThreadProcessId")
+	procSetForeground = user32.NewProc("SetForegroundWindow")
+	procShowWindow    = user32.NewProc("ShowWindow")
 )
 
 const (
@@ -31,18 +31,19 @@ const (
 )
 
 func addDesktopHandlers(m map[string]ToolHandler) {
-	m["list_windows"]    = handleListWindows
-	m["get_window_tree"] = handleGetWindowTree
-	m["click_element"]   = handleClickElement
-	m["move_mouse"]      = handleMoveMouse
-	m["type_text"]       = handleTypeText
-	m["press_keys"]      = handlePressKeys
-	m["launch_app"]      = handleLaunchApp
-	m["focus_window"]    = handleFocusWindow
-	m["find_element"]    = handleFindElement
-	m["get_clipboard"]   = handleGetClipboard
-	m["set_clipboard"]   = handleSetClipboard
-	// Stub new tools — not yet implemented on Windows
+	m["list_windows"]     = handleListWindows
+	m["get_window_tree"]  = handleGetWindowTree
+	m["click_element"]    = handleClickElement
+	m["move_mouse"]       = handleMoveMouse
+	m["type_text"]        = handleTypeText
+	m["press_keys"]       = handlePressKeys
+	m["launch_app"]       = handleLaunchApp
+	m["focus_window"]     = handleFocusWindow
+	m["find_element"]     = handleFindElement
+	m["get_clipboard"]    = handleGetClipboard
+	m["set_clipboard"]    = handleSetClipboard
+
+	// Stub helpers for tools not yet fully implemented on Windows
 	stub := func(name string) ToolHandler {
 		return func(params map[string]any) (any, error) {
 			return nil, fmt.Errorf("%s is not yet implemented on Windows", name)
@@ -51,6 +52,16 @@ func addDesktopHandlers(m map[string]ToolHandler) {
 	m["drag_to"]          = stub("drag_to")
 	m["scroll"]           = stub("scroll")
 	m["wait_for_element"] = stub("wait_for_element")
+
+	// New coordinate-input tools — click_at has a real Windows implementation;
+	// the rest are stubs.
+	m["click_at"]          = handleClickAt
+	m["double_click_at"]   = handleDoubleClickAt
+	m["right_click_at"]    = handleRightClickAt
+	m["get_screen_info"]   = stub("get_screen_info")
+	m["get_cursor_pos"]    = stub("get_cursor_pos")
+	m["capture_annotated"] = stub("capture_annotated")
+	m["type_clipboard"]    = handleTypeClipboard
 }
 
 func platformMoveMouse(x, y int) (any, error) {
@@ -71,6 +82,12 @@ func platformCaptureScreen(outputPath string) error {
 	return exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-Command", ps).Run()
 }
 
+// getScreenDimensions — Windows stub. Returns error so the caller omits the
+// metadata fields rather than emitting wrong values.
+func getScreenDimensions(pngData []byte) (screenDimInfo, error) {
+	return screenDimInfo{}, fmt.Errorf("screen dimension metadata not available on Windows")
+}
+
 func handleGetClipboard(params map[string]any) (any, error) {
 	out, err := runPS(`Get-Clipboard`, 5*time.Second)
 	if err != nil {
@@ -84,6 +101,66 @@ func handleSetClipboard(params map[string]any) (any, error) {
 	escaped := strings.ReplaceAll(content, "'", "''")
 	_, err := runPS(fmt.Sprintf("Set-Clipboard -Value '%s'", escaped), 5*time.Second)
 	return map[string]any{"success": err == nil}, err
+}
+
+// ── click_at (Windows) ────────────────────────────────────────────────────────
+// Clicks at raw pixel coordinates. Normalized / model-space inputs are not yet
+// supported on Windows (no Cocoa equivalent); raw x/y only for now.
+
+func handleClickAt(params map[string]any) (any, error) {
+	x := toInt(params["x"])
+	y := toInt(params["y"])
+	action := stringOrDefault(params["action"], "click")
+
+	procSetCursorPos.Call(uintptr(x), uintptr(y))
+	time.Sleep(30 * time.Millisecond)
+
+	switch action {
+	case "right_click":
+		procMouseEvent.Call(MOUSEEVENTF_RIGHTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_RIGHTUP, 0, 0, 0, 0)
+	case "double_click":
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+		time.Sleep(50 * time.Millisecond)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	default:
+		action = "click"
+		procMouseEvent.Call(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+		procMouseEvent.Call(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+	}
+	return map[string]any{"success": true, "action": action, "x": x, "y": y}, nil
+}
+
+func handleDoubleClickAt(params map[string]any) (any, error) {
+	params["action"] = "double_click"
+	return handleClickAt(params)
+}
+
+func handleRightClickAt(params map[string]any) (any, error) {
+	params["action"] = "right_click"
+	return handleClickAt(params)
+}
+
+// ── type_clipboard (Windows) ──────────────────────────────────────────────────
+// Sets clipboard content and sends Ctrl+V.
+
+func handleTypeClipboard(params map[string]any) (any, error) {
+	text, _ := params["text"].(string)
+	if text == "" {
+		return nil, fmt.Errorf("missing required parameter: text")
+	}
+	escaped := strings.ReplaceAll(text, "'", "''")
+	if _, err := runPS(fmt.Sprintf("Set-Clipboard -Value '%s'", escaped), 5*time.Second); err != nil {
+		return nil, fmt.Errorf("set clipboard: %w", err)
+	}
+	// Send Ctrl+V
+	script := `Add-Type -AssemblyName System.Windows.Forms;[System.Windows.Forms.SendKeys]::SendWait('^v')`
+	if _, err := runPS(script, 5*time.Second); err != nil {
+		return nil, fmt.Errorf("paste: %w", err)
+	}
+	return map[string]any{"success": true, "method": "clipboard"}, nil
 }
 
 // ── list_windows ──────────────────────────────────────────────────────────────
@@ -111,7 +188,7 @@ public class WE {
       var t=sb.ToString();if(string.IsNullOrWhiteSpace(t))return true;
       uint pid;GetWindowThreadProcessId(h,out pid);
       RECT r;GetWindowRect(h,out r);
-      string pn="";try{pn=Process.GetProcessById((int)pid).ProcessName;}catch{}
+      string pn="";try{pn=System.Diagnostics.Process.GetProcessById((int)pid).ProcessName;}catch{}
       var d=new Dictionary<string,object>();
       d["title"]=t;d["pid"]=pid;d["process_name"]=pn;
       d["left"]=r.L;d["top"]=r.T;d["right"]=r.R;d["bottom"]=r.B;
@@ -272,6 +349,24 @@ func handleTypeText(params map[string]any) (any, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	// Use clipboard method if requested or if text contains non-ASCII
+	useClipboard := false
+	if uc, ok := params["use_clipboard"].(bool); ok {
+		useClipboard = uc
+	}
+	if !useClipboard {
+		for _, r := range text {
+			if r > 127 {
+				useClipboard = true
+				break
+			}
+		}
+	}
+	if useClipboard {
+		return handleTypeClipboard(params)
+	}
+
 	escaped := escapeSendKeys(text)
 	script := fmt.Sprintf(`Add-Type -AssemblyName System.Windows.Forms;[System.Windows.Forms.SendKeys]::SendWait('%s')`, escaped)
 	_, err := runPS(script, 5*time.Second)
@@ -362,7 +457,13 @@ func runPS(script string, timeout time.Duration) (string, error) {
 }
 
 func convertToSendKeys(keys string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(keys)), ",")
+	// Normalise + as separator same as Darwin side
+	norm := keys
+	if !strings.Contains(keys, ",") && strings.Contains(keys, "+") {
+		norm = strings.ReplaceAll(keys, "+", ",")
+	}
+
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(norm)), ",")
 	mods := ""
 	var keyParts []string
 	for _, p := range parts {
@@ -370,10 +471,12 @@ func convertToSendKeys(keys string) string {
 		switch p {
 		case "ctrl", "control":
 			mods += "^"
-		case "alt":
+		case "alt", "option", "opt":
 			mods += "%"
 		case "shift":
 			mods += "+"
+		case "cmd", "command", "win", "windows":
+			// Windows key not directly supported by SendKeys; ignore gracefully
 		default:
 			keyParts = append(keyParts, p)
 		}
@@ -383,14 +486,27 @@ func convertToSendKeys(keys string) string {
 	}
 	key := keyParts[0]
 	specialKeys := map[string]string{
-		"enter": "{ENTER}", "return": "{ENTER}", "tab": "{TAB}",
-		"escape": "{ESC}", "esc": "{ESC}", "backspace": "{BACKSPACE}",
-		"delete": "{DELETE}", "up": "{UP}", "down": "{DOWN}",
-		"left": "{LEFT}", "right": "{RIGHT}", "home": "{HOME}", "end": "{END}",
-		"pageup": "{PGUP}", "pagedown": "{PGDN}",
+		"enter": "{ENTER}", "return": "{ENTER}",
+		"tab": "{TAB}",
+		"escape": "{ESC}", "esc": "{ESC}",
+		"backspace": "{BACKSPACE}", "delete": "{DELETE}",
+		"forward_delete": "{DELETE}", "del": "{DELETE}",
+		"up": "{UP}", "down": "{DOWN}",
+		"left": "{LEFT}", "right": "{RIGHT}",
+		"home": "{HOME}", "end": "{END}",
+		"page_up": "{PGUP}", "pageup": "{PGUP}",
+		"page_down": "{PGDN}", "pagedown": "{PGDN}",
 		"f1": "{F1}", "f2": "{F2}", "f3": "{F3}", "f4": "{F4}",
 		"f5": "{F5}", "f6": "{F6}", "f7": "{F7}", "f8": "{F8}",
 		"f9": "{F9}", "f10": "{F10}", "f11": "{F11}", "f12": "{F12}",
+		"f13": "{F13}", "f14": "{F14}", "f15": "{F15}",
+		"space": " ",
+		"caps_lock": "{CAPSLOCK}",
+		"num_lock": "{NUMLOCK}",
+		"scroll_lock": "{SCROLLLOCK}",
+		"print_screen": "{PRTSC}",
+		"pause": "{BREAK}",
+		"insert": "{INSERT}",
 	}
 	if mapped, ok := specialKeys[key]; ok {
 		return mods + mapped

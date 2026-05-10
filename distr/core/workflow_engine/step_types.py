@@ -1,8 +1,8 @@
 """Step type definitions and Pydantic configuration models for workflows.
 
 Defines the supported step types (Run Command, Play Recording, HTTP Request,
-Execute Code, Playwright, Send to Project CLI) and their typed configuration schemas. The 'Set Variable'
-type has been removed.
+Execute Code, Playwright, Computer Use, Send to Project CLI) and their typed
+configuration schemas. The 'Set Variable' type has been removed.
 """
 
 from enum import Enum
@@ -19,6 +19,7 @@ class StepType(str, Enum):
     EXECUTE_CODE = "execute_code"
     PLAYWRIGHT = "playwright"
     SEND_TO_PROJECT_CLI = "send_to_project_cli"
+    COMPUTER_USE = "computer_use"
 
 
 class RunCommandConfig(BaseModel):
@@ -67,3 +68,20 @@ class PlaywrightConfig(BaseModel):
     instruction: str = ""
     code: str = ""
     headless: bool = True
+
+
+class ComputerUseConfig(BaseModel):
+    """Configuration for a Computer Use step.
+
+    This step type owns its own vision-action loop. It captures a screenshot,
+    asks a vision model what action to take next, executes it via the sidecar,
+    then repeats — without burning orchestration LLM tokens on micro-decisions.
+
+    The orchestration model is only called when the loop escalates (stuck_threshold
+    consecutive failed observations, or the vision model explicitly asks for help).
+    """
+    goal: str = ""                    # Natural language goal for this step
+    max_iterations: int = 15          # Hard cap on vision-action cycles
+    stuck_threshold: int = 3          # Consecutive "no progress" turns before escalating
+    escalate_on_ambiguity: bool = True # Call orchestration model when stuck
+    screenshot_resize_width: int = 1280  # Max width before sending to vision model

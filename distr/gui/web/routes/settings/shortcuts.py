@@ -22,8 +22,7 @@ def register_routes(router, templates):
         settings = load_settings_from_db()
         return JSONResponse({
             "global_ptt_hotkey_enabled": settings.get("global_ptt_hotkey_enabled", True),
-            "global_ptt_hotkey_primary": settings.get("global_ptt_hotkey_primary", HOTKEY_DEFAULTS["global_ptt_hotkey_primary"]),
-            "global_ptt_hotkey_secondary": settings.get("global_ptt_hotkey_secondary", HOTKEY_DEFAULTS["global_ptt_hotkey_secondary"]),
+            "global_ptt_hotkey_combo": settings.get("global_ptt_hotkey_combo", HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]),
             "oracle_size_hotkey_decrease_modifier": settings.get("oracle_size_hotkey_decrease_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_modifier"]),
             "oracle_size_hotkey_decrease_key": settings.get("oracle_size_hotkey_decrease_key", HOTKEY_DEFAULTS["oracle_size_hotkey_decrease_key"]),
             "oracle_size_hotkey_increase_modifier": settings.get("oracle_size_hotkey_increase_modifier", HOTKEY_DEFAULTS["oracle_size_hotkey_increase_modifier"]),
@@ -48,7 +47,7 @@ def register_routes(router, templates):
             "web_hotkey_workflows_key": settings.get("web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"]),
             "web_hotkey_preferences_modifier": settings.get("web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]),
             "web_hotkey_preferences_key": settings.get("web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"]),
-            "dictation_hotkey_enabled": settings.get("dictation_hotkey_enabled", False),
+            "dictation_hotkey_enabled": settings.get("dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]),
             "dictation_hotkey_modifier": settings.get("dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]),
             "dictation_hotkey_key": settings.get("dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]),
             "shortcut_options": {

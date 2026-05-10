@@ -72,27 +72,15 @@ def run_migrations():
 
     try:
         with Session() as session:
-            session.execute(text("SELECT global_ptt_hotkey_primary FROM settings LIMIT 1"))
+            session.execute(text("SELECT global_ptt_hotkey_combo FROM settings LIMIT 1"))
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN global_ptt_hotkey_primary VARCHAR DEFAULT 'option'"))
+                conn.execute(text(f"ALTER TABLE settings ADD COLUMN global_ptt_hotkey_combo VARCHAR DEFAULT '{HOTKEY_DEFAULTS['global_ptt_hotkey_combo']}'"))
                 conn.commit()
-                logger.info("Added global_ptt_hotkey_primary column to settings table")
+                logger.info("Added global_ptt_hotkey_combo column to settings table")
             except Exception as e:
-                logger.warning(f"Could not add global_ptt_hotkey_primary column: {e}")
-
-    try:
-        with Session() as session:
-            session.execute(text("SELECT global_ptt_hotkey_secondary FROM settings LIMIT 1"))
-    except Exception:
-        with engine.connect() as conn:
-            try:
-                conn.execute(text("ALTER TABLE settings ADD COLUMN global_ptt_hotkey_secondary VARCHAR DEFAULT 'command'"))
-                conn.commit()
-                logger.info("Added global_ptt_hotkey_secondary column to settings table")
-            except Exception as e:
-                logger.warning(f"Could not add global_ptt_hotkey_secondary column: {e}")
+                logger.warning(f"Could not add global_ptt_hotkey_combo column: {e}")
 
     try:
         with Session() as session:
@@ -1667,9 +1655,9 @@ def run_migrations():
 
     # Dictation hotkey settings
     for _col_name, _col_type in [
-        ("dictation_hotkey_enabled", "BOOLEAN DEFAULT 0"),
-        ("dictation_hotkey_modifier", "VARCHAR DEFAULT 'control_command'"),
-        ("dictation_hotkey_key", "VARCHAR DEFAULT 'd'"),
+        ("dictation_hotkey_enabled", f"BOOLEAN DEFAULT {int(HOTKEY_DEFAULTS['dictation_hotkey_enabled'])}"),
+        ("dictation_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_modifier']}'"),
+        ("dictation_hotkey_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_key']}'"),
     ]:
         try:
             with Session() as session:
@@ -1687,24 +1675,24 @@ def run_migrations():
     for _col_name, _col_type in [
         ("recording_hotkey_enabled", "BOOLEAN DEFAULT 1"),
         ("recording_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['recording_hotkey_modifier']}'"),
-        ("recording_hotkey_key", "VARCHAR DEFAULT 's'"),
+        ("recording_hotkey_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['recording_hotkey_key']}'"),
         ("skin_nav_hotkey_previous_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier']}'"),
         ("skin_nav_hotkey_previous_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key']}'"),
         ("skin_nav_hotkey_next_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier']}'"),
         ("skin_nav_hotkey_next_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_nav_hotkey_next_key']}'"),
         ("skin_select_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['skin_select_hotkey_modifier']}'"),
-        ("web_hotkey_chat_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_chat_key", "VARCHAR DEFAULT 'c'"),
-        ("web_hotkey_projects_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_projects_key", "VARCHAR DEFAULT 'j'"),
-        ("web_hotkey_actions_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_actions_key", "VARCHAR DEFAULT 'a'"),
-        ("web_hotkey_snippets_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_snippets_key", "VARCHAR DEFAULT 'n'"),
-        ("web_hotkey_workflows_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_workflows_key", "VARCHAR DEFAULT 'w'"),
-        ("web_hotkey_preferences_modifier", "VARCHAR DEFAULT 'option_command'"),
-        ("web_hotkey_preferences_key", "VARCHAR DEFAULT 'grave'"),
+        ("web_hotkey_chat_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_chat_modifier']}'"),
+        ("web_hotkey_chat_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_chat_key']}'"),
+        ("web_hotkey_projects_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_projects_modifier']}'"),
+        ("web_hotkey_projects_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_projects_key']}'"),
+        ("web_hotkey_actions_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_actions_modifier']}'"),
+        ("web_hotkey_actions_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_actions_key']}'"),
+        ("web_hotkey_snippets_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_snippets_modifier']}'"),
+        ("web_hotkey_snippets_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_snippets_key']}'"),
+        ("web_hotkey_workflows_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_workflows_modifier']}'"),
+        ("web_hotkey_workflows_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_workflows_key']}'"),
+        ("web_hotkey_preferences_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_preferences_modifier']}'"),
+        ("web_hotkey_preferences_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['web_hotkey_preferences_key']}'"),
     ]:
         try:
             with Session() as session:

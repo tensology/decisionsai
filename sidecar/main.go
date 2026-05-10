@@ -234,7 +234,11 @@ func dispatch(handlers map[string]ToolHandler, req RPCRequest) RPCResponse {
 type ToolHandler func(params map[string]any) (any, error)
 
 func defaultSidecarCapabilities() []string {
-	return []string{"terminal", "filesystem", "clipboard", "screenshot", "desktop", "screen_intelligence", "python_executor"}
+	return []string{
+		"terminal", "filesystem", "clipboard", "screenshot",
+		"desktop", "screen_intelligence", "python_executor",
+		"coordinate_input", "screen_info", "som_annotation",
+	}
 }
 
 func buildHealthPayload(handlers map[string]ToolHandler) map[string]any {

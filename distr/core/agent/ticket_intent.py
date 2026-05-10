@@ -1,0 +1,215 @@
+"""Deterministic routing helpers for ticket-related user requests.
+
+This module is intentionally small and boring: it protects the product
+workflow before an LLM gets a chance to improvise.  Natural "create a ticket"
+requests should go to the Kanban Ticket Board.  Legacy .tickets/Cursor files
+should only be used when the user explicitly asks for Cursor/project-ticket
+behaviour.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass
+import json
+import os
+import re
+from typing import Iterable
+
+
+@dataclass(frozen=True)
+class TicketIntent:
+    """Classified ticket intent used by tools and tests."""
+
+    kind: str
+    confidence: float
+    reason: str
+
+
+@dataclass(frozen=True)
+class SkillRecommendation:
+    """A skill that may help execute a ticket."""
+
+    name: str
+    reason: str
+
+
+_CREATE_TICKET_RE = re.compile(
+    r"\b(create|make|add|new|write|draft|open)\s+(?:a\s+|an\s+)?(?:kanban\s+|board\s+)?ticket\b",
+    re.IGNORECASE,
+)
+_CURSOR_TICKET_RE = re.compile(
+    r"\b("
+    r"tell\s+cursor|"
+    r"cursor\s+ticket|"
+    r"create\s+(?:a\s+)?(?:cursor|\.tickets?)\s+ticket|"
+    r"\.tickets?\s+(?:file|ticket)|"
+    r"send\s+(?:this|that|it)?\s*to\s+cursor"
+    r")\b",
+    re.IGNORECASE,
+)
+_EXTERNAL_TICKET_RE = re.compile(r"\b(jira|trello)\s+(?:ticket|card|issue)\b", re.IGNORECASE)
+_DECISIONS_PROJECT_TICKET_RE = re.compile(
+    r"\b(create|make|add|new|write|draft|open)\s+"
+    r"(?:a\s+|an\s+|this\s+|that\s+)?(?:ticket|task|work\s+item)\s+"
+    r"(?:for|in|into|to)\s+(?:the\s+)?decisions(?:ai| ai)?\b",
+    re.IGNORECASE,
+)
+_DISCUSS_TICKET_RE = re.compile(
+    r"\b(talk|discuss|load|open|think\s+through|help\s+me\s+with)\s+(?:about\s+)?(?:this\s+|that\s+)?ticket\b",
+    re.IGNORECASE,
+)
+
+
+def _repo_root() -> str:
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+
+
+def is_debug_enabled() -> bool:
+    """Return whether DecisionsAI is running in developer/debug mode.
+
+    An explicit DEBUG environment variable wins. When absent, fall back to the
+    repo-local .env so the desktop app behaves the same way as the dev server.
+    """
+    env_value = os.environ.get("DEBUG")
+    if env_value is not None:
+        return env_value.strip().lower() in {"1", "true", "yes", "on"}
+
+    env_path = os.path.join(_repo_root(), ".env")
+    try:
+        with open(env_path, encoding="utf-8") as fh:
+            for line in fh:
+                cleaned = line.strip()
+                if not cleaned or cleaned.startswith("#") or "=" not in cleaned:
+                    continue
+                key, value = cleaned.split("=", 1)
+                if key.strip() == "DEBUG":
+                    return value.strip().strip('"\'').lower() in {"1", "true", "yes", "on"}
+    except OSError:
+        pass
+    return False
+
+
+def classify_ticket_intent(text: str) -> TicketIntent:
+    """Classify ticket-related text before tool routing.
+
+    The ordering is deliberate: explicit Cursor requests win over generic
+    ticket creation, while generic creation always maps to Kanban.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return TicketIntent("none", 0.0, "empty text")
+
+    if _CURSOR_TICKET_RE.search(raw):
+        return TicketIntent("cursor_ticket", 0.97, "explicit Cursor/.tickets request")
+    if _DECISIONS_PROJECT_TICKET_RE.search(raw) and is_debug_enabled():
+        return TicketIntent("debug_decisions_ticket", 0.96, "DEBUG=True DecisionsAI .tickets request")
+    if _EXTERNAL_TICKET_RE.search(raw):
+        return TicketIntent("external_ticket", 0.84, "external ticket provider mentioned")
+    if _DISCUSS_TICKET_RE.search(raw):
+        return TicketIntent("discuss_ticket", 0.90, "ticket discussion request")
+    if _CREATE_TICKET_RE.search(raw):
+        return TicketIntent("kanban_ticket", 0.95, "generic ticket creation maps to Kanban")
+
+    return TicketIntent("none", 0.0, "no ticket intent detected")
+
+
+_SKILL_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (
+    (
+        "systematic-debugging",
+        ("bug", "error", "fail", "failing", "broken", "logs", "traceback", "regression", "stuck"),
+        "The ticket appears to involve investigation or failure analysis.",
+    ),
+    (
+        "webapp-testing",
+        ("ui", "frontend", "browser", "playwright", "screen", "click", "form", "responsive", "web"),
+        "The work likely needs browser/UI validation.",
+    ),
+    (
+        "test-driven-development",
+        ("test", "tests", "coverage", "pytest", "unit", "integration", "e2e", "regression"),
+        "The request mentions tests or needs a test-first implementation path.",
+    ),
+    (
+        "skill-creator",
+        ("skill", "skills", "agent skill", "create a skill", "skill creation"),
+        "The work is about creating or improving reusable agent skills.",
+    ),
+    (
+        "ln-627-observability-auditor",
+        ("log", "logs", "observability", "telemetry", "health", "status", "diagnostic"),
+        "The ticket needs logging, health, or diagnostic evidence.",
+    ),
+    (
+        "ln-643-api-contract-auditor",
+        ("api", "endpoint", "schema", "contract", "request", "response", "payload"),
+        "The ticket touches API contracts or structured payloads.",
+    ),
+    (
+        "verification-before-completion",
+        ("validate", "validation", "verify", "done", "acceptance", "criteria"),
+        "The ticket needs explicit completion checks.",
+    ),
+)
+
+
+def _available_skill_names(skills_root: str | None = None) -> set[str]:
+    root = skills_root or os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..", "skills"))
+    registry_path = os.path.join(root, "skills_registry.json")
+    names: set[str] = set()
+    try:
+        with open(registry_path, encoding="utf-8") as fh:
+            data = json.load(fh)
+        if isinstance(data, dict):
+            items: Iterable = data.get("skills") or data.values()
+        else:
+            items = data if isinstance(data, list) else []
+        for item in items:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("id") or item.get("slug")
+                if name:
+                    names.add(str(name))
+    except Exception:
+        pass
+
+    if not names and os.path.isdir(root):
+        try:
+            names.update(
+                name
+                for name in os.listdir(root)
+                if os.path.isdir(os.path.join(root, name)) and not name.startswith(".")
+            )
+        except OSError:
+            pass
+    return names
+
+
+def recommend_skills_for_ticket(text: str, *, max_recommendations: int = 3) -> list[SkillRecommendation]:
+    """Recommend available skills from deterministic keyword rules."""
+    haystack = (text or "").lower()
+    if not haystack.strip():
+        return []
+
+    available = _available_skill_names()
+    recommendations: list[SkillRecommendation] = []
+    seen: set[str] = set()
+    for skill_name, keywords, reason in _SKILL_RULES:
+        if skill_name in seen:
+            continue
+        if available and skill_name not in available:
+            continue
+        if any(keyword in haystack for keyword in keywords):
+            recommendations.append(SkillRecommendation(skill_name, reason))
+            seen.add(skill_name)
+        if len(recommendations) >= max_recommendations:
+            break
+    return recommendations
+
+
+def format_skill_recommendations_markdown(recommendations: list[SkillRecommendation]) -> str:
+    """Render recommendations as a compact ticket description section."""
+    if not recommendations:
+        return ""
+    lines = ["", "## Recommended Skills"]
+    for rec in recommendations:
+        lines.append(f"- `{rec.name}` — {rec.reason}")
+    return "\n".join(lines).strip()

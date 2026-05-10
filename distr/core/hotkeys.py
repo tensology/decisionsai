@@ -44,12 +44,12 @@ for _letter in "abcdefghijklmnopqrstuvwxyz":
 
 VALID_HOTKEY_KEYS = set(KEY_LABELS.keys())
 
+# Canonical default shortcut profile (new DB rows, API fallbacks, web UI load defaults).
 DEFAULTS = {
     "dictation_hotkey_enabled": False,
     "dictation_hotkey_modifier": "control_command",
     "dictation_hotkey_key": "d",
-    "global_ptt_hotkey_primary": "option",
-    "global_ptt_hotkey_secondary": "command",
+    "global_ptt_hotkey_combo": "option_command",
     "oracle_size_hotkey_decrease_modifier": "control_command",
     "oracle_size_hotkey_decrease_key": "down_arrow",
     "oracle_size_hotkey_increase_modifier": "control_command",

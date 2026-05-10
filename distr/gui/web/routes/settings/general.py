@@ -5,6 +5,8 @@ import asyncio
 
 from fastapi.responses import JSONResponse
 
+from distr.core.hotkeys import DEFAULTS as HOTKEY_DEFAULTS
+
 from ._shared import (
     logger,
     GeneralSettings,
@@ -70,8 +72,7 @@ def register_routes(router, templates):
             "restore_position": settings.get("restore_position", True),
             "oracle_position": settings.get("oracle_position", "custom"),
             "global_ptt_hotkey_enabled": settings.get("global_ptt_hotkey_enabled", True),
-            "global_ptt_hotkey_primary": settings.get("global_ptt_hotkey_primary", "option"),
-            "global_ptt_hotkey_secondary": settings.get("global_ptt_hotkey_secondary", "command"),
+            "global_ptt_hotkey_combo": settings.get("global_ptt_hotkey_combo", HOTKEY_DEFAULTS["global_ptt_hotkey_combo"]),
         })
 
     @router.post("/general")

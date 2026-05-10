@@ -293,9 +293,11 @@ class KanbanAgentCheckIn:
 
         # Workflow path: prefer ticket-linked workflow, fall back to board default.
         workflow_id = None
-        # Build context from ticket title and description
+        # Build context from ticket title and description. Replaced by a
+        # structured brief below when the full ticket row is available.
         context = f"Ticket: {ticket['title']}"
         ticket_description = ""
+        workflow_brief = None
         try:
             with get_session() as db:
                 tk = db.query(KanbanTicket).filter(KanbanTicket.id == ticket["id"]).first()
@@ -320,6 +322,25 @@ class KanbanAgentCheckIn:
         if project_ctx.get("project_folder"):
             context += f"\nProject folder: {project_ctx['project_folder']}"
 
+        try:
+            from distr.core.kanban.ticket_workflow_brief import (
+                build_ticket_workflow_brief,
+                render_ticket_workflow_brief,
+            )
+            with get_session() as db:
+                workflow_brief = build_ticket_workflow_brief(
+                    db,
+                    ticket["id"],
+                    board_id=board.id,
+                    board_name=board.name,
+                    project_id=project_ctx.get("project_id"),
+                    project_name=project_ctx.get("project_name"),
+                    project_folder=project_ctx.get("project_folder"),
+                )
+            context = render_ticket_workflow_brief(workflow_brief)
+        except Exception:
+            logger.debug("Agent check-in: could not build structured ticket brief", exc_info=True)
+
         risk_profile = _risk_profile_for_ticket(ticket.get("title", ""), ticket_description)
         run_metadata = {
             "source_type": "board_checkin",
@@ -333,6 +354,8 @@ class KanbanAgentCheckIn:
             "phase": "planning",
             "risk_profile": risk_profile,
         }
+        if workflow_brief:
+            run_metadata["ticket_workflow_brief"] = workflow_brief
         run_result = start_workflow_run(
             workflow_id,
             context=context,

@@ -141,6 +141,8 @@ ROUTING_CASES = [
 
     # ── Kanban ──
     ("create a ticket for this bug", "create_ticket"),
+    ("create a Jira ticket for this bug", "create_ticket"),
+    ("make a Trello card for this bug", "create_ticket"),
 ]
 
 

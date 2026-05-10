@@ -112,6 +112,11 @@ def valid_config_for(draw, step_type: str):
     if step_type == StepType.SEND_TO_PROJECT_CLI.value:
         return {"instruction": draw(non_empty_text)}
 
+    if step_type == StepType.COMPUTER_USE.value:
+        if draw(st.booleans()):
+            return {"goal": draw(non_empty_text)}
+        return {"instruction": draw(non_empty_text)}
+
     # Should not reach here for known types
     return {}
 
@@ -147,6 +152,15 @@ def invalid_config_for(draw, step_type: str):
         return {
             "instruction": draw(empty_or_whitespace),
             "code": draw(empty_or_whitespace),
+        }
+
+    if step_type == StepType.SEND_TO_PROJECT_CLI.value:
+        return {"instruction": draw(empty_or_whitespace)}
+
+    if step_type == StepType.COMPUTER_USE.value:
+        return {
+            "goal": draw(empty_or_whitespace),
+            "instruction": draw(empty_or_whitespace),
         }
 
     return {}
@@ -389,7 +403,22 @@ class TestProperty4PerTypeValidationCorrectness:
         fields = [e.field for e in errors]
         assert "instruction" in fields
 
-    # (g) unknown step type → error on "step_type"
+    # (g) empty goal+instruction for computer_use → error on "goal"
+    @given(
+        goal=empty_or_whitespace,
+        instruction=empty_or_whitespace,
+    )
+    @settings(max_examples=100)
+    def test_computer_use_empty_goal_errors_on_goal(self, goal, instruction):
+        """A Computer Use config with no goal/instruction errors on "goal"."""
+        errors = validator.validate(
+            "computer_use", {"goal": goal, "instruction": instruction}
+        )
+        assert len(errors) >= 1
+        fields = [e.field for e in errors]
+        assert "goal" in fields
+
+    # (h) unknown step type → error on "step_type"
     @given(unknown=unknown_step_types)
     @settings(max_examples=100)
     def test_unknown_step_type_errors_on_step_type(self, unknown):

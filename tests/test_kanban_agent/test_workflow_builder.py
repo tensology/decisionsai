@@ -39,6 +39,7 @@ VALID_ACTION_TYPES = {
     "http_request",
     "execute_code",
     "playwright",
+    "computer_use",
     "play_recording",
     "set_variable",
 }

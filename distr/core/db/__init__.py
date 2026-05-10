@@ -130,8 +130,7 @@ class Settings(Base):
     last_listening_state = Column(Boolean, default=True)
     hands_free_mode = Column(Boolean, default=True)
     global_ptt_hotkey_enabled = Column(Boolean, default=True)
-    global_ptt_hotkey_primary = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_primary'])
-    global_ptt_hotkey_secondary = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_secondary'])
+    global_ptt_hotkey_combo = Column(String, default=HOTKEY_DEFAULTS['global_ptt_hotkey_combo'])
     oracle_size_hotkey_decrease_modifier = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier'])
     oracle_size_hotkey_decrease_key = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_key'])
     oracle_size_hotkey_increase_modifier = Column(String, default=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_modifier'])
@@ -139,9 +138,9 @@ class Settings(Base):
     recording_hotkey_enabled = Column(Boolean, default=True)
     recording_hotkey_modifier = Column(String, default=HOTKEY_DEFAULTS['recording_hotkey_modifier'])
     recording_hotkey_key = Column(String, default=HOTKEY_DEFAULTS['recording_hotkey_key'])
-    dictation_hotkey_enabled = Column(Boolean, default=False)
-    dictation_hotkey_modifier = Column(String, default='control_command')
-    dictation_hotkey_key = Column(String, default='d')
+    dictation_hotkey_enabled = Column(Boolean, default=HOTKEY_DEFAULTS['dictation_hotkey_enabled'])
+    dictation_hotkey_modifier = Column(String, default=HOTKEY_DEFAULTS['dictation_hotkey_modifier'])
+    dictation_hotkey_key = Column(String, default=HOTKEY_DEFAULTS['dictation_hotkey_key'])
     skin_nav_hotkey_previous_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier'])
     skin_nav_hotkey_previous_key = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key'])
     skin_nav_hotkey_next_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier'])
@@ -753,8 +752,7 @@ def init_db():
                 last_listening_state=True,
                 hands_free_mode=False,  # Default to push-to-talk mode
                 global_ptt_hotkey_enabled=True,
-                global_ptt_hotkey_primary=HOTKEY_DEFAULTS['global_ptt_hotkey_primary'],
-                global_ptt_hotkey_secondary=HOTKEY_DEFAULTS['global_ptt_hotkey_secondary'],
+                global_ptt_hotkey_combo=HOTKEY_DEFAULTS['global_ptt_hotkey_combo'],
                 oracle_size_hotkey_decrease_modifier=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_modifier'],
                 oracle_size_hotkey_decrease_key=HOTKEY_DEFAULTS['oracle_size_hotkey_decrease_key'],
                 oracle_size_hotkey_increase_modifier=HOTKEY_DEFAULTS['oracle_size_hotkey_increase_modifier'],

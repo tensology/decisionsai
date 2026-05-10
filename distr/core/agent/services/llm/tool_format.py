@@ -211,12 +211,16 @@ def get_tool_parameters(tool_name: str) -> dict:
             "properties": {
                 "action": {
                     "type": "string",
-                    "description": "REQUIRED: The clipboard action: 'explain this', 'elaborate this', or 'get' (for 'what's in the clipboard'). Extract from user request immediately. NOTE: 'read this' is handled separately.",
-                    "enum": ["explain", "elaborate", "get"]
+                    "description": "REQUIRED: The clipboard action: 'explain', 'elaborate', 'get' (for what's in the clipboard), or 'set'/'write' to write text into the clipboard. NOTE: 'read this' is handled separately.",
+                    "enum": ["explain", "elaborate", "get", "set", "write"]
                 },
                 "text": {
                     "type": "string",
                     "description": "The full user request text (used to extract action if action not provided)"
+                },
+                "content": {
+                    "type": "string",
+                    "description": "Text to write into the clipboard when action is 'set' or 'write'."
                 }
             },
             "required": ["action"]
@@ -457,4 +461,3 @@ def convert_tools_to_openai_format(tools_list):
         result_tools.append(ollama_tool)
     
     return result_tools
-

@@ -88,7 +88,7 @@ _legacy_statuses = st.sampled_from(["planned", "in_progress", "completed"])
 
 _step_types = st.sampled_from([
     "agent_instruction", "run_command", "http_request",
-    "execute_code", "playwright", "play_recording",
+    "execute_code", "playwright", "computer_use", "play_recording",
 ])
 
 _step_config = st.one_of(

@@ -16,8 +16,35 @@ import re
 import subprocess
 import platform
 from datetime import datetime
+from pathlib import Path
 
 logger = logging.getLogger(__name__)
+
+
+def _decisionsai_project_root() -> str:
+    """Return the DecisionsAI repo root for debug-only self tickets."""
+    return str(Path(__file__).resolve().parents[5])
+
+
+def _extract_debug_decisions_ticket_content(text: str) -> str:
+    """Extract the work text from 'make a ticket for DecisionsAI ...' requests."""
+    patterns = (
+        r"\b(?:create|make|add|new|write|draft|open)\s+"
+        r"(?:a\s+|an\s+|this\s+|that\s+)?(?:ticket|task|work\s+item)\s+"
+        r"(?:for|in|into|to)\s+(?:the\s+)?decisions(?:ai| ai)?\s*"
+        r"(?::|,|\-|\babout\b|\bto\b|\bfor\b|\bon\b|\bthat\b)?\s*(.*)$",
+        r"\b(?:create|make|add|new|write|draft|open)\s+"
+        r"(?:a\s+|an\s+|this\s+|that\s+)?(?:decisionsai|decisions ai|decisions)\s+"
+        r"(?:ticket|task|work\s+item)\s*"
+        r"(?::|,|\-|\babout\b|\bto\b|\bfor\b|\bon\b|\bthat\b)?\s*(.*)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text or "", re.IGNORECASE | re.DOTALL)
+        if match:
+            content = match.group(1).strip()
+            if content:
+                return content
+    return (text or "").strip()
 
 def get_clipboard_content() -> Optional[str]:
     """Get text content from system clipboard using platform-specific methods."""
@@ -73,14 +100,16 @@ class CreateCursorTicketTool(BaseTool):
     """Tool for creating a ticket file in the active project's .tickets or Cursor's tickets folder."""
 
     name: str = "create_cursor_ticket"
-    description: str = """Create a ticket file when user says 'can you tell cursor', 'create a ticket', 'tell cursor what's in the clipboard', or 'tell cursor that instruction'.
+    description: str = """Create a legacy Cursor/.tickets file only when the user explicitly says 'tell cursor', 'Cursor ticket', '.tickets file', or asks to send work to Cursor.
+    DEBUG=True exception: "make a ticket for Decisions/DecisionsAI" writes a project ticket file into the DecisionsAI repo .tickets/ folder.
     If a project is active (in use) with a folder path, the file is written to that project's .tickets/ folder.
     Otherwise the file is written under ~/.cursor/decisionsai/tickets/.
     The tool cleans up and summarizes the content into a well-formatted ticket.
+    Do not use this for ordinary 'create a ticket' requests; those belong to the Kanban Ticket Board tool named create_ticket.
     
     Usage:
     - "can you tell cursor [message]" -> Creates a cleaned up ticket file with the message content
-    - "create a ticket [message]" -> Creates a ticket file with the message content
+    - "create a Cursor ticket [message]" -> Creates a ticket file with the message content
     - "tell cursor what's in the clipboard" -> Creates a ticket from clipboard content
     - "tell cursor that instruction" -> Creates a ticket summarizing recent conversation
     """
@@ -371,6 +400,15 @@ Cleaned ticket:"""
             
             if not text:
                 return "Error: No text provided to create cursor ticket."
+
+            from distr.core.agent.ticket_intent import classify_ticket_intent
+
+            ticket_intent = classify_ticket_intent(text)
+            if ticket_intent.kind == "kanban_ticket":
+                return (
+                    "This looks like a normal Ticket Board request, not an explicit Cursor/.tickets request. "
+                    "Use the create_ticket tool with action='create_ticket' so the ticket is created on the Kanban board."
+                )
             
             text_lower = text.lower() if text else ""
             
@@ -445,6 +483,11 @@ Cleaned ticket:"""
                 is_clipboard = True
                 is_conversation = False
                 logger.info(f"CreateCursorTicket: Using clipboard content ({len(raw_content)} chars)")
+            elif ticket_intent.kind == "debug_decisions_ticket":
+                raw_content = _extract_debug_decisions_ticket_content(text)
+                is_clipboard = False
+                is_conversation = False
+                logger.info("CreateCursorTicket: Detected DEBUG DecisionsAI project ticket")
             else:
                 # Extract the message after "can you tell cursor", "tell cursor", or "create a ticket"
                 pattern = r'can\s+you\s+tell\s+cursor\s+(.+)'
@@ -456,13 +499,14 @@ Cleaned ticket:"""
                     match = re.search(pattern, text, re.IGNORECASE)
                 
                 if not match:
-                    # Try "create a ticket"
-                    pattern = r'create\s+(?:a\s+)?ticket\s+(.+)'
+                    # Try explicit Cursor/.tickets variants only. Generic
+                    # "create a ticket" is reserved for the Kanban board.
+                    pattern = r'create\s+(?:a\s+)?(?:cursor|\.tickets?)\s+ticket\s+(.+)'
                     match = re.search(pattern, text, re.IGNORECASE)
                 
                 if not match:
                     logger.warning(f"CreateCursorTicket: Could not extract message from text: '{text}'")
-                    return "Error: Could not extract message from command. Try 'tell cursor [message]' or 'create a ticket [message]'."
+                    return "Error: Could not extract message from command. Try 'tell cursor [message]' or 'create a Cursor ticket [message]'."
                 
                 raw_content = match.group(1).strip()
                 is_clipboard = False
@@ -494,17 +538,22 @@ Cleaned ticket:"""
             # Prefer active project's .tickets (same as create_project_ticket / extension watchers)
             tickets_dir = None
             project_label = None
-            try:
-                from distr.core.agent.services.rag.project import get_active_project
-                ap = get_active_project()
-                folder = (ap or {}).get("folder_location") or ""
-                folder = folder.strip()
-                if folder:
-                    tickets_dir = os.path.join(folder, ".tickets")
-                    project_label = (ap or {}).get("name") or "project"
-                    logger.info("CreateCursorTicket: using active project .tickets at %s", tickets_dir)
-            except Exception as e:
-                logger.warning("CreateCursorTicket: could not resolve active project: %s", e)
+            if ticket_intent.kind == "debug_decisions_ticket":
+                tickets_dir = os.path.join(_decisionsai_project_root(), ".tickets")
+                project_label = "DecisionsAI"
+                logger.info("CreateCursorTicket: using DEBUG DecisionsAI .tickets at %s", tickets_dir)
+            else:
+                try:
+                    from distr.core.agent.services.rag.project import get_active_project
+                    ap = get_active_project()
+                    folder = (ap or {}).get("folder_location") or ""
+                    folder = folder.strip()
+                    if folder:
+                        tickets_dir = os.path.join(folder, ".tickets")
+                        project_label = (ap or {}).get("name") or "project"
+                        logger.info("CreateCursorTicket: using active project .tickets at %s", tickets_dir)
+                except Exception as e:
+                    logger.warning("CreateCursorTicket: could not resolve active project: %s", e)
 
             if not tickets_dir:
                 home_dir = os.path.expanduser("~")
@@ -585,14 +634,14 @@ Cleaned ticket:"""
         Checks DECISIONS_WORKFLOW_RUN_ID and DECISIONS_WORKFLOW_STEP_ID env vars
         set by the workflow service. Returns empty string if not in a workflow context.
         """
-        from distr.core.workflow.dispatcher import get_current_workflow_env
-        _wenv = get_current_workflow_env()
-        run_id = _wenv.get("run_id")
-        step_id = _wenv.get("step_id")
-        workflow_id = _wenv.get("workflow_id")
-        if not run_id:
-            return ""
         try:
+            from distr.core.workflow.dispatcher import get_current_workflow_env
+            _wenv = get_current_workflow_env()
+            run_id = _wenv.get("run_id")
+            step_id = _wenv.get("step_id")
+            workflow_id = _wenv.get("workflow_id")
+            if not run_id:
+                return ""
             import json as _json
             api_base = os.environ.get("DECISIONS_API_BASE", "http://127.0.0.1:8765")
             meta = {
@@ -605,7 +654,7 @@ Cleaned ticket:"""
                 "callback_payload_type": "workflow_continue",
             }
             return f"<!-- decisions-meta: {_json.dumps(meta)} -->\n"
-        except (ValueError, TypeError) as e:
+        except (ImportError, ValueError, TypeError) as e:
             logger.warning(f"CreateCursorTicket: Could not build decisions-meta: {e}")
             return ""
     
@@ -641,4 +690,3 @@ Cleaned ticket:"""
     
     async def _arun(self, text: str = "", **kwargs) -> str:
         return self._run(text=text)
-

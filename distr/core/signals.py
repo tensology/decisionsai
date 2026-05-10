@@ -58,6 +58,9 @@ class SignalManager(QObject):
     dictation_hotkey_pressed = pyqtSignal()
     dictation_hotkey_released = pyqtSignal()
 
+    # Shortcut settings changed (web/native settings -> live hotkey listeners)
+    shortcut_settings_changed = pyqtSignal()
+
     # Voice/action handler signals
     voice_set_is_listening = pyqtSignal(bool)
 
@@ -68,6 +71,8 @@ class SignalManager(QObject):
     chat_deleted = pyqtSignal(int)
     current_chat_changed = pyqtSignal(int)
     agent_context_updated = pyqtSignal(int)  # Chat ID when agent context (model/voice/persona) should sync
+    tool_executed = pyqtSignal(object)  # dict payload: {chat_id, tool_name, args_summary, result_summary, status, timestamp}
+    workflow_event = pyqtSignal(object)  # dict payload: durable chat timeline event for workflow/subagent progress
 
     exit_app = pyqtSignal()
     restart_app = pyqtSignal()

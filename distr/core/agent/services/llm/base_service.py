@@ -59,6 +59,7 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._is_hands_free = False
         self._is_listening = is_listening
         self._is_dictating = False
+        self._dictation_one_shot = False  # True when hold-to-dictate hotkey (commit after one transcript)
         self._hands_free_before_dictation = False
         self.event_queue = event_queue
         self.chat_manager = chat_manager

@@ -602,6 +602,54 @@ def _cmd_push_to_talk_stop(session, params):
         session.logger.warning("PTT: STT service not available!")
 
 
+def _cmd_dictation_hotkey_pressed(session, params):
+    """Hold-to-dictate: capture audio like PTT, route transcript to typing (not chat).
+
+    GUI emits Qt signals; agent runs in a subprocess so we bridge via command_queue only.
+    """
+    session.logger.debug("Dictation hotkey: pressed")
+    _cmd_push_to_talk_start(session, params)
+    # Enable STT dictation flag immediately in-process. _start_dictation also queues
+    # set_dictating for the main UI loop, but that round-trip can arrive after key-up,
+    # breaking buffering / routing for short utterances.
+    _cmd_set_dictating(session, {"enabled": True})
+    if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
+        session.llm_service._start_dictation(one_shot=True)
+
+
+def _cmd_dictation_hotkey_released(session, params):
+    """End capture; LLM stops one-shot dictation after transcript is processed."""
+    session.logger.debug("Dictation hotkey: released")
+    _cmd_push_to_talk_stop(session, params)
+
+    def _clear_stuck_one_shot_dictation():
+        try:
+            llm = getattr(session, 'llm_service', None)
+            if (
+                llm
+                and getattr(llm, '_dictation_one_shot', False)
+                and getattr(llm, '_is_dictating', False)
+            ):
+                session.logger.warning(
+                    "Dictation hotkey: clearing stuck one-shot dictation (no transcript arrived)"
+                )
+                llm._stop_dictation()
+        except Exception as exc:
+            session.logger.debug("Dictation hotkey fallback cleanup failed: %s", exc)
+
+    loop = getattr(session.runner, '_loop', None) if session.runner else None
+    if loop and getattr(loop, 'is_running', lambda: False)():
+
+        async def _delayed_cleanup():
+            await asyncio.sleep(15.0)
+            _clear_stuck_one_shot_dictation()
+
+        try:
+            asyncio.run_coroutine_threadsafe(_delayed_cleanup(), loop)
+        except Exception as exc:
+            session.logger.debug("Dictation hotkey: could not schedule fallback cleanup: %s", exc)
+
+
 
 def _cmd_interrupt_tts(session, params):
     session.logger.info("⏹ TTS interrupted")
@@ -1179,6 +1227,8 @@ _COMMAND_MAP = {
     'process_text_input': _cmd_process_text_input,
     'push_to_talk_start': _cmd_push_to_talk_start,
     'push_to_talk_stop': _cmd_push_to_talk_stop,
+    'dictation_hotkey_pressed': _cmd_dictation_hotkey_pressed,
+    'dictation_hotkey_released': _cmd_dictation_hotkey_released,
     'interrupt_tts': _cmd_interrupt_tts,
     'speak_text_directly': _cmd_speak_text_directly,
     # Chat

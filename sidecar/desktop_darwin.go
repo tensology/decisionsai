@@ -4,37 +4,214 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
 // elementCache is declared in element_cache.go (shared across platforms)
 
+// ── Multi-screen cache ────────────────────────────────────────────────────────
+// Stores all connected screens so coordinate resolution can apply per-screen
+// offsets for multi-monitor setups.
+
+type screenDef struct {
+	logicalW    int
+	logicalH    int
+	xOffset     int
+	yOffset     int
+	scaleFactor float64
+}
+
+var screensCache struct {
+	mu      sync.Mutex
+	screens []screenDef
+	loaded  bool
+}
+
+// loadAllScreens fetches every screen's logical rect + scale factor.
+// Falls back through two cheaper methods if Python/Cocoa is unavailable.
+func loadAllScreens(force bool) []screenDef {
+	screensCache.mu.Lock()
+	defer screensCache.mu.Unlock()
+	if !force && screensCache.loaded {
+		return screensCache.screens
+	}
+
+	// ── Method 1: Python/Cocoa (most accurate, all screens) ──────────────────
+	py := `import Cocoa,json
+r=[]
+for s in Cocoa.NSScreen.screens():
+    f=s.frame()
+    r.append([int(f.size.width),int(f.size.height),int(f.origin.x),int(f.origin.y),s.backingScaleFactor()])
+print(json.dumps(r))`
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
+	cancel()
+	if err == nil {
+		var raw [][]float64
+		if json.Unmarshal([]byte(strings.TrimSpace(string(out))), &raw) == nil && len(raw) > 0 {
+			defs := make([]screenDef, len(raw))
+			for i, s := range raw {
+				if len(s) >= 5 {
+					defs[i] = screenDef{
+						logicalW: int(s[0]), logicalH: int(s[1]),
+						xOffset: int(s[2]), yOffset: int(s[3]),
+						scaleFactor: s[4],
+					}
+				}
+			}
+			screensCache.screens = defs
+			screensCache.loaded = true
+			return defs
+		}
+	}
+
+	// ── Method 2: osascript desktop bounds (primary screen, logical size) ────
+	osaOut, osaErr := runOsascript(`tell application "Finder" to get bounds of window of desktop`, 5*time.Second)
+	if osaErr == nil {
+		parts := strings.Split(strings.TrimSpace(osaOut), ",")
+		if len(parts) == 4 {
+			w, _ := strconv.Atoi(strings.TrimSpace(parts[2]))
+			h, _ := strconv.Atoi(strings.TrimSpace(parts[3]))
+			if w > 0 && h > 0 {
+				// Scale factor unknown via this method; default to 2.0 for Retina.
+				defs := []screenDef{{logicalW: w, logicalH: h, scaleFactor: 2.0}}
+				screensCache.screens = defs
+				screensCache.loaded = true
+				return defs
+			}
+		}
+	}
+
+	// ── Method 3: hard fallback — 1440×900 at 2× (safe-ish for M-series) ─────
+	defs := []screenDef{{logicalW: 1440, logicalH: 900, scaleFactor: 2.0}}
+	screensCache.screens = defs
+	screensCache.loaded = true
+	return defs
+}
+
+// screenRect returns the logical rect for the given screen index (0 = primary).
+func screenRect(idx int) screenDef {
+	defs := loadAllScreens(false)
+	if idx >= 0 && idx < len(defs) {
+		return defs[idx]
+	}
+	if len(defs) > 0 {
+		return defs[0]
+	}
+	return screenDef{logicalW: 1440, logicalH: 900, scaleFactor: 2.0}
+}
+
+// logicalScreenSize returns primary screen dimensions for backward compat.
+func logicalScreenSize() (w, h int, sf float64) {
+	s := screenRect(0)
+	return s.logicalW, s.logicalH, s.scaleFactor
+}
+
+// resolveCoords converts any coordinate format to logical pixel coords.
+//
+// Accepted formats (in priority order):
+//  1. norm_x / norm_y  (float 0.0–1.0) — fraction of screen width/height
+//  2. model_x / model_y + optional model_space (default 1000) — UI-TARS style
+//  3. x / y — raw logical pixels (passed through unchanged)
+//
+// Optional param "screen" (int) selects which monitor; 0 = primary (default).
+// For norm and model formats the screen's x/y offset is added automatically.
+func resolveCoords(params map[string]any) (int, int) {
+	screenIdx := 0
+	if s, ok := params["screen"].(float64); ok && s >= 0 {
+		screenIdx = int(s)
+	}
+	sc := screenRect(screenIdx)
+
+	if _, hasNorm := params["norm_x"]; hasNorm {
+		nx := toFloat(params["norm_x"])
+		ny := toFloat(params["norm_y"])
+		return sc.xOffset + int(nx*float64(sc.logicalW)),
+			sc.yOffset + int(ny*float64(sc.logicalH))
+	}
+
+	if _, hasModel := params["model_x"]; hasModel {
+		mx := toFloat(params["model_x"])
+		my := toFloat(params["model_y"])
+		space := 1000.0
+		if s, ok := params["model_space"].(float64); ok && s > 0 {
+			space = s
+		}
+		return sc.xOffset + int(mx/space*float64(sc.logicalW)),
+			sc.yOffset + int(my/space*float64(sc.logicalH))
+	}
+
+	return toInt(params["x"]), toInt(params["y"])
+}
+
 func addDesktopHandlers(m map[string]ToolHandler) {
-	m["list_windows"]    = handleListWindows
-	m["get_window_tree"] = handleGetWindowTree
-	m["click_element"]   = handleClickElement
-	m["move_mouse"]      = handleMoveMouse
-	m["type_text"]       = handleTypeText
-	m["press_keys"]      = handlePressKeys
-	m["launch_app"]      = handleLaunchApp
-	m["focus_window"]    = handleFocusWindow
-	m["find_element"]    = handleFindElement
-	m["get_clipboard"]   = handleGetClipboard
-	m["set_clipboard"]   = handleSetClipboard
-	m["drag_to"]         = handleDragTo
-	m["scroll"]          = handleScroll
+	m["list_windows"]     = handleListWindows
+	m["get_window_tree"]  = handleGetWindowTree
+	m["click_element"]    = handleClickElement
+	m["move_mouse"]       = handleMoveMouse
+	m["type_text"]        = handleTypeText
+	m["press_keys"]       = handlePressKeys
+	m["launch_app"]       = handleLaunchApp
+	m["focus_window"]     = handleFocusWindow
+	m["find_element"]     = handleFindElement
+	m["get_clipboard"]    = handleGetClipboard
+	m["set_clipboard"]    = handleSetClipboard
+	m["drag_to"]          = handleDragTo
+	m["scroll"]           = handleScroll
 	m["wait_for_element"] = handleWaitForElement
+
+	// Coordinate-input tools — registered here so darwin overrides the
+	// platform-agnostic stubs that would otherwise land from handlers.go.
+	m["click_at"]          = handleClickAt
+	m["double_click_at"]   = handleDoubleClickAt
+	m["right_click_at"]    = handleRightClickAt
+	m["get_screen_info"]   = handleGetScreenInfo
+	m["get_cursor_pos"]    = handleGetCursorPos
+	m["capture_annotated"] = handleCaptureAnnotated
+	m["type_clipboard"]    = handleTypeClipboard
 }
 
 func platformCaptureScreen(outputPath string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	return exec.CommandContext(ctx, "screencapture", "-x", outputPath).Run()
+}
+
+// getScreenDimensions reads physical PNG dimensions from the header bytes and
+// compares to the logical screen size to compute scale factor.
+func getScreenDimensions(pngData []byte) (screenDimInfo, error) {
+	// PNG signature is 8 bytes; IHDR chunk starts at byte 8.
+	// Width  = bytes 16-19 (big-endian uint32)
+	// Height = bytes 20-23 (big-endian uint32)
+	if len(pngData) < 24 {
+		return screenDimInfo{}, fmt.Errorf("PNG too short")
+	}
+	physW := int(binary.BigEndian.Uint32(pngData[16:20]))
+	physH := int(binary.BigEndian.Uint32(pngData[20:24]))
+
+	lw, lh, _ := logicalScreenSize()
+	sf := 1.0
+	if lw > 0 && physW > 0 {
+		sf = float64(physW) / float64(lw)
+	}
+
+	return screenDimInfo{
+		scaleFactor: sf,
+		logicalW:    lw,
+		logicalH:    lh,
+		physicalW:   physW,
+		physicalH:   physH,
+	}, nil
 }
 
 func platformMoveMouse(x, y int) (any, error) {
@@ -335,6 +512,115 @@ CGEventPost(kCGHIDEventTap,ev)`, x, y)
 	return exec.CommandContext(ctx, "python3", "-c", py).Run()
 }
 
+// ── click_at (NEW) ────────────────────────────────────────────────────────────
+// Clicks at raw, normalized, or model-space coordinates.
+//
+// Params:
+//   x, y            int   — raw logical pixel coords
+//   norm_x, norm_y  float — 0.0–1.0 normalized (multiplied by screen size)
+//   model_x, model_y int  — UI-TARS style; divide by model_space (default 1000) then multiply by screen
+//   model_space     int   — denominator for model coords (default 1000)
+//   action          str   — "click" | "double_click" | "right_click" (default "click")
+
+func handleClickAt(params map[string]any) (any, error) {
+	x, y := resolveCoords(params)
+	action := stringOrDefault(params["action"], "click")
+
+	if _, err := platformMoveMouse(x, y); err != nil {
+		return nil, fmt.Errorf("move mouse: %w", err)
+	}
+	time.Sleep(30 * time.Millisecond)
+
+	var err error
+	switch action {
+	case "double_click":
+		err = doubleClickAt(x, y)
+	case "right_click":
+		err = rightClickAt(x, y)
+	default:
+		err = clickAt(x, y)
+		action = "click"
+	}
+	if err != nil {
+		return nil, fmt.Errorf("click_at: %w", err)
+	}
+	return map[string]any{"success": true, "action": action, "x": x, "y": y}, nil
+}
+
+// ── double_click_at (NEW) ─────────────────────────────────────────────────────
+
+func handleDoubleClickAt(params map[string]any) (any, error) {
+	params["action"] = "double_click"
+	return handleClickAt(params)
+}
+
+// ── right_click_at (NEW) ──────────────────────────────────────────────────────
+
+func handleRightClickAt(params map[string]any) (any, error) {
+	params["action"] = "right_click"
+	return handleClickAt(params)
+}
+
+// ── get_screen_info (NEW) ─────────────────────────────────────────────────────
+
+func handleGetScreenInfo(params map[string]any) (any, error) {
+	py := `import Cocoa,json,sys
+screens=[]
+for i,s in enumerate(Cocoa.NSScreen.screens()):
+    f=s.frame()
+    screens.append({
+        "index":i,
+        "logical_width":int(f.size.width),
+        "logical_height":int(f.size.height),
+        "x_offset":int(f.origin.x),
+        "y_offset":int(f.origin.y),
+        "scale_factor":s.backingScaleFactor(),
+        "is_primary":i==0
+    })
+print(json.dumps(screens))`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
+	if err != nil {
+		return nil, fmt.Errorf("get_screen_info: %w", err)
+	}
+
+	var screens []map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &screens); err != nil {
+		return nil, fmt.Errorf("parse screen info: %w", err)
+	}
+
+	result := map[string]any{"screens": screens}
+	if len(screens) > 0 {
+		result["primary"] = screens[0]
+	}
+	return result, nil
+}
+
+// ── get_cursor_pos (NEW) ──────────────────────────────────────────────────────
+
+func handleGetCursorPos(params map[string]any) (any, error) {
+	py := `from Quartz.CoreGraphics import CGEventCreate,kCGEventNull,CGEventGetLocation
+import json
+ev=CGEventCreate(None)
+pt=CGEventGetLocation(ev)
+print(json.dumps({"x":int(pt.x),"y":int(pt.y)}))`
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	out, err := exec.CommandContext(ctx, "python3", "-c", py).Output()
+	if err != nil {
+		return nil, fmt.Errorf("get_cursor_pos: %w", err)
+	}
+
+	var pos map[string]any
+	if err := json.Unmarshal([]byte(strings.TrimSpace(string(out))), &pos); err != nil {
+		return nil, fmt.Errorf("parse cursor pos: %w", err)
+	}
+	return pos, nil
+}
+
 // ── type_text ─────────────────────────────────────────────────────────────────
 
 func handleTypeText(params map[string]any) (any, error) {
@@ -348,6 +634,29 @@ func handleTypeText(params map[string]any) (any, error) {
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
+
+	// Use clipboard method when explicitly requested or when text contains
+	// non-ASCII characters (osascript keystroke breaks on unicode).
+	useClipboard := false
+	if uc, ok := params["use_clipboard"].(bool); ok {
+		useClipboard = uc
+	}
+	if !useClipboard {
+		for _, r := range text {
+			if r > 127 {
+				useClipboard = true
+				break
+			}
+		}
+	}
+
+	if useClipboard {
+		return typeViaClipboard(text)
+	}
+
+	// Properly escape the text for osascript string literal:
+	// backslash must be doubled, double-quotes must be escaped,
+	// newlines need special handling via key code.
 	escaped := strings.ReplaceAll(text, `\`, `\\`)
 	escaped = strings.ReplaceAll(escaped, `"`, `\"`)
 	script := fmt.Sprintf(`tell application "System Events" to keystroke "%s"`, escaped)
@@ -355,6 +664,34 @@ func handleTypeText(params map[string]any) (any, error) {
 		return nil, fmt.Errorf("type_text: %w", err)
 	}
 	return map[string]any{"success": true}, nil
+}
+
+// ── type_clipboard (NEW) ──────────────────────────────────────────────────────
+// Types text by writing to the clipboard then pressing Cmd+V.
+// Reliable for unicode, emoji, and any special characters.
+
+func handleTypeClipboard(params map[string]any) (any, error) {
+	text, _ := params["text"].(string)
+	if text == "" {
+		return nil, fmt.Errorf("missing required parameter: text")
+	}
+	return typeViaClipboard(text)
+}
+
+func typeViaClipboard(text string) (any, error) {
+	// Write to clipboard via pbcopy
+	pbcopy := exec.Command("pbcopy")
+	pbcopy.Stdin = strings.NewReader(text)
+	if err := pbcopy.Run(); err != nil {
+		return nil, fmt.Errorf("pbcopy failed: %w", err)
+	}
+
+	// Press Cmd+V to paste
+	script := `tell application "System Events" to keystroke "v" using command down`
+	if _, err := runOsascript(script, 5*time.Second); err != nil {
+		return nil, fmt.Errorf("paste failed: %w", err)
+	}
+	return map[string]any{"success": true, "method": "clipboard"}, nil
 }
 
 // ── press_keys ────────────────────────────────────────────────────────────────
@@ -475,46 +812,57 @@ func findInCache(name, controlType string) []map[string]any {
 func handleDragTo(params map[string]any) (any, error) {
 	var fromX, fromY, toX, toY int
 
-	// Resolve source position
-	if fromID, ok := params["from_element_id"]; ok {
-		id := toInt(fromID)
-		elementCache.mu.Lock()
-		var rect map[string]any
-		if id >= 0 && id < len(elementCache.elements) {
-			if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
-				rect = r
+	// resolveEndpoint picks the coordinate for one drag endpoint.
+	// Priority: element_id → norm → model → raw x/y.
+	// prefix is "from" or "to"; the shared "screen" param applies to both.
+	resolveEndpoint := func(prefix string) (int, int, error) {
+		idKey := prefix + "_element_id"
+		if idVal, ok := params[idKey]; ok {
+			id := toInt(idVal)
+			elementCache.mu.Lock()
+			var rect map[string]any
+			if id >= 0 && id < len(elementCache.elements) {
+				if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
+					rect = r
+				}
 			}
+			elementCache.mu.Unlock()
+			if rect == nil {
+				return 0, 0, fmt.Errorf("%s element [%d] not in cache", prefix, id)
+			}
+			return toInt(rect["x"]) + toInt(rect["w"])/2,
+				toInt(rect["y"]) + toInt(rect["h"])/2, nil
 		}
-		elementCache.mu.Unlock()
-		if rect == nil {
-			return nil, fmt.Errorf("from element [%d] not in cache", id)
+		// Build a mini-params map for resolveCoords using prefixed keys.
+		ep := map[string]any{}
+		if v, ok := params[prefix+"_norm_x"]; ok {
+			ep["norm_x"] = v
+			ep["norm_y"] = params[prefix+"_norm_y"]
+		} else if v, ok := params[prefix+"_model_x"]; ok {
+			ep["model_x"] = v
+			ep["model_y"] = params[prefix+"_model_y"]
+			if ms, ok := params["model_space"]; ok {
+				ep["model_space"] = ms
+			}
+		} else {
+			ep["x"] = params[prefix+"_x"]
+			ep["y"] = params[prefix+"_y"]
 		}
-		fromX = toInt(rect["x"]) + toInt(rect["w"])/2
-		fromY = toInt(rect["y"]) + toInt(rect["h"])/2
-	} else {
-		fromX = toInt(params["from_x"])
-		fromY = toInt(params["from_y"])
+		if sc, ok := params["screen"]; ok {
+			ep["screen"] = sc
+		}
+		x, y := resolveCoords(ep)
+		return x, y, nil
 	}
 
-	// Resolve destination position
-	if toID, ok := params["to_element_id"]; ok {
-		id := toInt(toID)
-		elementCache.mu.Lock()
-		var rect map[string]any
-		if id >= 0 && id < len(elementCache.elements) {
-			if r, ok := elementCache.elements[id]["rect"].(map[string]any); ok {
-				rect = r
-			}
-		}
-		elementCache.mu.Unlock()
-		if rect == nil {
-			return nil, fmt.Errorf("to element [%d] not in cache", id)
-		}
-		toX = toInt(rect["x"]) + toInt(rect["w"])/2
-		toY = toInt(rect["y"]) + toInt(rect["h"])/2
-	} else {
-		toX = toInt(params["to_x"])
-		toY = toInt(params["to_y"])
+	var err error
+	fromX, fromY, err = resolveEndpoint("from")
+	if err != nil {
+		return nil, err
+	}
+	toX, toY, err = resolveEndpoint("to")
+	if err != nil {
+		return nil, err
 	}
 
 	durationMs := 500
@@ -546,7 +894,7 @@ for i in range(steps + 1):
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(durationMs+5000)*time.Millisecond)
 	defer cancel()
-	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
+	err = exec.CommandContext(ctx, "python3", "-c", py).Run()
 	if err != nil {
 		return nil, fmt.Errorf("drag_to failed: %w", err)
 	}
@@ -556,7 +904,8 @@ for i in range(steps + 1):
 // ── scroll ────────────────────────────────────────────────────────────────────
 // Scroll at the current mouse position or at specified coordinates.
 // direction: "up", "down", "left", "right"
-// amount: number of scroll units (default 3)
+// amount:    number of scroll units (default 3)
+// steps:     how many discrete events to send for smoother scrolling (default 1, max 10)
 
 func handleScroll(params map[string]any) (any, error) {
 	direction, _ := params["direction"].(string)
@@ -567,12 +916,27 @@ func handleScroll(params map[string]any) (any, error) {
 	if a, ok := params["amount"].(float64); ok && a > 0 {
 		amount = int(a)
 	}
+	steps := 1
+	if s, ok := params["steps"].(float64); ok && s > 0 {
+		steps = int(s)
+		if steps > 10 {
+			steps = 10
+		}
+	}
 
-	// Optional: scroll at specific coordinates (move mouse first)
-	if _, hasX := params["x"]; hasX {
-		x := toInt(params["x"])
-		y := toInt(params["y"])
-		platformMoveMouse(x, y)
+	// Optional: scroll at specific coordinates (move mouse first).
+	// Accepts raw x/y, norm_x/norm_y, or model_x/model_y.
+	hasPos := func() bool {
+		for _, k := range []string{"x", "norm_x", "model_x"} {
+			if _, ok := params[k]; ok {
+				return true
+			}
+		}
+		return false
+	}
+	if hasPos() {
+		px, py := resolveCoords(params)
+		platformMoveMouse(px, py)
 		time.Sleep(50 * time.Millisecond)
 	}
 
@@ -588,19 +952,36 @@ func handleScroll(params map[string]any) (any, error) {
 		deltaX = -amount
 	}
 
+	// When steps > 1 divide the total delta across steps for smooth scrolling.
+	stepDeltaY := deltaY / steps
+	stepDeltaX := deltaX / steps
+	if stepDeltaY == 0 && deltaY != 0 {
+		stepDeltaY = deltaY // avoid rounding to zero for small amounts
+	}
+	if stepDeltaX == 0 && deltaX != 0 {
+		stepDeltaX = deltaX
+	}
+
 	py := fmt.Sprintf(`
 from Quartz.CoreGraphics import *
-ev = CGEventCreateScrollWheelEvent(None, kCGScrollEventUnitLine, 2, %d, %d)
-CGEventPost(kCGHIDEventTap, ev)
-`, deltaY, deltaX)
+import time
+steps=%d
+step_dy=%d
+step_dx=%d
+for i in range(steps):
+    ev = CGEventCreateScrollWheelEvent(None, kCGScrollEventUnitLine, 2, step_dy, step_dx)
+    CGEventPost(kCGHIDEventTap, ev)
+    if steps > 1:
+        time.sleep(0.016)
+`, steps, stepDeltaY, stepDeltaX)
 
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	err := exec.CommandContext(ctx, "python3", "-c", py).Run()
 	if err != nil {
 		return nil, fmt.Errorf("scroll failed: %w", err)
 	}
-	return map[string]any{"success": true, "direction": direction, "amount": amount}, nil
+	return map[string]any{"success": true, "direction": direction, "amount": amount, "steps": steps}, nil
 }
 
 // ── wait_for_element ──────────────────────────────────────────────────────────
@@ -649,6 +1030,142 @@ func handleWaitForElement(params map[string]any) (any, error) {
 	return map[string]any{"found": false, "match_count": 0, "elements": []any{}}, nil
 }
 
+// ── capture_annotated (NEW — SoM) ─────────────────────────────────────────────
+// Takes a screenshot and overlays numbered bounding boxes for each cached element
+// (Set-of-Marks / SoM annotation). Requires Pillow installed in python3.
+
+func handleCaptureAnnotated(params map[string]any) (any, error) {
+	// 1. Capture raw screenshot
+	tmp := filepath.Join(os.TempDir(), fmt.Sprintf("dai-annot-%d.png", time.Now().UnixMilli()))
+	defer os.Remove(tmp)
+	if err := platformCaptureScreen(tmp); err != nil {
+		return nil, fmt.Errorf("capture_annotated: screenshot failed: %w", err)
+	}
+	rawData, err := os.ReadFile(tmp)
+	if err != nil {
+		return nil, err
+	}
+
+	// 2. Collect elements from cache (call get_window_tree first if cache is empty)
+	elementCache.mu.Lock()
+	cachedElements := make([]map[string]any, len(elementCache.elements))
+	copy(cachedElements, elementCache.elements)
+	elementCache.mu.Unlock()
+
+	if len(cachedElements) == 0 {
+		if _, err := handleGetWindowTree(map[string]any{}); err == nil {
+			elementCache.mu.Lock()
+			cachedElements = make([]map[string]any, len(elementCache.elements))
+			copy(cachedElements, elementCache.elements)
+			elementCache.mu.Unlock()
+		}
+	}
+
+	// 3. Determine scale factor from PNG header
+	_, _, sf := logicalScreenSize()
+	if sf <= 0 {
+		sf = 1.0
+	}
+
+	// 4. Serialize data for Python
+	elemsJSON, err := json.Marshal(cachedElements)
+	if err != nil {
+		return nil, fmt.Errorf("marshal elements: %w", err)
+	}
+	imgB64 := base64.StdEncoding.EncodeToString(rawData)
+	inputJSON, err := json.Marshal(map[string]any{
+		"image":        imgB64,
+		"elements":     json.RawMessage(elemsJSON),
+		"scale_factor": sf,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	// Write input JSON to temp file to avoid argument-length limits
+	inFile := filepath.Join(os.TempDir(), fmt.Sprintf("dai-annot-in-%d.json", time.Now().UnixMilli()))
+	if err := os.WriteFile(inFile, inputJSON, 0600); err != nil {
+		return nil, err
+	}
+	defer os.Remove(inFile)
+
+	pyCode := fmt.Sprintf(`
+import json,base64,io,sys
+try:
+    from PIL import Image,ImageDraw
+except ImportError:
+    import subprocess
+    subprocess.check_call([sys.executable,'-m','pip','install','--quiet','Pillow'])
+    from PIL import Image,ImageDraw
+
+with open(%q) as f:
+    data=json.load(f)
+img_bytes=base64.b64decode(data["image"])
+elements=data["elements"]
+scale=data.get("scale_factor",1.0)
+
+img=Image.open(io.BytesIO(img_bytes)).convert("RGBA")
+overlay=Image.new("RGBA",img.size,(0,0,0,0))
+draw=ImageDraw.Draw(overlay)
+
+colors=["#FF4444","#44BB44","#4477FF","#FFAA00","#FF44FF","#00CCCC","#FF8800","#8844FF"]
+for el in elements:
+    r=el.get("rect")
+    if not r:
+        continue
+    x1=int(r["x"]*scale)
+    y1=int(r["y"]*scale)
+    x2=int((r["x"]+r["w"])*scale)
+    y2=int((r["y"]+r["h"])*scale)
+    if x2<=x1 or y2<=y1:
+        continue
+    color=colors[el["id"]%%len(colors)]
+    cr=int(color[1:3],16)
+    cg=int(color[3:5],16)
+    cb=int(color[5:7],16)
+    draw.rectangle([x1,y1,x2,y2],outline=(cr,cg,cb,200),width=2)
+    label=str(el["id"])
+    lw=len(label)*7+6
+    draw.rectangle([x1,y1,x1+lw,y1+15],fill=(cr,cg,cb,220))
+    draw.text((x1+3,y1+2),label,fill=(255,255,255,255))
+
+result=Image.alpha_composite(img,overlay).convert("RGB")
+buf=io.BytesIO()
+result.save(buf,format="PNG")
+print(base64.b64encode(buf.getvalue()).decode())
+`, inFile)
+
+	pyScript := filepath.Join(os.TempDir(), fmt.Sprintf("dai-annot-%d.py", time.Now().UnixMilli()))
+	if err := os.WriteFile(pyScript, []byte(pyCode), 0644); err != nil {
+		return nil, err
+	}
+	defer os.Remove(pyScript)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	annotOut, err := exec.CommandContext(ctx, "python3", pyScript).Output()
+	if err != nil {
+		// Return unannotated image if Pillow not available
+		return map[string]any{
+			"type":           "screenshot",
+			"mime_type":      "image/png",
+			"data":           imgB64,
+			"annotated":      false,
+			"annotation_err": err.Error(),
+			"element_count":  len(cachedElements),
+		}, nil
+	}
+
+	return map[string]any{
+		"type":          "screenshot",
+		"mime_type":     "image/png",
+		"data":          strings.TrimSpace(string(annotOut)),
+		"annotated":     true,
+		"element_count": len(cachedElements),
+		"scale_factor":  sf,
+	}, nil
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 func runOsascript(script string, timeout time.Duration) (string, error) {
@@ -665,20 +1182,34 @@ func runOsascriptJS(script string, timeout time.Duration) (string, error) {
 	return strings.TrimSpace(string(out)), err
 }
 
+// keysToOsascript converts a key combo string to an osascript command.
+//
+// Accepts comma or plus as separator, so "cmd,s" and "cmd+s" are equivalent.
+// Modifier aliases: ctrl/control/⌃, cmd/command/⌘, opt/option/alt/⌥, shift/⇧.
+// Special key names map to key codes; all others are sent as keystroke characters.
 func keysToOsascript(keys string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(keys)), ",")
+	// Normalise separators: replace "+" with "," but only when "+" is used as
+	// a key separator rather than as the literal plus character.
+	// Heuristic: if the string contains no comma but does contain "+", treat
+	// "+" as the separator.
+	norm := keys
+	if !strings.Contains(keys, ",") && strings.Contains(keys, "+") {
+		norm = strings.ReplaceAll(keys, "+", ",")
+	}
+
+	parts := strings.Split(strings.ToLower(strings.TrimSpace(norm)), ",")
 	var mods []string
 	var keyParts []string
 	for _, p := range parts {
 		p = strings.TrimSpace(p)
 		switch p {
-		case "ctrl", "control":
+		case "ctrl", "control", "⌃":
 			mods = append(mods, "control down")
-		case "alt", "option":
+		case "alt", "option", "opt", "⌥":
 			mods = append(mods, "option down")
-		case "shift":
+		case "shift", "⇧":
 			mods = append(mods, "shift down")
-		case "cmd", "command":
+		case "cmd", "command", "⌘":
 			mods = append(mods, "command down")
 		default:
 			keyParts = append(keyParts, p)
@@ -692,17 +1223,76 @@ func keysToOsascript(keys string) string {
 		return `tell application "System Events" to keystroke ""`
 	}
 	key := keyParts[0]
+
+	// macOS virtual key codes (decimal).
+	// Reference: HIToolbox/Events.h
 	specialKeys := map[string]int{
-		"enter": 36, "return": 36, "tab": 48, "escape": 53, "esc": 53,
-		"delete": 51, "backspace": 51, "space": 49,
-		"up": 126, "down": 125, "left": 123, "right": 124,
-		"home": 115, "end": 119, "pageup": 116, "pagedown": 121,
-		"f1": 122, "f2": 120, "f3": 99, "f4": 118, "f5": 96,
-		"f6": 97, "f7": 98, "f8": 100, "f9": 101, "f10": 109, "f11": 103, "f12": 111,
+		// Core
+		"return": 36, "enter": 36,
+		"tab": 48,
+		"space": 49,
+		"delete": 51, "backspace": 51,
+		"escape": 53, "esc": 53,
+		"caps_lock": 57,
+		"fn": 63,
+
+		// Forward delete
+		"forward_delete": 117, "del": 117,
+
+		// Arrow keys
+		"left": 123, "right": 124, "down": 125, "up": 126,
+
+		// Navigation
+		"home": 115, "end": 119,
+		"page_up": 116, "pageup": 116,
+		"page_down": 121, "pagedown": 121,
+
+		// Function keys F1–F15
+		"f1": 122, "f2": 120, "f3": 99, "f4": 118,
+		"f5": 96, "f6": 97, "f7": 98, "f8": 100,
+		"f9": 101, "f10": 109, "f11": 103, "f12": 111,
+		"f13": 105, "f14": 107, "f15": 113,
+
+		// Numpad digits
+		"num0": 82, "numpad0": 82,
+		"num1": 83, "numpad1": 83,
+		"num2": 84, "numpad2": 84,
+		"num3": 85, "numpad3": 85,
+		"num4": 86, "numpad4": 86,
+		"num5": 87, "numpad5": 87,
+		"num6": 88, "numpad6": 88,
+		"num7": 89, "numpad7": 89,
+		"num8": 91, "numpad8": 91,
+		"num9": 92, "numpad9": 92,
+
+		// Numpad operators / special
+		"numpad_decimal": 65, "numpad_dot": 65,
+		"numpad_multiply": 67, "numpad_star": 67,
+		"numpad_plus": 69, "numpad_add": 69,
+		"numpad_clear": 71,
+		"numpad_divide": 75, "numpad_slash": 75,
+		"numpad_enter": 76,
+		"numpad_minus": 78, "numpad_subtract": 78,
+		"numpad_equals": 81,
+
+		// Media / special hardware keys
+		"volume_up": 72, "volume_mute": 74, "volume_down": 73,
+		"mute": 74,
+		"play_pause": 100, // maps to F8 on Apple keyboards; use key code directly
+		"brightness_up": 144, "brightness_down": 145,
+		"mission_control": 160, "launchpad": 131,
+
+		// Help / print screen equivalent
+		"help": 114,
+
+		// Scroll lock / pause — no standard macOS key codes; skip
 	}
+
 	if code, ok := specialKeys[key]; ok {
 		return fmt.Sprintf(`tell application "System Events" to key code %d%s`, code, using)
 	}
+	// Single printable character
 	escaped := strings.ReplaceAll(key, `"`, `\"`)
+	escaped = strings.ReplaceAll(escaped, `\`, `\\`)
 	return fmt.Sprintf(`tell application "System Events" to keystroke "%s"%s`, escaped, using)
 }

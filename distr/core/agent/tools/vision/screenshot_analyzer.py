@@ -1136,6 +1136,31 @@ class ScreenshotAnalyzerTool(BaseTool):
                     ollama_url += '/'
                 if not vision_model:
                     vision_model = "llava"
+
+                # Resize images before sending to Ollama.
+                # Retina screenshots can be 6000+ px wide; vision encoders like
+                # Qwen2-VL tile large images into hundreds of patches which makes
+                # inference extremely slow. Cap at 1280 wide (JPEG 80%) which
+                # gives good accuracy at a manageable token count.
+                _MAX_OLLAMA_WIDTH = 1280
+                resized_images = []
+                for b64 in base64_images:
+                    try:
+                        import io as _io
+                        import base64 as _b64
+                        from PIL import Image as _PILImage
+                        raw = _b64.b64decode(b64)
+                        img = _PILImage.open(_io.BytesIO(raw)).convert('RGB')
+                        w, h = img.size
+                        if w > _MAX_OLLAMA_WIDTH:
+                            scale = _MAX_OLLAMA_WIDTH / w
+                            img = img.resize((int(w * scale), int(h * scale)), _PILImage.LANCZOS)
+                        buf = _io.BytesIO()
+                        img.save(buf, format='JPEG', quality=80)
+                        resized_images.append(_b64.b64encode(buf.getvalue()).decode())
+                    except Exception:
+                        resized_images.append(b64)  # fallback: send original
+
                 logger.info("ScreenshotAnalyzer: Calling Ollama vision API with model: %s", vision_model)
                 resp = _requests.post(
                     f"{ollama_url}api/chat",
@@ -1144,11 +1169,11 @@ class ScreenshotAnalyzerTool(BaseTool):
                         "messages": [{
                             "role": "user",
                             "content": enhanced_prompt,
-                            "images": base64_images,
+                            "images": resized_images,
                         }],
                         "stream": False,
                     },
-                    timeout=120,
+                    timeout=180,
                 )
                 if resp.status_code == 200:
                     data = resp.json()

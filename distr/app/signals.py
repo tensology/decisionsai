@@ -22,6 +22,8 @@ class SignalBridgeMixin:
         try:
             signal_manager.push_to_talk_start.disconnect()
             signal_manager.push_to_talk_stop.disconnect()
+            signal_manager.dictation_hotkey_pressed.disconnect()
+            signal_manager.dictation_hotkey_released.disconnect()
             signal_manager.voice_set_is_listening.disconnect()
             signal_manager.hands_free_mode_changed.disconnect()
             signal_manager.playback_speed_changed.disconnect()
@@ -35,7 +37,16 @@ class SignalBridgeMixin:
         signal_manager.push_to_talk_stop.connect(
             lambda: self._send_command_to_agent('push_to_talk_stop', {})
         )
-        
+
+        # Hold-to-dictate hotkey — same STT capture path as PTT (agent subprocess cannot receive Qt emits from GUI)
+        signal_manager.dictation_hotkey_pressed.connect(
+            lambda: self._send_command_to_agent('dictation_hotkey_pressed', {})
+        )
+        signal_manager.dictation_hotkey_released.connect(
+            lambda: self._send_command_to_agent('dictation_hotkey_released', {})
+        )
+        logger.info("Connected dictation_hotkey_pressed/released to agent command queue")
+
         # Interrupt TTS signal - when agent is dead, hide player locally (command won't reach agent)
         signal_manager.interrupt_tts.connect(self._on_interrupt_tts)
         
@@ -306,7 +317,31 @@ class SignalBridgeMixin:
             except Exception:
                 pass
         signal_manager.transcription_progress.connect(on_transcription_progress_web)
-        logger.info("Connected chat stream/message_added signals to web WebSocket notify")
+
+        def on_tool_executed_web(payload):
+            try:
+                body = dict(payload or {})
+                if body.get("chat_id") is None:
+                    return
+                body["event"] = "tool_executed"
+                body["chat_id"] = int(body["chat_id"])
+                _post_chat_event(body)
+            except Exception:
+                pass
+        signal_manager.tool_executed.connect(on_tool_executed_web)
+
+        def on_workflow_event_web(payload):
+            try:
+                body = dict(payload or {})
+                if body.get("chat_id") is None:
+                    return
+                body["event"] = "workflow_event"
+                body["chat_id"] = int(body["chat_id"])
+                _post_chat_event(body)
+            except Exception:
+                pass
+        signal_manager.workflow_event.connect(on_workflow_event_web)
+        logger.info("Connected chat stream/message/tool execution signals to web WebSocket notify")
 
         # Web routes -> main thread: hot-swap LLM in running agent, then send message.
         # No timers, no pending state, no reload locks. Commands go immediately via command_queue.

@@ -128,6 +128,118 @@ def test_dictation_hotkey_not_triggered_when_disabled():
     assert listener._dictation_active is False
 
 
+def test_dictation_hotkey_maps_control_character_letter_and_releases():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    pressed_cb = MagicMock()
+    released_cb = MagicMock()
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_dictation_combo=MagicMock(return_value=("control_command", "d")),
+        on_dictation_pressed=pressed_cb,
+        on_dictation_released=released_cb,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class CommandKey:
+        name = "cmd"
+        char = None
+        vk = None
+
+    class ControlD:
+        name = ""
+        char = "\x04"
+        vk = None
+
+    listener._on_press(ControlKey())
+    listener._on_press(CommandKey())
+    listener._on_press(ControlD())
+
+    pressed_cb.assert_called_once()
+    assert listener._dictation_active is True
+
+    listener._on_release(ControlD())
+
+    released_cb.assert_called_once()
+    assert listener._dictation_active is False
+
+
+def test_dictation_hotkey_uses_dynamic_combo_from_settings_callback():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    pressed_cb = MagicMock()
+    released_cb = MagicMock()
+    combo = {"value": ("option_command", "m")}
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_dictation_combo=lambda: combo["value"],
+        on_dictation_pressed=pressed_cb,
+        on_dictation_released=released_cb,
+    )
+
+    class OptionKey:
+        name = "alt"
+        char = None
+        vk = None
+
+    class CommandKey:
+        name = "cmd"
+        char = None
+        vk = None
+
+    class MKey:
+        name = "m"
+        char = "m"
+        vk = None
+
+    listener._on_press(OptionKey())
+    listener._on_press(CommandKey())
+    listener._on_press(MKey())
+
+    pressed_cb.assert_called_once()
+    assert listener._dictation_active is True
+
+    listener._on_release(MKey())
+
+    released_cb.assert_called_once()
+    assert listener._dictation_active is False
+
+
+def test_global_hotkey_refresh_releases_active_dictation():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    released_cb = MagicMock()
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_dictation_combo=MagicMock(return_value=("option_command", "m")),
+        on_dictation_pressed=MagicMock(),
+        on_dictation_released=released_cb,
+    )
+    listener._dictation_active = True
+    listener._listener = None
+
+    listener.stop()
+
+    released_cb.assert_called_once()
+    assert listener._dictation_active is False
+
+
 # ---------------------------------------------------------------------------
 # 5. Test WorkflowAgent.enable_computer_use sets flags
 # ---------------------------------------------------------------------------

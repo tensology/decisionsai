@@ -529,6 +529,7 @@ class AddWorkflowStepInput(BaseModel):
         description=(
             "Step type. Valid values: "
             "agent_instruction (LLM agent executes an instruction), "
+            "computer_use (local vision-action loop for mechanical GUI tasks), "
             "execute_code (run Python code), "
             "playwright (browser automation script — takes screenshots and returns results), "
             "play_recording (replay a recorded mouse/keyboard action), "
@@ -551,7 +552,7 @@ class AddWorkflowStepTool(BaseTool):
     name: str = "add_workflow_step"
     description: str = (
         "Add a step to a workflow. Supports all step types: "
-        "agent_instruction (LLM does a task), execute_code (run Python), "
+        "agent_instruction (LLM does a task), computer_use (local vision-action GUI loop), execute_code (run Python), "
         "playwright (browser automation with screenshots), play_recording (replay recorded actions), "
         "set_variable. For playwright steps, write the code with screenshots baked in — "
         "use page.screenshot() to capture results for the workflow agent to review. "
@@ -660,7 +661,7 @@ class GenerateWorkflowTool(BaseTool):
         "The LLM will create the workflow with appropriate steps, action types, "
         "and routing. Use when user says 'create a workflow that does X', "
         "'build me a workflow for Y', 'I want a workflow with the following steps'. "
-        "Valid step types: agent_instruction, execute_code, playwright, "
+        "Valid step types: agent_instruction, computer_use, execute_code, playwright, "
         "play_recording, set_variable."
     )
     args_schema: Type[BaseModel] = GenerateWorkflowInput
@@ -694,7 +695,7 @@ class GenerateWorkflowTool(BaseTool):
                 "  ],\n"
                 '  "context_rules": ""\n'
                 "}\n\n"
-                "Valid action_type values: agent_instruction, execute_code, playwright, "
+                "Valid action_type values: agent_instruction, computer_use, execute_code, playwright, "
                 "play_recording, set_variable.\n\n"
                 "For playwright steps, include complete browser automation code in a 'code' field "
                 "that uses page.screenshot() to capture visual results.\n\n"
@@ -732,6 +733,30 @@ class GenerateWorkflowTool(BaseTool):
         except Exception as e:
             logger.error("generate_workflow failed: %s", e, exc_info=True)
             return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+class CreateStepRunnerInput(BaseModel):
+    instruction: str = Field(description="Natural language task or automation to turn into a workflow")
+
+
+class CreateStepRunnerTool(BaseTool):
+    name: str = "create_step_runner"
+    description: str = (
+        "Create a workflow/step runner automation from a natural language instruction. "
+        "Use when the user says 'create a step runner', 'create an automation', "
+        "'build a workflow', or asks to break a task into executable workflow steps. "
+        "This is a compatibility alias for generate_workflow."
+    )
+    args_schema: Type[BaseModel] = CreateStepRunnerInput
+
+    def _run(self, instruction: str = "", **kwargs) -> str:
+        description = instruction or kwargs.get("description") or kwargs.get("text") or ""
+        if not description:
+            return "Error: No automation instruction provided."
+        return GenerateWorkflowTool()._run(description=description)
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)

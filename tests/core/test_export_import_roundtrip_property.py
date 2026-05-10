@@ -84,12 +84,12 @@ _workflow_types = st.sampled_from(["manual", "instruction", "scheduled"])
 
 _action_types = st.sampled_from([
     "agent_instruction", "run_command", "http_request",
-    "execute_code", "playwright", "play_recording",
+    "execute_code", "playwright", "computer_use", "play_recording",
 ])
 
 _step_types = st.sampled_from([
     "agent_instruction", "run_command", "http_request",
-    "execute_code", "playwright", "play_recording",
+    "execute_code", "playwright", "computer_use", "play_recording",
 ])
 
 _validation_types = st.sampled_from(["none", "text_match", "llm_judgment", "rule_based"])

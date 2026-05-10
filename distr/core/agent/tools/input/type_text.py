@@ -16,9 +16,15 @@ import re
 from typing import Optional, Any
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
-from distr.core.audio.dictation import type_text
 
 logger = logging.getLogger(__name__)
+
+try:
+    from distr.core.audio.dictation import type_text
+except Exception:
+    def type_text(text: str, delay: float = 0.01):
+        logger.error("TypeText: pynput/dictation backend is not available")
+        return False
 
 
 def get_clipboard_content() -> Optional[str]:
@@ -300,4 +306,3 @@ class TypeTextTool(BaseTool):
     async def _arun(self, text: Optional[str] = None, source: str = "auto", **kwargs) -> str:
         """Async version of _run."""
         return self._run(text=text, source=source, **kwargs)
-

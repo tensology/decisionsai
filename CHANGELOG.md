@@ -2,6 +2,44 @@
 
 ---
 
+## [What's to Come]
+
+### Ecosystem tightening before expansion
+
+The next phase is deliberately not about piling on another large feature surface. The focus is tightening the whole DecisionsAI ecosystem so the existing pieces behave like one coherent agentic developer workflow: Chat, Projects, Ticket Boards, Workflows, Skills, Initiative, Telegram, audio, hotkeys, desktop control, and remote boards all need to feel predictable, observable, and connected.
+
+That means more work on orchestration quality, ticket parsing, tool selection, workflow validation, board-to-project context, remote board parity for Trello/Jira, clearer chat activity traces, stronger regression tests, better initiative communication, and fewer places where the agent quietly does the wrong thing. The goal is for DecisionsAI to reliably receive work, understand where it belongs, create the right ticket or workflow, execute with visible progress, recover when stuck, and communicate what happened without noise.
+
+---
+
+## [2.7.14] - 2026-05-10
+
+### Agentic workflow tightening, chat trace polish, hotkeys, dictation, and audit follow-through
+
+**A full ecosystem audit was completed across the agentic developer workflow.** The audit covered the main orchestrator, Projects, Ticket Boards, Workflows, Skills, Chat, Initiative, Telegram, tool execution, computer-use validation, and audio/TTS behavior. The conclusion was that DecisionsAI already has strong execution primitives, but the next product priority is reliability and cohesion: fewer janky tickets, clearer workflow mapping, better validation, better tool feedback, and less silent failure across the whole loop.
+
+**Chat now has a richer activity trace for real work.** Tool executions and workflow/sub-agent progress can now appear in the chat timeline as structured activity instead of loose, noisy, out-of-order cards. The web chat consolidates related tool calls into a single activity block, keeps late-arriving tool activity near the assistant turn it belongs to, removes duplicate method/result wording, and handles empty realtime streaming placeholders so blank assistant bubbles disappear instead of lingering until refresh.
+
+**Workflow and sub-agent activity is now durable in chat.** Workflow runs can record started, waiting, resumed, cancelled, step started, step completed, step failed, and completed events back into the originating chat. That gives long-running workflow work a visible trail instead of making the user infer what happened from a final response or from separate workflow screens.
+
+**Ticket creation and board linkage were tightened.** Local Decisions tickets now explicitly target `.tickets/` only in `DEBUG=True` development mode, and ticket generation gained better intent parsing, project/workflow context handling, and recommended skills. Local, Trello, and Jira ticket creation paths now share the skill recommendation behavior so remote boards do not fall behind the local board experience.
+
+**Skills are now part of the ticket workflow conversation.** When a ticket is created, DecisionsAI can include recommended skills that should help execute or review the work. This makes tickets more useful as handoff objects instead of just storing the user's raw request.
+
+**Computer-use workflows gained a dedicated path.** A new computer-use workflow step type and tighter agent-instruction computer-use mode were added so screen tasks can follow an observe-act loop with screenshot feedback, lower iteration caps, early stopping, and sidecar execution. This moves workflow automation closer to a real desktop-operating loop while keeping validation and stuck-state behavior visible.
+
+**Clipboard and typing tools were expanded.** The tool layer now includes explicit clipboard-writing support and stronger typing/text-entry plumbing, covering the missing path where the agent needed to place generated text onto the clipboard or type dictated/generated content reliably.
+
+**Hotkeys were rebuilt around configurable defaults.** Shortcut settings now use a canonical hotkey profile shared by backend validation and the web UI. Defaults are editable in Preferences, and saving shortcut settings now immediately notifies the live Oracle hotkey listener instead of requiring a restart. The current default push-to-talk hold combo is `Option + Command`; the current default hold-to-dictate shortcut is `Control + Command + D` and is disabled until enabled in Preferences.
+
+**Hold-to-dictate was fixed end to end.** Dictation hotkeys now use the dynamically configured shortcut, correctly handle `Ctrl + letter` key events, switch the Oracle into the dictation visual state immediately on press, reset the Oracle state on release, and route the transcript through the dictation path instead of dropping it when normal listening is disabled.
+
+**The web UI shortcut settings now match the runtime.** The Shortcuts settings page and backend validation now share the same option lists and defaults for push-to-talk, Oracle sizing, action recording, web navigation, skin navigation, skin selection, and dictation.
+
+**Testing coverage was broadened around the tightened areas.** Added or expanded tests for dictation hotkeys, shortcut save signaling, chat tool-event persistence, workflow chat tracing, remote ticket skill recommendations, ticket intent parsing, workflow planning normalization, tool intents, clipboard actions, sidecar computer-control behavior, computer-use step integration, and chat tool merge ordering.
+
+---
+
 ## [2.7.13] - 2026-05-05
 
 ### Hotfixes + stability

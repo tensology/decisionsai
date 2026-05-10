@@ -169,7 +169,7 @@ _session_types = st.sampled_from(["instruction", "scheduled"])
 _step_statuses = st.sampled_from(["pending", "running", "passed", "failed", "cancelled"])
 _step_types = st.sampled_from([
     "agent_instruction", "run_command", "http_request",
-    "execute_code", "playwright", "play_recording",
+    "execute_code", "playwright", "computer_use", "play_recording",
 ])
 
 _run_statuses = st.sampled_from(["running", "in_progress", "completed"])

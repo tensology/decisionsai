@@ -881,7 +881,7 @@
         }
         el.innerHTML = steps.map(function (s) {
             var isOpen = expandedStepId === s.id;
-            var typeLabel = { agent_instruction: "Agent", play_recording: "Recording", run_command: "Command", send_to_project_cli: "Project CLI", http_request: "HTTP", execute_code: "Code", playwright: "Playwright" }[s.action_type] || s.action_type;
+            var typeLabel = { agent_instruction: "Agent", computer_use: "Computer Use", play_recording: "Recording", run_command: "Command", send_to_project_cli: "Project CLI", http_request: "HTTP", execute_code: "Code", playwright: "Playwright" }[s.action_type] || s.action_type;
             var chevronCls = isOpen ? "chevron open" : "chevron";
             var statusCls = statusBadgeClass(s.status);
             var showStepStatusBadge = !!s.status && s.status !== "pending";
@@ -955,6 +955,7 @@
         html += '<div><label class="block text-xs text-gray-500 mb-1">Type</label>' +
             '<select class="sf-action-type w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
             '<option value="agent_instruction"' + (step.action_type === "agent_instruction" ? " selected" : "") + '>Agent Instruction</option>' +
+            '<option value="computer_use"' + (step.action_type === "computer_use" ? " selected" : "") + '>Computer Use</option>' +
             '<option value="play_recording"' + (step.action_type === "play_recording" ? " selected" : "") + '>Play Recording</option>' +
             '<option value="run_command"' + (step.action_type === "run_command" ? " selected" : "") + '>Run Command</option>' +
             '<option value="send_to_project_cli"' + (step.action_type === "send_to_project_cli" ? " selected" : "") + '>Send to Project CLI</option>' +
