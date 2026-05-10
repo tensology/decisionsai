@@ -35,6 +35,9 @@ class VoiceDictationMixin:
 
     def _check_dictation_commands(self, text_lower: str, original_text: str) -> bool:
         """Check for dictation commands. Returns True if a dictation command was processed."""
+        if self._is_dictating and getattr(self, '_dictation_one_shot', False):
+            return False
+
         if not self._is_dictating:
             words = text_lower.split()
             if "dictate" in text_lower:

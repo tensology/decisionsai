@@ -891,13 +891,16 @@ class AgentSession:
     def _on_dictation_hotkey_pressed(self):
         try:
             if self.llm_service and hasattr(self.llm_service, '_start_dictation'):
-                self.llm_service._start_dictation()
+                self.llm_service._start_dictation(one_shot=True)
         except Exception as e:
             self.logger.debug("Dictation hotkey press failed: %s", e)
 
     def _on_dictation_hotkey_released(self):
         try:
             if self.llm_service and hasattr(self.llm_service, '_stop_dictation'):
+                if getattr(self.llm_service, '_dictation_one_shot', False):
+                    self.logger.debug("Dictation hotkey release: waiting for one-shot transcript before stopping")
+                    return
                 self.llm_service._stop_dictation()
         except Exception as e:
             self.logger.debug("Dictation hotkey release failed: %s", e)

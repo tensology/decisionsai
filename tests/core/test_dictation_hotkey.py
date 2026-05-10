@@ -12,7 +12,7 @@ import pytest
 def test_dictation_hotkey_defaults_in_hotkeys_py():
     from distr.core.hotkeys import DEFAULTS
     assert "dictation_hotkey_enabled" in DEFAULTS
-    assert DEFAULTS["dictation_hotkey_enabled"] is False
+    assert DEFAULTS["dictation_hotkey_enabled"] is True
     assert "dictation_hotkey_modifier" in DEFAULTS
     assert DEFAULTS["dictation_hotkey_modifier"] == "control_command"
     assert "dictation_hotkey_key" in DEFAULTS
@@ -47,7 +47,7 @@ def test_dictation_hotkey_defaults_in_settings_py():
         spec.loader.exec_module(real_settings)
         DEFAULT_SETTINGS = real_settings.DEFAULT_SETTINGS
         assert "dictation_hotkey_enabled" in DEFAULT_SETTINGS
-        assert DEFAULT_SETTINGS["dictation_hotkey_enabled"] is False
+        assert DEFAULT_SETTINGS["dictation_hotkey_enabled"] is True
         assert "dictation_hotkey_modifier" in DEFAULT_SETTINGS
         assert DEFAULT_SETTINGS["dictation_hotkey_modifier"] == "control_command"
         assert "dictation_hotkey_key" in DEFAULT_SETTINGS
@@ -289,6 +289,22 @@ def test_modifier_only_non_dictation_shortcut_fires_once_per_hold():
     listener._on_press(CommandKey())
 
     assert record_cb.call_count == 2
+
+
+def test_one_shot_dictation_does_not_consume_voice_commands():
+    from distr.core.agent.services.llm.mixins.voice import VoiceDictationMixin
+
+    class DummyDictation(VoiceDictationMixin):
+        def __init__(self):
+            self._is_dictating = True
+            self._dictation_one_shot = True
+            self._stop_dictation = MagicMock()
+
+    dummy = DummyDictation()
+
+    assert dummy._check_dictation_commands("enter this", "enter this") is False
+    assert dummy._check_dictation_commands("stop dictating", "stop dictating") is False
+    dummy._stop_dictation.assert_not_called()
 
 
 def test_global_hotkey_refresh_releases_active_dictation_without_restart():

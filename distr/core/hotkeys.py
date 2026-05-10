@@ -59,7 +59,7 @@ VALID_HOTKEY_KEYS = set(KEY_LABELS.keys())
 
 # Canonical default shortcut profile (new DB rows, API fallbacks, web UI load defaults).
 DEFAULTS = {
-    "dictation_hotkey_enabled": False,
+    "dictation_hotkey_enabled": True,
     "dictation_hotkey_modifier": "control_command",
     "dictation_hotkey_key": "",
     "global_ptt_hotkey_combo": "option_command",
