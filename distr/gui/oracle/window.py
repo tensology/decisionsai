@@ -38,6 +38,8 @@ class _GlobalPttBridge(QtCore.QObject):
     oracle_size_up = QtCore.pyqtSignal()
     recording_toggle = QtCore.pyqtSignal()
     hotkey_action = QtCore.pyqtSignal(str)
+    dictation_pressed = QtCore.pyqtSignal()
+    dictation_released = QtCore.pyqtSignal()
 
 
 class RoundContainer(QtWidgets.QWidget):
@@ -273,6 +275,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._global_ptt_bridge.oracle_size_up.connect(self._on_global_oracle_size_up)
         self._global_ptt_bridge.recording_toggle.connect(self._on_global_recording_toggle)
         self._global_ptt_bridge.hotkey_action.connect(self._on_global_hotkey_action)
+        self._global_ptt_bridge.dictation_pressed.connect(self._on_dictation_hotkey_pressed)
+        self._global_ptt_bridge.dictation_released.connect(self._on_dictation_hotkey_released)
         self._setup_global_ptt_hotkey()
 
         if self.settings.get('restore_position'):
@@ -1216,6 +1220,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 on_size_up=lambda: self._global_ptt_bridge.oracle_size_up.emit(),
                 on_record_toggle=lambda: self._global_ptt_bridge.recording_toggle.emit(),
                 on_hotkey_action=lambda action_name: self._global_ptt_bridge.hotkey_action.emit(action_name),
+                get_dictation_combo=self._get_dictation_hotkey_combo,
+                on_dictation_pressed=lambda: self._global_ptt_bridge.dictation_pressed.emit(),
+                on_dictation_released=lambda: self._global_ptt_bridge.dictation_released.emit(),
             )
             self._global_ptt_listener.start()
 
@@ -1355,6 +1362,35 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if key not in valid_keys:
             key = HOTKEY_DEFAULTS["recording_hotkey_key"]
         return (modifier, key)
+
+    def _get_dictation_hotkey_combo(self):
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+        if not current_settings.get("dictation_hotkey_enabled", False):
+            return None
+        modifier = str(current_settings.get("dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"])).strip().lower()
+        key = str(current_settings.get("dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"])).strip().lower()
+        if modifier not in CHORD_MODIFIERS or key not in VALID_HOTKEY_KEYS:
+            return None
+        return (modifier, key)
+
+    def _on_dictation_hotkey_pressed(self):
+        """Start dictation via hold-to-dictate hotkey."""
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.dictation_hotkey_pressed.emit()
+        except Exception:
+            pass
+
+    def _on_dictation_hotkey_released(self):
+        """Stop dictation via hold-to-dictate hotkey release."""
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.dictation_hotkey_released.emit()
+        except Exception:
+            pass
 
     def _on_global_recording_toggle(self):
         """Toggle action recording from global hotkey (e.g., Command+Option+S)."""

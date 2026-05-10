@@ -847,6 +847,9 @@ class AgentSession:
             )
             # Model hot-reload signal - update ChatManager model immediately
             signal_manager.model_hot_reload.connect(self._on_model_hot_reload)
+            # Dictation hotkey signals — hold-to-dictate keyboard shortcut
+            signal_manager.dictation_hotkey_pressed.connect(self._on_dictation_hotkey_pressed)
+            signal_manager.dictation_hotkey_released.connect(self._on_dictation_hotkey_released)
             self.logger.debug("Signal bridging setup complete")
         except RuntimeError as e:
             # signal_manager QObject has been deleted (happens in spawned child processes
@@ -884,7 +887,21 @@ class AgentSession:
             'model_name': model_name,
             'chat_id': chat_id,
         })
-    
+
+    def _on_dictation_hotkey_pressed(self):
+        try:
+            if self.llm_service and hasattr(self.llm_service, '_start_dictation'):
+                self.llm_service._start_dictation()
+        except Exception as e:
+            self.logger.debug("Dictation hotkey press failed: %s", e)
+
+    def _on_dictation_hotkey_released(self):
+        try:
+            if self.llm_service and hasattr(self.llm_service, '_stop_dictation'):
+                self.llm_service._stop_dictation()
+        except Exception as e:
+            self.logger.debug("Dictation hotkey release failed: %s", e)
+
     def _create_llm_service_only(self):
         """Create a new LLM service from current self.config['llm'].
 

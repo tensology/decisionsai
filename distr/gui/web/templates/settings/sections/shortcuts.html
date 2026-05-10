@@ -19,26 +19,28 @@
             </label>
             <div class="grid grid-cols-2 gap-4 max-w-xl">
                 <div>
-                    <label for="shortcuts_global_ptt_hotkey_primary" class="block text-sm font-medium text-[#ececf1] mb-2">Primary Key</label>
-                    <select id="shortcuts_global_ptt_hotkey_primary" name="shortcuts_global_ptt_hotkey_primary"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="option">Option (Alt)</option>
-                        <option value="command">Command</option>
-                        <option value="control">Control</option>
-                        <option value="shift">Shift</option>
-                    </select>
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Primary Key</label>
+                    <div class="hotkey-capture ptt-capture"
+                         data-type="ptt-single"
+                         data-field="shortcuts_global_ptt_hotkey_primary">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set key">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <input type="hidden" id="shortcuts_global_ptt_hotkey_primary" name="shortcuts_global_ptt_hotkey_primary" value="">
+                    </div>
                 </div>
                 <div>
-                    <label for="shortcuts_global_ptt_hotkey_secondary" class="block text-sm font-medium text-[#ececf1] mb-2">Secondary Key</label>
-                    <select id="shortcuts_global_ptt_hotkey_secondary" name="shortcuts_global_ptt_hotkey_secondary"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="option">Option (Alt)</option>
-                        <option value="command">Command</option>
-                        <option value="control">Control</option>
-                        <option value="shift">Shift</option>
-                    </select>
+                    <label class="block text-sm font-medium text-[#ececf1] mb-2">Secondary Key</label>
+                    <div class="hotkey-capture ptt-capture"
+                         data-type="ptt-single"
+                         data-field="shortcuts_global_ptt_hotkey_secondary">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set key">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <input type="hidden" id="shortcuts_global_ptt_hotkey_secondary" name="shortcuts_global_ptt_hotkey_secondary" value="">
+                    </div>
                 </div>
             </div>
         </div>
@@ -57,26 +59,18 @@
                     Enable global recording toggle hotkey
                 </span>
             </label>
-            <div class="grid grid-cols-2 gap-4 max-w-xl">
-                <div>
-                    <label for="shortcuts_recording_hotkey_modifier" class="block text-sm font-medium text-[#ececf1] mb-2">Modifier</label>
-                    <select id="shortcuts_recording_hotkey_modifier" name="shortcuts_recording_hotkey_modifier"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="option_command">Option + Command</option>
-                        <option value="option">Option (Alt)</option>
-                        <option value="command">Command</option>
-                        <option value="control">Control</option>
-                        <option value="shift">Shift</option>
-                    </select>
-                </div>
-                <div>
-                    <label for="shortcuts_recording_hotkey_key" class="block text-sm font-medium text-[#ececf1] mb-2">Key</label>
-                    <select id="shortcuts_recording_hotkey_key" name="shortcuts_recording_hotkey_key"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="s">S</option>
-                    </select>
+            <div class="max-w-xs">
+                <label class="block text-sm font-medium text-[#ececf1] mb-2">Shortcut</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_recording_hotkey_modifier"
+                     data-key-field="shortcuts_recording_hotkey_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_recording_hotkey_modifier" name="shortcuts_recording_hotkey_modifier" value="">
+                  <input type="hidden" id="shortcuts_recording_hotkey_key" name="shortcuts_recording_hotkey_key" value="">
                 </div>
             </div>
             <p class="text-xs text-gray-400">
@@ -90,61 +84,44 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6 mb-4">
             <div class="space-y-3">
                 <p class="text-sm text-[#ececf1] font-medium">Previous Skin / Frame</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label for="shortcuts_skin_nav_hotkey_previous_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
-                        <select id="shortcuts_skin_nav_hotkey_previous_modifier" name="shortcuts_skin_nav_hotkey_previous_modifier"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="option_command">Option + Command</option>
-                            <option value="option">Option (Alt)</option>
-                            <option value="command">Command</option>
-                            <option value="control">Control</option>
-                            <option value="shift">Shift</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="shortcuts_skin_nav_hotkey_previous_key" class="block text-xs text-gray-400 mb-1">Key</label>
-                        <select id="shortcuts_skin_nav_hotkey_previous_key" name="shortcuts_skin_nav_hotkey_previous_key"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="left_arrow">Left Arrow</option>
-                        </select>
-                    </div>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_skin_nav_hotkey_previous_modifier"
+                     data-key-field="shortcuts_skin_nav_hotkey_previous_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_modifier" name="shortcuts_skin_nav_hotkey_previous_modifier" value="">
+                  <input type="hidden" id="shortcuts_skin_nav_hotkey_previous_key" name="shortcuts_skin_nav_hotkey_previous_key" value="">
                 </div>
             </div>
             <div class="space-y-3">
                 <p class="text-sm text-[#ececf1] font-medium">Next Skin / Frame</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label for="shortcuts_skin_nav_hotkey_next_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
-                        <select id="shortcuts_skin_nav_hotkey_next_modifier" name="shortcuts_skin_nav_hotkey_next_modifier"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="option_command">Option + Command</option>
-                            <option value="option">Option (Alt)</option>
-                            <option value="command">Command</option>
-                            <option value="control">Control</option>
-                            <option value="shift">Shift</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="shortcuts_skin_nav_hotkey_next_key" class="block text-xs text-gray-400 mb-1">Key</label>
-                        <select id="shortcuts_skin_nav_hotkey_next_key" name="shortcuts_skin_nav_hotkey_next_key"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="right_arrow">Right Arrow</option>
-                        </select>
-                    </div>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_skin_nav_hotkey_next_modifier"
+                     data-key-field="shortcuts_skin_nav_hotkey_next_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_skin_nav_hotkey_next_modifier" name="shortcuts_skin_nav_hotkey_next_modifier" value="">
+                  <input type="hidden" id="shortcuts_skin_nav_hotkey_next_key" name="shortcuts_skin_nav_hotkey_next_key" value="">
                 </div>
             </div>
         </div>
         <div class="max-w-xs">
-            <label for="shortcuts_skin_select_hotkey_modifier" class="block text-sm font-medium text-[#ececf1] mb-2">Number Select Modifier (1..9)</label>
-            <select id="shortcuts_skin_select_hotkey_modifier" name="shortcuts_skin_select_hotkey_modifier"
-                    class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                <option value="option_command">Option + Command</option>
-                <option value="option">Option (Alt)</option>
-                <option value="command">Command</option>
-                <option value="control">Control</option>
-                <option value="shift">Shift</option>
-            </select>
+            <label class="block text-sm font-medium text-[#ececf1] mb-2">Number Select Modifier (1..9)</label>
+            <div class="hotkey-capture"
+                 data-type="modifier-only"
+                 data-field="shortcuts_skin_select_hotkey_modifier">
+              <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set modifier">
+                <span class="hotkey-placeholder">Click to set</span>
+              </div>
+              <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+              <input type="hidden" id="shortcuts_skin_select_hotkey_modifier" name="shortcuts_skin_select_hotkey_modifier" value="">
+            </div>
             <p class="text-xs text-gray-400 mt-2">`1` selects Oracle, `2+` selects avatar skins in order.</p>
         </div>
     </div>
@@ -152,36 +129,123 @@
     <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
         <h3 class="text-lg font-semibold text-white mb-4">Web UI Launcher Hotkeys</h3>
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Chat</label>
-                <select id="shortcuts_web_hotkey_chat_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_chat_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="c">C</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Chat</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_chat_modifier"
+                     data-key-field="shortcuts_web_hotkey_chat_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_chat_modifier" name="shortcuts_web_hotkey_chat_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_chat_key" name="shortcuts_web_hotkey_chat_key" value="">
+                </div>
             </div>
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Projects</label>
-                <select id="shortcuts_web_hotkey_projects_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_projects_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="j">J</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Projects</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_projects_modifier"
+                     data-key-field="shortcuts_web_hotkey_projects_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_projects_modifier" name="shortcuts_web_hotkey_projects_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_projects_key" name="shortcuts_web_hotkey_projects_key" value="">
+                </div>
             </div>
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Actions</label>
-                <select id="shortcuts_web_hotkey_actions_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_actions_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="a">A</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Actions</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_actions_modifier"
+                     data-key-field="shortcuts_web_hotkey_actions_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_actions_modifier" name="shortcuts_web_hotkey_actions_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_actions_key" name="shortcuts_web_hotkey_actions_key" value="">
+                </div>
             </div>
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Snippets</label>
-                <select id="shortcuts_web_hotkey_snippets_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_snippets_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="n">N</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Snippets</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_snippets_modifier"
+                     data-key-field="shortcuts_web_hotkey_snippets_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_snippets_modifier" name="shortcuts_web_hotkey_snippets_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_snippets_key" name="shortcuts_web_hotkey_snippets_key" value="">
+                </div>
             </div>
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Workflows</label>
-                <select id="shortcuts_web_hotkey_workflows_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_workflows_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="w">W</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Workflows</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_workflows_modifier"
+                     data-key-field="shortcuts_web_hotkey_workflows_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_workflows_modifier" name="shortcuts_web_hotkey_workflows_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_workflows_key" name="shortcuts_web_hotkey_workflows_key" value="">
+                </div>
             </div>
-            <div class="grid grid-cols-3 gap-3 items-end">
-                <label class="text-sm text-[#ececf1]">Preferences</label>
-                <select id="shortcuts_web_hotkey_preferences_modifier" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="option_command">Option + Command</option><option value="option">Option</option><option value="command">Command</option><option value="control">Control</option><option value="shift">Shift</option></select>
-                <select id="shortcuts_web_hotkey_preferences_key" class="bg-[#1a1f3a] border border-[#565869] rounded-md px-2 py-2 text-white text-sm"><option value="grave">~</option></select>
+            <div>
+                <label class="block text-sm text-[#ececf1] mb-2">Preferences</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_web_hotkey_preferences_modifier"
+                     data-key-field="shortcuts_web_hotkey_preferences_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_web_hotkey_preferences_modifier" name="shortcuts_web_hotkey_preferences_modifier" value="">
+                  <input type="hidden" id="shortcuts_web_hotkey_preferences_key" name="shortcuts_web_hotkey_preferences_key" value="">
+                </div>
             </div>
+        </div>
+    </div>
+
+    <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
+        <h3 class="text-lg font-semibold text-white mb-4">Global Dictation Hotkey</h3>
+        <div class="space-y-4">
+            <label class="flex items-center cursor-pointer group">
+                <input type="checkbox" id="shortcuts_dictation_hotkey_enabled" name="shortcuts_dictation_hotkey_enabled"
+                        class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                checked:bg-[#10a37f] checked:border-[#10a37f]
+                                focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                transition-colors cursor-pointer">
+                <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                    Enable hold-to-dictate hotkey
+                </span>
+            </label>
+            <div class="max-w-xs">
+                <label class="block text-sm font-medium text-[#ececf1] mb-2">Shortcut</label>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_dictation_hotkey_modifier"
+                     data-key-field="shortcuts_dictation_hotkey_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set dictation shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_dictation_hotkey_modifier" name="shortcuts_dictation_hotkey_modifier" value="">
+                  <input type="hidden" id="shortcuts_dictation_hotkey_key" name="shortcuts_dictation_hotkey_key" value="">
+                </div>
+            </div>
+            <p class="text-xs text-gray-400">
+                Hold to record speech. Release to type what was said. Default: Control + Command + D.
+            </p>
         </div>
     </div>
 
@@ -190,58 +254,30 @@
         <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
             <div class="space-y-3">
                 <p class="text-sm text-[#ececf1] font-medium">Decrease Size</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label for="shortcuts_oracle_size_hotkey_decrease_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
-                        <select id="shortcuts_oracle_size_hotkey_decrease_modifier" name="shortcuts_oracle_size_hotkey_decrease_modifier"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="option_command">Option + Command</option>
-                            <option value="option">Option (Alt)</option>
-                            <option value="command">Command</option>
-                            <option value="control">Control</option>
-                            <option value="shift">Shift</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="shortcuts_oracle_size_hotkey_decrease_key" class="block text-xs text-gray-400 mb-1">Key</label>
-                        <select id="shortcuts_oracle_size_hotkey_decrease_key" name="shortcuts_oracle_size_hotkey_decrease_key"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="left_bracket">[</option>
-                            <option value="right_bracket">]</option>
-                            <option value="minus">-</option>
-                            <option value="equal">=</option>
-                        </select>
-                    </div>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_oracle_size_hotkey_decrease_modifier"
+                     data-key-field="shortcuts_oracle_size_hotkey_decrease_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_modifier" name="shortcuts_oracle_size_hotkey_decrease_modifier" value="">
+                  <input type="hidden" id="shortcuts_oracle_size_hotkey_decrease_key" name="shortcuts_oracle_size_hotkey_decrease_key" value="">
                 </div>
             </div>
             <div class="space-y-3">
                 <p class="text-sm text-[#ececf1] font-medium">Increase Size</p>
-                <div class="grid grid-cols-2 gap-3">
-                    <div>
-                        <label for="shortcuts_oracle_size_hotkey_increase_modifier" class="block text-xs text-gray-400 mb-1">Modifier</label>
-                        <select id="shortcuts_oracle_size_hotkey_increase_modifier" name="shortcuts_oracle_size_hotkey_increase_modifier"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="option_command">Option + Command</option>
-                            <option value="option">Option (Alt)</option>
-                            <option value="command">Command</option>
-                            <option value="control">Control</option>
-                            <option value="shift">Shift</option>
-                        </select>
-                    </div>
-                    <div>
-                        <label for="shortcuts_oracle_size_hotkey_increase_key" class="block text-xs text-gray-400 mb-1">Key</label>
-                        <select id="shortcuts_oracle_size_hotkey_increase_key" name="shortcuts_oracle_size_hotkey_increase_key"
-                                class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                        focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer">
-                            <option value="right_bracket">]</option>
-                            <option value="left_bracket">[</option>
-                            <option value="equal">=</option>
-                            <option value="minus">-</option>
-                        </select>
-                    </div>
+                <div class="hotkey-capture"
+                     data-type="modifier-key"
+                     data-modifier-field="shortcuts_oracle_size_hotkey_increase_modifier"
+                     data-key-field="shortcuts_oracle_size_hotkey_increase_key">
+                  <div class="hotkey-display" tabindex="0" role="button" aria-label="Click to set shortcut">
+                    <span class="hotkey-placeholder">Click to set</span>
+                  </div>
+                  <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                  <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_modifier" name="shortcuts_oracle_size_hotkey_increase_modifier" value="">
+                  <input type="hidden" id="shortcuts_oracle_size_hotkey_increase_key" name="shortcuts_oracle_size_hotkey_increase_key" value="">
                 </div>
             </div>
         </div>

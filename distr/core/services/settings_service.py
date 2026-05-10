@@ -313,6 +313,13 @@ def save_shortcut_settings(data) -> None:
     settings["web_hotkey_workflows_key"] = web_workflows_key
     settings["web_hotkey_preferences_modifier"] = web_preferences_modifier
     settings["web_hotkey_preferences_key"] = web_preferences_key
+    dictation_modifier = _norm_modifier(getattr(data, "dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]), HOTKEY_DEFAULTS["dictation_hotkey_modifier"])
+    dictation_key = _norm_key(getattr(data, "dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]), HOTKEY_DEFAULTS["dictation_hotkey_key"])
+    if dictation_modifier not in valid_chord_modifiers:
+        dictation_modifier = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
+    settings["dictation_hotkey_enabled"] = bool(getattr(data, "dictation_hotkey_enabled", False))
+    settings["dictation_hotkey_modifier"] = dictation_modifier
+    settings["dictation_hotkey_key"] = dictation_key
     save_settings_to_db(settings)
 
 

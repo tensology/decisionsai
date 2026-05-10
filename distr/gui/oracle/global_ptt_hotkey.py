@@ -35,6 +35,9 @@ class GlobalPttHotkeyListener:
         on_size_up: Optional[Callable[[], None]] = None,
         on_record_toggle: Optional[Callable[[], None]] = None,
         on_hotkey_action: Optional[Callable[[str], None]] = None,
+        get_dictation_combo: Optional[Callable[[], Tuple[str, str]]] = None,
+        on_dictation_pressed: Optional[Callable[[], None]] = None,
+        on_dictation_released: Optional[Callable[[], None]] = None,
     ) -> None:
         self._on_combo_pressed = on_combo_pressed
         self._on_combo_released = on_combo_released
@@ -48,9 +51,13 @@ class GlobalPttHotkeyListener:
         self._on_size_up = on_size_up
         self._on_record_toggle = on_record_toggle
         self._on_hotkey_action = on_hotkey_action
+        self._get_dictation_combo = get_dictation_combo
+        self._on_dictation_pressed = on_dictation_pressed
+        self._on_dictation_released = on_dictation_released
         self._pressed_modifiers: Set[str] = set()
         self._pressed_keys: Set[str] = set()
         self._combo_active = False
+        self._dictation_active = False
         self._listener = None
         self._lock = threading.Lock()
 
@@ -77,6 +84,7 @@ class GlobalPttHotkeyListener:
             self._pressed_keys.clear()
             was_active = self._combo_active
             self._combo_active = False
+            self._dictation_active = False
 
         if was_active:
             try:
@@ -114,6 +122,7 @@ class GlobalPttHotkeyListener:
         emit_size_up = False
         emit_record_toggle = False
         emit_action_names: list[str] = []
+        emit_dictation_pressed = False
 
         with self._lock:
             down_combo = self._get_size_down_combo() if self._get_size_down_combo else None
@@ -142,6 +151,15 @@ class GlobalPttHotkeyListener:
                     action_modifiers = self._modifier_tokens(action_modifier)
                     if action_modifiers.issubset(self._pressed_modifiers) and normalized_key == action_key:
                         emit_action_names.append(action_name)
+            if self._get_dictation_combo and self._on_dictation_pressed:
+                dict_combo = self._get_dictation_combo()
+                if dict_combo and len(dict_combo) == 2:
+                    dict_modifier, dict_key = dict_combo
+                    dict_modifiers = self._modifier_tokens(dict_modifier)
+                    if dict_modifiers.issubset(self._pressed_modifiers) and normalized_key == dict_key:
+                        if not self._dictation_active:
+                            self._dictation_active = True
+                            emit_dictation_pressed = True
 
             if not mod:
                 # Non-modifier key press handled only for option+bracket shortcuts.
@@ -184,6 +202,8 @@ class GlobalPttHotkeyListener:
             self._on_combo_pressed()
         if emit_combo_released:
             self._on_combo_released()
+        if emit_dictation_pressed and self._on_dictation_pressed:
+            self._on_dictation_pressed()
 
     def _on_release(self, key) -> None:
         normalized_key = self._normalize_key(key)
@@ -215,6 +235,21 @@ class GlobalPttHotkeyListener:
 
         if should_emit:
             self._on_combo_released()
+
+        # Dictation release — fires when either the modifier or key is released
+        if self._dictation_active and self._get_dictation_combo and self._on_dictation_released:
+            dict_combo = self._get_dictation_combo()
+            if dict_combo and len(dict_combo) == 2:
+                dict_modifier, dict_key = dict_combo
+                dict_modifiers = self._modifier_tokens(dict_modifier)
+                # Release if the modifier set no longer satisfies OR the key was released
+                still_dict_active = (
+                    dict_modifiers.issubset(self._pressed_modifiers)
+                    and dict_key in self._pressed_keys
+                )
+                if not still_dict_active:
+                    self._dictation_active = False
+                    self._on_dictation_released()
 
     @staticmethod
     def _normalize_key(key) -> Optional[str]:

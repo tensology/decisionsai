@@ -45,6 +45,9 @@ for _letter in "abcdefghijklmnopqrstuvwxyz":
 VALID_HOTKEY_KEYS = set(KEY_LABELS.keys())
 
 DEFAULTS = {
+    "dictation_hotkey_enabled": False,
+    "dictation_hotkey_modifier": "control_command",
+    "dictation_hotkey_key": "d",
     "global_ptt_hotkey_primary": "option",
     "global_ptt_hotkey_secondary": "command",
     "oracle_size_hotkey_decrease_modifier": "control_command",

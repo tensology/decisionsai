@@ -1665,6 +1665,24 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add load_on_startup column: {e}")
 
+    # Dictation hotkey settings
+    for _col_name, _col_type in [
+        ("dictation_hotkey_enabled", "BOOLEAN DEFAULT 0"),
+        ("dictation_hotkey_modifier", "VARCHAR DEFAULT 'control_command'"),
+        ("dictation_hotkey_key", "VARCHAR DEFAULT 'd'"),
+    ]:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {_col_name} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col_name} {_col_type}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", _col_name)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", _col_name, e)
+
     # Recording shortcut settings
     for _col_name, _col_type in [
         ("recording_hotkey_enabled", "BOOLEAN DEFAULT 1"),

@@ -197,6 +197,9 @@ class ShortcutSettings(BaseModel):
     web_hotkey_workflows_key: str = HOTKEY_DEFAULTS["web_hotkey_workflows_key"]
     web_hotkey_preferences_modifier: str = HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]
     web_hotkey_preferences_key: str = HOTKEY_DEFAULTS["web_hotkey_preferences_key"]
+    dictation_hotkey_enabled: bool = False
+    dictation_hotkey_modifier: str = "control_command"
+    dictation_hotkey_key: str = "d"
 
 
 class AudioSettings(BaseModel):

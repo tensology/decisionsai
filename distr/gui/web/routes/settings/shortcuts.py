@@ -48,6 +48,9 @@ def register_routes(router, templates):
             "web_hotkey_workflows_key": settings.get("web_hotkey_workflows_key", HOTKEY_DEFAULTS["web_hotkey_workflows_key"]),
             "web_hotkey_preferences_modifier": settings.get("web_hotkey_preferences_modifier", HOTKEY_DEFAULTS["web_hotkey_preferences_modifier"]),
             "web_hotkey_preferences_key": settings.get("web_hotkey_preferences_key", HOTKEY_DEFAULTS["web_hotkey_preferences_key"]),
+            "dictation_hotkey_enabled": settings.get("dictation_hotkey_enabled", False),
+            "dictation_hotkey_modifier": settings.get("dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]),
+            "dictation_hotkey_key": settings.get("dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]),
             "shortcut_options": {
                 "ptt_modifiers": ptt_modifier_options(),
                 "modifiers": modifier_options(),
