@@ -201,6 +201,8 @@ class BackgroundChainRunner:
 
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
+            if getattr(self.service, '_is_telegram_request', False):
+                func_args.setdefault("is_telegram_request", True)
 
             # Execute the tool
             result = None

@@ -1,6 +1,8 @@
 from distr.core.agent.ticket_intent import (
     classify_ticket_intent,
+    draft_ticket_from_request,
     format_skill_recommendations_markdown,
+    is_weak_ticket_title,
     recommend_skills_for_ticket,
 )
 from distr.core.agent.tools.integrations.create_cursor_ticket import CreateCursorTicketTool
@@ -94,3 +96,38 @@ def test_ticket_skill_recommendations_include_relevant_available_skills():
     rendered = format_skill_recommendations_markdown(recs)
     assert "## Recommended Skills" in rendered
     assert "`webapp-testing`" in rendered
+
+
+def test_ticket_draft_strips_meta_command_and_project_target():
+    draft = draft_ticket_from_request(
+        "make a ticket for DecisionsAI to fix the flaky Telegram delivery status"
+    )
+
+    assert draft.title == "Fix the flaky Telegram delivery status"
+    assert draft.description == "Fix the flaky Telegram delivery status."
+    assert draft.project_hint == "DecisionsAI"
+
+
+def test_weak_ticket_title_detection_catches_meta_titles():
+    assert is_weak_ticket_title("Instruction from user")
+    assert is_weak_ticket_title("Create a ticket")
+    assert not is_weak_ticket_title("Fix flaky Telegram delivery status")
+
+
+def test_kanban_ticket_summary_replaces_llm_meta_title(monkeypatch):
+    from distr.core.agent.tools.integrations.kanban_ticket import KanbanTicketTool
+
+    tool = KanbanTicketTool()
+    tool.llm_service = object()
+    monkeypatch.setattr(
+        tool,
+        "_call_llm_sync",
+        lambda _prompt: "Title: Instruction from user\nDescription: The user asked to create a ticket.",
+    )
+
+    summary = tool._summarise_for_ticket(
+        "User instruction: make a ticket for DecisionsAI to fix workflow validation getting stuck"
+    )
+
+    assert summary["title"] == "Fix workflow validation getting stuck"
+    assert summary["description"] == "Fix workflow validation getting stuck."

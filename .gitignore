@@ -83,6 +83,8 @@ installer/.requirements_installed*
 *.spec
 *.app
 *.dmg
+sidecar/sidecar
+sidecar/dist/
 
 # --- Recordings ---
 distr/recordings/

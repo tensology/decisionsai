@@ -183,8 +183,9 @@ def clean_text_for_tts(
     text = re.sub(r'https?://\S+', 'a web link', text, flags=re.IGNORECASE)
     text = re.sub(r'file://\S+', 'a file link', text, flags=re.IGNORECASE)
     # Paths already redacted via redact_filesystem_paths_for_conversation above.
-    # Residual slash runs that are unpleasant for TTS ("slash slash slash")
-    text = re.sub(r'(?:\s*/\s*){2,}', ' path ', text)
+    # Residual slash/backslash separators from copied snippets are unpleasant
+    # in TTS ("slash slash slash", "forward slash"). Treat them as spacing.
+    text = re.sub(r'\s*[\\/]+\s*', ' ', text)
 
     # Normalize whitespace — collapse newlines to spaces so TTS never receives bare
     # newline characters (Kokoro/espeak-ng phonemizer drops whitespace at utterance

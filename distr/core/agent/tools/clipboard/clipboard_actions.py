@@ -113,16 +113,20 @@ def set_clipboard_content(text: str) -> bool:
 
 
 class ClipboardActionTool(BaseTool):
-    """Tool for clipboard-based actions: explain, elaborate, read."""
+    """Tool for clipboard-based actions: explain, elaborate, inspect, read aloud."""
     
     name: str = "clipboard_action"
-    description: str = """EXECUTE clipboard actions: explain, elaborate, get clipboard content, or write text into the clipboard.
+    description: str = """EXECUTE clipboard actions: explain, elaborate, get clipboard content, read aloud, or write text into the clipboard.
     
     CRITICAL: This tool is ONLY for "explain this", "elaborate this", and "get clipboard" - NOT for copy/cut/paste.
     For "copy this", "cut this", "paste" → Use text_editing tool instead.
     
     DO NOT call this tool for copy/cut/paste operations - use text_editing tool.
     
+    Clipboard intent distinction:
+    - "read it out loud", "read this", "read from clipboard" means speak the clipboard/selection aloud.
+    - "read/check/look at/load the clipboard so we can talk about it" means consume the clipboard into chat context with action="get"; do NOT read the whole clipboard aloud.
+
     When user says "explain this", "elaborate this", "what's in the clipboard", "get the clipboard", "show clipboard", "set clipboard to ...", or "write ... to clipboard" - YOU MUST CALL THIS TOOL IMMEDIATELY.
     DO NOT explain what the tool does. DO NOT describe the tool. DO NOT ask questions. JUST CALL IT.
     
@@ -130,13 +134,15 @@ class ClipboardActionTool(BaseTool):
     
     The tool automatically:
     - For "explain this" / "elaborate this": Copies current selection (Cmd+C), gets clipboard content, processes it (explain/elaborate -> LLM)
-    - For "get clipboard" / "what's in the clipboard": Returns clipboard content directly to conversation
+    - For "get clipboard" / "what's in the clipboard" / "read clipboard and talk about it": Returns clipboard content directly to conversation context
+    - For "read this" / "read from clipboard": Returns text for direct TTS playback
     - For "set clipboard to X" / "write X to clipboard": Writes X directly into the clipboard
     
     REQUIRED CALLS:
     - "explain this" -> CALL with action="explain" (do not explain, just call)
     - "elaborate this" -> CALL with action="elaborate" (do not explain, just call)
-    - "what's in the clipboard" / "get the clipboard" / "show clipboard" -> CALL with action="get" (returns clipboard content)
+    - "what's in the clipboard" / "get the clipboard" / "show clipboard" / "read clipboard and let's talk about it" -> CALL with action="get" (returns clipboard content)
+    - "read this aloud" / "read from clipboard" -> CALL with action="read" for selected text or action="get" only when the fast-action route is direct TTS
     - "set clipboard to hello" / "write hello to clipboard" -> CALL with action="set", content="hello"
     
     Available actions: explain, elaborate, get, set, write.
@@ -231,7 +237,8 @@ class ClipboardActionTool(BaseTool):
                     return "Error: Could not write to clipboard."
                 return f"Clipboard updated ({len(str(content))} characters)."
             
-            # For "get" action, use existing clipboard content directly (no copy needed)
+            # For "get" action, use existing clipboard content directly (no copy needed).
+            # This is a context-ingestion path for the LLM, not a direct TTS readout.
             if action == "get":
                 clipboard_text = get_clipboard_content()
                 if not clipboard_text or not clipboard_text.strip():

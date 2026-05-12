@@ -1,0 +1,69 @@
+from distr.core.agent.services.llm.mixins.voice import VoiceDictationMixin
+
+
+class DummyDictation(VoiceDictationMixin):
+    def __init__(self, messages=None, chat_manager=None):
+        self._messages = messages or []
+        self.chat_manager = chat_manager
+
+
+class DummyChatManager:
+    def __init__(self, messages):
+        self._messages = messages
+
+    def get_current_chat(self):
+        return 123
+
+    def get_chat_history(self, chat_id):
+        assert chat_id == 123
+        return self._messages
+
+
+def test_contextual_typeout_command_types_last_assistant_message():
+    dummy = DummyDictation(messages=[
+        {"role": "user", "content": "summarize this"},
+        {"role": "assistant", "content": "Here is the concise version."},
+    ])
+
+    assert dummy._process_dictation_text("Can you actually type that out?") == (
+        "Here is the concise version."
+    )
+
+
+def test_contextual_typeout_command_skips_generic_assistant_messages():
+    dummy = DummyDictation(messages=[
+        {"role": "assistant", "content": "Use the export button first."},
+        {"role": "assistant", "content": "Done"},
+    ])
+
+    assert dummy._process_dictation_text("please type that out") == (
+        "Use the export button first."
+    )
+
+
+def test_contextual_typeout_command_falls_back_to_chat_history():
+    chat_manager = DummyChatManager([
+        {"role": "system", "content": "system"},
+        {"role": "assistant", "content": "Fallback text from the current chat."},
+    ])
+    dummy = DummyDictation(chat_manager=chat_manager)
+
+    assert dummy._process_dictation_text("write it out please") == (
+        "Fallback text from the current chat."
+    )
+
+
+def test_contextual_typeout_command_does_not_type_literal_command_without_context():
+    dummy = DummyDictation()
+
+    assert dummy._process_dictation_text("Can you please type that out?") == ""
+
+
+def test_normal_dictation_text_is_unchanged():
+    dummy = DummyDictation(messages=[
+        {"role": "assistant", "content": "Previous assistant text."},
+    ])
+
+    assert dummy._process_dictation_text("Can you type that out in Python tomorrow?") == (
+        "Can you type that out in Python tomorrow?"
+    )

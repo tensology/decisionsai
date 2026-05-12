@@ -207,6 +207,12 @@ class FastActionDetector:
 
             # === CLIPBOARD READ (TTS) ===
             # IMPORTANT: More specific patterns must come FIRST
+            # Consumption/context requests: read/inspect clipboard so the LLM can discuss it.
+            # These must not go straight to TTS just because they contain "read".
+            (re.compile(r'\b(read|inspect|check|look\s+at|review|pull\s+in|load)\b.*\bclipboard\b.*\b(talk|discuss|review|go\s+through|walk\s+through|explain|summari[sz]e|tell\s+me|what\s+you\s+think|about\s+it|with\s+me)\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_GET, "clipboard_action", {"action": "get"}, False, "llm_response"),
+            (re.compile(r'\b(talk|discuss|review|go\s+through|walk\s+through|explain|summari[sz]e|tell\s+me|what\s+you\s+think)\b.*\bclipboard\b', re.IGNORECASE),
+             ActionType.CLIPBOARD_GET, "clipboard_action", {"action": "get"}, False, "llm_response"),
             # "read this", "read that", "read it" - tool handles copy internally
             # needs_copy_first=False because clipboard_action handles copy for "this" context
             (re.compile(r'^read\s+(this|that|it)\.?$', re.IGNORECASE), 
@@ -217,7 +223,7 @@ class FastActionDetector:
             # This reads the clipboard content ALOUD via TTS
             # SUMMARIZE patterns are matched earlier in this list; negative lookahead keeps
             # "summarize … clipboard" from routing here if regex order ever changes.
-            (re.compile(r'^(?!.*\bsummar(ize|ise)\b).*\bread\b.*\b(from\s+)?(the\s+|my\s+)?clipboard\b', re.IGNORECASE), 
+            (re.compile(r'^(?!.*\bsummar(ize|ise)\b)(?!.*\b(talk|discuss|review|go\s+through|walk\s+through|explain|tell\s+me|what\s+you\s+think|about\s+it|with\s+me)\b).*\bread\b.*\b(from\s+)?(the\s+|my\s+)?clipboard\b', re.IGNORECASE), 
              ActionType.CLIPBOARD_READ, "clipboard_action", {"action": "get"}, False, "tts_clipboard"),
             
             # === CLIPBOARD GET (show content, LLM responds) ===
@@ -1303,4 +1309,3 @@ def detect_fast_action(text: str, has_recent_clipboard_context: bool = False) ->
         DetectedAction result
     """
     return get_detector().detect(text, has_recent_clipboard_context)
-

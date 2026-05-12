@@ -2,6 +2,7 @@ import asyncio
 import logging
 from typing import Optional
 import numpy as np
+from math import gcd
 
 logger = logging.getLogger(__name__)
 import threading
@@ -161,6 +162,47 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             frame.pts = None
         if not hasattr(frame, 'id'):
             frame.id = str(uuid.uuid4())
+
+    @staticmethod
+    def _resample_float_audio(audio_data: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:
+        """Resample mono float32 audio while preserving duration."""
+        if source_rate <= 0 or target_rate <= 0 or source_rate == target_rate or len(audio_data) == 0:
+            return audio_data.astype(np.float32, copy=False)
+
+        try:
+            from scipy.signal import resample_poly
+
+            divisor = gcd(source_rate, target_rate)
+            up = target_rate // divisor
+            down = source_rate // divisor
+            return resample_poly(audio_data, up, down).astype(np.float32, copy=False)
+        except Exception as exc:
+            logger.warning(
+                "Transport: scipy resample failed (%s); using linear fallback for %dHz -> %dHz",
+                exc,
+                source_rate,
+                target_rate,
+            )
+            target_len = max(1, int(round(len(audio_data) * target_rate / source_rate)))
+            old_x = np.linspace(0.0, 1.0, num=len(audio_data), endpoint=False)
+            new_x = np.linspace(0.0, 1.0, num=target_len, endpoint=False)
+            return np.interp(new_x, old_x, audio_data).astype(np.float32)
+
+    @classmethod
+    def _decode_pcm16_mono(
+        cls,
+        audio: bytes,
+        source_rate: int,
+        source_channels: int,
+        target_rate: int,
+    ) -> np.ndarray:
+        """Decode a PCM16 frame to mono float32 at the output transport rate."""
+        audio_data = np.frombuffer(audio, dtype=np.int16).astype(np.float32) / 32768.0
+        channels = max(1, int(source_channels or 1))
+        if channels > 1:
+            usable = (len(audio_data) // channels) * channels
+            audio_data = audio_data[:usable].reshape(-1, channels).mean(axis=1)
+        return cls._resample_float_audio(audio_data, int(source_rate or target_rate), target_rate)
 
     async def write_audio_frame(self, frame) -> bool:
         """Override to write silence when interrupted and recover dead streams."""
@@ -541,13 +583,18 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     self._last_burst_output_bytes = 0
                     self._burst_needs_reset = False
 
-                frame_bytes = len(frame.audio)
                 bytes_per_sample = 2
-                channels = getattr(frame, 'num_channels', 1)
-                sample_rate = getattr(frame, 'sample_rate', self._original_sample_rate)
+                channels = max(1, int(getattr(frame, 'num_channels', 1) or 1))
+                sample_rate = int(getattr(frame, 'sample_rate', self._original_sample_rate) or self._original_sample_rate)
+                audio_data = self._decode_pcm16_mono(
+                    frame.audio,
+                    sample_rate,
+                    channels,
+                    self._original_sample_rate,
+                )
                 
-                if sample_rate > 0:
-                    frame_duration = frame_bytes / (sample_rate * bytes_per_sample * channels)
+                if len(audio_data) > 0:
+                    frame_duration = len(audio_data) / self._original_sample_rate
                     self._total_audio_duration += frame_duration
                     self._last_audio_frame_time = time.time()
                     
@@ -557,8 +604,6 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     if self._state == AudioPlaybackState.SYNTHESIZING:
                         await self._transition_to(AudioPlaybackState.PLAYING)
                 
-                # Convert to float, time-stretch, apply volume, send
-                audio_data = np.frombuffer(frame.audio, dtype=np.int16).astype(np.float32) / 32768.0
                 effective_speed = self._map_speed(self._speed)
                 processed_audio = await self._time_stretcher.async_process(audio_data, effective_speed)
                 
@@ -570,7 +615,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     output_bytes = (processed_audio * 32767.0).astype(np.int16).tobytes()
                     
                     # Compute actual output duration (after time-stretching)
-                    output_duration = len(output_bytes) / (self._original_sample_rate * bytes_per_sample * channels)
+                    output_duration = len(output_bytes) / (self._original_sample_rate * bytes_per_sample)
                     
                     # Advance playback watermark using output duration.
                     # If the queue was empty (generation gap), start from now.
@@ -581,6 +626,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                         self._playback_watermark += output_duration
                     
                     frame.audio = output_bytes
+                    frame.sample_rate = self._original_sample_rate
+                    frame.num_channels = 1
                     self._total_output_bytes += len(output_bytes)
                     self._last_burst_output_bytes += len(output_bytes)
                     

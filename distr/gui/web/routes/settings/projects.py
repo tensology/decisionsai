@@ -13,6 +13,12 @@ import re
 from ._shared import logger, ProjectUpdate, ContextItemCreate, ContextItemUpdate, PROJECT_UPLOADS_DIR
 
 
+def _backend_id_for_project(project) -> str:
+    from distr.core.project_cli_backends import get_project_backend_id
+
+    return get_project_backend_id(project)
+
+
 def _resolve_terminal_overview_llm(settings: dict) -> tuple:
     """Provider/model for CLI Read Overview: match Projects CLI (coding_llm_*), then conversational LLM.
 
@@ -66,6 +72,7 @@ def register_routes(router, templates):
                         "description": p.description or "",
                         "folder_location": p.folder_location or "",
                         "in_use": bool(p.in_use),
+                        "coding_backend": _backend_id_for_project(p),
                         "provider": p.provider or "",
                         "board_name": p.board_name or "",
                     }
@@ -263,6 +270,60 @@ def register_routes(router, templates):
             return JSONResponse({"success": True, "model": model, "provider": provider})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
+    @router.get("/projects/cli-backends")
+    async def get_cli_backends():
+        """Return all supported project coding CLI backends and setup state."""
+        from distr.core.project_cli_backends import get_backend_statuses
+
+        return JSONResponse(get_backend_statuses())
+
+    @router.get("/projects/{project_id}/cli-backends")
+    async def get_project_cli_backends(project_id: int):
+        """Return supported project coding CLI backends for a specific project."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend_statuses
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            return JSONResponse(get_backend_statuses(_backend_id_for_project(project)))
+
+    @router.post("/projects/{project_id}/cli-backends/{backend_id}/setup")
+    async def setup_project_cli_backend(project_id: int, backend_id: str):
+        """Run or describe setup for a project coding CLI backend."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+
+        backend = get_backend(backend_id)
+        status = await backend.install_or_setup()
+        return JSONResponse(status.to_dict())
+
+    @router.put("/projects/{project_id}/coding-backend")
+    async def set_project_coding_backend(project_id: int, request: Request):
+        """Persist the active coding CLI backend for a project."""
+        body = await request.json()
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend_statuses, normalize_backend_id
+
+        backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project.coding_backend = backend_id
+            session.commit()
+        return JSONResponse({"success": True, **get_backend_statuses(backend_id)})
+
     @router.get("/projects/{project_id}")
     async def get_project_detail(project_id: int):
         """Get full project details including context items and files (matches desktop Projects UI)."""
@@ -282,6 +343,7 @@ def register_routes(router, templates):
                     "folder_location": project.folder_location or "",
                     "in_use": bool(project.in_use),
                     "provider": project.provider or "",
+                    "coding_backend": _backend_id_for_project(project),
                     "board_id": project.board_id or "",
                     "board_name": project.board_name or "",
                     "additional_trigger_words": project.additional_trigger_words or "[]",
@@ -543,6 +605,10 @@ def register_routes(router, templates):
                     project.additional_trigger_words = payload.additional_trigger_words
                 if payload.startup_instructions is not None:
                     project.startup_instructions = payload.startup_instructions
+                if payload.coding_backend is not None:
+                    from distr.core.project_cli_backends import normalize_backend_id
+
+                    project.coding_backend = normalize_backend_id(payload.coding_backend)
                 if payload.provider is not None:
                     project.provider = payload.provider
                 if payload.board_id is not None:
@@ -605,8 +671,16 @@ def register_routes(router, templates):
                 pass
             name = (body.get("name") or "").strip() or "New Project"
             folder = (body.get("folder_location") or "").strip()
+            from distr.core.project_cli_backends import normalize_backend_id
+            coding_backend = normalize_backend_id(body.get("coding_backend"))
             with get_session() as session:
-                project = Project(name=name, description="", folder_location=folder, additional_trigger_words="[]")
+                project = Project(
+                    name=name,
+                    description="",
+                    folder_location=folder,
+                    additional_trigger_words="[]",
+                    coding_backend=coding_backend,
+                )
                 session.add(project)
                 session.commit()
                 session.refresh(project)
@@ -717,18 +791,12 @@ def register_routes(router, templates):
 
     @router.post("/projects/{project_id}/cli")
     async def send_cli_instruction(project_id: int, request: Request):
-        """Send an instruction to pi coding agent in the context of a project."""
+        """Send an instruction to the selected project coding CLI backend."""
         try:
             body = await request.json()
             instruction = (body.get("instruction") or "").strip()
             if not instruction:
                 return JSONResponse({"success": False, "error": "instruction required"}, status_code=400)
-
-            # Check pi coding agent is available
-            from distr.core.pi_rpc import PiRpcSession, get_or_create_rpc_session
-            pi_path = PiRpcSession.find_pi()
-            if not pi_path:
-                return JSONResponse({"success": False, "error": "Pi coding agent not installed. Run: npm install -g @mariozechner/pi-coding-agent"}, status_code=400)
 
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -738,6 +806,7 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 folder = project.folder_location or ""
                 project_name = project.name or ""
+                backend_id = _backend_id_for_project(project)
 
             if not folder:
                 return JSONResponse({"success": False, "error": "Project has no folder set"}, status_code=400)
@@ -750,7 +819,7 @@ def register_routes(router, templates):
                 chat_id = settings.get("agent_current_chat_id") or settings.get("last_chat_id")
                 if chat_id:
                     from distr.core.chat import ChatService
-                    ChatService.add_message(int(chat_id), "user", f"[Pi: {project_name}] {instruction}")
+                    ChatService.add_message(int(chat_id), "user", f"[{backend_id}: {project_name}] {instruction}")
             except Exception as e:
                 logger.debug(f"Could not log CLI instruction to chat: {e}")
 
@@ -761,65 +830,68 @@ def register_routes(router, templates):
                     name=f"[Project: {project_name}] {instruction}",
                     status="in_progress",
                     chat_id=int(chat_id) if chat_id else None,
-                    workflow_type="pi_agent",
+                    workflow_type="project_cli",
                 )
                 session.add(audit)
                 session.flush()
                 step = AutoWorkflowStep(
                     workflow_id=audit.id,
                     position=0,
-                    name="Pi Agent",
+                    name=f"{backend_id} backend",
                     instruction=instruction,
                     status="running",
-                    tool_used="pi",
+                    tool_used=backend_id,
                 )
                 session.add(step)
                 session.commit()
                 audit_id = audit.id
                 step_id = step.id
 
-            # Try RPC session first, fall back to pi -p (print mode)
-            try:
-                rpc = await get_or_create_rpc_session(project_id, folder)
-                success = rpc.send_prompt(instruction)
-                if success:
-                    if chat_id:
-                        try:
-                            from distr.core.chat import ChatService
-                            ChatService.add_message(int(chat_id), "assistant", f"[Pi: {project_name}] Instruction sent. Check the terminal tab for progress.")
-                        except Exception:
-                            pass
-                    return JSONResponse({"success": True, "session_id": audit_id, "engine": "pi_rpc"})
-            except Exception as e:
-                logger.warning(f"RPC session failed, falling back to pi -p: {e}")
+            from types import SimpleNamespace
+            from distr.core.project_cli_backends import run_project_task
 
-            # Fallback: run pi in print mode (one-shot)
-            import subprocess
-            import threading
-            def _run_pi():
+            project_ref = SimpleNamespace(
+                id=project_id,
+                name=project_name,
+                folder_location=folder,
+                coding_backend=backend_id,
+            )
+            result = await run_project_task(
+                project_ref,
+                instruction,
+                chat_id=int(chat_id) if chat_id else None,
+                audit_id=audit_id,
+                origin="cli",
+            )
+
+            status = "completed" if result.success else "failed"
+            with get_session() as session:
+                step = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+                audit = session.query(AutoWorkflow).filter(AutoWorkflow.id == audit_id).first()
+                if step:
+                    step.status = status
+                    step.result = (result.output or result.error or "")[:3000]
+                    step.tool_used = result.backend_id
+                if audit:
+                    audit.status = status
+                session.commit()
+
+            if chat_id:
                 try:
-                    result = subprocess.run(
-                        [pi_path, "-p", "--append-system-prompt", f"You are working on project: {project_name}", instruction],
-                        capture_output=True, text=True, timeout=300,
-                        cwd=folder,
-                    )
-                    output = (result.stdout + result.stderr).strip()[:3000]
-                    status = "completed" if result.returncode == 0 else "failed"
-
-                    # Log result to chat
-                    if chat_id:
-                        try:
-                            from distr.core.chat import ChatService
-                            ChatService.add_message(int(chat_id), "assistant", f"[Pi: {project_name}] {output[:1500]}")
-                        except Exception:
-                            pass
-                except subprocess.TimeoutExpired:
+                    from distr.core.chat import ChatService
+                    if result.success:
+                        msg = result.output[:1500] if result.output else "Instruction sent. Check the CLI tab for progress."
+                    else:
+                        msg = f"Backend failed: {result.error or 'Unknown error'}"
+                    ChatService.add_message(int(chat_id), "assistant", f"[{result.backend_id}: {project_name}] {msg}")
+                except Exception:
                     pass
-                except Exception as e:
-                    logger.error(f"Pi execution failed: {e}", exc_info=True)
 
-            threading.Thread(target=_run_pi, daemon=True).start()
-            return JSONResponse({"success": True, "session_id": audit_id, "engine": "pi_cli"})
+            payload = result.to_dict()
+            payload["success"] = result.success
+            if not result.success:
+                return JSONResponse(payload, status_code=400)
+            return JSONResponse(payload)
         except HTTPException:
             raise
         except Exception as e:
@@ -828,7 +900,7 @@ def register_routes(router, templates):
 
     @router.get("/projects/{project_id}/cli/audit")
     async def get_cli_audit(project_id: int):
-        """Get audit trail of pi agent actions for a project."""
+        """Get audit trail of project CLI backend actions for a project."""
         try:
             from distr.core.db import get_session
             from distr.core.db.projects import Project
@@ -840,13 +912,14 @@ def register_routes(router, templates):
                     raise HTTPException(status_code=404, detail="Project not found")
                 project_name = project.name or ""
 
-                # Find pi_agent workflows for this project
+                # Find project CLI workflows for this project. Include legacy
+                # pi_agent rows so existing audit history remains visible.
                 prefix = f"[Project: {project_name}]"
                 workflows = (
                     session.query(AutoWorkflow)
                     .filter(
                         AutoWorkflow.name.like(f"{prefix}%"),
-                        AutoWorkflow.workflow_type == "pi_agent",
+                        AutoWorkflow.workflow_type.in_(["project_cli", "pi_agent"]),
                     )
                     .order_by(AutoWorkflow.created_date.desc())
                     .limit(50)
@@ -965,7 +1038,7 @@ def register_routes(router, templates):
                             session.query(AutoWorkflow)
                             .filter(
                                 AutoWorkflow.name.like(f"{prefix}%"),
-                                AutoWorkflow.workflow_type == "pi_agent",
+                                AutoWorkflow.workflow_type.in_(["project_cli", "pi_agent"]),
                             )
                             .order_by(AutoWorkflow.modified_date.desc())
                             .first()
@@ -1015,6 +1088,8 @@ def register_routes(router, templates):
                     await websocket.close(code=1008, reason="Project not found")
                     return
                 cwd = project.folder_location or os.path.expanduser("~")
+                project_name = project.name or ""
+                backend_id = _backend_id_for_project(project)
         except Exception as e:
             logger.error(f"Terminal: failed to load project: {e}")
             await websocket.send_json({"type": "error", "message": "Failed to load project"})
@@ -1024,6 +1099,98 @@ def register_routes(router, templates):
         # Ensure the directory exists
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
+
+        from distr.core.project_cli_backends import get_backend, run_project_task
+        backend = get_backend(backend_id)
+        loop = asyncio.get_running_loop()
+
+        if not backend.supports_rpc:
+            status = backend.setup_status()
+            await websocket.send_json({
+                "type": "connected",
+                "project_id": project_id,
+                "backend": backend.id,
+                "buffer": [],
+            })
+            if not status.ready:
+                await websocket.send_json({
+                    "type": "error",
+                    "message": f"{backend.name} is not ready: {status.message} {status.setup_instructions}".strip(),
+                })
+
+            running_task = None
+
+            async def _send_event(event_dict):
+                try:
+                    await websocket.send_json(event_dict)
+                except Exception:
+                    pass
+
+            try:
+                while True:
+                    data = await websocket.receive_text()
+                    try:
+                        msg = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    msg_type = msg.get("type")
+                    if msg_type == "prompt":
+                        instruction = (msg.get("message") or "").strip()
+                        if not instruction:
+                            continue
+                        if running_task and not running_task.done():
+                            await websocket.send_json({"type": "error", "message": f"{backend.name} is still running. Wait for it to finish before sending another task."})
+                            continue
+
+                        async def _run_one():
+                            queue: asyncio.Queue = asyncio.Queue()
+
+                            def _queue_event(event_dict):
+                                try:
+                                    loop.call_soon_threadsafe(queue.put_nowait, event_dict)
+                                except Exception:
+                                    pass
+
+                            async def _drain():
+                                while True:
+                                    event = await queue.get()
+                                    if event is None:
+                                        break
+                                    await _send_event(event)
+
+                            drain_task = asyncio.create_task(_drain())
+                            try:
+                                from types import SimpleNamespace
+                                p = SimpleNamespace(
+                                    id=project_id,
+                                    name=project_name,
+                                    folder_location=cwd,
+                                    coding_backend=backend.id,
+                                )
+                                result = await run_project_task(p, instruction, on_event=_queue_event, origin="cli")
+                                if not result.success:
+                                    await _send_event({"type": "error", "message": result.error or f"{backend.name} failed"})
+                            finally:
+                                await queue.put(None)
+                                await drain_task
+
+                        running_task = asyncio.create_task(_run_one())
+                    elif msg_type == "abort":
+                        if running_task and not running_task.done():
+                            running_task.cancel()
+                            await websocket.send_json({"type": "error", "message": f"{backend.name} task cancelled."})
+                    elif msg_type == "restart":
+                        await websocket.send_json({"type": "connected", "project_id": project_id, "backend": backend.id, "buffer": []})
+                    elif msg_type == "ping":
+                        await websocket.send_json({"type": "pong"})
+            except WebSocketDisconnect:
+                pass
+            except Exception as e:
+                logger.debug(f"Generic CLI terminal WebSocket error: {e}")
+            finally:
+                if running_task and not running_task.done():
+                    running_task.cancel()
+            return
 
         # Create or get the pi RPC session (lazy: don't auto-start pi until first prompt)
         try:
@@ -1117,17 +1284,23 @@ def register_routes(router, templates):
 
     @router.get("/projects/{project_id}/terminal/buffer")
     async def get_terminal_buffer(project_id: int, lines: int = 100):
-        """Get the terminal buffer content from the pi RPC session."""
-        from distr.core.pi_rpc import get_rpc_session
+        """Get terminal buffer content from the selected backend when available."""
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend
 
-        rpc = get_rpc_session(project_id)
-        if not rpc:
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
+            backend = get_backend(_backend_id_for_project(project))
+        buffer_text = backend.get_buffer(project_id, lines)
+        if not buffer_text:
             return JSONResponse({"buffer": "", "alive": False, "project_id": project_id})
 
-        buffer_text = rpc.get_buffer(lines)
         return JSONResponse({
             "buffer": buffer_text,
-            "alive": rpc.is_alive,
+            "alive": True,
             "project_id": project_id,
         })
 
@@ -1145,6 +1318,7 @@ def register_routes(router, templates):
                 if not project:
                     raise HTTPException(status_code=404, detail="Project not found")
                 cwd = project.folder_location or os.path.expanduser("~")
+                backend_id = _backend_id_for_project(project)
         except HTTPException:
             raise
         except Exception as e:
@@ -1152,6 +1326,12 @@ def register_routes(router, templates):
 
         if not os.path.isdir(cwd):
             cwd = os.path.expanduser("~")
+
+        from distr.core.project_cli_backends import get_backend
+        backend = get_backend(backend_id)
+        if not backend.supports_rpc:
+            result = await backend.restart(project_id, cwd)
+            return JSONResponse(result.to_dict() | {"success": result.success})
 
         await kill_rpc_session(project_id)
         try:
@@ -1336,19 +1516,23 @@ def register_routes(router, templates):
 
     @router.post("/projects/{project_id}/terminal/overview")
     async def terminal_overview(project_id: int):
-        """Get pi RPC session transcript, produce a natural spoken summary, and speak it aloud."""
+        """Get selected backend transcript, produce a natural spoken summary, and speak it aloud."""
         import asyncio
-        from distr.core.pi_rpc import get_rpc_session
         from distr.core.settings import load_settings_from_db
         from distr.core.llm_factory import create_stream
         from distr.core.signals import signal_manager
+        from distr.core.db import get_session as db_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend
 
-        rpc = get_rpc_session(project_id)
-        if not rpc:
-            return JSONResponse({"error": "No pi session for this project"}, status_code=404)
+        with db_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                return JSONResponse({"error": "Project not found"}, status_code=404)
+            backend = get_backend(_backend_id_for_project(project))
 
         # Get structured transcript
-        messages = rpc.get_messages()
+        messages = backend.get_messages(project_id)
         if not messages:
             return JSONResponse({"summary": "The terminal is empty — nothing has been output yet.", "empty": True})
 
@@ -1357,19 +1541,19 @@ def register_routes(router, templates):
         assistant_msgs = []
         tool_msgs = []
         for msg in messages:
-            role = msg.get("role", "")
+            role = msg.get("role", "") if isinstance(msg, dict) else getattr(msg, "role", "")
             if role == "user":
-                content = (msg.get("content", "") or "").strip()
+                content = ((msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")) or "").strip()
                 if content:
                     user_msgs.append(content)
             elif role == "assistant":
-                content = (msg.get("content", "") or "").strip()
+                content = ((msg.get("content", "") if isinstance(msg, dict) else getattr(msg, "content", "")) or "").strip()
                 if content:
                     assistant_msgs.append(content)
             elif role == "tool_result":
-                tool_name = msg.get("tool_name", "") or "tool"
-                tool_result = (msg.get("tool_result", "") or "").strip()
-                is_error = msg.get("is_error", False)
+                tool_name = (msg.get("tool_name", "") if isinstance(msg, dict) else getattr(msg, "tool_name", "")) or "tool"
+                tool_result = ((msg.get("tool_result", "") if isinstance(msg, dict) else getattr(msg, "tool_result", "")) or "").strip()
+                is_error = (msg.get("is_error", False) if isinstance(msg, dict) else getattr(msg, "is_error", False))
                 tool_msgs.append(f"{'ERROR' if is_error else 'OK'} {tool_name}: {tool_result[:200]}")
 
         if not user_msgs and not assistant_msgs and not tool_msgs:

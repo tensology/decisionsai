@@ -12,6 +12,7 @@ from distr.core.agent.libs import (
     sf, SOUNDFILE_AVAILABLE,
     AudioSegment, PYDUB_AVAILABLE
 )
+from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
@@ -357,10 +358,16 @@ class OpenAITTSService(TTSService):
                 # Don't process, don't accumulate, just drop it
                 return
             
-            # Accumulate text and process incrementally
+            # Accumulate cleaned text and process incrementally. Live deltas can
+            # contain markdown/tool residue that is absent from rendered replay.
+            cleaned_text = clean_text_for_tts(frame.text, strip_whitespace=False, spoken_prose=True)
+            if not cleaned_text:
+                logger.debug("TTS: TextFrame dropped after OpenAI live cleaning")
+                return
+
             # Log buffer state before adding to help debug duplicates
             buffer_before = len(self._text_buffer)
-            self._text_buffer += frame.text
+            self._text_buffer += cleaned_text
             logger.debug(f"TTS: Added TextFrame text to buffer (buffer: {buffer_before} -> {len(self._text_buffer)} chars): '{frame.text[:100]}...'")
             
             # CRITICAL: Check cancellation before extracting sentences
@@ -656,7 +663,6 @@ class OpenAITTSService(TTSService):
     def get_sample_rate(self) -> int:
         """Return the output sample rate for OpenAI TTS (24kHz)"""
         return 24000
-
 
 
 

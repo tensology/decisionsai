@@ -3,6 +3,7 @@ from distr.core.agent.tool_intents import forced_tool_names_for_text
 
 def test_forces_clipboard_for_read_and_write_requests():
     assert "clipboard_action" in forced_tool_names_for_text("read my clipboard")
+    assert "clipboard_action" in forced_tool_names_for_text("read the clipboard and let's talk about it")
     assert "clipboard_action" in forced_tool_names_for_text("set clipboard to hello")
     assert "clipboard_action" in forced_tool_names_for_text("write hello into my clipboard")
 

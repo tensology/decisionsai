@@ -9,7 +9,7 @@ behaviour.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 import os
 import re
@@ -31,6 +31,18 @@ class SkillRecommendation:
 
     name: str
     reason: str
+
+
+@dataclass(frozen=True)
+class TicketDraft:
+    """Deterministic ticket draft extracted before/after LLM summarisation."""
+
+    title: str
+    description: str
+    acceptance_criteria: list[str] = field(default_factory=list)
+    board_hint: str = ""
+    project_hint: str = ""
+    remote_target: str = ""
 
 
 _CREATE_TICKET_RE = re.compile(
@@ -111,6 +123,163 @@ def classify_ticket_intent(text: str) -> TicketIntent:
         return TicketIntent("kanban_ticket", 0.95, "generic ticket creation maps to Kanban")
 
     return TicketIntent("none", 0.0, "no ticket intent detected")
+
+
+_WEAK_TICKET_TITLES = {
+    "instruction from user",
+    "user instruction",
+    "user request",
+    "request from user",
+    "task",
+    "new ticket",
+    "ticket",
+    "work item",
+    "todo",
+}
+
+
+def is_weak_ticket_title(title: str) -> bool:
+    """Return True for meta/vague ticket titles that should be replaced."""
+    cleaned = re.sub(r"\s+", " ", (title or "").strip().lower())
+    if not cleaned:
+        return True
+    if cleaned in _WEAK_TICKET_TITLES:
+        return True
+    return bool(
+        re.fullmatch(
+            r"(create|make|add|write|draft)\s+(a\s+|an\s+)?(ticket|task|work item)",
+            cleaned,
+        )
+    )
+
+
+def draft_ticket_from_request(text: str) -> TicketDraft:
+    """Create a stable ticket draft from natural language.
+
+    This is intentionally deterministic and conservative. It protects ticket
+    quality when a small/free model returns meta wording such as "Instruction
+    from user" or when no LLM is available.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return TicketDraft(title="New Ticket", description="No request text was provided.")
+
+    request = _extract_primary_ticket_request(raw)
+    board_hint = _extract_target_hint(request, ("board",))
+    project_hint = _extract_project_hint(request)
+    remote_target = ""
+    lowered = request.lower()
+    if "jira" in lowered:
+        remote_target = "jira"
+    elif "trello" in lowered:
+        remote_target = "trello"
+
+    title_source = _strip_ticket_command(request)
+    title = _title_from_task_text(title_source)
+    description = _description_from_task_text(title_source, raw)
+    acceptance = _extract_acceptance_criteria(raw)
+
+    return TicketDraft(
+        title=title,
+        description=description,
+        acceptance_criteria=acceptance,
+        board_hint=board_hint,
+        project_hint=project_hint,
+        remote_target=remote_target,
+    )
+
+
+def _extract_primary_ticket_request(text: str) -> str:
+    patterns = (
+        r"(?im)^\s*User instruction:\s*(.+)$",
+        r"(?im)^\s*Instruction:\s*(.+)$",
+        r"(?im)^\s*Request:\s*(.+)$",
+    )
+    for pattern in patterns:
+        match = re.search(pattern, text)
+        if match:
+            return match.group(1).strip()
+    first_non_empty = next((line.strip() for line in text.splitlines() if line.strip()), text)
+    return first_non_empty.strip()
+
+
+def _strip_ticket_command(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip())
+    cleaned = re.sub(
+        r"(?i)^(please\s+)?(can you\s+|could you\s+)?"
+        r"(create|make|add|write|draft|open)\s+"
+        r"(a\s+|an\s+|this\s+|that\s+)?"
+        r"(jira\s+|trello\s+|kanban\s+|board\s+)?"
+        r"(ticket|task|card|issue|work item)\s*",
+        "",
+        cleaned,
+    ).strip()
+    cleaned = re.sub(r"(?i)^(for|about|to|in|into)\s+", "", cleaned).strip()
+    cleaned = re.sub(r"(?i)^[A-Za-z][A-Za-z0-9_.-]{2,40}\s+to\s+", "", cleaned).strip()
+    cleaned = re.sub(
+        r"(?i)\b(?:for|in|into|on)\s+(?:the\s+)?(?:decisions(?:ai| ai)?|jira|trello)\b",
+        "",
+        cleaned,
+    ).strip(" -:,.")
+    return cleaned or text.strip()
+
+
+def _title_from_task_text(text: str) -> str:
+    cleaned = re.sub(r"\s+", " ", (text or "").strip(" -:,."))
+    cleaned = re.sub(r"(?i)^(that|this|it)\s+", "", cleaned).strip()
+    if not cleaned:
+        return "New Ticket"
+    sentence = re.split(r"[.!?]\s+", cleaned, maxsplit=1)[0].strip()
+    if len(sentence) > 90:
+        sentence = sentence[:90].rsplit(" ", 1)[0].strip()
+    if not sentence:
+        return "New Ticket"
+    first = sentence[0].upper() + sentence[1:]
+    return first
+
+
+def _description_from_task_text(task_text: str, raw_text: str) -> str:
+    task = re.sub(r"\s+", " ", (task_text or "").strip(" -:,."))
+    if not task:
+        task = _extract_primary_ticket_request(raw_text)
+    if not task.endswith((".", "!", "?")):
+        task += "."
+    return task[0].upper() + task[1:]
+
+
+def _extract_acceptance_criteria(text: str) -> list[str]:
+    criteria: list[str] = []
+    for line in (text or "").splitlines():
+        cleaned = line.strip()
+        match = re.match(
+            r"(?i)^(?:[-*]\s*)?(?:acceptance criteria|acceptance|done when|verify|validate|must):\s*(.+)$",
+            cleaned,
+        )
+        if match:
+            item = match.group(1).strip()
+            if item:
+                criteria.append(item)
+    return criteria[:8]
+
+
+def _extract_target_hint(text: str, labels: tuple[str, ...]) -> str:
+    label_pattern = "|".join(re.escape(label) for label in labels)
+    match = re.search(rf"(?i)\b(?:{label_pattern})\s+['\"]?([A-Za-z0-9 _.-]+)['\"]?", text or "")
+    return match.group(1).strip(" .,:;") if match else ""
+
+
+def _extract_project_hint(text: str) -> str:
+    match = re.search(
+        r"(?i)\b(?:for|in|into|to)\s+(?:the\s+)?([A-Za-z][A-Za-z0-9_.-]{2,40})"
+        r"(?=\s+(?:to|about|because|that|where|when|with)\b|[,.!?]|$)",
+        text or "",
+    )
+    if not match:
+        return ""
+    hint = match.group(1).strip(" .,:;")
+    if hint.lower() in {"a ticket", "ticket", "jira", "trello", "kanban"}:
+        return ""
+    return hint
 
 
 _SKILL_RULES: tuple[tuple[str, tuple[str, ...], str], ...] = (

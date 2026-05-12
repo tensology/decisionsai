@@ -27,6 +27,27 @@
         </div>
     </div>
     <div class="border-t border-white/20 pt-4">
+        <div class="flex items-center justify-between gap-3 mb-2">
+            <div>
+                <label class="block text-sm text-gray-400">Coding backend</label>
+                <p class="text-xs text-gray-500">Choose which project CLI handles implementation tasks for this project.</p>
+            </div>
+            <span id="coding-backend-active-pill" class="text-xs px-2 py-1 rounded border border-white/20 text-gray-400">Loading</span>
+        </div>
+        <div class="flex gap-3 flex-wrap items-start">
+            <div class="flex-1 min-w-[220px]">
+                <label class="block text-xs text-gray-500 mb-1">Active CLI</label>
+                <select id="detail-coding-backend" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                    <option value="pi">Pi</option>
+                </select>
+            </div>
+            <div class="flex-[2] min-w-[260px]">
+                <label class="block text-xs text-gray-500 mb-1">Status</label>
+                <div id="coding-backend-status-list" class="grid grid-cols-1 lg:grid-cols-3 gap-2"></div>
+            </div>
+        </div>
+    </div>
+    <div class="border-t border-white/20 pt-4">
         <label class="block text-sm text-gray-400 mb-2">Board</label>
         <div class="flex gap-4 flex-wrap">
             <div class="flex-1 min-w-[180px]">

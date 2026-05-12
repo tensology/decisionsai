@@ -1174,7 +1174,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
     # ------------------------------------------------------------------ #
 
     async def process_chat_input(self, text: str, is_telegram: bool = False,
-                                  uploaded_image_path: str = None, speaker_enabled=None):
+                                  uploaded_image_path: str = None, speaker_enabled=None,
+                                  telegram_input_type: str = None):
         """Process text input from chat window. Unified for all providers."""
         self._cancelled = False
         if hasattr(self, '_generation_requested_at'):
@@ -1189,10 +1190,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
         self._is_telegram_request = is_telegram
         self._uploaded_image_path = uploaded_image_path
+        self._telegram_input_type = telegram_input_type if telegram_input_type in ("text", "voice") else None
 
         if is_telegram:
             import threading
             threading.current_thread().telegram_request = True
+            if self._telegram_input_type:
+                threading.current_thread().telegram_input_type = self._telegram_input_type
 
         # Verify chat provider matches this service
         provider_name = self._get_provider_name()
@@ -1448,6 +1452,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
                 await self.push_frame(LLMFullResponseStartFrame(), direction)
 
+                display_result = None
                 try:
                     if 'text' not in args:
                         args['text'] = text
@@ -1486,7 +1491,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                         self.chat_manager.add_assistant_message(current_chat_id, display_result)
                     self._messages.append({"role": "assistant", "content": display_result or "Done"})
 
-                    if self._tts_service and self._speaker_enabled and display_result:
+                    if (
+                        self._tts_service
+                        and self._speaker_enabled
+                        and display_result
+                        and not getattr(self, '_is_telegram_request', False)
+                    ):
                         cleaned = clean_text_for_tts(display_result)
                         if cleaned:
                             from distr.core.agent.libs import LLMFullResponseStartFrame
@@ -1495,11 +1505,20 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 except Exception as e:
                     logger.error("Error running fast tool %s: %s", tool.name, e, exc_info=True)
                 finally:
+                    if (
+                        getattr(self, '_is_telegram_request', False)
+                        and self.event_queue
+                        and display_result
+                    ):
+                        self._telegram_fallback_text = display_result
+                        self._emit_telegram_response("", "")
                     await self.push_frame(LLMFullResponseEndFrame(), direction)
                     # Signal the UI that the agent is done
                     if self.event_queue and current_chat_id:
                         self.event_queue.put(('typing_indicator_changed', {'show': False}), block=False)
                         self.event_queue.put(('chat_stream_finished', {'chat_id': current_chat_id, 'response_text': ''}), block=False)
+                    if getattr(self, '_is_telegram_request', False):
+                        self._cleanup_telegram_flags()
                 return
 
             # Normal LLM generation

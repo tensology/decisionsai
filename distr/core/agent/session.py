@@ -1467,10 +1467,15 @@ class AgentSession:
             pending = getattr(self, '_pending_text_inputs', None)
             if pending:
                 self._pending_text_inputs = []
-                for (text, is_telegram, uploaded_image_path, speaker_override) in pending:
+                for item in pending:
+                    if len(item) == 5:
+                        text, is_telegram, uploaded_image_path, speaker_override, telegram_input_type = item
+                    else:
+                        text, is_telegram, uploaded_image_path, speaker_override = item
+                        telegram_input_type = None
                     if text and hasattr(self, 'llm_service') and self.llm_service:
                         self.logger.debug("Processing pending text input: '%s...'", (text or "")[:50])
-                        asyncio.create_task(self.llm_service.process_chat_input(text, is_telegram=is_telegram, uploaded_image_path=uploaded_image_path or None, speaker_enabled=speaker_override))
+                        asyncio.create_task(self.llm_service.process_chat_input(text, is_telegram=is_telegram, uploaded_image_path=uploaded_image_path or None, speaker_enabled=speaker_override, telegram_input_type=telegram_input_type))
             
             # Handle SIGTERM for clean exit
             try:

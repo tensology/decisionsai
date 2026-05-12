@@ -501,6 +501,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
             logger.info("🔧 Tool: %s", func_name)
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
+            if getattr(self, '_is_telegram_request', False):
+                func_args.setdefault("is_telegram_request", True)
 
             # Hard guard: prevent generic mouse fallback when a recent visual-target
             # flow already reported target-not-found / unresolved coordinates.
@@ -682,6 +684,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
             if last_user_message:
                 func_args["last_user_message"] = last_user_message
+            if getattr(self, '_is_telegram_request', False):
+                func_args.setdefault("is_telegram_request", True)
 
             if not decision.get("allow", True):
                 self._messages.append({
@@ -1073,8 +1077,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 user_msg = f"{self.SERVICE_NAME} Rate Limit Exceeded. Model: {self._model_name}"
             await self.push_frame(ErrorFrame(error=user_msg))
             if getattr(self, '_is_telegram_request', False):
-                await self.push_frame(LLMFullResponseStartFrame())
-                await self.push_frame(TextFrame(text="Sorry, the API is temporarily overloaded. Please try again in a moment."))
+                self._telegram_fallback_text = "Sorry, the API is temporarily overloaded. Please try again in a moment."
             if self.event_queue:
                 chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 self.event_queue.put(('chat_stream_error', {'error': user_msg, 'chat_id': chat_id}), block=False)
@@ -1097,8 +1100,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     tg_err = "Sorry, the request timed out."
                 else:
                     tg_err = "Sorry, something went wrong. Please try again."
-                await self.push_frame(LLMFullResponseStartFrame())
-                await self.push_frame(TextFrame(text=tg_err))
+                self._telegram_fallback_text = tg_err
             if self.event_queue:
                 chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
                 fmt = f"Error code: {error_code} - {error_msg}" if error_code else error_msg

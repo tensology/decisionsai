@@ -97,7 +97,12 @@ class SignalBridgeMixin:
         # Chat input signals (4th arg speak: when not None, agent sets speaker before processing - used by web)
         def on_send_text_input(text, is_telegram=False, uploaded_image_path=None, speak=None):
             params = {'text': text, 'is_telegram': is_telegram, 'uploaded_image_path': uploaded_image_path}
-            if speak is not None:
+            if isinstance(speak, dict):
+                if speak.get('speak') is not None:
+                    params['speak'] = bool(speak.get('speak'))
+                if speak.get('input_type'):
+                    params['telegram_input_type'] = str(speak.get('input_type'))
+            elif speak is not None:
                 params['speak'] = bool(speak)
             self._send_command_to_agent('process_text_input', params)
         signal_manager.send_text_input.connect(on_send_text_input)

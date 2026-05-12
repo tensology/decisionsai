@@ -11,11 +11,21 @@ import logging
 import re
 import string
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # R27: seconds user has to confirm after a draft readout or reminder summary.
 _VOICE_CONFIRM_WINDOW_S = 35.0
+_GENERIC_ASSISTANT_MESSAGES = {
+    "done",
+    "ok",
+    "okay",
+    "sure",
+    "finished",
+    "complete",
+    "completed",
+}
 
 
 class VoiceDictationMixin:
@@ -61,7 +71,7 @@ class VoiceDictationMixin:
         return False
 
     def _process_dictation_text(self, text: str) -> str:
-        """Process dictation text - remove stop commands. Returns the text to type."""
+        """Process dictation text. Returns the text to type."""
         text_lower = text.lower()
         text_no_punct = text_lower.translate(str.maketrans('', '', string.punctuation))
 
@@ -76,7 +86,89 @@ class VoiceDictationMixin:
             if match:
                 text = text[:match.start()].strip()
 
+        if self._is_contextual_typeout_command(text):
+            resolved = self._resolve_contextual_typeout_text()
+            if resolved:
+                logger.info(
+                    "Dictation: Resolved contextual type-out command to prior assistant text (%d characters)",
+                    len(resolved),
+                )
+                return resolved
+            logger.info(
+                "Dictation: Contextual type-out command detected, but no prior assistant text was available"
+            )
+            return ""
+
         return text
+
+    def _is_contextual_typeout_command(self, text: str) -> bool:
+        """Return True when dictation text asks to type the prior assistant response."""
+        normalized = re.sub(r"\s+", " ", text.lower().translate(
+            str.maketrans(string.punctuation, " " * len(string.punctuation))
+        )).strip()
+        if not normalized:
+            return False
+
+        return bool(re.fullmatch(
+            r"(?:(?:can|could|would)\s+you\s+)?"
+            r"(?:(?:please|actually|just|now)\s+)*"
+            r"(?:type|write|paste|put)\s+"
+            r"(?:that|this|it)"
+            r"(?:\s+(?:out|down|in|for\s+me))?"
+            r"(?:\s+please)?",
+            normalized,
+        ))
+
+    def _resolve_contextual_typeout_text(self) -> str:
+        """Find the latest useful assistant message from active memory or chat history."""
+        for message in reversed(getattr(self, "_messages", []) or []):
+            if not isinstance(message, dict) or message.get("role") != "assistant":
+                continue
+            content = self._dictation_message_content_to_text(message.get("content"))
+            if self._is_useful_contextual_typeout_text(content):
+                return content
+
+        chat_manager = getattr(self, "chat_manager", None)
+        chat_id = chat_manager.get_current_chat() if chat_manager else None
+        if chat_manager and chat_id:
+            try:
+                for message in reversed(chat_manager.get_chat_history(chat_id) or []):
+                    if not isinstance(message, dict) or message.get("role") != "assistant":
+                        continue
+                    content = self._dictation_message_content_to_text(message.get("content"))
+                    if self._is_useful_contextual_typeout_text(content):
+                        return content
+            except Exception as e:
+                logger.debug("Dictation: Could not inspect chat history for contextual type-out: %s", e)
+
+        return ""
+
+    def _dictation_message_content_to_text(self, content: Any) -> str:
+        """Normalize provider message content into visible text for keyboard typing."""
+        if isinstance(content, str):
+            return content.strip()
+        if isinstance(content, list):
+            parts: list[str] = []
+            for item in content:
+                if isinstance(item, str):
+                    parts.append(item)
+                elif isinstance(item, dict):
+                    value = item.get("text") or item.get("content")
+                    if isinstance(value, str):
+                        parts.append(value)
+            return "\n".join(part.strip() for part in parts if part and part.strip()).strip()
+        if isinstance(content, dict):
+            value = content.get("text") or content.get("content")
+            if isinstance(value, str):
+                return value.strip()
+        return ""
+
+    def _is_useful_contextual_typeout_text(self, text: str) -> bool:
+        cleaned = (text or "").strip()
+        if not cleaned:
+            return False
+        normalized = re.sub(r"\s+", " ", cleaned.lower()).strip(" .!?:;")
+        return normalized not in _GENERIC_ASSISTANT_MESSAGES
 
     async def _type_dictation_text(self, text: str):
         """Type dictation text as keyboard input."""

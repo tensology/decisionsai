@@ -995,6 +995,20 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add kanban_board_id column: {e}")
 
+    # Handle database migration for coding_backend column in projects table
+    try:
+        with Session() as session:
+            session.execute(text("SELECT coding_backend FROM projects LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN coding_backend VARCHAR DEFAULT 'pi'"))
+                conn.execute(text("UPDATE projects SET coding_backend = 'pi' WHERE coding_backend IS NULL OR coding_backend = ''"))
+                conn.commit()
+                logger.info("Added coding_backend column to projects table")
+            except Exception as e:
+                logger.warning(f"Could not add coding_backend column: {e}")
+
     # Ensure board tables exist
     try:
         from .projects import BoardColumn, BoardTicket  # Imported here to avoid circular imports

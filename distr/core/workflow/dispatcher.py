@@ -150,6 +150,48 @@ def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_s
             ticket.description = ticket.description[-12000:]
     except Exception:
         logger.debug("Could not append workflow summary note to ticket", exc_info=True)
+
+
+def _finalize_result_packet_for_terminal_run(
+    packet: Dict[str, Any],
+    *,
+    run_id: int,
+    status: str,
+    risk_profile: Dict[str, Any],
+) -> Dict[str, Any]:
+    """Ensure the stored run packet reflects the terminal workflow state."""
+    updated = dict(packet or {})
+    status_label = (status or "completed").strip().lower()
+    risk = dict(risk_profile or {})
+    risk_level = risk.get("level", "low")
+
+    updated["status"] = status_label
+    updated["summary"] = f"Workflow run {run_id} finished with status: {status_label}."
+
+    artifacts = dict(updated.get("artifacts") or {})
+    logs = list(artifacts.get("logs") or [])
+    run_log = f"workflow_run:{run_id}"
+    if run_log not in logs:
+        logs.append(run_log)
+    artifacts["logs"] = logs
+    updated["artifacts"] = artifacts
+
+    audit = dict(updated.get("audit") or {})
+    audits_run = list(audit.get("audits_run") or [])
+    if not audits_run:
+        audits_run = build_audit_gates(
+            status=status_label,
+            risk_level=risk_level,
+            tests_passed=(status_label == "completed"),
+        )
+    audit["audits_run"] = audits_run
+    if status_label == "completed" and audit.get("final_verdict") in (None, "", "cannot_determine"):
+        audit["final_verdict"] = "pass"
+    elif status_label in ("failed", "cancelled") and audit.get("final_verdict") in (None, "", "cannot_determine"):
+        audit["final_verdict"] = "needs_changes"
+    audit.setdefault("rationale", "Workflow terminal status mapped to canonical result packet.")
+    updated["audit"] = audit
+    return updated
 _isolated_step_lock = threading.Lock()
 _isolated_steps_in_progress: set[int] = set()
 
@@ -670,6 +712,12 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         packet = dict(run_data.get("result_packet") or {})
         risk_profile = dict(run_data.get("risk_profile") or {})
         if packet:
+            packet = _finalize_result_packet_for_terminal_run(
+                packet,
+                run_id=run_id,
+                status=status,
+                risk_profile=risk_profile,
+            )
             enforced_status, updated_packet, missing_checks = enforce_validation_requirements(
                 packet=packet,
                 run_status=status,

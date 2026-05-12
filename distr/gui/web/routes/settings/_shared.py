@@ -326,6 +326,7 @@ class ProjectUpdate(BaseModel):
     folder_location: Optional[str] = None
     additional_trigger_words: Optional[str] = None
     startup_instructions: Optional[str] = None
+    coding_backend: Optional[str] = None
     provider: Optional[str] = None
     board_id: Optional[str] = None
     board_name: Optional[str] = None

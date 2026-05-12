@@ -211,6 +211,17 @@ class TelegramMessagesMixin:
                     chat_id, chat_type or "group", chat_title, chat_description
                 )
 
+        is_private_message = bool(
+            chat_id
+            and isinstance(chat_id, (int, str))
+            and not str(chat_id).startswith("-")
+        )
+        if msg_id and is_private_message:
+            # Acknowledge receipt as soon as the local app accepts the message.
+            # This covers text, voice notes, and media messages that may return
+            # before the normal private-text path below.
+            self._mark_message_as_read(msg_id)
+
         # Store chat type for later use in print statement
         self._last_chat_type_display = chat_type_display
 
@@ -224,11 +235,11 @@ class TelegramMessagesMixin:
             logger.info("Received media message (type: %s)", media_type)
             if media_type == "voice":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "voice", message_id=msg_id)
+                self._handle_voice_message(media.get("download_url"), "voice")
                 media_handled = True
             elif media_type == "audio":
                 input_type = "voice"
-                self._handle_voice_message(media.get("download_url"), "audio", message_id=msg_id)
+                self._handle_voice_message(media.get("download_url"), "audio")
                 media_handled = True
             elif media_type in ("photo", "document", "video"):
                 self._handle_file_message(media, inner_data.get("caption") or inner_data.get("text"))
@@ -606,10 +617,6 @@ class TelegramMessagesMixin:
         # Emit raw signal for any direct listeners
         self.message_received.emit(inner_data)
 
-        # Mark the message as read so sender sees the double-check
-        if msg_id:
-            self._mark_message_as_read(msg_id)
-
         # ── Batch text messages before forwarding to agent ──
         # Instead of emitting each message immediately, buffer them.
         # After 3 seconds of silence the batch is flushed as one combined message.
@@ -618,7 +625,16 @@ class TelegramMessagesMixin:
                 self._telegram_batch_thread_id = int(chat_id) if chat_id is not None else None
             except (TypeError, ValueError):
                 self._telegram_batch_thread_id = getattr(self, "telegram_user_id", None)
-            self._enqueue_telegram_batch(str(text), None, input_type)
+            image_path = None
+            pending_media = getattr(self, "_pending_telegram_media_context", None)
+            if isinstance(pending_media, dict):
+                age_s = time.time() - float(pending_media.get("created_at") or 0)
+                if age_s <= 120:
+                    text = f"{pending_media.get('text')}\n{text}"
+                    image_path = pending_media.get("image_path") or None
+                    logger.info("[Telegram] Attached silent media context to follow-up text")
+                self._pending_telegram_media_context = None
+            self._enqueue_telegram_batch(str(text), image_path, input_type)
             logger.info(
                 "[Telegram] 📥 Buffered message (%d in batch): '%s' (chat_id: %s)",
                 len(self._telegram_batch_buffer), text[:50], chat_id,
@@ -762,6 +778,7 @@ class TelegramMessagesMixin:
                 image_path=image_path,
                 telegram_chat_id=getattr(self, "_telegram_batch_thread_id", None),
                 speak=None,
+                input_type=input_type,
             )
             logger.info("[Telegram] ✅ Batch flushed to agent (input_type=%s)", input_type)
         except Exception as e:
@@ -777,7 +794,8 @@ class TelegramMessagesMixin:
                 self._telegram_batch_thread_id = int(uid)
             except (TypeError, ValueError):
                 pass
-        self._start_typing_loop("typing")  # Keep dots alive while batching
+        action = "record_voice" if input_type == "voice" else "typing"
+        self._start_typing_loop(action)  # Keep Telegram status alive while batching
         self._telegram_batch_buffer.append((text, bool(image_path), image_path, input_type))
         self._telegram_batch_timer.start(self._TELEGRAM_BATCH_DELAY_MS)
 
@@ -792,9 +810,6 @@ class TelegramMessagesMixin:
             logger.warning("[Telegram] ⚠️ No download_url for %s — skipping transcription", media_type)
             self.send_to_telegram("⚠️ Could not process voice note: no download URL in message. Please resend.")
             return
-        # Mark the voice message as read immediately
-        if message_id:
-            self._mark_message_as_read(message_id)
         # Show "recording" indicator so user knows we're processing a voice note, not typing text
         self._start_typing_loop("record_voice")
         threading.Thread(
@@ -957,17 +972,53 @@ class TelegramMessagesMixin:
                 media_type, file_size, dest,
             )
 
-            # Build a message for the agent describing what was received
-            parts = []
-            if caption:
-                parts.append(caption)
-
             type_label = {"photo": "image", "document": "document", "video": "video"}.get(media_type, "file")
-            parts.append(
-                f"[Telegram {type_label} saved to {dest}]"
-            )
+            media_context = f"[Telegram {type_label} saved to {dest}]"
+            image_path_for_vision = str(dest) if media_type == "photo" else None
 
-            agent_text = "\n".join(parts) if parts else f"Received a {type_label} from Telegram."
+            if not caption:
+                pending_text_batch = any(
+                    item and item[0]
+                    for item in getattr(self, "_telegram_batch_buffer", [])
+                )
+                if pending_text_batch:
+                    try:
+                        from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
+
+                        QMetaObject.invokeMethod(
+                            self, "_enqueue_telegram_batch_slot",
+                            Qt.ConnectionType.QueuedConnection,
+                            Q_ARG(str, str(media_context)),
+                            Q_ARG(str, image_path_for_vision or ""),
+                        )
+                        logger.info(
+                            "[Telegram] Attached uncaptioned %s to pending text batch: %s",
+                            media_type,
+                            dest,
+                        )
+                    except Exception as e:
+                        logger.error(
+                            "[Telegram] Failed to attach uncaptioned media to pending batch: %s",
+                            e,
+                            exc_info=True,
+                        )
+                    return
+
+                # Silent receipt: save the media and remember it briefly, but do
+                # not generate an agent turn that can echo "received image/file".
+                self._pending_telegram_media_context = {
+                    "text": media_context,
+                    "image_path": image_path_for_vision,
+                    "created_at": time.time(),
+                }
+                logger.info(
+                    "[Telegram] Stored %s context silently for a possible follow-up: %s",
+                    media_type,
+                    dest,
+                )
+                return
+
+            agent_text = f"{caption}\n{media_context}"
 
             # Forward to agent via signal
             # Pass image path for photos (enables vision analysis), None for other types
@@ -978,7 +1029,6 @@ class TelegramMessagesMixin:
                     "[Telegram] 📤 Forwarding %s to agent: '%s'",
                     media_type, agent_text[:80],
                 )
-                image_path_for_vision = str(dest) if media_type == "photo" else None
                 # Use the batch buffer so file messages are combined with any
                 # text messages the user sends in the same burst.
                 from PyQt6.QtCore import QMetaObject, Qt, Q_ARG
@@ -1000,4 +1050,3 @@ class TelegramMessagesMixin:
     # =========================================================================
     # Sending Logic
     # =========================================================================
-

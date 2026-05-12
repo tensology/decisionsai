@@ -690,11 +690,6 @@ class EventHandlerMixin:
         if success and transcript:
             logger.info("[EVENT QUEUE] ✅ Telegram voice transcription successful (request_id: %s): '%s'", request_id, transcript[:200])
             try:
-                if hasattr(self, 'telegram_manager') and self.telegram_manager:
-                    self.telegram_manager._start_typing_loop("typing")
-            except Exception:
-                pass
-            try:
                 threading.current_thread().telegram_request = True
                 # Route through the batch buffer so input_type="voice" is
                 # propagated to _flush_telegram_batch → _current_input_type,
@@ -710,12 +705,33 @@ class EventHandlerMixin:
                         image_path=None,
                         telegram_chat_id=None,
                         speak=None,
+                        input_type=input_type,
                     )
                 logger.info("[EVENT QUEUE] 📤 Forwarded Telegram voice transcription to agent (input_type=%s): '%s'", input_type, transcript[:100])
             except Exception as e:
                 logger.error("[EVENT QUEUE] ❌ Failed to forward Telegram transcription to agent: %s", e, exc_info=True)
+                try:
+                    if hasattr(self, 'telegram_manager') and self.telegram_manager:
+                        self.telegram_manager._stop_typing_loop()
+                        self.telegram_manager.send_to_telegram(
+                            "⚠️ I transcribed that voice note, but couldn't hand it to the agent. Please try once more."
+                        )
+                except Exception as notify_error:
+                    logger.error(
+                        "[EVENT QUEUE] ❌ Failed to notify Telegram transcription handoff failure: %s",
+                        notify_error,
+                        exc_info=True,
+                    )
         else:
             logger.warning("[EVENT QUEUE] ❌ Telegram voice transcription failed (request_id: %s): %s", request_id, error)
+            try:
+                if hasattr(self, 'telegram_manager') and self.telegram_manager:
+                    self.telegram_manager._stop_typing_loop()
+                    self.telegram_manager.send_to_telegram(
+                        "⚠️ I couldn't transcribe that voice note. Please try resending it or send it as text."
+                    )
+            except Exception as e:
+                logger.error("[EVENT QUEUE] ❌ Failed to notify Telegram transcription failure: %s", e, exc_info=True)
 
     # ------------------------------------------------------------------
     # send_to_telegram  (the largest single handler)
@@ -746,8 +762,10 @@ class EventHandlerMixin:
                     logger.error(f"Error in send_to_remote thread: {e}", exc_info=True)
 
             threading.Thread(target=send_to_remote_thread, daemon=True, name="SendToRemoteApp").start()
-        elif (provider == 'kokoro' or provider == 'tool') and has_telegram_manager and telegram_connected:
+        elif (provider == 'kokoro' or provider == 'tool') and has_telegram_manager:
             # Capture self reference for thread
+            if not telegram_connected:
+                logger.warning("[EVENT QUEUE] Telegram not connected; queuing outbound response for reconnect")
             app_ref = self
 
             def send_to_telegram_thread():
@@ -763,7 +781,7 @@ class EventHandlerMixin:
             elif not has_telegram_manager:
                 logger.warning("[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram manager not available)")
             elif not telegram_connected:
-                logger.warning(f"[EVENT QUEUE] ⚠️ Ignoring send_to_telegram (Telegram not connected. Manager exists: {has_telegram_manager})")
+                logger.warning(f"[EVENT QUEUE] ⚠️ Telegram unavailable for send_to_telegram (manager exists: {has_telegram_manager})")
 
     def _consume_remote_response_context(self):
         """Get and clear one pending remote-app response context, if present."""
@@ -998,6 +1016,12 @@ class EventHandlerMixin:
                 logger.debug("[Telegram] No audio_file or screenshot_file; sending text-only response")
 
             if text_to_send and self._try_route_integration_text_reply(text_to_send, data):
+                time.sleep(2)
+                self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
+                return
+
+            if not text_to_send and not audio_file and not screenshot_file:
+                logger.info("[Telegram] Nothing to send after response preparation; skipping empty Telegram payload")
                 time.sleep(2)
                 self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
                 return
@@ -1453,7 +1477,9 @@ class EventHandlerMixin:
         has_tm = hasattr(self, 'telegram_manager')
         connected = has_tm and self.telegram_manager.is_connected() if has_tm else False
 
-        if has_tm and connected and file_path:
+        if has_tm and file_path:
+            if not connected:
+                logger.warning("[EVENT QUEUE] Telegram not connected; queuing outbound file for reconnect")
             emoji_map = {
                 'image': ('📸', 'image'), 'audio': ('🎵', 'audio file'),
                 'video': ('🎬', 'video'), 'document': ('📄', 'document'),

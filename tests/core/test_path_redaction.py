@@ -3,6 +3,7 @@
 from distr.core.agent.services.llm.text_utils import (
     _PATH_REDACT_PLACEHOLDER,
     clean_model_text_for_chat,
+    clean_text_for_tts,
     redact_filesystem_paths_for_conversation,
 )
 
@@ -37,3 +38,20 @@ def test_clean_model_text_for_chat_strips_markdown_noise():
     assert "`" not in out
     assert "#" not in out
     assert out == "Fix: use dictation mode. Next Do the thing"
+
+
+def test_clean_text_for_tts_turns_residual_slashes_into_spacing():
+    raw = r"Use app/src/audio.ts or alpha\beta for copied text from 05/12."
+    out = clean_text_for_tts(raw, spoken_prose=True)
+
+    assert "/" not in out
+    assert "\\" not in out
+    assert "app src audio.ts" in out
+    assert "alpha beta" in out
+    assert "05 12" in out
+
+
+def test_clean_text_for_tts_replaces_urls_before_slash_spacing():
+    out = clean_text_for_tts("Open https://example.com/docs/api now.", spoken_prose=True)
+
+    assert out == "Open a web link now."

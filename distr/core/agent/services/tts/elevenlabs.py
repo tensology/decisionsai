@@ -13,6 +13,7 @@ from distr.core.agent.libs import (
     sf, SOUNDFILE_AVAILABLE,
     AudioSegment, PYDUB_AVAILABLE
 )
+from distr.core.agent.services.llm.text_utils import clean_text_for_tts
 from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
@@ -110,6 +111,7 @@ class ElevenLabsTTSService(TTSService):
         """
         if not text:
             return ""
+        text = clean_text_for_tts(text, strip_whitespace=False, spoken_prose=True)
         # Replace angle brackets that could be parsed as SSML
         text = text.replace("<", "(").replace(">", ")")
         # Avoid HTML entity mis-parsing
@@ -541,8 +543,15 @@ class ElevenLabsTTSService(TTSService):
                 # Don't process, don't accumulate, just drop it
                 return
             
-            # Accumulate text and process incrementally
-            self._text_buffer += frame.text
+            # Accumulate cleaned text and process incrementally. Live deltas can
+            # arrive with partial markdown/XML/tool residue; ElevenLabs is
+            # especially sensitive to SSML-like fragments and filler such as
+            # "ahhhh", which can become elongated vocal artifacts.
+            cleaned_text = clean_text_for_tts(frame.text, strip_whitespace=False, spoken_prose=True)
+            if not cleaned_text:
+                logger.debug("TTS: TextFrame dropped after ElevenLabs live cleaning")
+                return
+            self._text_buffer += cleaned_text
             
             # CRITICAL: Check cancellation before extracting sentences
             # This prevents processing new sentences if we're already cancelled

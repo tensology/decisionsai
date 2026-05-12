@@ -157,6 +157,9 @@
         if (triggersInput) triggersInput.value = "";
         document.getElementById("detail-provider").value = project.provider || "";
         document.getElementById("detail-startup").value = project.startup_instructions || "";
+        var backendSel = document.getElementById("detail-coding-backend");
+        if (backendSel) backendSel.value = project.coding_backend || "pi";
+        loadProjectCliBackends(project.id, project.coding_backend || "pi");
         loadBoardProvidersAndSelect(project.provider || "", project.board_id || "", project.board_name || "");
         loadKanbanBoardStatus();
 
@@ -461,6 +464,7 @@
             folder_location: (document.getElementById("detail-folder").value || "").trim(),
             additional_trigger_words: JSON.stringify(getTriggerWordsArray()),
             startup_instructions: (document.getElementById("detail-startup").value || "").trim(),
+            coding_backend: (document.getElementById("detail-coding-backend")?.value || "pi").trim(),
             provider: (document.getElementById("detail-provider").value || "").trim() || null,
             board_id: boardId,
             board_name: boardName
@@ -483,6 +487,79 @@
                 }
             })
             .catch(function() { showSnackbar("Failed to save project", "error"); });
+    }
+
+    function backendStateClasses(state, active) {
+        if (state === "ready") {
+            return active
+                ? "border-[#22c55e]/60 bg-[#22c55e]/10 text-green-100"
+                : "border-white/15 bg-white/[0.03] text-gray-300";
+        }
+        if (state === "missing" || state === "misconfigured") {
+            return active
+                ? "border-amber-400/60 bg-amber-500/10 text-amber-100"
+                : "border-white/15 bg-white/[0.03] text-gray-300";
+        }
+        return "border-white/15 bg-white/[0.03] text-gray-300";
+    }
+
+    function loadProjectCliBackends(projectId, activeBackend) {
+        var sel = document.getElementById("detail-coding-backend");
+        var list = document.getElementById("coding-backend-status-list");
+        var pill = document.getElementById("coding-backend-active-pill");
+        if (!sel || !list) return;
+        activeBackend = activeBackend || "pi";
+        apiFetch("/api/projects/" + projectId + "/cli-backends")
+            .then(function(data) {
+                var backends = data.backends || [];
+                var active = data.active_backend || activeBackend || "pi";
+                sel.innerHTML = backends.map(function(b) {
+                    return "<option value=\"" + escapeAttr(b.id) + "\">" + escapeAttr(b.name) + "</option>";
+                }).join("");
+                sel.value = active;
+                var activeItem = backends.filter(function(b) { return b.id === active; })[0];
+                if (pill) {
+                    pill.textContent = activeItem ? (activeItem.name + " / " + activeItem.state) : "Pi / default";
+                    pill.className = "text-xs px-2 py-1 rounded border " + (activeItem && activeItem.ready ? "border-green-500/40 text-green-300 bg-green-500/10" : "border-amber-400/40 text-amber-200 bg-amber-500/10");
+                }
+                list.innerHTML = backends.map(function(b) {
+                    var activeBadge = b.active ? "<span class=\"text-[10px] px-1.5 py-0.5 rounded bg-[#f97316]/20 text-[#fdba74]\">Active</span>" : "";
+                    var stateLabel = b.ready ? "Ready" : (b.setup_required ? "Setup required" : (b.state || "Unavailable"));
+                    var setup = b.ready ? "" : "<div class=\"mt-1 text-[11px] text-gray-400 leading-snug\">" + escapeAttr(b.setup_instructions || b.message || "") + "</div>";
+                    return "<div class=\"rounded border p-2 text-xs " + backendStateClasses(b.state, b.active) + "\">" +
+                        "<div class=\"flex items-center justify-between gap-2\"><span class=\"font-medium text-white\">" + escapeAttr(b.name) + "</span>" + activeBadge + "</div>" +
+                        "<div class=\"mt-1 text-gray-300\">" + escapeAttr(stateLabel) + "</div>" +
+                        "<div class=\"mt-0.5 text-[11px] text-gray-500\">" + escapeAttr(b.path || "Not found on PATH") + "</div>" +
+                        setup +
+                        "</div>";
+                }).join("");
+            })
+            .catch(function() {
+                list.innerHTML = "<div class=\"text-xs text-amber-300\">Could not load CLI backend status.</div>";
+                if (pill) pill.textContent = "Unavailable";
+            });
+    }
+
+    function setProjectCodingBackend() {
+        if (!currentProjectId) return;
+        var sel = document.getElementById("detail-coding-backend");
+        if (!sel) return;
+        var backend = (sel.value || "pi").trim();
+        apiFetch("/api/projects/" + currentProjectId + "/coding-backend", {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ coding_backend: backend })
+        }).then(function(resp) {
+            if (resp && resp.success) {
+                showSnackbar("Coding backend set to " + sel.options[sel.selectedIndex].textContent, "success");
+                loadProjectCliBackends(currentProjectId, backend);
+                destroyTerminal();
+            } else {
+                showSnackbar("Failed to set coding backend", "error");
+            }
+        }).catch(function() {
+            showSnackbar("Failed to set coding backend", "error");
+        });
     }
 
     function useProject() {
@@ -831,6 +908,9 @@
 
         var detailBoard = document.getElementById("detail-board");
         if (detailBoard) detailBoard.addEventListener("change", updateKanbanVisibility);
+
+        var codingBackend = document.getElementById("detail-coding-backend");
+        if (codingBackend) codingBackend.addEventListener("change", setProjectCodingBackend);
 
         document.getElementById("project-update").addEventListener("click", saveProject);
         document.getElementById("project-use").addEventListener("click", useProject);

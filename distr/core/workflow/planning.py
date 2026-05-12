@@ -448,10 +448,10 @@ def build_step_context_prompt(
 ) -> str:
     """Build a context-aware prompt for step execution.
 
-    For single-step workflows with no prior results, no context_rules, and no
-    continuation input, returns the raw instruction so fast-action detection
-    (e.g. 'run action X') works correctly without wrapper text polluting regex
-    group captures.
+    For single-step workflows with no workflow_description, no prior results,
+    no context_rules, and no continuation input, returns the raw instruction so
+    fast-action detection (e.g. 'run action X') works correctly without wrapper
+    text polluting regex group captures.
 
     When ``context_rules`` is non-empty, it is prepended as a ``[CONTEXT AND RULES]``
     section before the workflow header.
@@ -473,11 +473,12 @@ def build_step_context_prompt(
     if session_instruction and not workflow_description:
         workflow_description = session_instruction
 
-    # Single step, no prior context, no context rules, no continuation:
+    # Single step, no workflow context, no prior context, no context rules, no continuation:
     # send raw instruction so fast-action detector can cleanly extract
     # action names, commands, etc.
     if (
         total_steps == 1
+        and not workflow_description
         and not prior_results
         and not context_rules
         and not continuation_input

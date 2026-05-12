@@ -20,6 +20,7 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "clipboard_action",
         (
             r"\b(what'?s?|what\s+is|show|get|read|see)\s+(?:in|on)?\s*(?:my\s+|the\s+)?clipboard\b",
+            r"\b(read|inspect|check|look\s+at|review|load)\b.*\bclipboard\b.*\b(talk|discuss|go\s+through|about\s+it|with\s+me)\b",
             r"\b(explain|elaborate|summari[sz]e|rework|rewrite)\s+(?:on\s+)?this\b",
             r"\b(?:set|write|put|copy)\s+(?:the\s+)?clipboard\s+(?:to|as)\b",
             r"\b(?:set|write|put|copy)\s+.+\s+(?:to|into|onto)\s+(?:my\s+|the\s+)?clipboard\b",

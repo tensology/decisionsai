@@ -162,6 +162,7 @@ class IntegrationMessageBus:
         image_path: str | None = None,
         telegram_chat_id: int | None = None,
         speak: bool | None = None,
+        input_type: str | None = None,
     ) -> None:
         """Locked mapping update + delegate to Qt/agent sink (outside lock)."""
         sink: AgentTextSink | None
@@ -184,7 +185,8 @@ class IntegrationMessageBus:
             )
             return
         try:
-            sink(text, True, image_path, speak)
+            metadata = {"speak": speak, "input_type": input_type} if input_type else speak
+            sink(text, True, image_path, metadata)
         except Exception:
             logger.exception("IntegrationMessageBus: text sink raised")
 

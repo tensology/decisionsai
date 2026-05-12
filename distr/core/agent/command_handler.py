@@ -487,6 +487,11 @@ def _cmd_process_text_input(session, params):
     uploaded_image_path = params.get('uploaded_image_path', None)
     speaker_val = params.get('speak') if isinstance(params, dict) and 'speak' in params else None
     speaker_override = _parse_bool(speaker_val, default=True) if speaker_val is not None else None
+    telegram_input_type = (
+        params.get('telegram_input_type')
+        if isinstance(params, dict) and params.get('telegram_input_type') in ('text', 'voice')
+        else None
+    )
     session.logger.debug(f"process_text_input: speak param={speaker_val}, parsed={speaker_override}, current _speaker_enabled={getattr(session.llm_service, '_speaker_enabled', None) if hasattr(session, 'llm_service') and session.llm_service else 'N/A'}")
 
     # Save current speaker state so we can restore it after a speak=False request.
@@ -520,6 +525,7 @@ def _cmd_process_text_input(session, params):
                         is_telegram=is_telegram,
                         uploaded_image_path=uploaded_image_path or None,
                         speaker_enabled=speaker_override,
+                        telegram_input_type=telegram_input_type,
                     )
                 finally:
                     # Restore speaker state after a speak-override request so
@@ -540,7 +546,7 @@ def _cmd_process_text_input(session, params):
             )
             if getattr(session, '_pending_text_inputs', None) is None:
                 session._pending_text_inputs = []
-            session._pending_text_inputs.append((text, is_telegram, uploaded_image_path, speaker_override))
+            session._pending_text_inputs.append((text, is_telegram, uploaded_image_path, speaker_override, telegram_input_type))
 
 
 

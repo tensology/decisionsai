@@ -238,6 +238,8 @@ class SendFileToTelegramTool(BaseTool):
     def _run(self, file_name: str = "", text: str = "", file_path: Optional[str] = None, **kwargs) -> str:
         """Find and send file via Telegram."""
         try:
+            if not text and kwargs.get("last_user_message"):
+                text = str(kwargs.get("last_user_message") or "")
             # If file_path is provided directly (e.g., from execute_code or screenshot_analyzer result), 
             # it means the user explicitly requested it via a tool chain - skip connection check and try to send
             # (the actual send will handle real connection failures gracefully)
@@ -259,7 +261,9 @@ class SendFileToTelegramTool(BaseTool):
                 
                 # Also check if this request came from Telegram
                 import threading
-                is_telegram_request = hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
+                is_telegram_request = bool(kwargs.get("is_telegram_request")) or (
+                    hasattr(threading.current_thread(), 'telegram_request') and threading.current_thread().telegram_request
+                )
                 
                 if not is_telegram_request:
                     # Check all threads
@@ -477,4 +481,3 @@ class SendFileToTelegramTool(BaseTool):
         """Async run method"""
         # Ignore extra kwargs like 'last_user_message' that may be passed by LLM service
         return self._run(file_name=file_name, text=text, file_path=file_path)
-

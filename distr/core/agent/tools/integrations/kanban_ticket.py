@@ -23,7 +23,9 @@ from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from distr.core.agent.ticket_intent import (
+    draft_ticket_from_request,
     format_skill_recommendations_markdown,
+    is_weak_ticket_title,
     recommend_skills_for_ticket,
 )
 
@@ -622,17 +624,17 @@ class KanbanTicketTool(BaseTool):
                     desc_match = re.search(r'^Description:\s*(.+)', result, re.MULTILINE | re.IGNORECASE | re.DOTALL)
                     title = title_match.group(1).strip() if title_match else ""
                     desc = desc_match.group(1).strip() if desc_match else result
-                    if title:
+                    if title and not is_weak_ticket_title(title):
                         title = _sanitize_ticket_title(title)
                         return {"title": title, "description": desc}
+                    draft = draft_ticket_from_request(raw_text)
+                    return {"title": draft.title, "description": draft.description}
             except Exception as e:
                 logger.warning("LLM summarisation failed, using fallback: %s", e)
 
         # Fallback
-        lines = [l.strip() for l in raw_text.strip().split("\n") if l.strip()]
-        title = _sanitize_ticket_title(lines[0][:80] if lines else "New Ticket")
-        desc = "\n".join(lines[1:]) if len(lines) > 1 else raw_text[:500]
-        return {"title": title, "description": desc}
+        draft = draft_ticket_from_request(raw_text)
+        return {"title": _sanitize_ticket_title(draft.title), "description": draft.description}
 
     def _detect_bulk_mode(self, text: str) -> bool:
         """Detect if text contains multiple distinct tasks/items."""
@@ -1690,6 +1692,11 @@ class KanbanTicketTool(BaseTool):
             description = text or title
 
         title = _sanitize_ticket_title(title or "") or "New Ticket"
+        if is_weak_ticket_title(title):
+            draft = draft_ticket_from_request(f"{text}\n\n{description}")
+            title = _sanitize_ticket_title(draft.title) or "New Ticket"
+            if not description or is_weak_ticket_title(description):
+                description = draft.description
 
         # Create the ticket in DB
         description, skill_recommendations = _append_recommended_skills(title, description, text)

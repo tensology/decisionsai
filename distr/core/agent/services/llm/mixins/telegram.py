@@ -126,6 +126,7 @@ class TelegramMixin:
             'skip_screenshot': skip_screenshot,
             'provider': 'kokoro',
             'analyzed_image_path': analyzed_image_path,
+            'input_type': getattr(self, '_telegram_input_type', None) or getattr(threading.current_thread(), 'telegram_input_type', None),
         }), block=False)
         logger.info("%s: Emitted send_to_telegram from LLM (bypassed TTS pipeline)",
                     getattr(self, 'SERVICE_NAME', self.__class__.__name__))
@@ -143,6 +144,8 @@ class TelegramMixin:
         for t in threading.enumerate():
             if getattr(t, 'telegram_request', False):
                 t.telegram_request = False
+            if getattr(t, 'telegram_input_type', None):
+                t.telegram_input_type = None
             if getattr(t, 'telegram_analyzed_image', None):
                 t.telegram_analyzed_image = None
             if getattr(t, 'telegram_send_raw_screenshot', None):
@@ -153,6 +156,7 @@ class TelegramMixin:
             cur.telegram_uploaded_image = None
         self._is_telegram_request = False
         self._uploaded_image_path = None
+        self._telegram_input_type = None
 
     def _extract_action_required_path(self):
         """Scan recent tool messages for [ACTION REQUIRED] and extract the file path."""

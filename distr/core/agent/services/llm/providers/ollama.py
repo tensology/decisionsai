@@ -275,7 +275,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         return {"content": text, "images": [base64_image]}
 
     async def process_chat_input(self, text: str, is_telegram: bool = False,
-                                  uploaded_image_path: str = None, speaker_enabled=None):
+                                  uploaded_image_path: str = None, speaker_enabled=None,
+                                  telegram_input_type: str = None):
         """Override to handle Ollama's special image format in messages."""
         t_start = time.time()
         from distr.core.agent.services.llm.image_utils import (
@@ -290,6 +291,10 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
 
         self._is_telegram_request = is_telegram
         self._uploaded_image_path = uploaded_image_path
+        self._telegram_input_type = telegram_input_type if telegram_input_type in ("text", "voice") else None
+        if is_telegram and self._telegram_input_type:
+            import threading
+            threading.current_thread().telegram_input_type = self._telegram_input_type
 
         self._ensure_user_message_persisted(text)
 
@@ -994,7 +999,11 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                 tool = self._tools_dict[tool_name]
                 try:
                     # Inject context for tools that need it
-                    if tool_name in ('oracle_globe', 'clipboard_action', 'mouse_movement') and not args_dict.get('text'):
+                    if getattr(self, '_is_telegram_request', False):
+                        args_dict.setdefault("is_telegram_request", True)
+                    if last_user_message:
+                        args_dict.setdefault("last_user_message", last_user_message)
+                    if tool_name in ('oracle_globe', 'clipboard_action', 'mouse_movement', 'send_file_to_telegram') and not args_dict.get('text'):
                         if last_user_message:
                             args_dict['text'] = last_user_message
                         elif self._messages:

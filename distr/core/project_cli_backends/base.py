@@ -1,0 +1,97 @@
+"""Shared adapter interface for project coding CLI backends."""
+
+from __future__ import annotations
+
+from dataclasses import asdict, dataclass
+from typing import Any, Callable, Optional
+
+
+EventCallback = Callable[[dict[str, Any]], None]
+
+
+@dataclass
+class BackendStatus:
+    id: str
+    name: str
+    installed: bool
+    ready: bool
+    state: str
+    message: str
+    path: Optional[str] = None
+    version: Optional[str] = None
+    setup_required: bool = False
+    setup_instructions: str = ""
+    supports_rpc: bool = False
+    supports_install: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class BackendTaskResult:
+    success: bool
+    backend_id: str
+    engine: str
+    output: str = ""
+    error: str = ""
+    session_id: Optional[int] = None
+
+    def to_dict(self) -> dict[str, Any]:
+        return asdict(self)
+
+
+@dataclass
+class ProjectTask:
+    project_id: int
+    project_name: str
+    folder: str
+    instruction: str
+    chat_id: Optional[int] = None
+    audit_id: Optional[int] = None
+    origin: str = "cli"
+
+
+class ProjectCliBackend:
+    """Base class for coding CLI backends.
+
+    Adapters expose a common surface even when their concrete transport differs
+    (Pi RPC, one-shot CLI, future long-lived daemon, etc.).
+    """
+
+    id = ""
+    name = ""
+    description = ""
+    supports_rpc = False
+    supports_install = False
+    setup_instructions = ""
+
+    def check_availability(self) -> BackendStatus:
+        raise NotImplementedError
+
+    def setup_status(self) -> BackendStatus:
+        return self.check_availability()
+
+    async def install_or_setup(self) -> BackendStatus:
+        return self.setup_status()
+
+    async def send_task(
+        self,
+        task: ProjectTask,
+        on_event: Optional[EventCallback] = None,
+    ) -> BackendTaskResult:
+        raise NotImplementedError
+
+    def get_messages(self, project_id: int) -> list[dict[str, Any]]:
+        return []
+
+    def get_buffer(self, project_id: int, lines: int = 100) -> str:
+        return ""
+
+    async def restart(self, project_id: int, folder: str) -> BackendTaskResult:
+        return BackendTaskResult(
+            success=False,
+            backend_id=self.id,
+            engine=self.id,
+            error=f"{self.name} does not support a persistent terminal session.",
+        )
