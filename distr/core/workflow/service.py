@@ -38,6 +38,37 @@ def _safe_json_loads(text: Optional[str]) -> Any:
         return {}
 
 
+def _compact_result_packet_for_api(packet: Any) -> Dict[str, Any]:
+    """Return the browser-safe subset of a workflow result packet."""
+    if not isinstance(packet, dict):
+        return {}
+    artifacts = packet.get("artifacts") if isinstance(packet.get("artifacts"), dict) else {}
+    execution = packet.get("execution") if isinstance(packet.get("execution"), dict) else {}
+    audit = packet.get("audit") if isinstance(packet.get("audit"), dict) else {}
+    changes = packet.get("changes") if isinstance(packet.get("changes"), dict) else {}
+    return {
+        "status": packet.get("status") or "",
+        "summary": packet.get("summary") or "",
+        "audit": {
+            "final_verdict": audit.get("final_verdict") or "",
+            "rationale": audit.get("rationale") or "",
+        },
+        "changes": {
+            "change_summary": list(changes.get("change_summary") or [])[-5:],
+        },
+        "artifacts": {
+            "screenshots": list(artifacts.get("screenshots") or [])[-5:],
+            "logs": list(artifacts.get("logs") or [])[-5:],
+            "diffs_or_patches": list(artifacts.get("diffs_or_patches") or [])[-5:],
+            "links": list(artifacts.get("links") or [])[-5:],
+        },
+        "execution": {
+            "action_trace": list(execution.get("action_trace") or [])[-8:],
+            "validation_snapshots": list(execution.get("validation_snapshots") or [])[-8:],
+        },
+    }
+
+
 # ── Re-exports for backward compatibility ──
 # These functions were extracted to dedicated modules but are re-exported
 # here so existing callers don't break.
@@ -619,10 +650,11 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 "current_step_id": r.current_step_id,
                 "board_id": r.board_id,
                 "ticket_id": r.ticket_id,
-                "phase": (_safe_json_loads(r.run_data) or {}).get("phase"),
-                "source_type": (_safe_json_loads(r.run_data) or {}).get("source_type"),
-                "project_id": (_safe_json_loads(r.run_data) or {}).get("project_id"),
-                "project_name": (_safe_json_loads(r.run_data) or {}).get("project_name"),
+                "phase": (run_data := (_safe_json_loads(r.run_data) or {})).get("phase"),
+                "source_type": run_data.get("source_type"),
+                "project_id": run_data.get("project_id"),
+                "project_name": run_data.get("project_name"),
+                "result_packet": _compact_result_packet_for_api(run_data.get("result_packet")),
             }
             for r in rows
         ]

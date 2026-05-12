@@ -79,12 +79,14 @@ Done:
 - Terminal workflow completion now canonicalizes the stored run result packet, writes a bounded workflow/evidence note back to the ticket, updates ticket workflow status, and records a ticket audit entry. Added regression coverage for the persisted packet, ticket note, and audit row.
 - Workflow step results now classify evidence references into the stored run result packet: screenshots/media, logs/text/json/html/md, diffs/patches, and links. Result-packet context shown to later steps includes recent artifact references, so screen/log evidence is no longer trapped inside free-form step prose.
 - Computer-use style step summaries now parse into `execution.action_trace` rows in the stored run result packet. The trace is deduped and included in later step context, so workflows can carry forward recent click/type/key/scroll/escalation actions as structured evidence.
+- Step verification now writes `execution.validation_snapshots` into the stored run result packet. Snapshots capture validation type, expected criteria, observed output snippet, caller pass flag, verified pass flag, and verdict, then appear in later step context.
+- The workflow run history API now exposes a browser-safe compact result packet, and the Workflows Runs tab renders summary, audit verdict, recent actions, validation snapshots, and artifacts. A WebKit E2E regression seeds a completed run and verifies that evidence appears in the web UI.
 - Tests cover planner normalization, computer-use preservation, stuck contracts, HTTP defaults, and developer-context rendering.
 
 Still needed:
 
 - Broaden structured audit summary coverage beyond terminal happy paths.
-- Extend evidence persistence from artifact/action references into validation snapshots and UI-visible failure semantics.
+- Extend evidence persistence from artifact/action/validation/UI references into failure semantics and routing decisions.
 - Add full run tests for create-from-ticket, run, pause, resume, stuck, retry, failed validation, and escalation.
 - Make workflow failure statuses user-facing and precise: complete, blocked, needs user, failed validation, escalated.
 - Add browser regression around workflow UI state changes and ordering.
@@ -166,7 +168,7 @@ Still needed:
 
 1. Expand the Project -> Ticket -> Workflow regression harness beyond context handoff into creation quality, run status, evidence, and writeback.
 2. Promote ticket creation to a structured intent/parser contract with tests.
-3. Expand workflow run audit/evidence persistence into validation snapshots and UI-visible failure semantics.
+3. Expand workflow run audit/evidence persistence into UI-visible failure semantics and routing decisions.
 4. Add project terminal health diagnostics.
 5. Add Initiative/Telegram observability so the user can see checked, skipped, proposed, executed, failed, and notified cycles.
 6. Add TTS/audio provider stress tests across all configured providers, including live streaming versus replay comparison and device hot-swap.

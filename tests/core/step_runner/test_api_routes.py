@@ -235,7 +235,31 @@ class TestResultsHistory:
         mock_run.current_step_id = 3
         mock_run.board_id = 7
         mock_run.ticket_id = 9
-        mock_run.run_data = json.dumps({"phase": "execution", "source_type": "kanban"})
+        mock_run.run_data = json.dumps({
+            "phase": "execution",
+            "source_type": "kanban",
+            "result_packet": {
+                "status": "completed",
+                "summary": "Workflow run evidence captured.",
+                "audit": {"final_verdict": "pass", "rationale": "Validated."},
+                "artifacts": {
+                    "screenshots": ["/tmp/decisions/workflow_screenshots/step_1.png"],
+                    "logs": ["/tmp/decisions/logs/workflow_10.log"],
+                },
+                "execution": {
+                    "action_trace": [
+                        {"action_type": "click", "description": "open menu", "result": "ok"},
+                    ],
+                    "validation_snapshots": [
+                        {
+                            "validation_type": "text_match",
+                            "expected": "success visible",
+                            "verdict": "pass",
+                        },
+                    ],
+                },
+            },
+        })
 
         mock_query = MagicMock()
         mock_query.filter.return_value.order_by.return_value.limit.return_value.all.return_value = [mock_run]
@@ -251,3 +275,9 @@ class TestResultsHistory:
         assert rows[0]["source_type"] == "kanban"
         assert rows[0]["board_id"] == 7
         assert rows[0]["ticket_id"] == 9
+        assert rows[0]["result_packet"]["summary"] == "Workflow run evidence captured."
+        assert rows[0]["result_packet"]["artifacts"]["screenshots"] == [
+            "/tmp/decisions/workflow_screenshots/step_1.png"
+        ]
+        assert rows[0]["result_packet"]["execution"]["action_trace"][0]["action_type"] == "click"
+        assert rows[0]["result_packet"]["execution"]["validation_snapshots"][0]["expected"] == "success visible"

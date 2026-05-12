@@ -129,7 +129,12 @@ def match_draft_decision(text_lower: str) -> Literal["approve", "reject"] | None
                 "approve that",
                 "approve it",
                 "yes approve",
+                "yes continue",
+                "continue",
+                "go ahead",
                 "go ahead and approve",
+                "go ahead and continue",
+                "yes go ahead",
                 "accept that",
                 "accept it",
             )

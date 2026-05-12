@@ -77,6 +77,33 @@ def _merge_action_trace(existing: List[Dict[str, Any]], found: List[Dict[str, An
     return trace
 
 
+def _merge_validation_snapshots(existing: List[Dict[str, Any]], found: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    snapshots = list(existing or [])
+    seen = {
+        (
+            str(item.get("step_name", "")),
+            str(item.get("validation_type", "")),
+            str(item.get("verdict", "")),
+            str(item.get("expected", "")),
+        )
+        for item in snapshots
+    }
+    for item in found:
+        key = (
+            str(item.get("step_name", "")),
+            str(item.get("validation_type", "")),
+            str(item.get("verdict", "")),
+            str(item.get("expected", "")),
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        snapshots.append(item)
+    if len(snapshots) > 80:
+        snapshots = snapshots[-80:]
+    return snapshots
+
+
 def extract_artifacts_from_step_result(step_result: str) -> Dict[str, List[str]]:
     """Classify evidence references from workflow step output into packet artifacts."""
     text = step_result or ""
@@ -157,6 +184,7 @@ def build_result_packet(
     diffs_or_patches: Optional[List[str]] = None,
     links: Optional[List[str]] = None,
     action_trace: Optional[List[Dict[str, Any]]] = None,
+    validation_snapshots: Optional[List[Dict[str, Any]]] = None,
     audits_run: Optional[List[Dict[str, Any]]] = None,
     final_verdict: str = "cannot_determine",
     audit_rationale: str = "",
@@ -203,6 +231,7 @@ def build_result_packet(
         },
         "execution": {
             "action_trace": action_trace or [],
+            "validation_snapshots": validation_snapshots or [],
         },
         "audit": {
             "audits_run": audits_run or [],
@@ -272,6 +301,7 @@ def append_workflow_step_to_packet(
     step_status: str,
     step_result: str,
     run_status: str,
+    validation_snapshot: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """Update packet with a single completed step outcome."""
     updated = dict(packet or {})
@@ -297,6 +327,13 @@ def append_workflow_step_to_packet(
         list(execution.get("action_trace") or []),
         extract_action_trace_from_step_result(trimmed_result),
     )
+    if validation_snapshot:
+        execution["validation_snapshots"] = _merge_validation_snapshots(
+            list(execution.get("validation_snapshots") or []),
+            [validation_snapshot],
+        )
+    else:
+        execution["validation_snapshots"] = list(execution.get("validation_snapshots") or [])
     updated["execution"] = execution
 
     updated["status"] = run_status or updated.get("status") or "running"
@@ -352,5 +389,16 @@ def summarize_packet_for_step_context(packet: Dict[str, Any], *, max_lines: int 
             line = f"{action_type}: {desc}" if desc else str(action_type)
             if result:
                 line += f" -> {result}"
+            lines.append(f"- {line}")
+    validation_snapshots = ((packet.get("execution") or {}).get("validation_snapshots") or [])[-max_lines:]
+    if validation_snapshots:
+        lines.append("validation:")
+        for item in validation_snapshots:
+            verdict = item.get("verdict") or "unknown"
+            validation_type = item.get("validation_type") or "none"
+            expected = (item.get("expected") or "").strip()
+            line = f"{verdict} ({validation_type})"
+            if expected:
+                line += f": {expected[:160]}"
             lines.append(f"- {line}")
     return "\n".join(lines).strip()

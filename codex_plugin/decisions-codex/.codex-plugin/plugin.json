@@ -1,0 +1,42 @@
+{
+  "name": "decisions-codex",
+  "version": "0.1.0",
+  "description": "Codex wrapper for DecisionsAI project, workflow, and ticket orchestration.",
+  "author": {
+    "name": "Tensology",
+    "email": "support@decisions.ai",
+    "url": "https://www.decisionsai.net"
+  },
+  "homepage": "https://www.decisionsai.net",
+  "repository": "https://github.com/tensology/decisionsai",
+  "license": "Proprietary",
+  "keywords": [
+    "decisionsai",
+    "codex",
+    "workflow",
+    "ticket-board",
+    "project-cli"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DecisionsAI Codex",
+    "shortDescription": "Let Codex operate as a DecisionsAI project and workflow worker.",
+    "longDescription": "Provides the Codex-side instructions for receiving DecisionsAI tickets, executing implementation work, and reporting structured results back to DecisionsAI workflows.",
+    "developerName": "Tensology",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "Automation"
+    ],
+    "websiteURL": "https://www.decisionsai.net",
+    "privacyPolicyURL": "https://www.decisionsai.net/privacy",
+    "termsOfServiceURL": "https://www.decisionsai.net/terms",
+    "defaultPrompt": [
+      "Run the DecisionsAI ticket assigned to this project and report the result.",
+      "Continue the current DecisionsAI workflow step and return a concise completion packet.",
+      "Inspect this project and tell DecisionsAI whether it matches the active project record."
+    ],
+    "brandColor": "#f97316"
+  }
+}

@@ -128,6 +128,13 @@ class PiRpcSession:
                 )).first()
                 self._provider = (row[0] or "ollama") if row else "ollama"
                 self._model = (row[1] or "") if row else ""
+                project_row = session.execute(
+                    text("SELECT coding_backend_model FROM projects WHERE id = :project_id LIMIT 1"),
+                    {"project_id": self.project_id},
+                ).first()
+                project_model = (project_row[0] or "").strip() if project_row else ""
+                if project_model:
+                    self._model = project_model
         except Exception:
             self._provider = "ollama"
             self._model = ""

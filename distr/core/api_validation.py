@@ -80,6 +80,39 @@ def validate_anthropic(api_key: str) -> tuple[bool, str]:
         return False, str(e)
 
 
+def validate_cursor(api_key: str) -> tuple[bool, str]:
+    """Validate Cursor API key by listing available Background Agent models."""
+    try:
+        req = urllib.request.Request(
+            "https://api.cursor.com/v0/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "accept": "application/json",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as response:
+            if response.status == 200:
+                return True, ""
+        return False, "Invalid API key"
+    except urllib.error.HTTPError as e:
+        try:
+            body = e.read().decode("utf-8", errors="replace")
+        except Exception:
+            body = ""
+        snippet = (body[:280] + "…") if len(body) > 280 else body
+        if e.code == 401:
+            return False, "Invalid API key"
+        if e.code == 403:
+            return False, "Forbidden (403): key rejected or lacks Cursor API access"
+        if e.code == 429:
+            return True, ""
+        if e.code >= 500:
+            return False, f"Cursor server error ({e.code})"
+        return False, f"HTTP {e.code}" + (f": {snippet}" if snippet.strip() else "")
+    except Exception as e:
+        return False, str(e)
+
+
 def validate_elevenlabs(api_key: str) -> tuple[bool, str]:
     """Validate ElevenLabs API key."""
     try:
@@ -267,6 +300,7 @@ def validate_provider(provider: str, key: str) -> tuple[bool, str]:
     validators = {
         "openai": validate_openai,
         "anthropic": validate_anthropic,
+        "cursor": validate_cursor,
         "elevenlabs": validate_elevenlabs,
         "assemblyai": validate_assemblyai,
         "openrouter": validate_openrouter,

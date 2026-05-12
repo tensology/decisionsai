@@ -16,7 +16,20 @@ from distr.core.initiative.rubric import RubricScore
 logger = logging.getLogger(__name__)
 
 VALID_ACTION_TYPES = frozenset(
-    {"suggestion", "routine_task", "external_comms", "file_change", "sensitive", "none"}
+    {
+        "suggestion",
+        "routine_task",
+        "board_triage",
+        "ticket_lane_move",
+        "workflow_start",
+        "project_cli_task",
+        "message_triage",
+        "email_triage",
+        "external_comms",
+        "file_change",
+        "sensitive",
+        "none",
+    }
 )
 
 

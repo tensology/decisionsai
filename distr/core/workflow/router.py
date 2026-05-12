@@ -19,7 +19,7 @@ from distr.core.db.workflow import (
     AutoWorkflowStep,
     AutoWorkflowStepResult,
 )
-from distr.core.workflow.verification import _run_verification
+from distr.core.workflow.verification import _run_verification, build_validation_snapshot
 from distr.core.kanban.result_packet import append_workflow_step_to_packet
 from distr.core.kanban.ticket_audit import append_ticket_audit_entry
 from distr.core.workflow.chat_trace import record_workflow_chat_event
@@ -73,6 +73,7 @@ class StepRouter:
 
             # ── verify ──
             verified_passed = _run_verification(step, result, passed)
+            validation_snapshot = build_validation_snapshot(step, result, passed, verified_passed)
             status = "passed" if verified_passed else "failed"
 
             # ── store result ──
@@ -113,6 +114,7 @@ class StepRouter:
                     if decision.get("action") == "end_run"
                     else "running"
                 ),
+                validation_snapshot=validation_snapshot,
             )
             run_data["result_packet"] = packet
 

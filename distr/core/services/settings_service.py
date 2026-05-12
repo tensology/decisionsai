@@ -628,6 +628,7 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
         ("assemblyai_enabled", "assemblyai_key"),
         ("openai_enabled", "openai_key"),
         ("anthropic_enabled", "anthropic_key"),
+        ("cursor_enabled", "cursor_key"),
         ("elevenlabs_enabled", "elevenlabs_key"),
         ("openrouter_enabled", "openrouter_key"),
         ("groq_enabled", "groq_key"),

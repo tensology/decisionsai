@@ -18,6 +18,7 @@ class ContextBundle:
     skills: list = field(default_factory=list)
     recent_audit: list = field(default_factory=list)
     developer_context: dict = field(default_factory=dict)
+    work_scan: dict = field(default_factory=dict)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
     # R8 memory files — trimmed for LLM (not full AGENT/USER/MEMORY bodies)
@@ -101,6 +102,14 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to fetch developer workflow context", exc_info=True)
 
+        work_scan = {}
+        try:
+            from distr.core.initiative.work_scanner import build_work_scan
+
+            work_scan = build_work_scan(settings)
+        except Exception:
+            logger.warning("ContextAssembler: failed to scan actionable work sources", exc_info=True)
+
         memory_agent, memory_user, memory_long_term = "", "", ""
         try:
             memory_agent, memory_user, memory_long_term = self._fetch_memory_snippets()
@@ -118,6 +127,7 @@ class ContextAssembler:
             skills=skills,
             recent_audit=recent_audit,
             developer_context=developer_context,
+            work_scan=work_scan,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
             memory_agent=memory_agent,

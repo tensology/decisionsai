@@ -5,7 +5,7 @@ Extracted from service.py as part of the module decomposition.
 """
 import logging
 import os
-from typing import Optional
+from typing import Any, Dict, Optional
 
 from distr.core.db.workflow import AutoWorkflowStep
 
@@ -46,6 +46,34 @@ def _run_verification(step: AutoWorkflowStep, result: str, caller_passed: bool) 
     except Exception as e:
         logger.error("Verification failed for step %s: %s", step.id, e, exc_info=True)
         return False
+
+
+def build_validation_snapshot(
+    step: AutoWorkflowStep,
+    result: str,
+    caller_passed: bool,
+    verified_passed: bool,
+) -> Dict[str, Any]:
+    """Build a compact, serializable record of the validation decision."""
+    vtype = (getattr(step, "validation_type", None) or "none").strip().lower()
+    expected = (
+        getattr(step, "validation_prompt", None)
+        or getattr(step, "verification", None)
+        or ""
+    )
+    observed = (result or "").strip()
+    if len(observed) > 600:
+        observed = observed[:600] + "..."
+    return {
+        "step_id": getattr(step, "id", None),
+        "step_name": getattr(step, "name", None) or f"Step {getattr(step, 'id', '')}",
+        "validation_type": vtype,
+        "expected": str(expected or "").strip(),
+        "observed": observed,
+        "caller_passed": bool(caller_passed),
+        "verified_passed": bool(verified_passed),
+        "verdict": "pass" if verified_passed else "fail",
+    }
 
 
 def _verify_text_match(result: str, criteria: str) -> bool:

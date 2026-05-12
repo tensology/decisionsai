@@ -50,6 +50,7 @@ class ProjectTask:
     chat_id: Optional[int] = None
     audit_id: Optional[int] = None
     origin: str = "cli"
+    model: str = ""
 
 
 class ProjectCliBackend:

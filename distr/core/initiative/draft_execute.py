@@ -78,6 +78,22 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
             raise ValueError("skill_install payload missing repo_url or folder_name")
         execute_skill_clone(url.strip(), folder.strip())
         return
+    if kind == "initiative_action":
+        from distr.core.initiative.action_handlers import execute_initiative_action
+        from distr.core.settings import load_settings_from_db
+
+        action = payload.get("action") or {}
+        if not isinstance(action, dict):
+            raise ValueError("initiative_action payload missing action dict")
+        settings = load_settings_from_db()
+        execute_initiative_action(
+            action_type=str(action.get("action_type") or "none"),
+            description=str(action.get("description") or ""),
+            payload=action.get("payload") if isinstance(action.get("payload"), dict) else {},
+            draft=str(action.get("draft") or ""),
+            settings=settings,
+        )
+        return
     raise ValueError(f"unknown execute_payload kind: {kind!r}")
 
 

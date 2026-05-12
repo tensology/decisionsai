@@ -17,6 +17,91 @@ _isolated_step_exec_lock = threading.Lock()
 _isolated_step_exec_started_at = {}
 
 
+def _workflow_feedback_message(action: str, result: dict | None = None) -> dict:
+    """Return human-readable workflow feedback for API/UI callers."""
+    result = result or {}
+    if action == "run_started":
+        return {
+            "message": "Workflow run started.",
+            "next_action": "Watch Active Runs for the current step and final result.",
+        }
+    if action == "cancelled":
+        return {
+            "message": "Workflow run cancelled.",
+            "next_action": "Review the run history before starting it again.",
+        }
+    if action == "reset":
+        return {
+            "message": "Workflow stopped and reset.",
+            "next_action": "Run it again when the steps look right.",
+        }
+    if action == "continued":
+        decision = result.get("action") or ""
+        if decision == "next_step":
+            return {
+                "message": f"Workflow continued to step #{result.get('step_id')}.",
+                "next_action": "Watch Active Runs for the next step outcome.",
+            }
+        if decision == "end_run":
+            return {
+                "message": f"Workflow finished with status: {result.get('status', 'completed')}.",
+                "next_action": "Open run history for the final evidence packet.",
+            }
+        if decision == "waiting":
+            return {
+                "message": "Workflow is still waiting for input.",
+                "next_action": "Provide the missing decision or continue instruction.",
+            }
+        return {
+            "message": "Workflow continued.",
+            "next_action": "Refresh Active Runs to see the latest state.",
+        }
+    return {"message": "Workflow updated.", "next_action": "Refresh the workflow status."}
+
+
+def _workflow_error_payload(error: str, action: str = "workflow") -> dict:
+    """Normalize workflow errors into useful, non-noisy API payloads."""
+    raw = str(error or "Workflow request failed.").strip()
+    lower = raw.lower()
+    detail = raw
+    next_action = "Refresh the workflow and check the current run state."
+
+    if "already in progress" in lower:
+        detail = "A run is already active for this workflow scope."
+        next_action = "Open Active Runs, then continue, cancel, or wait for that run."
+    elif "not waiting" in lower:
+        detail = "This workflow is not currently waiting for input."
+        next_action = "Refresh Active Runs; continue only applies to waiting runs."
+    elif "no waiting step" in lower:
+        detail = "There is no waiting step to continue."
+        next_action = "Refresh the workflow status and inspect the current step."
+    elif "has no steps" in lower:
+        detail = "This workflow has no steps to run."
+        next_action = "Add at least one workflow step, then run it again."
+    elif "no instruction" in lower or "no command configured" in lower or "no url configured" in lower:
+        detail = "A workflow step is missing required configuration."
+        next_action = "Open the highlighted step and fill in the missing action details."
+    elif "audit workflows are read-only" in lower:
+        detail = "Audit workflows are read-only."
+        next_action = "Duplicate or create a non-audit workflow before editing or running it."
+    elif "run not found" in lower:
+        detail = "That workflow run no longer exists."
+        next_action = "Refresh Active Runs and use the latest run id."
+    elif "workflow not found" in lower:
+        detail = "That workflow no longer exists."
+        next_action = "Refresh the workflow list."
+    elif "step not found" in lower:
+        detail = "That workflow step no longer exists."
+        next_action = "Refresh the workflow details."
+
+    return {
+        "detail": detail,
+        "raw_detail": raw,
+        "action": action,
+        "next_action": next_action,
+    }
+
+
 # ---- Pydantic models (only used in this module) ----
 
 class WorkflowCreateRequest(BaseModel):
@@ -512,22 +597,23 @@ def register_routes(router, templates):
             start_step_id = body.get("start_step_id") if isinstance(body, dict) else None
             result = start_workflow_run(workflow_id, start_step_id=start_step_id)
             if "error" in result:
-                return JSONResponse({"detail": result["error"]}, status_code=400)
+                return JSONResponse(_workflow_error_payload(result["error"], "run"), status_code=400)
+            result.update(_workflow_feedback_message("run_started", result))
             return JSONResponse(result)
         except Exception as e:
             logger.error("Workflow run failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            return JSONResponse(_workflow_error_payload(str(e), "run"), status_code=500)
 
     @router.post("/workflows/{workflow_id}/cancel-run/{run_id}")
     async def workflow_cancel_run(workflow_id: int, run_id: int):
         try:
             from distr.core.workflow.dispatcher import cancel_run
             if not cancel_run(run_id):
-                return JSONResponse({"detail": "Run not found"}, status_code=404)
-            return JSONResponse({"success": True})
+                return JSONResponse(_workflow_error_payload("Run not found", "cancel"), status_code=404)
+            return JSONResponse({"success": True, **_workflow_feedback_message("cancelled")})
         except Exception as e:
             logger.error("Workflow cancel run failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            return JSONResponse(_workflow_error_payload(str(e), "cancel"), status_code=500)
 
     @router.post("/workflows/{workflow_id}/stop-reset")
     async def workflow_stop_reset(workflow_id: int):
@@ -538,11 +624,12 @@ def register_routes(router, templates):
             from distr.core.workflow.service import reset_workflow_steps
             result = reset_workflow_steps(workflow_id)
             if "error" in result:
-                return JSONResponse({"detail": result["error"]}, status_code=404)
+                return JSONResponse(_workflow_error_payload(result["error"], "reset"), status_code=404)
+            result.update(_workflow_feedback_message("reset", result))
             return JSONResponse(result)
         except Exception as e:
             logger.error("Workflow stop-reset failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            return JSONResponse(_workflow_error_payload(str(e), "reset"), status_code=500)
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
     async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
@@ -573,21 +660,26 @@ def register_routes(router, templates):
             result = continue_waiting_step(run_id, optional_input)
             if "error" in result:
                 status_code = result.get("status_code", 400)
-                return JSONResponse({"detail": result["error"]}, status_code=status_code)
+                return JSONResponse(_workflow_error_payload(result["error"], "continue"), status_code=status_code)
+            result.update(_workflow_feedback_message("continued", result))
             return JSONResponse(result)
         except Exception as e:
             logger.error("Workflow continue run failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            return JSONResponse(_workflow_error_payload(str(e), "continue"), status_code=500)
 
     @router.get("/workflows/{workflow_id}/active-run")
     async def workflow_active_run(workflow_id: int):
         try:
             from distr.core.workflow.service import get_active_run
             run = get_active_run(workflow_id)
-            return JSONResponse(run or {"active": False})
+            return JSONResponse(run or {
+                "active": False,
+                "message": "No active run for this workflow.",
+                "next_action": "Start the workflow or open run history for previous results.",
+            })
         except Exception as e:
             logger.error("Workflow active run failed: %s", e, exc_info=True)
-            return JSONResponse({"detail": str(e)}, status_code=500)
+            return JSONResponse(_workflow_error_payload(str(e), "status"), status_code=500)
 
     # Context items (structured agent context snippets)
     @router.get("/workflows/{workflow_id}/context-items")

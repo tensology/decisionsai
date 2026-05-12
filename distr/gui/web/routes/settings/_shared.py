@@ -105,6 +105,8 @@ class ThirdPartySettings(BaseModel):
     openai_key: str = ""
     anthropic_enabled: bool = False
     anthropic_key: str = ""
+    cursor_enabled: bool = False
+    cursor_key: str = ""
     elevenlabs_enabled: bool = False
     elevenlabs_key: str = ""
     openrouter_enabled: bool = False
@@ -246,6 +248,15 @@ class InitiativeSettings(BaseModel):
     initiative_level: str = "assist"
     initiative_allow_telegram: bool = False
     initiative_allow_routine_tasks: bool = False
+    initiative_scan_boards: bool = True
+    initiative_scan_external_boards: bool = False
+    initiative_scan_email: bool = False
+    initiative_scan_whatsapp: bool = True
+    initiative_scan_telegram: bool = True
+    initiative_suggest_backlog_promotion: bool = True
+    initiative_allow_ticket_lane_moves: bool = False
+    initiative_allow_workflow_start: bool = False
+    initiative_allow_project_cli: bool = False
     initiative_ask_external_comms: bool = True
     initiative_ask_file_changes: bool = True
     initiative_ask_sensitive: bool = True
@@ -327,6 +338,7 @@ class ProjectUpdate(BaseModel):
     additional_trigger_words: Optional[str] = None
     startup_instructions: Optional[str] = None
     coding_backend: Optional[str] = None
+    coding_backend_model: Optional[str] = None
     provider: Optional[str] = None
     board_id: Optional[str] = None
     board_name: Optional[str] = None

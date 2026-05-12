@@ -17,7 +17,7 @@ The current product direction is not broad feature expansion. The focus is tight
 
 1. Project -> Ticket -> Workflow regression spine. First guardrail landed; continue expanding.
 2. Ticket creation intelligence and board targeting.
-3. Workflow audit/evidence model. Terminal packet/writeback, evidence artifacts, and first action-trace guardrails landed; validation snapshots still open.
+3. Workflow audit/evidence model. Terminal packet/writeback, evidence artifacts, action traces, and validation snapshots have guardrails; UI-visible failure semantics still open.
 4. Initiative/Telegram observability.
 5. TTS/audio provider stress and device switching.
 6. Chat/tool activity browser regression.
@@ -160,20 +160,22 @@ What is banked:
 - Terminal workflow completion now canonicalizes the stored run `result_packet`, appends workflow evidence to the ticket, updates ticket workflow status, and writes a ticket audit entry. Regression coverage proves the persisted packet, ticket note, and audit row.
 - Workflow step results now extract evidence references into the canonical run `result_packet`: screenshots/media, logs/text/json/html/md, diffs/patches, and links. Later workflow steps see recent artifact references in result-packet context instead of losing screen/log evidence in prose-only summaries.
 - Computer-use style step summaries now parse into `execution.action_trace` rows in the canonical run `result_packet`, with dedupe and context propagation. Later steps can see recent actions such as click/type/key/scroll/escalation instead of relying only on a prose transcript.
+- Step verification now writes `execution.validation_snapshots` into the canonical run `result_packet`, capturing validation type, expected criteria, observed output snippet, caller pass flag, verified pass flag, and verdict. Later steps see recent validation outcomes in result-packet context.
+- The workflow run history API now exposes a browser-safe compact `result_packet`, and the Workflows Runs tab renders summary, audit verdict, recent actions, validation snapshots, and artifacts. Added a WebKit E2E regression that seeds a completed run and verifies the evidence block appears in the web UI.
 - Tests cover planner normalization and computer-use config.
 
 Known gaps:
 
 - Run audit summaries now have terminal persistence coverage, but need broader coverage for non-happy paths.
-- Screenshot/log/link/patch evidence references and first action traces from step output are now attached to run state, but validation snapshots and UI rendering still need a structured contract.
+- Screenshot/log/link/patch evidence references, first action traces, validation snapshots, and the first Runs-tab UI rendering are now attached to run state, but broader user-facing failure semantics still need a structured contract.
 - Pause/resume/stuck/retry/failure paths need end-to-end tests.
 - Failure statuses need clearer user-facing semantics.
 
 Next actions:
 
-- Expand workflow run audit/evidence persistence from artifact/action references into validation snapshots and user-facing failure semantics.
+- Expand workflow run audit/evidence persistence into routing decisions and clearer blocked/needs-user/escalated states.
 - Add create-from-ticket, run, pause, resume, stuck, retry, validation-fail, and escalate tests.
-- Make workflow UI state changes browser-tested.
+- Broaden workflow UI browser coverage beyond the Runs-tab evidence block into failure states, refresh consistency, and active-run ordering.
 
 ## 5. Computer Use
 

@@ -108,6 +108,7 @@ class Settings(Base):
     openai_enabled = Column(Boolean, default=False)
     replicate_enabled = Column(Boolean, default=False)
     anthropic_enabled = Column(Boolean, default=False)
+    cursor_enabled = Column(Boolean, default=False)
     elevenlabs_enabled = Column(Boolean, default=False)
     ollama_enabled = Column(Boolean, default=True)  # Default to True for Ollama
     openrouter_enabled = Column(Boolean, default=False)
@@ -120,6 +121,7 @@ class Settings(Base):
     speechmatics_key = Column(String, default='')
     openai_key = Column(String, default='')
     anthropic_key = Column(String, default='')
+    cursor_key = Column(String, default='')
     ollama_url = Column(String, default='http://localhost:11434/')
     elevenlabs_key = Column(String, default='')
     openrouter_key = Column(String, default='')
@@ -186,6 +188,15 @@ class Settings(Base):
     initiative_level = Column(String, default='assist')
     initiative_allow_telegram = Column(Boolean, default=False)
     initiative_allow_routine_tasks = Column(Boolean, default=False)
+    initiative_scan_boards = Column(Boolean, default=True)
+    initiative_scan_external_boards = Column(Boolean, default=False)
+    initiative_scan_email = Column(Boolean, default=False)
+    initiative_scan_whatsapp = Column(Boolean, default=True)
+    initiative_scan_telegram = Column(Boolean, default=True)
+    initiative_suggest_backlog_promotion = Column(Boolean, default=True)
+    initiative_allow_ticket_lane_moves = Column(Boolean, default=False)
+    initiative_allow_workflow_start = Column(Boolean, default=False)
+    initiative_allow_project_cli = Column(Boolean, default=False)
     initiative_ask_external_comms = Column(Boolean, default=True)
     initiative_ask_file_changes = Column(Boolean, default=True)
     initiative_ask_sensitive = Column(Boolean, default=True)
@@ -529,15 +540,27 @@ try:
                 ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
                 ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
                 # Initiative settings
-                ("initiative_level", "VARCHAR DEFAULT 'assist'"),
-                ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
-                ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
-                ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
+        ("initiative_level", "VARCHAR DEFAULT 'assist'"),
+        ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_boards", "BOOLEAN DEFAULT 1"),
+        ("initiative_scan_external_boards", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_email", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_whatsapp", "BOOLEAN DEFAULT 1"),
+        ("initiative_scan_telegram", "BOOLEAN DEFAULT 1"),
+        ("initiative_suggest_backlog_promotion", "BOOLEAN DEFAULT 1"),
+        ("initiative_allow_ticket_lane_moves", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_workflow_start", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_project_cli", "BOOLEAN DEFAULT 0"),
+        ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
                 ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),
                 # Google Gemini provider
                 ("gemini_enabled", "BOOLEAN DEFAULT 0"),
                 ("gemini_key", "VARCHAR DEFAULT ''"),
+                # Cursor project CLI provider
+                ("cursor_enabled", "BOOLEAN DEFAULT 0"),
+                ("cursor_key", "VARCHAR DEFAULT ''"),
                 # Telegram response format settings
                 ("telegram_text_only_override", "BOOLEAN DEFAULT 0"),
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 1"),

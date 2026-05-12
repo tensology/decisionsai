@@ -159,7 +159,11 @@
         document.getElementById("detail-startup").value = project.startup_instructions || "";
         var backendSel = document.getElementById("detail-coding-backend");
         if (backendSel) backendSel.value = project.coding_backend || "pi";
+        var terminalBackendSel = document.getElementById("terminal-backend-select");
+        if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
         loadProjectCliBackends(project.id, project.coding_backend || "pi");
+        loadCodexSync(project.id);
+        loadCliModels(project.coding_backend || "pi");
         loadBoardProvidersAndSelect(project.provider || "", project.board_id || "", project.board_name || "");
         loadKanbanBoardStatus();
 
@@ -200,8 +204,11 @@
             });
         });
 
-        document.getElementById("project-use").textContent = project.in_use ? "In use" : "Use";
-        document.getElementById("project-use").disabled = !!project.in_use;
+        var useBtn = document.getElementById("project-use");
+        if (useBtn) {
+            useBtn.classList.toggle("hidden", !!project.in_use);
+            useBtn.textContent = "Use";
+        }
         renderList(projectsData);
     }
 
@@ -237,7 +244,7 @@
                         var sBtn = document.getElementById("startup-start-btn");
                         var tBtn = document.getElementById("startup-terminate-all-btn");
                         if (sBtn) sBtn.classList.remove("hidden");
-                        if (tBtn) { tBtn.classList.add("hidden"); tBtn.disabled = true; }
+                        if (tBtn) tBtn.classList.add("hidden");
                         // Page was reloaded — ask server if any sessions are still running
                         apiFetch("/api/projects/" + id + "/startup-sessions")
                             .then(function(data) {
@@ -469,6 +476,10 @@
             board_id: boardId,
             board_name: boardName
         };
+        var modelSel = document.getElementById("terminal-model-select");
+        if (modelSel && (modelSel.value || "").trim()) {
+            payload.coding_backend_model = (modelSel.value || "").trim();
+        }
         fetch("/api/projects/" + currentProjectId, {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -503,8 +514,23 @@
         return "border-white/15 bg-white/[0.03] text-gray-300";
     }
 
+    function populateBackendSelect(sel, backends, active) {
+        if (!sel) return;
+        sel.innerHTML = backends.map(function(b) {
+            return "<option value=\"" + escapeAttr(b.id) + "\">" + escapeAttr(b.name) + "</option>";
+        }).join("");
+        sel.value = active;
+    }
+
+    function activeCodingBackend() {
+        var terminalSel = document.getElementById("terminal-backend-select");
+        var detailSel = document.getElementById("detail-coding-backend");
+        return ((terminalSel && terminalSel.value) || (detailSel && detailSel.value) || "pi").trim();
+    }
+
     function loadProjectCliBackends(projectId, activeBackend) {
         var sel = document.getElementById("detail-coding-backend");
+        var terminalSel = document.getElementById("terminal-backend-select");
         var list = document.getElementById("coding-backend-status-list");
         var pill = document.getElementById("coding-backend-active-pill");
         if (!sel || !list) return;
@@ -513,10 +539,8 @@
             .then(function(data) {
                 var backends = data.backends || [];
                 var active = data.active_backend || activeBackend || "pi";
-                sel.innerHTML = backends.map(function(b) {
-                    return "<option value=\"" + escapeAttr(b.id) + "\">" + escapeAttr(b.name) + "</option>";
-                }).join("");
-                sel.value = active;
+                populateBackendSelect(sel, backends, active);
+                populateBackendSelect(terminalSel, backends, active);
                 var activeItem = backends.filter(function(b) { return b.id === active; })[0];
                 if (pill) {
                     pill.textContent = activeItem ? (activeItem.name + " / " + activeItem.state) : "Pi / default";
@@ -540,11 +564,16 @@
             });
     }
 
-    function setProjectCodingBackend() {
+    function setProjectCodingBackend(event) {
         if (!currentProjectId) return;
-        var sel = document.getElementById("detail-coding-backend");
+        var sel = event && event.currentTarget ? event.currentTarget : document.getElementById("detail-coding-backend");
         if (!sel) return;
         var backend = (sel.value || "pi").trim();
+        var detailSel = document.getElementById("detail-coding-backend");
+        var terminalSel = document.getElementById("terminal-backend-select");
+        if (detailSel) detailSel.value = backend;
+        if (terminalSel) terminalSel.value = backend;
+        loadCliModels(backend);
         apiFetch("/api/projects/" + currentProjectId + "/coding-backend", {
             method: "PUT",
             headers: { "Content-Type": "application/json" },
@@ -553,13 +582,83 @@
             if (resp && resp.success) {
                 showSnackbar("Coding backend set to " + sel.options[sel.selectedIndex].textContent, "success");
                 loadProjectCliBackends(currentProjectId, backend);
+                loadCodexSync(currentProjectId);
                 destroyTerminal();
+                var cliTabEl = document.getElementById("tab-cli");
+                if (cliTabEl && !cliTabEl.classList.contains("hidden")) initTerminal();
             } else {
                 showSnackbar("Failed to set coding backend", "error");
             }
         }).catch(function() {
             showSnackbar("Failed to set coding backend", "error");
         });
+    }
+
+    function renderCodexSync(data) {
+        var panel = document.getElementById("codex-sync-panel");
+        var statusEl = document.getElementById("codex-sync-status");
+        var btn = document.getElementById("codex-sync-btn");
+        if (!panel || !statusEl || !btn) return;
+        panel.classList.remove("hidden");
+        var backend = data.backend || {};
+        var plugin = data.plugin || {};
+        var active = data.current_backend === "codex";
+        var ready = !!data.sync_ready;
+        var folderText = data.folder_exists ? "project folder found" : "project folder missing";
+        var pluginText = plugin.available ? "plugin scaffold found" : "plugin scaffold not found";
+        var backendText = backend.ready ? "Codex CLI ready" : (backend.message || "Codex CLI needs setup");
+        statusEl.textContent = backendText + " · " + folderText + " · " + pluginText;
+        statusEl.className = "text-xs mt-1 " + (ready ? "text-green-300" : "text-amber-200");
+        btn.textContent = "Use Codex";
+        btn.disabled = false;
+        btn.className = active
+            ? "hidden"
+            : "px-3 py-1.5 text-sm rounded border border-white/20 text-gray-200 hover:bg-white/10";
+        btn.title = data.message || "";
+    }
+
+    function loadCodexSync(projectId) {
+        var panel = document.getElementById("codex-sync-panel");
+        var statusEl = document.getElementById("codex-sync-status");
+        if (panel) panel.classList.remove("hidden");
+        if (statusEl) statusEl.textContent = "Checking Codex project state...";
+        if (!projectId) return;
+        apiFetch("/api/projects/" + projectId + "/codex-sync")
+            .then(renderCodexSync)
+            .catch(function() {
+                if (statusEl) {
+                    statusEl.textContent = "Could not check Codex integration.";
+                    statusEl.className = "text-xs text-amber-200 mt-1";
+                }
+            });
+    }
+
+    function syncProjectToCodex() {
+        if (!currentProjectId) return;
+        var btn = document.getElementById("codex-sync-btn");
+        if (btn) {
+            btn.disabled = true;
+            btn.textContent = "Syncing...";
+        }
+        apiFetch("/api/projects/" + currentProjectId + "/codex-sync", { method: "POST" })
+            .then(function(resp) {
+                if (resp && resp.success) {
+                    showSnackbar("Project set to Codex CLI", "success");
+                    loadCliModels("codex");
+                    loadProjectCliBackends(currentProjectId, "codex");
+                    loadCodexSync(currentProjectId);
+                    destroyTerminal();
+                    var cliTabEl = document.getElementById("tab-cli");
+                    if (cliTabEl && !cliTabEl.classList.contains("hidden")) initTerminal();
+                } else {
+                    showSnackbar("Could not sync project to Codex", "error");
+                    loadCodexSync(currentProjectId);
+                }
+            })
+            .catch(function() {
+                showSnackbar("Could not sync project to Codex", "error");
+                loadCodexSync(currentProjectId);
+            });
     }
 
     function useProject() {
@@ -911,6 +1010,10 @@
 
         var codingBackend = document.getElementById("detail-coding-backend");
         if (codingBackend) codingBackend.addEventListener("change", setProjectCodingBackend);
+        var terminalCodingBackend = document.getElementById("terminal-backend-select");
+        if (terminalCodingBackend) terminalCodingBackend.addEventListener("change", setProjectCodingBackend);
+        var codexSyncBtn = document.getElementById("codex-sync-btn");
+        if (codexSyncBtn) codexSyncBtn.addEventListener("click", syncProjectToCodex);
 
         document.getElementById("project-update").addEventListener("click", saveProject);
         document.getElementById("project-use").addEventListener("click", useProject);
@@ -1819,19 +1922,28 @@
 
     // ?? CLI Model Dropdown ???????????????????????????????????????????
 
-    function loadCliModels() {
+    var _cliModelsRequestId = 0;
+
+    function loadCliModels(backend) {
         var sel = document.getElementById("terminal-model-select");
         if (!sel) return;
+        backend = (backend || activeCodingBackend() || "pi").trim();
+        var params = new URLSearchParams({ backend_id: backend });
+        if (currentProjectId) params.set("project_id", String(currentProjectId));
+        var requestId = ++_cliModelsRequestId;
+        sel.innerHTML = '<option value="">Loading models...</option>';
 
-        apiFetch("/api/projects/cli-models")
+        apiFetch("/api/projects/cli-models?" + params.toString())
             .then(function(data) {
+                if (requestId !== _cliModelsRequestId) return;
                 sel.innerHTML = "";
                 var models = data.models || [];
                 var current = data.current_model || "";
                 var currentProvider = data.current_provider || "";
                 if (!models.length) {
                     var opt = document.createElement("option");
-                    opt.value = ""; opt.textContent = current || "(no models)";
+                    opt.value = "";
+                    opt.textContent = data.message || current || "No models reported by this CLI";
                     sel.appendChild(opt);
                     return;
                 }
@@ -1863,10 +1975,11 @@
                 }
             })
             .catch(function() {
+                if (requestId !== _cliModelsRequestId) return;
                 sel.innerHTML = '<option value="">Failed to load</option>';
             });
 
-        sel.addEventListener("change", function() {
+        sel.onchange = function() {
             var opt = sel.options[sel.selectedIndex];
             var model = sel.value;
             var provider = opt ? (opt.dataset.provider || "") : "";
@@ -1874,14 +1987,19 @@
             apiFetch("/api/projects/cli-model", {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ model: model, provider: provider })
+                body: JSON.stringify({
+                    project_id: currentProjectId,
+                    backend_id: activeCodingBackend(),
+                    model: model,
+                    provider: provider
+                })
             }).then(function(resp) {
                 if (resp.success) showSnackbar("Model set to " + model, "success");
                 else showSnackbar("Failed to set model", "error");
             }).catch(function() {
                 showSnackbar("Failed to set model", "error");
             });
-        });
+        };
     }
 
     function sendTerminalPrompt(instruction) {
@@ -1921,10 +2039,7 @@
         if (!currentProjectId) return;
         var btn = document.getElementById("terminal-overview");
         var originalText = btn ? btn.innerHTML : "";
-        if (btn) {
-            btn.disabled = true;
-            btn.innerHTML = "\u23F3 Analyzing...";
-        }
+        if (btn) btn.classList.add("hidden");
         // Show loading overlay
         var overlay = document.getElementById("terminal-overview-overlay");
         var overviewText = document.getElementById("terminal-overview-text");
@@ -1947,7 +2062,7 @@
             })
             .finally(function() {
                 if (btn) {
-                    btn.disabled = false;
+                    btn.classList.remove("hidden");
                     btn.innerHTML = originalText;
                 }
             });
@@ -2344,10 +2459,7 @@
         var startBtn = document.getElementById("startup-start-btn");
         var termBtn = document.getElementById("startup-terminate-all-btn");
         if (startBtn) startBtn.classList.add("hidden");
-        if (termBtn) {
-            termBtn.classList.remove("hidden");
-            termBtn.disabled = false;
-        }
+        if (termBtn) termBtn.classList.remove("hidden");
         if (grid) {
             grid.classList.remove("hidden");
             grid.innerHTML = "";
@@ -2576,7 +2688,7 @@
         var startBtn = document.getElementById("startup-start-btn");
         var termBtn = document.getElementById("startup-terminate-all-btn");
         if (startBtn) startBtn.classList.remove("hidden");
-        if (termBtn) { termBtn.classList.add("hidden"); termBtn.disabled = true; }
+        if (termBtn) termBtn.classList.add("hidden");
     }
 
     // Reconnect terminals for a project that was previously running.
@@ -2591,7 +2703,7 @@
         var startBtn = document.getElementById("startup-start-btn");
         var termBtn = document.getElementById("startup-terminate-all-btn");
         if (startBtn) startBtn.classList.add("hidden");
-        if (termBtn) { termBtn.classList.remove("hidden"); termBtn.disabled = false; }
+        if (termBtn) termBtn.classList.remove("hidden");
         if (grid) { grid.classList.remove("hidden"); grid.innerHTML = ""; }
 
         saved.forEach(function(entry) {
@@ -2821,10 +2933,7 @@
         var startBtn = document.getElementById("startup-start-btn");
         var termBtn = document.getElementById("startup-terminate-all-btn");
         if (startBtn) startBtn.classList.remove("hidden");
-        if (termBtn) {
-            termBtn.classList.add("hidden");
-            termBtn.disabled = true;
-        }
+        if (termBtn) termBtn.classList.add("hidden");
     }
 
     function terminateAllStartupTerminals() {

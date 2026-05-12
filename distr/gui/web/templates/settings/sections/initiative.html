@@ -53,6 +53,30 @@
 
         <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
             <div>
+                <div class="text-sm text-white">Allow approved lane moves</div>
+                <div class="text-xs text-gray-500">Let Initiative move selected tickets between local board lanes after policy or user approval.</div>
+            </div>
+            <input type="checkbox" id="initiative_allow_ticket_lane_moves" class="accent-[#f97316] w-5 h-5">
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Allow approved workflow starts</div>
+                <div class="text-xs text-gray-500">Let Initiative start linked ticket workflows when routine execution is enabled.</div>
+            </div>
+            <input type="checkbox" id="initiative_allow_workflow_start" class="accent-[#f97316] w-5 h-5">
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Allow approved project CLI tasks</div>
+                <div class="text-xs text-gray-500">Let Initiative send selected tickets to the project’s configured coding CLI.</div>
+            </div>
+            <input type="checkbox" id="initiative_allow_project_cli" class="accent-[#f97316] w-5 h-5">
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
                 <div class="text-sm text-white">Ask before external communication</div>
                 <div class="text-xs text-gray-500">Confirm before sending emails, messages, or making API calls to external services.</div>
             </div>
@@ -73,6 +97,61 @@
                 <div class="text-xs text-gray-500">Always confirm before actions involving money, customers, or publishing.</div>
             </div>
             <input type="checkbox" id="initiative_ask_sensitive" class="accent-[#f97316] w-5 h-5" checked>
+        </label>
+    </div>
+</div>
+
+<!-- Work Sources -->
+<div class="mb-6">
+    <h3 class="text-sm font-medium text-gray-300 mb-3">Work Sources &amp; Execution Scope</h3>
+    <p class="text-xs text-gray-500 mb-4">Choose what Initiative may inspect when deciding whether to surface work, propose board changes, or start an approved execution path.</p>
+    <div class="space-y-3">
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Scan local ticket boards</div>
+                <div class="text-xs text-gray-500">Look for backlog, current-lane, workflow, and project CLI opportunities.</div>
+            </div>
+            <input type="checkbox" id="initiative_scan_boards" class="accent-[#f97316] w-5 h-5" checked>
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Suggest backlog promotion</div>
+                <div class="text-xs text-gray-500">Flag backlog items that look ready to move into the current lane.</div>
+            </div>
+            <input type="checkbox" id="initiative_suggest_backlog_promotion" class="accent-[#f97316] w-5 h-5" checked>
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Scan WhatsApp work messages</div>
+                <div class="text-xs text-gray-500">Surface recent unprocessed WhatsApp messages that look work-related.</div>
+            </div>
+            <input type="checkbox" id="initiative_scan_whatsapp" class="accent-[#f97316] w-5 h-5" checked>
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Scan Telegram group messages</div>
+                <div class="text-xs text-gray-500">Surface stored Telegram group/channel messages that look work-related.</div>
+            </div>
+            <input type="checkbox" id="initiative_scan_telegram" class="accent-[#f97316] w-5 h-5" checked>
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Scan external boards</div>
+                <div class="text-xs text-gray-500">Reserve scope for Jira/Trello board inspection when detailed external scanning is enabled.</div>
+            </div>
+            <input type="checkbox" id="initiative_scan_external_boards" class="accent-[#f97316] w-5 h-5">
+        </label>
+
+        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
+            <div>
+                <div class="text-sm text-white">Scan email work items</div>
+                <div class="text-xs text-gray-500">Reserve scope for connected email triage once mailbox sync is wired into Initiative.</div>
+            </div>
+            <input type="checkbox" id="initiative_scan_email" class="accent-[#f97316] w-5 h-5">
         </label>
     </div>
 </div>

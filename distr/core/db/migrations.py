@@ -444,6 +444,32 @@ def run_migrations():
                 logger.info("Added gemini_key column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add gemini_key column: {e}")
+
+    # Handle database migration for cursor_enabled column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT cursor_enabled FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN cursor_enabled BOOLEAN DEFAULT 0"))
+                conn.commit()
+                logger.info("Added cursor_enabled column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add cursor_enabled column: {e}")
+
+    # Handle database migration for cursor_key column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT cursor_key FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN cursor_key VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added cursor_key column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add cursor_key column: {e}")
     
     # Handle database migration for model_name column in chats table
     try:
@@ -1009,6 +1035,19 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add coding_backend column: {e}")
 
+    # Handle database migration for per-project CLI model selection
+    try:
+        with Session() as session:
+            session.execute(text("SELECT coding_backend_model FROM projects LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN coding_backend_model VARCHAR DEFAULT ''"))
+                conn.commit()
+                logger.info("Added coding_backend_model column to projects table")
+            except Exception as e:
+                logger.warning(f"Could not add coding_backend_model column: {e}")
+
     # Ensure board tables exist
     try:
         from .projects import BoardColumn, BoardTicket  # Imported here to avoid circular imports
@@ -1483,6 +1522,15 @@ def run_migrations():
         ("initiative_level", "VARCHAR DEFAULT 'assist'"),
         ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
         ("initiative_allow_routine_tasks", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_boards", "BOOLEAN DEFAULT 1"),
+        ("initiative_scan_external_boards", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_email", "BOOLEAN DEFAULT 0"),
+        ("initiative_scan_whatsapp", "BOOLEAN DEFAULT 1"),
+        ("initiative_scan_telegram", "BOOLEAN DEFAULT 1"),
+        ("initiative_suggest_backlog_promotion", "BOOLEAN DEFAULT 1"),
+        ("initiative_allow_ticket_lane_moves", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_workflow_start", "BOOLEAN DEFAULT 0"),
+        ("initiative_allow_project_cli", "BOOLEAN DEFAULT 0"),
         ("initiative_ask_external_comms", "BOOLEAN DEFAULT 1"),
         ("initiative_ask_file_changes", "BOOLEAN DEFAULT 1"),
         ("initiative_ask_sensitive", "BOOLEAN DEFAULT 1"),

@@ -120,6 +120,30 @@ def _evaluate_operate(action, boundaries: dict) -> PolicyDecision:
     if action_type == "suggestion":
         return PolicyDecision.EXECUTE
 
+    if action_type in ("board_triage", "message_triage", "email_triage"):
+        return PolicyDecision.EXECUTE
+
+    if action_type == "ticket_lane_move":
+        if boundaries.get("initiative_allow_ticket_lane_moves", False):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
+    if action_type == "workflow_start":
+        if (
+            boundaries.get("initiative_allow_routine_tasks", False)
+            and boundaries.get("initiative_allow_workflow_start", False)
+        ):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
+    if action_type == "project_cli_task":
+        if (
+            boundaries.get("initiative_allow_routine_tasks", False)
+            and boundaries.get("initiative_allow_project_cli", False)
+        ):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
     if action_type == "external_comms":
         if boundaries.get("initiative_ask_external_comms", False):
             return PolicyDecision.DRAFT_AND_ASK
@@ -151,6 +175,30 @@ def _evaluate_own(action, boundaries: dict) -> PolicyDecision:
 
     if action_type == "suggestion":
         return PolicyDecision.EXECUTE
+
+    if action_type in ("board_triage", "message_triage", "email_triage"):
+        return PolicyDecision.EXECUTE
+
+    if action_type == "ticket_lane_move":
+        if boundaries.get("initiative_allow_ticket_lane_moves", False):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
+    if action_type == "workflow_start":
+        if (
+            boundaries.get("initiative_allow_routine_tasks", False)
+            and boundaries.get("initiative_allow_workflow_start", False)
+        ):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
+
+    if action_type == "project_cli_task":
+        if (
+            boundaries.get("initiative_allow_routine_tasks", False)
+            and boundaries.get("initiative_allow_project_cli", False)
+        ):
+            return PolicyDecision.EXECUTE
+        return PolicyDecision.DRAFT_AND_ASK
 
     if action_type == "external_comms":
         if boundaries.get("initiative_ask_external_comms", False):
@@ -190,7 +238,14 @@ def evaluate(action, level: str, boundaries: dict, policy_context: dict | None =
     if policy["confidence"] < policy["minimum_confidence_to_execute"]:
         return PolicyDecision.SUGGEST_ONLY
     if (
-        action_type in ("external_comms", "file_change", "sensitive")
+        action_type in (
+            "external_comms",
+            "file_change",
+            "sensitive",
+            "ticket_lane_move",
+            "workflow_start",
+            "project_cli_task",
+        )
         and _risk_at_least(policy["risk_level"], policy["minimum_risk_to_require_ask"])
     ):
         return PolicyDecision.DRAFT_AND_ASK

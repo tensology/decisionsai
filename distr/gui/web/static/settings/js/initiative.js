@@ -7,6 +7,15 @@
         level: 'initiative_level',
         allowTelegram: 'initiative_allow_telegram',
         allowRoutineTasks: 'initiative_allow_routine_tasks',
+        scanBoards: 'initiative_scan_boards',
+        scanExternalBoards: 'initiative_scan_external_boards',
+        scanEmail: 'initiative_scan_email',
+        scanWhatsapp: 'initiative_scan_whatsapp',
+        scanTelegram: 'initiative_scan_telegram',
+        suggestBacklogPromotion: 'initiative_suggest_backlog_promotion',
+        allowTicketLaneMoves: 'initiative_allow_ticket_lane_moves',
+        allowWorkflowStart: 'initiative_allow_workflow_start',
+        allowProjectCli: 'initiative_allow_project_cli',
         askExternalComms: 'initiative_ask_external_comms',
         askFileChanges: 'initiative_ask_file_changes',
         askSensitive: 'initiative_ask_sensitive',
@@ -113,6 +122,15 @@
             setLevel(data.initiative_level || 'assist');
             document.getElementById(FIELDS.allowTelegram).checked = !!data.initiative_allow_telegram;
             document.getElementById(FIELDS.allowRoutineTasks).checked = !!data.initiative_allow_routine_tasks;
+            document.getElementById(FIELDS.scanBoards).checked = data.initiative_scan_boards !== false;
+            document.getElementById(FIELDS.scanExternalBoards).checked = !!data.initiative_scan_external_boards;
+            document.getElementById(FIELDS.scanEmail).checked = !!data.initiative_scan_email;
+            document.getElementById(FIELDS.scanWhatsapp).checked = data.initiative_scan_whatsapp !== false;
+            document.getElementById(FIELDS.scanTelegram).checked = data.initiative_scan_telegram !== false;
+            document.getElementById(FIELDS.suggestBacklogPromotion).checked = data.initiative_suggest_backlog_promotion !== false;
+            document.getElementById(FIELDS.allowTicketLaneMoves).checked = !!data.initiative_allow_ticket_lane_moves;
+            document.getElementById(FIELDS.allowWorkflowStart).checked = !!data.initiative_allow_workflow_start;
+            document.getElementById(FIELDS.allowProjectCli).checked = !!data.initiative_allow_project_cli;
             document.getElementById(FIELDS.askExternalComms).checked = data.initiative_ask_external_comms !== false;
             document.getElementById(FIELDS.askFileChanges).checked = data.initiative_ask_file_changes !== false;
             document.getElementById(FIELDS.askSensitive).checked = data.initiative_ask_sensitive !== false;
@@ -126,6 +144,15 @@
             initiative_level: document.getElementById(FIELDS.level).value,
             initiative_allow_telegram: document.getElementById(FIELDS.allowTelegram).checked,
             initiative_allow_routine_tasks: document.getElementById(FIELDS.allowRoutineTasks).checked,
+            initiative_scan_boards: document.getElementById(FIELDS.scanBoards).checked,
+            initiative_scan_external_boards: document.getElementById(FIELDS.scanExternalBoards).checked,
+            initiative_scan_email: document.getElementById(FIELDS.scanEmail).checked,
+            initiative_scan_whatsapp: document.getElementById(FIELDS.scanWhatsapp).checked,
+            initiative_scan_telegram: document.getElementById(FIELDS.scanTelegram).checked,
+            initiative_suggest_backlog_promotion: document.getElementById(FIELDS.suggestBacklogPromotion).checked,
+            initiative_allow_ticket_lane_moves: document.getElementById(FIELDS.allowTicketLaneMoves).checked,
+            initiative_allow_workflow_start: document.getElementById(FIELDS.allowWorkflowStart).checked,
+            initiative_allow_project_cli: document.getElementById(FIELDS.allowProjectCli).checked,
             initiative_ask_external_comms: document.getElementById(FIELDS.askExternalComms).checked,
             initiative_ask_file_changes: document.getElementById(FIELDS.askFileChanges).checked,
             initiative_ask_sensitive: document.getElementById(FIELDS.askSensitive).checked,

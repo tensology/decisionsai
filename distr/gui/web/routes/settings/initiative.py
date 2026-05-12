@@ -11,6 +11,15 @@ INITIATIVE_FIELDS = [
     "initiative_level",
     "initiative_allow_telegram",
     "initiative_allow_routine_tasks",
+    "initiative_scan_boards",
+    "initiative_scan_external_boards",
+    "initiative_scan_email",
+    "initiative_scan_whatsapp",
+    "initiative_scan_telegram",
+    "initiative_suggest_backlog_promotion",
+    "initiative_allow_ticket_lane_moves",
+    "initiative_allow_workflow_start",
+    "initiative_allow_project_cli",
     "initiative_ask_external_comms",
     "initiative_ask_file_changes",
     "initiative_ask_sensitive",
@@ -20,6 +29,15 @@ DEFAULTS = {
     "initiative_level": "assist",
     "initiative_allow_telegram": False,
     "initiative_allow_routine_tasks": False,
+    "initiative_scan_boards": True,
+    "initiative_scan_external_boards": False,
+    "initiative_scan_email": False,
+    "initiative_scan_whatsapp": True,
+    "initiative_scan_telegram": True,
+    "initiative_suggest_backlog_promotion": True,
+    "initiative_allow_ticket_lane_moves": False,
+    "initiative_allow_workflow_start": False,
+    "initiative_allow_project_cli": False,
     "initiative_ask_external_comms": True,
     "initiative_ask_file_changes": True,
     "initiative_ask_sensitive": True,
@@ -30,6 +48,15 @@ class _InitiativePayload(BaseModel):
     initiative_level: str = "assist"
     initiative_allow_telegram: bool = False
     initiative_allow_routine_tasks: bool = False
+    initiative_scan_boards: bool = True
+    initiative_scan_external_boards: bool = False
+    initiative_scan_email: bool = False
+    initiative_scan_whatsapp: bool = True
+    initiative_scan_telegram: bool = True
+    initiative_suggest_backlog_promotion: bool = True
+    initiative_allow_ticket_lane_moves: bool = False
+    initiative_allow_workflow_start: bool = False
+    initiative_allow_project_cli: bool = False
     initiative_ask_external_comms: bool = True
     initiative_ask_file_changes: bool = True
     initiative_ask_sensitive: bool = True

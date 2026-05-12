@@ -4,19 +4,166 @@ Projects routes — /projects/*, /browse-folder
 from fastapi import HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import JSONResponse
 from typing import Optional
+from pathlib import Path
 import json
 import os
+import shutil
 import subprocess
 import sys
 import re
+import urllib.error
+import urllib.request
 
 from ._shared import logger, ProjectUpdate, ContextItemCreate, ContextItemUpdate, PROJECT_UPLOADS_DIR
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[5]
 
 
 def _backend_id_for_project(project) -> str:
     from distr.core.project_cli_backends import get_project_backend_id
 
     return get_project_backend_id(project)
+
+
+def _codex_plugin_candidates() -> list[Path]:
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    agents_home = Path(os.environ.get("AGENTS_HOME") or (Path.home() / ".agents"))
+    return [
+        _repo_root() / "codex_plugin" / "decisions-codex",
+        Path.home() / "plugins" / "decisions-codex",
+        codex_home / "plugins" / "decisions-codex",
+        agents_home / "plugins" / "decisions-codex",
+    ]
+
+
+def _codex_plugin_state() -> dict:
+    candidates = _codex_plugin_candidates()
+    found = next((p for p in candidates if (p / ".codex-plugin" / "plugin.json").exists()), None)
+    return {
+        "available": bool(found),
+        "path": str(found or candidates[0]),
+        "candidates": [str(p) for p in candidates],
+        "manifest_exists": bool(found),
+    }
+
+
+def _install_local_codex_plugin() -> dict:
+    """Install/register the repo-local DecisionsAI Codex plugin for local Codex."""
+    from distr.core.project_cli_backends import get_backend
+
+    status = get_backend("codex").setup_status().to_dict()
+    if not status.get("ready"):
+        return {
+            "installed": False,
+            "skipped": True,
+            "reason": status.get("message") or "Codex CLI is not available on PATH.",
+            "backend": status,
+            "plugin": _codex_plugin_state(),
+        }
+
+    source = _repo_root() / "codex_plugin" / "decisions-codex"
+    manifest = source / ".codex-plugin" / "plugin.json"
+    if not manifest.exists():
+        return {
+            "installed": False,
+            "skipped": True,
+            "reason": "DecisionsAI Codex plugin source was not found in this checkout.",
+            "backend": status,
+            "plugin": _codex_plugin_state(),
+        }
+
+    target = Path.home() / "plugins" / "decisions-codex"
+    marketplace = Path.home() / ".agents" / "plugins" / "marketplace.json"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    marketplace.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists():
+        shutil.rmtree(target)
+    shutil.copytree(
+        source,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"),
+    )
+
+    if marketplace.exists():
+        try:
+            payload = json.loads(marketplace.read_text(encoding="utf-8"))
+        except Exception:
+            payload = {}
+    else:
+        payload = {}
+    if not isinstance(payload, dict):
+        payload = {}
+    payload.setdefault("name", "local-codex-plugins")
+    payload.setdefault("interface", {"displayName": "Local Codex Plugins"})
+    plugins = payload.get("plugins")
+    if not isinstance(plugins, list):
+        plugins = []
+    plugins = [
+        item for item in plugins
+        if not (isinstance(item, dict) and item.get("name") == "decisions-codex")
+    ]
+    plugins.append({
+        "name": "decisions-codex",
+        "source": {"type": "local", "path": "./plugins/decisions-codex"},
+        "policy": {"installation": "AVAILABLE", "authentication": "NONE"},
+        "category": "Developer Tools",
+    })
+    payload["plugins"] = plugins
+    marketplace.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+    return {
+        "installed": True,
+        "skipped": False,
+        "path": str(target),
+        "marketplace": str(marketplace),
+        "backend": status,
+        "plugin": _codex_plugin_state(),
+    }
+
+
+def _codex_project_sync_payload(project) -> dict:
+    from distr.core.project_cli_backends import get_backend
+
+    folder = (project.folder_location or "").strip()
+    folder_exists = bool(folder and Path(folder).expanduser().exists())
+    plugin = _codex_plugin_state()
+    try:
+        backend_status = get_backend("codex").setup_status().to_dict()
+    except Exception as exc:
+        backend_status = {
+            "id": "codex",
+            "name": "Codex CLI",
+            "ready": False,
+            "state": "unavailable",
+            "message": str(exc),
+            "setup_required": True,
+            "setup_instructions": "Install and authenticate Codex CLI, then make sure the codex command is on PATH.",
+        }
+
+    backend_ready = bool(backend_status.get("ready"))
+    correlated = folder_exists and (backend_ready or plugin.get("available"))
+    return {
+        "project_id": project.id,
+        "project_name": project.name or "",
+        "project_folder": folder,
+        "folder_exists": folder_exists,
+        "current_backend": _backend_id_for_project(project),
+        "recommended_backend": "codex",
+        "correlated": correlated,
+        "sync_ready": folder_exists and backend_ready,
+        "plugin": plugin,
+        "backend": backend_status,
+        "message": (
+            "Codex CLI is ready for this project."
+            if folder_exists and backend_ready
+            else "Project folder is missing."
+            if not folder_exists
+            else backend_status.get("message") or "Codex CLI needs setup."
+        ),
+    }
+
 
 
 def _resolve_terminal_overview_llm(settings: dict) -> tuple:
@@ -169,8 +316,7 @@ def register_routes(router, templates):
             logger.error(f"Failed to get boards: {e}", exc_info=True)
             return JSONResponse({"boards": []})
 
-    @router.get("/projects/cli-models")
-    async def get_cli_models():
+    def _pi_cli_models():
         """Return available models for the CLI dropdown.
         Reads custom models from ~/.pi/agent/models.json and built-in providers
         configured in settings."""
@@ -215,7 +361,164 @@ def register_routes(router, templates):
                 unique_models.append(m)
         models = unique_models
 
-        # Get current model from settings
+        return models
+
+    def _model_entry(model_id: str, provider: str, name: str | None = None) -> dict:
+        model_id = (model_id or "").strip()
+        return {"id": model_id, "name": (name or model_id).strip() or model_id, "provider": provider}
+
+    def _dedupe_model_entries(models: list[dict]) -> list[dict]:
+        seen = set()
+        out = []
+        for item in models:
+            mid = (item.get("id") or "").strip()
+            if not mid or mid in seen:
+                continue
+            seen.add(mid)
+            out.append(item)
+        return out
+
+    def _cursor_api_models(settings: dict) -> tuple[list[dict], str, str]:
+        enabled = bool(settings.get("cursor_enabled"))
+        api_key = (settings.get("cursor_key") or "").strip()
+        if not enabled:
+            return [], "disabled", "Enable Cursor in Third Party API Keys to load Cursor CLI models."
+        if not api_key:
+            return [], "no_key", "Add a Cursor API key in Third Party API Keys to load Cursor CLI models."
+        req = urllib.request.Request(
+            "https://api.cursor.com/v0/models",
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "accept": "application/json",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return [], "error", f"Cursor models API returned HTTP {exc.code}."
+        except Exception as exc:
+            return [], "error", f"Could not fetch Cursor models API: {exc}"
+        return [_model_entry(mid, "cursor") for mid in payload.get("models") or []], "cursor-api", ""
+
+    def _anthropic_models(settings: dict) -> tuple[list[dict], str, str]:
+        api_key = (os.environ.get("ANTHROPIC_API_KEY") or settings.get("anthropic_key") or "").strip()
+        aliases = [
+            _model_entry("default", "claude_code", "Default"),
+            _model_entry("sonnet", "claude_code", "Sonnet"),
+            _model_entry("opus", "claude_code", "Opus"),
+            _model_entry("haiku", "claude_code", "Haiku"),
+            _model_entry("sonnet[1m]", "claude_code", "Sonnet 1M"),
+            _model_entry("opusplan", "claude_code", "Opus plan"),
+        ]
+        if not api_key:
+            return aliases, "claude-code-aliases", "No Anthropic API key configured; showing Claude Code aliases only."
+        req = urllib.request.Request(
+            "https://api.anthropic.com/v1/models",
+            headers={
+                "x-api-key": api_key,
+                "anthropic-version": "2023-06-01",
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=12) as resp:
+                payload = json.loads(resp.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            return aliases, "claude-code-aliases", f"Anthropic models API returned HTTP {exc.code}; showing aliases."
+        except Exception as exc:
+            return aliases, "claude-code-aliases", f"Could not fetch Anthropic models: {exc}; showing aliases."
+        models = [
+            _model_entry(item.get("id") or "", "anthropic", item.get("display_name"))
+            for item in payload.get("data") or []
+            if item.get("id")
+        ]
+        return _dedupe_model_entries(aliases + models), "anthropic-api", ""
+
+    def _codex_models(settings: dict) -> tuple[list[dict], str, str]:
+        try:
+            import subprocess
+
+            result = subprocess.run(
+                ["codex", "models"],
+                capture_output=True,
+                text=True,
+                timeout=8,
+            )
+            if result.returncode == 0:
+                text = (result.stdout or "").strip()
+                models = []
+                for line in text.splitlines():
+                    mid = line.strip().split()[0] if line.strip() else ""
+                    if mid and not mid.lower().startswith(("-", "usage", "error")):
+                        models.append(_model_entry(mid, "codex"))
+                if models:
+                    return _dedupe_model_entries(models), "codex-cli", ""
+        except Exception:
+            pass
+
+        api_key = (
+            os.environ.get("OPENAI_API_KEY")
+            or settings.get("openai_key")
+            or settings.get("openai_api_key")
+            or ""
+        ).strip()
+        fallback = [
+            _model_entry("auto", "codex", "Auto"),
+            _model_entry("gpt-5.3-codex", "openai"),
+            _model_entry("gpt-5.3-codex-spark", "openai"),
+            _model_entry("gpt-5.2-codex", "openai"),
+        ]
+        if not api_key:
+            return fallback, "codex-defaults", "Codex CLI did not report models; showing safe defaults."
+        return fallback, "codex-defaults", "Codex CLI did not report models; showing OpenAI Codex defaults."
+
+    def _models_for_cli_backend(backend_id: str, settings: dict | None = None):
+        from distr.core.project_cli_backends import normalize_backend_id
+
+        backend_id = normalize_backend_id(backend_id)
+        settings = settings or {}
+        if backend_id == "cursor":
+            models, source, message = _cursor_api_models(settings)
+            return {"models": models, "source": source, "message": message}
+        if backend_id == "claude_code":
+            models, source, message = _anthropic_models(settings)
+            return {"models": models, "source": source, "message": message}
+        if backend_id == "codex":
+            models, source, message = _codex_models(settings)
+            return {"models": models, "source": source, "message": message}
+        return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
+
+    def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
+        if project_id:
+            try:
+                from distr.core.db import get_session
+                from distr.core.db.projects import Project
+
+                with get_session() as session:
+                    project = session.query(Project).filter(Project.id == project_id).first()
+                    if project and (project.coding_backend_model or "").strip():
+                        return (project.coding_backend_model or "").strip()
+            except Exception:
+                pass
+        return fallback_model
+
+    @router.get("/projects/cli-models")
+    async def get_cli_models(request: Request):
+        """Return available models for the selected project CLI backend."""
+        from distr.core.project_cli_backends import normalize_backend_id
+
+        backend_id = normalize_backend_id(request.query_params.get("backend_id"))
+        try:
+            project_id = int(request.query_params.get("project_id") or "0") or None
+        except Exception:
+            project_id = None
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        model_result = _models_for_cli_backend(backend_id, settings)
+        models = model_result.get("models") or []
+
+        # Get current Pi model from settings as the legacy/global fallback.
         try:
             from distr.core.db import get_session as db_session
             with db_session() as session:
@@ -226,9 +529,18 @@ def register_routes(router, templates):
         except Exception:
             current_provider = "ollama"
             current_model = ""
+        if backend_id != "pi":
+            current_provider = backend_id
+        current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
+        if not current_model:
+            current_model = "auto" if backend_id in ("cursor", "codex") else ("default" if backend_id == "claude_code" else "")
+            current_provider = backend_id
 
         return JSONResponse({
+            "backend_id": backend_id,
             "models": models,
+            "source": model_result.get("source") or "",
+            "message": model_result.get("message") or "",
             "current_provider": current_provider,
             "current_model": current_model,
         })
@@ -237,8 +549,12 @@ def register_routes(router, templates):
     async def set_cli_model(request: Request):
         """Set the CLI model and restart active pi RPC sessions with the new model."""
         body = await request.json()
+        from distr.core.project_cli_backends import normalize_backend_id
+
         model = (body.get("model") or "").strip()
         provider = (body.get("provider") or "").strip()
+        backend_id = normalize_backend_id(body.get("backend_id"))
+        project_id = body.get("project_id")
         if not model:
             return JSONResponse({"success": False, "error": "model required"}, status_code=400)
 
@@ -246,15 +562,23 @@ def register_routes(router, templates):
             from distr.core.db import get_session as db_session
             with db_session() as session:
                 from sqlalchemy import text
-                session.execute(text("UPDATE settings SET coding_llm_model = :m, coding_llm_provider = :p"), {"m": model, "p": provider or "ollama"})
+                if project_id:
+                    from distr.core.db.projects import Project
+                    project = session.query(Project).filter(Project.id == int(project_id)).first()
+                    if project:
+                        project.coding_backend_model = model
+                if backend_id == "pi":
+                    session.execute(text("UPDATE settings SET coding_llm_model = :m, coding_llm_provider = :p"), {"m": model, "p": provider or "ollama"})
                 session.commit()
-            logger.info(f"CLI model set to: {provider}/{model}")
+            logger.info(f"CLI model set to: {backend_id}/{provider}/{model}")
             
             # Mark active RPC sessions as stale so they restart on next prompt
             # (don't kill all sessions — they'll lazily restart with new model)
-            try:
+            if backend_id == "pi":
                 from distr.core.pi_rpc import _rpc_sessions
                 for pid, rpc in list(_rpc_sessions.items()):
+                    if project_id and int(pid) != int(project_id):
+                        continue
                     rpc._provider = provider or "ollama"
                     rpc._model = model
                     # If there's a running pi, kill it so next prompt spawns with new model
@@ -264,10 +588,8 @@ def register_routes(router, templates):
                             rpc._process.terminate()
                         except Exception:
                             pass
-            except Exception as e:
-                logger.debug(f"Could not update RPC sessions after model change: {e}")
             
-            return JSONResponse({"success": True, "model": model, "provider": provider})
+            return JSONResponse({"success": True, "model": model, "provider": provider, "backend_id": backend_id})
         except Exception as e:
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
@@ -296,14 +618,28 @@ def register_routes(router, templates):
         """Run or describe setup for a project coding CLI backend."""
         from distr.core.db import get_session
         from distr.core.db.projects import Project
-        from distr.core.project_cli_backends import get_backend
+        from distr.core.project_cli_backends import get_backend, normalize_backend_id
 
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
 
-        backend = get_backend(backend_id)
+        normalized_backend_id = normalize_backend_id(backend_id)
+        if normalized_backend_id == "codex":
+            install = _install_local_codex_plugin()
+            payload = install.get("backend") or get_backend("codex").setup_status().to_dict()
+            payload.update({
+                "plugin_install": install,
+                "message": (
+                    "Codex CLI is available and the DecisionsAI Codex plugin was installed."
+                    if install.get("installed")
+                    else install.get("reason") or payload.get("message") or "Codex setup checked."
+                ),
+            })
+            return JSONResponse(payload)
+
+        backend = get_backend(normalized_backend_id)
         status = await backend.install_or_setup()
         return JSONResponse(status.to_dict())
 
@@ -316,13 +652,51 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend_statuses, normalize_backend_id
 
         backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
+        plugin_install = _install_local_codex_plugin()
+
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
             if not project:
                 raise HTTPException(status_code=404, detail="Project not found")
             project.coding_backend = backend_id
+            project.coding_backend_model = ""
             session.commit()
         return JSONResponse({"success": True, **get_backend_statuses(backend_id)})
+
+    @router.get("/projects/{project_id}/codex-sync")
+    async def get_project_codex_sync(project_id: int):
+        """Report whether this Decisions project can be correlated with Codex."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            return JSONResponse(_codex_project_sync_payload(project))
+
+    @router.post("/projects/{project_id}/codex-sync")
+    async def sync_project_to_codex(project_id: int):
+        """Bind this project to the Codex CLI backend when the user requests it."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend_statuses
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project.coding_backend = "codex"
+            if not (project.coding_backend_model or "").strip():
+                project.coding_backend_model = "auto"
+            session.commit()
+            payload = _codex_project_sync_payload(project)
+        return JSONResponse({
+            "success": True,
+            "plugin_install": plugin_install,
+            **payload,
+            **get_backend_statuses("codex"),
+        })
 
     @router.get("/projects/{project_id}")
     async def get_project_detail(project_id: int):
@@ -344,6 +718,7 @@ def register_routes(router, templates):
                     "in_use": bool(project.in_use),
                     "provider": project.provider or "",
                     "coding_backend": _backend_id_for_project(project),
+                    "coding_backend_model": project.coding_backend_model or "",
                     "board_id": project.board_id or "",
                     "board_name": project.board_name or "",
                     "additional_trigger_words": project.additional_trigger_words or "[]",
@@ -609,6 +984,8 @@ def register_routes(router, templates):
                     from distr.core.project_cli_backends import normalize_backend_id
 
                     project.coding_backend = normalize_backend_id(payload.coding_backend)
+                if payload.coding_backend_model is not None:
+                    project.coding_backend_model = (payload.coding_backend_model or "").strip()
                 if payload.provider is not None:
                     project.provider = payload.provider
                 if payload.board_id is not None:
@@ -680,6 +1057,7 @@ def register_routes(router, templates):
                     folder_location=folder,
                     additional_trigger_words="[]",
                     coding_backend=coding_backend,
+                    coding_backend_model=(body.get("coding_backend_model") or "").strip(),
                 )
                 session.add(project)
                 session.commit()
@@ -1090,6 +1468,7 @@ def register_routes(router, templates):
                 cwd = project.folder_location or os.path.expanduser("~")
                 project_name = project.name or ""
                 backend_id = _backend_id_for_project(project)
+                backend_model = (project.coding_backend_model or "").strip()
         except Exception as e:
             logger.error(f"Terminal: failed to load project: {e}")
             await websocket.send_json({"type": "error", "message": "Failed to load project"})
@@ -1166,6 +1545,7 @@ def register_routes(router, templates):
                                     name=project_name,
                                     folder_location=cwd,
                                     coding_backend=backend.id,
+                                    coding_backend_model=backend_model,
                                 )
                                 result = await run_project_task(p, instruction, on_event=_queue_event, origin="cli")
                                 if not result.success:

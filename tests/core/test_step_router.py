@@ -323,7 +323,13 @@ class TestRouteIntegration:
     @patch("distr.core.workflow.router.get_session")
     @patch("distr.core.workflow.router._run_verification", return_value=True)
     def test_route_updates_result_packet_in_run_data(self, mock_verify, mock_get_session, mock_ws):
-        step = _make_step(id=1, name="Analyze", on_pass_goto=2)
+        step = _make_step(
+            id=1,
+            name="Analyze",
+            on_pass_goto=2,
+            validation_type="text_match",
+            validation_prompt="analysis passed",
+        )
         run = _make_run(
             id=10,
             run_data=json.dumps(
@@ -354,6 +360,11 @@ class TestRouteIntegration:
         assert packet.get("status") == "running"
         changes = (packet.get("changes") or {}).get("change_summary") or []
         assert any("Analyze: passed" in line for line in changes)
+        snapshots = ((packet.get("execution") or {}).get("validation_snapshots") or [])
+        assert snapshots[-1]["step_name"] == "Analyze"
+        assert snapshots[-1]["validation_type"] == "text_match"
+        assert snapshots[-1]["expected"] == "analysis passed"
+        assert snapshots[-1]["verdict"] == "pass"
 
     @patch("distr.core.workflow.router.append_ticket_audit_entry")
     @patch("distr.core.workflow.router.increment_workflow_updated")

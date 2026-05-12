@@ -160,6 +160,7 @@ class StepExecutorMixin:
 
         project_id = step_data.get("linked_project_id")
         project_folder = None
+        run_data: dict[str, Any] = {}
 
         try:
             from distr.core.db.projects import Project
@@ -168,7 +169,7 @@ class StepExecutorMixin:
                 if step_obj and step_obj.linked_project_id:
                     project_id = step_obj.linked_project_id
 
-                if not project_id and run_id:
+                if run_id:
                     run_obj = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
                     if run_obj and run_obj.run_data:
                         try:
@@ -178,8 +179,12 @@ class StepExecutorMixin:
                             )
                             if packet_context:
                                 instruction = f"{packet_context}\n\n{instruction}"
+                            if run_data.get("ticket_id") is not None:
+                                instruction = instruction.replace("{{ticket_id}}", str(run_data.get("ticket_id")))
+                            if run_data.get("project_id") is not None:
+                                instruction = instruction.replace("{{project_id}}", str(run_data.get("project_id")))
                             run_project_id = run_data.get("project_id")
-                            if run_project_id is not None and str(run_project_id).strip():
+                            if not project_id and run_project_id is not None and str(run_project_id).strip():
                                 project_id = int(run_project_id)
                         except (ValueError, TypeError, json.JSONDecodeError):
                             pass
@@ -199,31 +204,45 @@ class StepExecutorMixin:
             }
 
         try:
-            from distr.core import terminal as terminal_runtime
+            from distr.core.project_cli_backends import run_project_task
             import concurrent.futures
 
-            async def _get_session():
-                return await terminal_runtime.get_or_create_session(
-                    project_id=int(project_id),
-                    cwd=project_folder,
-                    command="pi",
-                )
+            async def _run_task():
+                with get_session() as db:
+                    project = db.query(Project).filter(Project.id == int(project_id)).first()
+                    if not project:
+                        raise ValueError(f"Project #{project_id} not found")
+                    return await run_project_task(
+                        project,
+                        instruction,
+                        audit_id=step_data.get("id"),
+                        origin="workflow",
+                    )
 
             # asyncio.run() raises RuntimeError if called from within a running
-            # event loop (e.g. inside an async workflow dispatched from FastAPI).
-            # Fall back to a thread-bound loop when that happens.
+            # event loop (e.g. inside FastAPI). Fall back to a thread-bound loop
+            # so workflow steps can use any project backend without stalling.
             try:
-                session = asyncio.run(_get_session())
+                result = asyncio.run(_run_task())
             except RuntimeError:
                 def _thread_runner():
-                    return asyncio.run(_get_session())
+                    return asyncio.run(_run_task())
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    session = pool.submit(_thread_runner).result(timeout=30)
+                    result = pool.submit(_thread_runner).result(timeout=int(config.get("timeout_seconds", 900) or 900))
 
-            session.write(instruction + "\n")
+            backend_name = getattr(result, "backend_id", "") or "project_cli"
+            output = (getattr(result, "output", "") or "").strip()
+            error = (getattr(result, "error", "") or "").strip()
+            passed = bool(getattr(result, "success", False))
+            text = output or error or f"Sent to {backend_name}."
             return {
-                "output": f"Sent to project CLI (project_id={project_id}): {instruction[:600]}",
-                "passed": True,
+                "output": (
+                    f"Project CLI backend: {backend_name}\n"
+                    f"Project: {project_id}\n"
+                    f"Status: {'completed' if passed else 'failed'}\n\n"
+                    f"{text}"
+                )[:6000],
+                "passed": passed,
                 "skip_wait": True,
             }
         except Exception as e:

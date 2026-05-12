@@ -5,6 +5,7 @@ const PROVIDERS = [
     {id: 'assemblyai', name: 'AssemblyAI', keyField: 'key'},
     {id: 'openai', name: 'OpenAI', keyField: 'key'},
     {id: 'anthropic', name: 'Anthropic', keyField: 'key'},
+    {id: 'cursor', name: 'Cursor', keyField: 'key'},
     {id: 'elevenlabs', name: 'ElevenLabs', keyField: 'key'},
     {id: 'openrouter', name: 'OpenRouter', keyField: 'key'},
     {id: 'groq', name: 'Groq', keyField: 'key'},

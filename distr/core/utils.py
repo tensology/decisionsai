@@ -26,6 +26,7 @@ SECRET_SETTINGS_FIELDS = {
     "speechmatics_key",
     "openai_key",
     "anthropic_key",
+    "cursor_key",
     "aws_polly_key",
     "elevenlabs_key",
     "openrouter_key",

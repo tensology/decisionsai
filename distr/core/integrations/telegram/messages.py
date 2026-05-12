@@ -304,6 +304,9 @@ class TelegramMessagesMixin:
                     self.send_to_telegram(error_text)
                     return
 
+            if self._handle_initiative_draft_command(text_lower):
+                return
+
             # Detect mode-switch intent and persist to Settings_Store
             from distr.core.integrations.telegram.response_format import detect_mode_switch_intent
             from distr.core.services.settings_service import update_setting
@@ -639,6 +642,88 @@ class TelegramMessagesMixin:
                 "[Telegram] 📥 Buffered message (%d in batch): '%s' (chat_id: %s)",
                 len(self._telegram_batch_buffer), text[:50], chat_id,
             )
+
+    def _handle_initiative_draft_command(self, text_lower: str) -> bool:
+        """Approve/reject/read Initiative drafts from Telegram private chat."""
+        try:
+            from distr.core.initiative.draft_execute import approve_draft_in_queue
+            from distr.core.initiative.draft_queue import DraftQueue
+            from distr.core.initiative.voice_commands import (
+                match_draft_decision,
+                match_draft_decision_for_id,
+                match_read_draft_by_id_request,
+                resolve_draft_entry_by_voice_id,
+                wants_pending_draft_readout,
+            )
+
+            queue_obj = DraftQueue()
+            queue_obj.expire_old()
+            entries = queue_obj.get_all()
+            if not entries:
+                if wants_pending_draft_readout(text_lower):
+                    self.send_to_telegram("No Initiative actions are waiting for approval.")
+                    return True
+                return False
+
+            read_token = match_read_draft_by_id_request(text_lower)
+            if read_token or wants_pending_draft_readout(text_lower):
+                entry = entries[0]
+                if read_token:
+                    resolved, state = resolve_draft_entry_by_voice_id(read_token, entries)
+                    if state == "ambiguous":
+                        self.send_to_telegram("That draft id matches more than one pending action. Send a longer id prefix.")
+                        return True
+                    if resolved:
+                        entry = resolved
+                self.send_to_telegram(
+                    f"Pending Initiative action:\n\n{entry.description}\n\n"
+                    f"Draft:\n{entry.draft}\n\n"
+                    f"Reply 'yes continue' to approve, 'reject it' to reject, or include id {entry.id[:8]}."
+                )
+                return True
+
+            matched = match_draft_decision_for_id(text_lower)
+            if matched:
+                decision, token = matched
+                entry, state = resolve_draft_entry_by_voice_id(token, entries)
+                if state == "ambiguous":
+                    self.send_to_telegram("That draft id matches more than one pending action. Send a longer id prefix.")
+                    return True
+                if not entry:
+                    self.send_to_telegram("I could not find that pending Initiative action.")
+                    return True
+                return self._apply_initiative_draft_decision(queue_obj, entry.id, decision)
+
+            decision = match_draft_decision(text_lower)
+            if decision:
+                if len(entries) > 1:
+                    summary = "\n".join(f"- {e.id[:8]}: {e.description[:90]}" for e in entries[:5])
+                    self.send_to_telegram(
+                        "There is more than one pending Initiative action. Reply with "
+                        f"'approve {entries[0].id[:8]}' or 'reject {entries[0].id[:8]}'.\n\n{summary}"
+                    )
+                    return True
+                return self._apply_initiative_draft_decision(queue_obj, entries[0].id, decision)
+        except Exception as exc:
+            logger.error("[Telegram] Initiative draft command failed: %s", exc, exc_info=True)
+            self.send_to_telegram(f"Initiative approval failed: {exc}")
+            return True
+        return False
+
+    def _apply_initiative_draft_decision(self, queue_obj, draft_id: str, decision: str) -> bool:
+        if decision == "approve":
+            from distr.core.initiative.draft_execute import approve_draft_in_queue
+
+            ok = approve_draft_in_queue(queue_obj, draft_id)
+            self.send_to_telegram(
+                "Approved. I’m executing that Initiative action now."
+                if ok else
+                "I could not execute that Initiative action. It is still pending if execution failed."
+            )
+            return True
+        removed = queue_obj.remove(draft_id)
+        self.send_to_telegram("Rejected and removed from the Initiative queue." if removed else "That pending action was not found.")
+        return True
 
     def _track_telegram_group(
         self,

@@ -1,6 +1,11 @@
 <div id="tab-cli" class="project-tab-pane hidden flex flex-col gap-2 p-2 flex-1 min-h-0 overflow-hidden relative">
     <div id="terminal-container" class="flex-1 min-h-0 overflow-y-auto rounded border border-white/10 bg-[#0d1117] font-mono text-sm leading-relaxed relative flex flex-col">
         <div id="cli-session-header" class="sticky top-0 z-30 flex flex-wrap items-start gap-x-3 gap-y-2 border-b border-white/10 bg-[#0d1117]/95 backdrop-blur-sm px-3 py-2.5 shadow-[0_6px_16px_rgba(0,0,0,0.35)]">
+            <div class="flex flex-wrap items-center gap-2 shrink-0">
+                <select id="terminal-backend-select" class="w-[18rem] max-w-full pl-3 pr-9 py-1.5 bg-[#152054] border border-white/20 rounded text-gray-200 text-xs focus:border-[#f97316] focus:outline-none cursor-pointer" title="Select project coding CLI backend" aria-label="Project coding CLI backend">
+                    <option value="pi">Pi</option>
+                </select>
+            </div>
             <div id="terminal-last-question-wrap" class="hidden flex-1 min-w-[min(100%,200px)] min-h-0">
                 <div class="text-[10px] uppercase tracking-wide text-gray-500 mb-0.5">Last sent</div>
                 <p id="terminal-last-question-text" class="text-xs text-amber-100/95 leading-snug line-clamp-3 whitespace-pre-wrap break-words"></p>
@@ -22,7 +27,7 @@
     </div>
     <div class="flex gap-2 px-1 items-center">
         <input type="text" id="terminal-input" class="flex-1 px-3 py-2 bg-[#152054] border border-[#f97316]/40 rounded text-white placeholder-gray-400 focus:border-[#f97316] focus:outline-none text-sm" placeholder="What would you like to build or do with this project?">
-        <select id="terminal-model-select" class="px-2 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs focus:border-[#f97316] focus:outline-none cursor-pointer max-w-[180px]" title="Select CLI model">
+        <select id="terminal-model-select" class="w-[16rem] max-w-[45vw] pl-3 pr-9 py-2 bg-[#152054] border border-white/20 rounded text-gray-300 text-xs focus:border-[#f97316] focus:outline-none cursor-pointer" title="Select CLI model">
             <option value="">Loading models...</option>
         </select>
         <button type="button" id="terminal-input-send" class="text-xs px-3 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium" title="Send instruction to the selected project CLI backend"><svg class="w-3.5 h-3.5 inline-block mr-1" fill="currentColor" viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg>Send</button>

@@ -18,6 +18,7 @@ class Project(Base):
     board_name = Column(String, nullable=True)  # Board name for display
     kanban_board_id = Column(Integer, nullable=True)  # FK to kanban_boards.id for local database boards
     coding_backend = Column(String, nullable=False, default="pi")  # Project coding CLI backend
+    coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
 
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

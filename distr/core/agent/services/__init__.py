@@ -121,3 +121,5 @@ if OpenAIWhisperSTTService:
     __all__.append("OpenAIWhisperSTTService")
 if AssemblyAISTTService:
     __all__.append("AssemblyAISTTService")
+if VibeVoiceAsrSTTService:
+    __all__.append("VibeVoiceAsrSTTService")

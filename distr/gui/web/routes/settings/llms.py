@@ -2,7 +2,6 @@
 LLMs routes — /llms, /llms/*, /ollama/*
 """
 import asyncio
-
 from fastapi.responses import JSONResponse
 
 from ._shared import logger, OllamaPullRequest, LLMSettings, route_handler
@@ -35,6 +34,76 @@ def _is_available_model_entry(model) -> bool:
 
 
 def register_routes(router, templates):
+    _STT_CHOICES = {
+        "vosk": "Vosk (Local & Offline)",
+        "whisper": "Whisper.cpp (Local & Offline)",
+        "assemblyai": "AssemblyAI (universal-2)",
+        "openai_whisper": "OpenAI Whisper (whisper-1)",
+        "vibevoice_asr": "VibeVoice ASR (Local)",
+    }
+
+    def _stt_short_from_full(raw: str) -> str:
+        raw = (raw or "Whisper.cpp (Local & Offline)").strip()
+        stt_map_to_short = {
+            "vosk (local & offline)": "vosk",
+            "whisper.cpp (local & offline)": "whisper",
+            "assemblyai (universal-2)": "assemblyai",
+            "assemblyai (nano)": "assemblyai",
+            "assemblyai (best)": "assemblyai",
+            "openai whisper (whisper-1)": "openai_whisper",
+            "vibevoice asr (local)": "vibevoice_asr",
+        }
+        lowered = raw.lower()
+        return stt_map_to_short.get(
+            lowered,
+            "whisper" if "whisper" in lowered
+            else "vosk" if "vosk" in lowered
+            else "openai_whisper" if "openai" in lowered
+            else "assemblyai" if "assemblyai" in lowered
+            else "vibevoice_asr" if "vibevoice" in lowered and "asr" in lowered
+            else "whisper",
+        )
+
+    def _stt_option_available(settings: dict, stt_id: str) -> tuple[bool, str]:
+        if stt_id == "assemblyai":
+            if settings.get("assemblyai_enabled") and (settings.get("assemblyai_key") or "").strip():
+                return True, ""
+            return False, "AssemblyAI needs an enabled API key in Third Party Providers."
+        if stt_id == "openai_whisper":
+            if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
+                return True, ""
+            return False, "OpenAI Whisper needs an enabled OpenAI API key in Third Party Providers."
+        if stt_id == "vibevoice_asr":
+            try:
+                from distr.core.agent.libs import PIPECAT_AVAILABLE
+                from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
+
+                if PIPECAT_AVAILABLE and vibevoice_asr_runtime_ready():
+                    return True, ""
+            except Exception:
+                pass
+            return False, "VibeVoice ASR is not installed/importable. Run scripts/install_vibevoice.sh in this environment."
+        return True, ""
+
+    def _available_stt_options(settings: dict) -> tuple[list[dict], dict]:
+        options = []
+        hidden = {}
+        for stt_id, label in _STT_CHOICES.items():
+            available, reason = _stt_option_available(settings, stt_id)
+            item = {"id": stt_id, "name": label, "available": available, "reason": reason}
+            if available:
+                options.append(item)
+            else:
+                hidden[stt_id] = item
+        return options, hidden
+
+    def _fallback_stt_choice(options: list[dict]) -> str:
+        preferred = ("whisper", "vosk")
+        ids = {o["id"] for o in options}
+        for stt_id in preferred:
+            if stt_id in ids:
+                return stt_id
+        return options[0]["id"] if options else "whisper"
 
     @router.get("/llms")
     @route_handler("load LLMs settings")
@@ -54,27 +123,16 @@ def register_routes(router, templates):
             return m
 
         _raw_stt = (settings.get("transcription_model") or "Whisper.cpp (Local & Offline)").strip()
-        _stt_map_to_short = {
-            "vosk (local & offline)": "vosk",
-            "whisper.cpp (local & offline)": "whisper",
-            "assemblyai (universal-2)": "assemblyai",
-            "assemblyai (nano)": "assemblyai",
-            "assemblyai (best)": "assemblyai",
-            "openai whisper (whisper-1)": "openai_whisper",
-            "vibevoice asr (local)": "vibevoice_asr",
-        }
-        _stt_short = _stt_map_to_short.get(
-            _raw_stt.lower(),
-            "whisper" if "whisper" in _raw_stt.lower()
-            else "vosk" if "vosk" in _raw_stt.lower()
-            else "openai_whisper" if "openai" in _raw_stt.lower()
-            else "assemblyai" if "assemblyai" in _raw_stt.lower()
-            else "vibevoice_asr" if "vibevoice" in _raw_stt.lower() and "asr" in _raw_stt.lower()
-            else "whisper"
-        )
+        _stt_short = _stt_short_from_full(_raw_stt)
+        _stt_options, _hidden_stt_options = _available_stt_options(settings)
+        _stt_unavailable = _hidden_stt_options.get(_stt_short)
+        if _stt_unavailable:
+            _stt_short = _fallback_stt_choice(_stt_options)
 
         return JSONResponse({
             "stt_model": _stt_short,
+            "stt_options": _stt_options,
+            "stt_unavailable": _stt_unavailable,
             "conversational_provider": _provider(settings.get("conversational_llm_provider")),
             "conversational_model": _model(settings.get("conversational_llm_model"), "conversational"),
             "coding_provider": _provider(settings.get("coding_llm_provider")),
@@ -122,14 +180,14 @@ def register_routes(router, templates):
         _fp_before = _agent_llm_settings_fingerprint(settings)
 
         _stt = (settings_data.stt_model or "whisper").strip().lower()
-        _stt_map_to_full = {
-            "vosk": "Vosk (Local & Offline)",
-            "whisper": "Whisper.cpp (Local & Offline)",
-            "assemblyai": "AssemblyAI (universal-2)",
-            "openai_whisper": "OpenAI Whisper (whisper-1)",
-            "vibevoice_asr": "VibeVoice ASR (Local)",
-        }
-        settings["transcription_model"] = _stt_map_to_full.get(_stt, "Whisper.cpp (Local & Offline)")
+        _stt_options, _hidden_stt_options = _available_stt_options(settings)
+        _stt_available_ids = {o["id"] for o in _stt_options}
+        if _stt not in _STT_CHOICES:
+            _stt = "whisper"
+        if _stt not in _stt_available_ids:
+            reason = (_hidden_stt_options.get(_stt) or {}).get("reason") or "This speech-to-text backend is not available."
+            return JSONResponse({"detail": reason}, status_code=400)
+        settings["transcription_model"] = _STT_CHOICES.get(_stt, "Whisper.cpp (Local & Offline)")
         settings["conversational_llm_provider"] = (settings_data.conversational_provider or "ollama").strip()
         settings["conversational_llm_model"] = (settings_data.conversational_model or "").strip()
         # Sync legacy fields

@@ -5,6 +5,7 @@ from __future__ import annotations
 __all__ = (
     "AssemblyAISTTService",
     "OpenAIWhisperSTTService",
+    "VibeVoiceAsrSTTService",
     "VoskSTTService",
     "WhisperSTTService",
 )
@@ -27,4 +28,8 @@ def __getattr__(name: str):
         from .assemblyai import AssemblyAISTTService as _AssemblyAISTTService
 
         return _AssemblyAISTTService
+    if name == "VibeVoiceAsrSTTService":
+        from .vibevoice_asr import VibeVoiceAsrSTTService as _VibeVoiceAsrSTTService
+
+        return _VibeVoiceAsrSTTService
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

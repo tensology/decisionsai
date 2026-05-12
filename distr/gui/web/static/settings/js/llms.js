@@ -38,6 +38,27 @@ function escapeHtml(text) {
     return div.innerHTML;
 }
 
+function populateSttOptions(settings) {
+    const select = document.getElementById('stt_model');
+    if (!select) return;
+    const options = settings.stt_options || [
+        { id: 'vosk', name: 'Vosk (Local & Offline)' },
+        { id: 'whisper', name: 'Whisper.cpp (Local & Offline)' }
+    ];
+    select.innerHTML = '';
+    options.forEach(option => {
+        const opt = document.createElement('option');
+        opt.value = option.id;
+        opt.textContent = option.name;
+        select.appendChild(opt);
+    });
+    select.value = settings.stt_model || (options[0] && options[0].id) || 'whisper';
+
+    if (settings.stt_unavailable && settings.stt_unavailable.reason && typeof window.showNotification === 'function') {
+        window.showNotification(settings.stt_unavailable.reason, 'warning');
+    }
+}
+
 // Load LLMs settings from backend
 async function loadLLMsSettings() {
     try {
@@ -49,7 +70,7 @@ async function loadLLMsSettings() {
         }
         const settings = await response.json();
 
-        document.getElementById('stt_model').value = settings.stt_model || 'vosk';
+        populateSttOptions(settings);
 
         const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
         const optionalTypes = ['workflow', 'computer_use', 'kanban'];

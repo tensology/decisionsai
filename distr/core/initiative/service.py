@@ -41,6 +41,20 @@ from distr.core.initiative.proposed_action import (
 logger = logging.getLogger("distr.core.initiative.service")
 
 
+def build_initiative_boundaries(settings: dict) -> dict:
+    """Extract policy boundary flags from persisted Initiative settings."""
+    return {
+        "initiative_allow_telegram": settings.get("initiative_allow_telegram", False),
+        "initiative_allow_routine_tasks": settings.get("initiative_allow_routine_tasks", False),
+        "initiative_allow_ticket_lane_moves": settings.get("initiative_allow_ticket_lane_moves", False),
+        "initiative_allow_workflow_start": settings.get("initiative_allow_workflow_start", False),
+        "initiative_allow_project_cli": settings.get("initiative_allow_project_cli", False),
+        "initiative_ask_external_comms": settings.get("initiative_ask_external_comms", True),
+        "initiative_ask_file_changes": settings.get("initiative_ask_file_changes", True),
+        "initiative_ask_sensitive": settings.get("initiative_ask_sensitive", True),
+    }
+
+
 class _InitiativeQtBridge(QObject):
     """Bridge signals so timer mutations always execute on Qt thread."""
     reset_idle_timer_requested = pyqtSignal()
@@ -352,6 +366,68 @@ class InitiativeService:
         from distr.core.initiative.policy import migrate_initiative_level
         return migrate_initiative_level(settings.get("initiative_level", "assist"))
 
+    @staticmethod
+    def _initiative_boundaries(settings: dict) -> dict:
+        return build_initiative_boundaries(settings)
+
+    @staticmethod
+    def _proposal_from_work_scan(bundle, settings: dict, level: str) -> ProposedAction | None:
+        if level == "observe":
+            return None
+        scan = getattr(bundle, "work_scan", {}) or {}
+        proposals = scan.get("proposals") if isinstance(scan, dict) else []
+        if not proposals:
+            return None
+
+        enabled = {
+            "ticket_lane_move": (
+                settings.get("initiative_scan_boards", True)
+                and settings.get("initiative_suggest_backlog_promotion", True)
+            ),
+            "workflow_start": (
+                settings.get("initiative_scan_boards", True)
+                and settings.get("initiative_allow_workflow_start", False)
+            ),
+            "project_cli_task": (
+                settings.get("initiative_scan_boards", True)
+                and settings.get("initiative_allow_project_cli", False)
+            ),
+            "message_triage": True,
+            "board_triage": True,
+            "email_triage": True,
+        }
+        priority = {
+            "workflow_start": 0,
+            "project_cli_task": 1,
+            "ticket_lane_move": 2,
+            "message_triage": 3,
+            "board_triage": 4,
+            "email_triage": 5,
+        }
+        candidates = [
+            p for p in proposals
+            if isinstance(p, dict) and enabled.get(p.get("action_type"), True)
+        ]
+        if not candidates:
+            return None
+        chosen = sorted(candidates, key=lambda p: priority.get(p.get("action_type"), 99))[0]
+        action_type = chosen.get("action_type") or "suggestion"
+        payload = chosen.get("payload") if isinstance(chosen.get("payload"), dict) else {}
+        description = chosen.get("description") or "Initiative found actionable work."
+        if level == "assist" and action_type not in ("message_triage", "board_triage", "email_triage"):
+            action_type = "board_triage"
+            payload = {**payload, "proposed_action_type": chosen.get("action_type")}
+        return ProposedAction(
+            action_type=action_type,
+            description=description,
+            payload=payload,
+            draft=(
+                chosen.get("draft")
+                or f"{description}\n\nPayload: {json.dumps(payload, ensure_ascii=False)}"
+            ),
+            telegram_message=chosen.get("telegram_message") or description,
+        )
+
     # ------------------------------------------------------------------
     # Main cycle
     # ------------------------------------------------------------------
@@ -380,22 +456,24 @@ class InitiativeService:
             # Assemble context
             bundle = self._context_assembler.build(settings)
 
-            # Call LLM
-            try:
-                raw = self._call_llm(bundle, settings, level)
-            except RuntimeError as e:
-                logger.error("InitiativeService: %s", e)
-                self._last_cycle_error = str(e)
-                self._reset_idle_timer()
-                return
-            except Exception as e:
-                logger.error("InitiativeService: LLM call failed — %s: %s", type(e).__name__, e)
-                self._last_cycle_error = f"{type(e).__name__}: {e}"
-                self._reset_idle_timer()
-                return
+            action = self._proposal_from_work_scan(bundle, settings, level)
+            if action is None:
+                # Call LLM
+                try:
+                    raw = self._call_llm(bundle, settings, level)
+                except RuntimeError as e:
+                    logger.error("InitiativeService: %s", e)
+                    self._last_cycle_error = str(e)
+                    self._reset_idle_timer()
+                    return
+                except Exception as e:
+                    logger.error("InitiativeService: LLM call failed — %s: %s", type(e).__name__, e)
+                    self._last_cycle_error = f"{type(e).__name__}: {e}"
+                    self._reset_idle_timer()
+                    return
 
-            # Parse action
-            action = parse_llm_response(raw)
+                # Parse action
+                action = parse_llm_response(raw)
             logger.info("InitiativeService: proposed action_type=%s description=%s",
                         action.action_type, action.description)
 
@@ -405,13 +483,7 @@ class InitiativeService:
                 return
 
             # Evaluate policy
-            boundaries = {
-                "initiative_allow_telegram": settings.get("initiative_allow_telegram", False),
-                "initiative_allow_routine_tasks": settings.get("initiative_allow_routine_tasks", False),
-                "initiative_ask_external_comms": settings.get("initiative_ask_external_comms", True),
-                "initiative_ask_file_changes": settings.get("initiative_ask_file_changes", True),
-                "initiative_ask_sensitive": settings.get("initiative_ask_sensitive", True),
-            }
+            boundaries = build_initiative_boundaries(settings)
             # Evaluate policy — inject duplicate_recent flag if the proposal
             # matches a recent one within the cooldown window.
             policy_context: dict[str, Any] = {}
@@ -482,13 +554,7 @@ class InitiativeService:
             logger.error("InitiativeService: proactive cycle could not load settings", exc_info=True)
             return
 
-        boundaries = {
-            "initiative_allow_telegram": settings.get("initiative_allow_telegram", False),
-            "initiative_allow_routine_tasks": settings.get("initiative_allow_routine_tasks", False),
-            "initiative_ask_external_comms": settings.get("initiative_ask_external_comms", True),
-            "initiative_ask_file_changes": settings.get("initiative_ask_file_changes", True),
-            "initiative_ask_sensitive": settings.get("initiative_ask_sensitive", True),
-        }
+        boundaries = build_initiative_boundaries(settings)
 
         snapshots: list[dict] = []
         try:
@@ -718,6 +784,8 @@ class InitiativeService:
             "available_tools": bundle.available_tools[:15],
             "skills": bundle.skills[:10],
             "recent_audit": bundle.recent_audit[:10],
+            "developer_context": bundle.developer_context,
+            "work_scan": bundle.work_scan,
             "memory_files_trimmed": {
                 "has_agent": bool(bundle.memory_agent),
                 "has_user": bool(bundle.memory_user),
@@ -844,12 +912,16 @@ class InitiativeService:
             "workflows (stuck/unfinished), recent tool audit trail, available tools, "
             "available skills, and trimmed AGENT/USER/MEMORY markdown files when present.\n\n"
             f"{rubric_help}"
+            "Use work_scan when present. It contains read-only observations and candidate "
+            "proposals from boards, workflows, WhatsApp, Telegram, and future email sources. "
             "Based on the context, propose ONE action. "
             "Respond with a JSON object (no markdown fences) with fields:\n"
-            "  action_type: suggestion | routine_task | external_comms | file_change | sensitive | none\n"
+            "  action_type: suggestion | routine_task | board_triage | ticket_lane_move | "
+            "workflow_start | project_cli_task | message_triage | email_triage | "
+            "external_comms | file_change | sensitive | none\n"
             "  description: what the action does (string)\n"
             "  rubric: optional object with impact, risk, cost, urgency, confidence (ints 1–5)\n"
-            "  payload: optional dict with details (e.g. board_id, lane, title for ticket board)\n"
+            "  payload: optional dict with details (e.g. board_id, ticket_ids, target_lane, workflow_id, project_id)\n"
             "  draft: optional text draft for the action\n"
             "  telegram_message: optional notification text\n"
             "  suggested_tool: OPTIONAL. Only if action_type is suggestion or none. "
@@ -935,6 +1007,41 @@ class InitiativeService:
 
         if action.action_type == "suggestion":
             self._deliver_suggestion(action, settings, tier=tier)
+            return
+
+        if action.action_type in ("board_triage", "message_triage", "email_triage"):
+            self._deliver_suggestion(action, settings, tier=tier)
+            return
+
+        if action.action_type in ("ticket_lane_move", "workflow_start", "project_cli_task"):
+            try:
+                from distr.core.initiative.action_handlers import execute_initiative_action
+
+                result = execute_initiative_action(
+                    action_type=action.action_type,
+                    description=action.description,
+                    payload=action.payload,
+                    draft=action.draft,
+                    settings=settings,
+                )
+                logger.info("InitiativeService: executed %s result=%s", action.action_type, result)
+                if tier != PermissionTier.SILENT:
+                    message = result.get("message") if isinstance(result, dict) else action.description
+                    self._log_to_chat(f"{action.action_type}: {message}", settings)
+                    self._send_telegram_if_allowed(
+                        action.telegram_message or f"{action.action_type}: {message}",
+                        settings,
+                    )
+            except Exception as e:
+                logger.error("InitiativeService: %s failed: %s", action.action_type, e, exc_info=True)
+                failed = ProposedAction(
+                    action_type="suggestion",
+                    description=f"{action.description} could not run: {e}",
+                    payload=action.payload,
+                    draft=action.draft,
+                    telegram_message=f"Initiative action failed: {e}",
+                )
+                self._deliver_suggestion(failed, settings, tier=tier)
             return
 
         # external_comms, file_change, sensitive with EXECUTE decision
@@ -1121,6 +1228,18 @@ class InitiativeService:
             created_at=now.isoformat(),
             expires_at=(now + timedelta(hours=48)).isoformat(),
             permission_tier=int(resolved_tier),
+            execute_payload=(
+                {
+                    "kind": "initiative_action",
+                    "action": serialize(action),
+                }
+                if action.action_type in (
+                    "ticket_lane_move",
+                    "workflow_start",
+                    "project_cli_task",
+                )
+                else None
+            ),
         )
         self._draft_queue.add(entry)
         logger.info("InitiativeService: draft queued %s: %s", entry.id, entry.description)

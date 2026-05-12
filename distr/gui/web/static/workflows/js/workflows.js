@@ -32,6 +32,75 @@
         return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    function lastItems(items, limit) {
+        if (!Array.isArray(items)) return [];
+        return items.slice(Math.max(0, items.length - limit));
+    }
+
+    function renderRunPacketEvidence(packet) {
+        if (!packet || typeof packet !== "object") return "";
+        var artifacts = packet.artifacts || {};
+        var execution = packet.execution || {};
+        var audit = packet.audit || {};
+        var actionTrace = lastItems(execution.action_trace, 4);
+        var validations = lastItems(execution.validation_snapshots, 4);
+        var screenshots = lastItems(artifacts.screenshots, 3);
+        var logs = lastItems(artifacts.logs, 3);
+        var patches = lastItems(artifacts.diffs_or_patches, 3);
+        var links = lastItems(artifacts.links, 3);
+        var hasEvidence = packet.summary || audit.final_verdict || actionTrace.length || validations.length || screenshots.length || logs.length || patches.length || links.length;
+        if (!hasEvidence) return "";
+
+        var html = '<div class="wf-run-evidence mt-2 pt-2 border-t border-white/10" data-testid="wf-run-evidence">';
+        html += '<div class="flex flex-wrap items-center gap-2 text-[11px]">';
+        if (packet.summary) html += '<span class="text-gray-300">' + esc(packet.summary) + '</span>';
+        if (audit.final_verdict) html += '<span class="px-1.5 py-0.5 rounded bg-white/10 text-gray-200">Verdict: ' + esc(audit.final_verdict) + '</span>';
+        html += '</div>';
+
+        if (actionTrace.length) {
+            html += '<div class="mt-2" data-testid="wf-run-actions"><p class="text-[11px] text-gray-500 mb-1">Actions</p>';
+            actionTrace.forEach(function (item) {
+                var desc = item.description || "";
+                var result = item.result ? " -> " + item.result : "";
+                html += '<div class="text-[11px] text-gray-300 truncate">• ' + esc(item.action_type || "action") + ': ' + esc(desc + result) + '</div>';
+            });
+            html += '</div>';
+        }
+
+        if (validations.length) {
+            html += '<div class="mt-2" data-testid="wf-run-validations"><p class="text-[11px] text-gray-500 mb-1">Validation</p>';
+            validations.forEach(function (item) {
+                var verdict = item.verdict || (item.verified_passed ? "pass" : "fail");
+                var cls = verdict === "pass" ? "text-green-300" : "text-red-300";
+                html += '<div class="text-[11px] text-gray-300 truncate"><span class="' + cls + '">' + esc(verdict) + '</span> ';
+                html += '<span class="text-gray-500">(' + esc(item.validation_type || "none") + ')</span>';
+                if (item.expected) html += ' ' + esc(item.expected);
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+
+        var artifactGroups = [
+            ["Screenshots", screenshots],
+            ["Logs", logs],
+            ["Patches", patches],
+            ["Links", links],
+        ].filter(function (pair) { return pair[1].length; });
+        if (artifactGroups.length) {
+            html += '<div class="mt-2 grid grid-cols-1 md:grid-cols-2 gap-1" data-testid="wf-run-artifacts">';
+            artifactGroups.forEach(function (pair) {
+                html += '<div><span class="text-[11px] text-gray-500">' + pair[0] + ':</span> ';
+                html += pair[1].map(function (value) {
+                    return '<span class="text-[11px] text-blue-300 break-all">' + esc(value) + '</span>';
+                }).join('<span class="text-gray-600">, </span>');
+                html += '</div>';
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+        return html;
+    }
+
     function snack(msg, type) {
         type = type || "success";
         var old = document.getElementById("wf-snackbar");
@@ -43,6 +112,19 @@
         el.textContent = msg;
         document.body.appendChild(el);
         setTimeout(function () { el.style.opacity = "0"; setTimeout(function () { el.remove(); }, 300); }, 3000);
+    }
+
+    function workflowFeedbackText(data, fallback) {
+        if (!data || typeof data !== "object") return fallback || "Workflow updated";
+        var msg = data.message || data.detail || fallback || "Workflow updated";
+        if (data.next_action) msg += " " + data.next_action;
+        return msg;
+    }
+
+    function workflowErrorText(err, fallback) {
+        var data = err && err.workflowDetail;
+        if (data && typeof data === "object") return workflowFeedbackText(data, fallback || "Workflow failed");
+        return (err && err.message) || fallback || "Workflow failed";
     }
 
     function showConfirmModal(opts) {
@@ -222,18 +304,26 @@
                     .then(function (d) {
                         var detail = d && d.detail;
                         if (typeof detail === "string" && detail.trim()) {
-                            throw new Error(detail);
+                            var err = new Error(detail);
+                            err.workflowDetail = d;
+                            throw err;
                         }
                         if (Array.isArray(detail) && detail.length) {
                             var first = detail[0] || {};
                             var loc = Array.isArray(first.loc) ? first.loc.join(".") : "";
                             var msg = first.msg || "Request failed";
-                            throw new Error(loc ? (loc + ": " + msg) : msg);
+                            var validationErr = new Error(loc ? (loc + ": " + msg) : msg);
+                            validationErr.workflowDetail = d;
+                            throw validationErr;
                         }
                         if (detail && typeof detail === "object") {
-                            throw new Error(JSON.stringify(detail));
+                            var objectErr = new Error(JSON.stringify(detail));
+                            objectErr.workflowDetail = d;
+                            throw objectErr;
                         }
-                        throw new Error("Request failed");
+                        var genericErr = new Error("Request failed");
+                        genericErr.workflowDetail = d;
+                        throw genericErr;
                     })
                     .catch(function (e) {
                         if (e instanceof Error) throw e;
@@ -282,8 +372,8 @@
                 }
                 if (action === "run") {
                     api("POST", "/workflows/" + workflowId + "/run")
-                        .then(function () { snack("Workflow started"); if (currentWorkflowId === workflowId) startPolling(); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
-                        .catch(function (e) { snack(e.message || "Run failed", "error"); });
+                        .then(function (data) { snack(workflowFeedbackText(data, "Workflow started")); if (currentWorkflowId === workflowId) startPolling(); loadList(); if (currentWorkflowId === workflowId) loadDetail(workflowId); })
+                        .catch(function (e) { snack(workflowErrorText(e, "Run failed"), "error"); });
                     return;
                 }
                 if (action === "duplicate") {
@@ -749,13 +839,13 @@
                     });
                     runBar.querySelector(".wf-continue-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
-                            .then(function () { snack("Run continued"); startPolling(); loadDetail(currentWorkflowId); })
-                            .catch(function (e) { snack(e.message || "Failed to continue", "error"); });
+                            .then(function (resp) { snack(workflowFeedbackText(resp, "Run continued")); startPolling(); loadDetail(currentWorkflowId); })
+                            .catch(function (e) { snack(workflowErrorText(e, "Failed to continue"), "error"); });
                     });
                     runBar.querySelector(".wf-cancel-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/cancel-run/" + data.id)
-                            .then(function () { snack("Run cancelled"); stopPolling(); loadDetail(currentWorkflowId); })
-                            .catch(function () { snack("Failed to cancel", "error"); });
+                            .then(function (resp) { snack(workflowFeedbackText(resp, "Run cancelled")); stopPolling(); loadDetail(currentWorkflowId); })
+                            .catch(function (e) { snack(workflowErrorText(e, "Failed to cancel"), "error"); });
                     });
                     startPolling();
                 } else {
@@ -774,8 +864,8 @@
                     });
                     runBar.querySelector(".wf-cancel-run").addEventListener("click", function () {
                         api("POST", "/workflows/" + currentWorkflowId + "/cancel-run/" + data.id)
-                            .then(function () { snack("Run cancelled"); stopPolling(); loadDetail(currentWorkflowId); })
-                            .catch(function () { snack("Failed to cancel", "error"); });
+                            .then(function (resp) { snack(workflowFeedbackText(resp, "Run cancelled")); stopPolling(); loadDetail(currentWorkflowId); })
+                            .catch(function (e) { snack(workflowErrorText(e, "Failed to cancel"), "error"); });
                     });
                     startPolling();
                 }
@@ -1520,8 +1610,8 @@
         markStepAsRunningLocally(stepId);
         // Start a full workflow run starting from the given step
         api("POST", "/workflows/" + currentWorkflowId + "/run", { start_step_id: stepId })
-            .then(function () { snack("Workflow started from this step"); startPolling(); loadDetail(currentWorkflowId); })
-            .catch(function (e) { snack(e.message || "Run failed", "error"); });
+            .then(function (data) { snack(workflowFeedbackText(data, "Workflow started from this step")); startPolling(); loadDetail(currentWorkflowId); })
+            .catch(function (e) { snack(workflowErrorText(e, "Run failed"), "error"); });
     }
 
     function stopStep(stepId) {
@@ -1541,12 +1631,12 @@
         api("GET", "/workflows/" + currentWorkflowId + "/active-run").then(function (data) {
             if (data && data.id) {
                 api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
-                    .then(function () { snack("Run continued"); startPolling(); loadDetail(currentWorkflowId); })
-                    .catch(function (e) { snack(e.message || "Failed to continue", "error"); });
+                    .then(function (resp) { snack(workflowFeedbackText(resp, "Run continued")); startPolling(); loadDetail(currentWorkflowId); })
+                    .catch(function (e) { snack(workflowErrorText(e, "Failed to continue"), "error"); });
             } else {
-                snack("No active run to continue", "error");
+                snack(workflowFeedbackText(data, "No active run to continue"), "error");
             }
-        }).catch(function () { snack("Failed to find active run", "error"); });
+        }).catch(function (e) { snack(workflowErrorText(e, "Failed to find active run"), "error"); });
     }
 
     function loadStepHistory(stepId, container) {
@@ -1678,12 +1768,15 @@
             var statusColor = { running: "text-blue-400", completed: "text-green-400", failed: "text-red-400", cancelled: "text-gray-400", waiting: "text-amber-400" }[r.status] || "text-gray-400";
             var started = r.started_at ? new Date(r.started_at).toLocaleString() : "—";
             var ended = r.completed_at ? new Date(r.completed_at).toLocaleString() : "—";
-            return '<div class="flex items-center gap-3 bg-[#152054]/50 rounded px-3 py-2 border border-white/10">' +
-                '<span class="text-xs text-gray-500">#' + r.id + '</span>' +
-                '<span class="text-xs ' + statusColor + ' font-medium">' + esc(r.status) + '</span>' +
-                '<span class="text-xs text-gray-500 ml-auto">' + started + '</span>' +
-                '<span class="text-xs text-gray-600">→</span>' +
-                '<span class="text-xs text-gray-500">' + ended + '</span>' +
+            return '<div class="wf-run-item bg-[#152054]/50 rounded px-3 py-2 border border-white/10" data-run-id="' + r.id + '">' +
+                '<div class="flex items-center gap-3">' +
+                    '<span class="text-xs text-gray-500">#' + r.id + '</span>' +
+                    '<span class="text-xs ' + statusColor + ' font-medium">' + esc(r.status) + '</span>' +
+                    '<span class="text-xs text-gray-500 ml-auto">' + started + '</span>' +
+                    '<span class="text-xs text-gray-600">→</span>' +
+                    '<span class="text-xs text-gray-500">' + ended + '</span>' +
+                '</div>' +
+                renderRunPacketEvidence(r.result_packet) +
             '</div>';
         }).join('');
     }
@@ -1951,8 +2044,8 @@
             runBtn.addEventListener("click", function () {
                 if (!currentWorkflowId) return;
                 api("POST", "/workflows/" + currentWorkflowId + "/run")
-                    .then(function () { snack("Workflow started"); startPolling(); loadDetail(currentWorkflowId); })
-                    .catch(function (e) { snack(e.message || "Run failed", "error"); });
+                    .then(function (data) { snack(workflowFeedbackText(data, "Workflow started")); startPolling(); loadDetail(currentWorkflowId); })
+                    .catch(function (e) { snack(workflowErrorText(e, "Run failed"), "error"); });
             });
         }
 
@@ -1963,13 +2056,13 @@
                 if (!currentWorkflowId) return;
                 if (!confirm("Stop and reset this workflow?\n\nThis will cancel any active run and reset all step states/results.")) return;
                 api("POST", "/workflows/" + currentWorkflowId + "/stop-reset")
-                    .then(function () {
-                        snack("Workflow stopped and reset");
+                    .then(function (data) {
+                        snack(workflowFeedbackText(data, "Workflow stopped and reset"));
                         stopPolling();
                         loadDetail(currentWorkflowId);
                         loadActiveRuns();
                     })
-                    .catch(function (e) { snack(e.message || "Failed to stop and reset workflow", "error"); });
+                    .catch(function (e) { snack(workflowErrorText(e, "Failed to stop and reset workflow"), "error"); });
             });
         }
 

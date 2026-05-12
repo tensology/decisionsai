@@ -233,6 +233,12 @@ class CursorBackend(OneShotCliBackend):
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )
 
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model != "auto":
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
 
 class ClaudeCodeBackend(OneShotCliBackend):
     id = "claude_code"
@@ -242,11 +248,35 @@ class ClaudeCodeBackend(OneShotCliBackend):
     command_args = ["-p"]
     setup_instructions = "Install Claude Code and authenticate it, then make sure the claude command is on PATH."
 
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model != "default":
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
+
+class CodexBackend(OneShotCliBackend):
+    id = "codex"
+    name = "Codex CLI"
+    description = "OpenAI Codex CLI backend for project implementation tasks."
+    executable_candidates = ["codex"]
+    command_args = ["exec"]
+    setup_instructions = (
+        "Install and authenticate Codex CLI, then make sure the codex command is on PATH."
+    )
+
+    def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
+        cmd = [executable] + self.command_args
+        if task.model and task.model not in ("auto", "default"):
+            cmd += ["--model", task.model]
+        return cmd + [task.instruction]
+
 
 _BACKENDS: dict[str, ProjectCliBackend] = {
     "pi": PiBackend(),
     "cursor": CursorBackend(),
     "claude_code": ClaudeCodeBackend(),
+    "codex": CodexBackend(),
 }
 
 
@@ -259,6 +289,8 @@ def normalize_backend_id(value: str | None) -> str:
         "claude-code": "claude_code",
         "claudecode": "claude_code",
         "cursor_cli": "cursor",
+        "codex_cli": "codex",
+        "openai_codex": "codex",
     }
     backend_id = aliases.get(backend_id, backend_id)
     return backend_id if backend_id in _BACKENDS else DEFAULT_BACKEND_ID
@@ -298,5 +330,6 @@ async def run_project_task(project: Any, instruction: str, *, chat_id: Optional[
         chat_id=chat_id,
         audit_id=audit_id,
         origin=origin,
+        model=(getattr(project, "coding_backend_model", "") or "").strip(),
     )
     return await backend.send_task(task, on_event=on_event)

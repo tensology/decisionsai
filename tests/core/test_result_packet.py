@@ -199,6 +199,44 @@ def test_append_workflow_step_to_packet_merges_action_trace_without_duplicates()
     ]
 
 
+def test_append_workflow_step_to_packet_stores_validation_snapshot():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Main",
+        project_id="4",
+        project_name="DecisionsAI",
+        execution_lane="cursor",
+    )
+    snapshot = {
+        "step_id": 12,
+        "step_name": "Validate checkout",
+        "validation_type": "text_match",
+        "expected": "Order summary is visible",
+        "observed": "Order summary is visible with total.",
+        "caller_passed": True,
+        "verified_passed": True,
+        "verdict": "pass",
+    }
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Validate checkout",
+        step_status="passed",
+        step_result="Order summary is visible with total.",
+        run_status="running",
+        validation_snapshot=snapshot,
+    )
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Validate checkout again",
+        step_status="passed",
+        step_result="Order summary is visible with total.",
+        run_status="running",
+        validation_snapshot=snapshot,
+    )
+    assert packet["execution"]["validation_snapshots"] == [snapshot]
+
+
 def test_summarize_packet_for_step_context_contains_recent_changes():
     packet = build_result_packet(
         ticket_id="88",
@@ -216,6 +254,18 @@ def test_summarize_packet_for_step_context_contains_recent_changes():
                 "result": "Clicked at (0.80, 0.20): True",
             }
         ],
+        validation_snapshots=[
+            {
+                "step_id": 3,
+                "step_name": "Submit form",
+                "validation_type": "llm_judgment",
+                "expected": "Submission success message is visible.",
+                "observed": "The form submitted and showed Success.",
+                "caller_passed": True,
+                "verified_passed": True,
+                "verdict": "pass",
+            }
+        ],
         final_verdict="cannot_determine",
     )
     text = summarize_packet_for_step_context(packet, max_lines=2)
@@ -226,3 +276,4 @@ def test_summarize_packet_for_step_context_contains_recent_changes():
     assert "screenshot: /tmp/decisions/workflow_screenshots/step_c_current.png" in text
     assert "log: /tmp/decisions/logs/workflow_88.log" in text
     assert "click: pressed submit -> Clicked at (0.80, 0.20): True" in text
+    assert "pass (llm_judgment): Submission success message is visible." in text
