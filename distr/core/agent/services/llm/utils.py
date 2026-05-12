@@ -16,6 +16,7 @@ from distr.core.agent.services.llm.prompt import (
 
 # text utilities
 from distr.core.agent.services.llm.text_utils import (
+    clean_model_text_for_chat,
     clean_text_for_tts,
     normalize_text,
     parse_tool_calls_from_content,

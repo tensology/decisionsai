@@ -13,6 +13,7 @@ from distr.core.agent.libs import (
     sf, SOUNDFILE_AVAILABLE,
     AudioSegment, PYDUB_AVAILABLE
 )
+from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -94,77 +95,8 @@ class ElevenLabsTTSService(TTSService):
         logger.debug(f"ElevenLabs voice_settings updated: stability={self._stability}, similarity_boost={self._similarity_boost}, style={self._style}, use_speaker_boost={self._use_speaker_boost}")
 
     def _extract_complete_sentences(self, text: str):
-        """Extract complete sentences from text buffer.
-
-        Fixes two bugs in the original implementation:
-
-        1. ``remaining[len(match.group(0)):]`` advanced from the START of the
-           string by the match *length*, not by the match *end position*.  For
-           any match that starts in the middle of the string (e.g. 'g.' found
-           at position 17 in "Use tools like e.g. foo.") this left the earlier
-           part of the string in *remaining* on the next iteration, causing a
-           runaway loop that sent the same fragment to ElevenLabs many times.
-
-        2. Abbreviations and decimal numbers were not protected, so "e.g.",
-           "Dr.", "1.2.3", etc. created spurious sentence boundaries that
-           sent single-letter or number fragments ("g.", "3.") to ElevenLabs —
-           short inputs that often produce the characteristic 'aaaaaahhhh'
-           artifact.
-        """
-        _P = "\x00"  # placeholder — replaces protected '.' chars
-
-        # ── Protect decimal / version numbers (1.2, 0.95, 1.2.3, v1.0) ─────
-        # Iterate until stable so that multi-segment numbers like "1.2.3" get
-        # all their internal dots protected (single pass leaves the ".3" exposed).
-        _decimal_re = re.compile(r'(\d)\.(\d)')
-        protected = text
-        while True:
-            replaced = _decimal_re.sub(lambda m: m.group(1) + _P + m.group(2), protected)
-            if replaced == protected:
-                break
-            protected = replaced
-
-        # ── Protect common abbreviations (ALL dots, not just the trailing one)
-        _ABBREVS = re.compile(
-            r'\b(?:'
-            r'Mr|Mrs|Ms|Dr|Prof|Sr|Jr|St|No|Vol|Ch|Fig|Sec|Art|Ref|'
-            r'Ave|Blvd|Dept|Est|Ltd|Inc|Corp|Co|'
-            r'vs|etc|cf|approx|ibid|'
-            r'e\.g|i\.e|op\.cit|'
-            r'Jan|Feb|Mar|Apr|Jun|Jul|Aug|Sep|Oct|Nov|Dec'
-            r')\.',
-            re.IGNORECASE,
-        )
-        # Replace every '.' inside the matched abbreviation (including internal
-        # dots in multi-dot abbreviations like "e.g.") with the placeholder.
-        protected = _ABBREVS.sub(
-            lambda m: m.group(0).replace(".", _P),
-            protected,
-        )
-
-        # ── Extract sentence boundaries ──────────────────────────────────────
-        sentences_raw: list[str] = []
-        pos = 0
-        while True:
-            match = re.search(
-                r'([^.!?]*\w[^.!?]*[.!?]+)(\s+|$)',
-                protected[pos:],
-            )
-            if not match:
-                break
-            sentence = match.group(1).strip()
-            # Skip fragments shorter than 2 real chars (stray punctuation,
-            # single letters like "g." from half-protected abbreviations).
-            if len(sentence.replace(_P, "")) >= 2:
-                sentences_raw.append(sentence)
-            pos += match.end()
-
-        remaining_raw = protected[pos:]
-
-        def _restore(s: str) -> str:
-            return s.replace(_P, ".")
-
-        return [_restore(s) for s in sentences_raw], _restore(remaining_raw)
+        """Extract complete sentences from text buffer."""
+        return extract_complete_sentences(text)
 
     @staticmethod
     def _sanitize_for_elevenlabs(text: str) -> str:
@@ -650,15 +582,6 @@ class ElevenLabsTTSService(TTSService):
                                     logger.debug(f"TTS: Skipping duplicate (subset): '{sentence[:30]}...'")
                                     is_duplicate = True
                                     break
-                                words1 = set(normalized_sentence.split())
-                                words2 = set(processed.split())
-                                if len(words1) > 4 and len(words2) > 4:
-                                    overlap = len(words1 & words2)
-                                    total_unique = len(words1 | words2)
-                                    if total_unique > 0 and overlap / total_unique > 0.9:
-                                        logger.debug(f"TTS: Skipping duplicate (overlap): '{sentence[:30]}...'")
-                                        is_duplicate = True
-                                        break
                     
                     if is_duplicate:
                         continue
@@ -818,4 +741,3 @@ class ElevenLabsTTSService(TTSService):
     def get_sample_rate(self) -> int:
         """Return the output sample rate for ElevenLabs (44.1kHz)"""
         return 44100
-

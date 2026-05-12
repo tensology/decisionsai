@@ -12,6 +12,7 @@ from distr.core.agent.libs import (
     sf, SOUNDFILE_AVAILABLE,
     AudioSegment, PYDUB_AVAILABLE
 )
+from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -86,24 +87,8 @@ class OpenAITTSService(TTSService):
         logger.debug(f"TTS: set_ptt_active(active={active})")
 
     def _extract_complete_sentences(self, text: str):
-        """Extract complete sentences from text buffer"""
-        sentences = []
-        remaining = text
-        
-        # Require at least one word character before terminal punctuation to avoid matching
-        # single-char fragments like "g." from mid-stream tokens (e.g. "ing." split mid-word).
-        while True:
-            match = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', remaining)
-            if not match:
-                break
-            
-            sentence = match.group(1).strip()
-            if sentence:
-                sentences.append(sentence)
-            
-            remaining = remaining[len(match.group(0)):]
-            
-        return sentences, remaining
+        """Extract complete sentences from text buffer."""
+        return extract_complete_sentences(text)
 
     def _generate_audio(self, text: str):
         """Generate audio from text using OpenAI TTS API"""
@@ -421,16 +406,6 @@ class OpenAITTSService(TTSService):
                                     logger.debug(f"TTS: Skipping duplicate sentence (subset): '{sentence[:50]}...'")
                                     is_duplicate = True
                                     break
-                                # Word overlap: require 90% to avoid skipping distinct sentences
-                                words1 = set(normalized_sentence.split())
-                                words2 = set(processed.split())
-                                if len(words1) > 4 and len(words2) > 4:
-                                    overlap = len(words1 & words2)
-                                    total_unique = len(words1 | words2)
-                                    if total_unique > 0 and overlap / total_unique > 0.9:
-                                        logger.debug(f"TTS: Skipping duplicate (word overlap {overlap}/{total_unique}): '{sentence[:50]}...'")
-                                        is_duplicate = True
-                                        break
                     
                     if is_duplicate:
                         continue
@@ -681,8 +656,6 @@ class OpenAITTSService(TTSService):
     def get_sample_rate(self) -> int:
         """Return the output sample rate for OpenAI TTS (24kHz)"""
         return 24000
-
-
 
 
 

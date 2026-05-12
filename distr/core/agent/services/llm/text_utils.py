@@ -168,7 +168,10 @@ def clean_text_for_tts(
     text = re.sub(r'\[([^\]]+)\]\([^\)]+\)', r'\1', text)
     text = re.sub(r'^#+\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*#{1,6}\s*', '', text, flags=re.MULTILINE)
-    text = re.sub(r'^\s*\d+\.\s*', '', text, flags=re.MULTILINE)
+    # Markdown numbered-list markers require whitespace after the dot. In live
+    # streaming, a chunk can start mid-version/decimal ("2.3"), and the old
+    # zero-or-more whitespace pattern stripped the leading "2." from speech.
+    text = re.sub(r'^\s*\d+\.\s+', '', text, flags=re.MULTILINE)
     text = re.sub(r'^\s*[•\-\*→]\s*', '', text, flags=re.MULTILINE)
     text = re.sub(r'[✓❌✅⚠️🚨]', '', text)
     text = re.sub(r'\[([^\]]+)\]', r'\1', text)
@@ -199,6 +202,21 @@ def clean_text_for_tts(
     # text = inject_prosody_hints(text)
 
     return text
+
+
+def clean_model_text_for_chat(text: str, strip_whitespace: bool = True) -> str:
+    """Normalize model prose before it is streamed or persisted in chat.
+
+    Some cheaper/free OpenAI-compatible models ignore the no-markdown prompt and
+    emit bold markers, headings, code fences, or XML-like tool artifacts. Chat
+    should still look like a conversational transcript, so reuse the robust TTS
+    sanitizer while keeping broad Unicode prose.
+    """
+    return clean_text_for_tts(
+        text,
+        strip_whitespace=strip_whitespace,
+        spoken_prose=True,
+    )
 
 
 def humanize_silent_navigation_json(result: str) -> Optional[str]:

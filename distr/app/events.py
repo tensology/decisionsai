@@ -217,6 +217,15 @@ class EventHandlerMixin:
             self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
 
         if event == 'tts_started':
+            source = data.get("source") if isinstance(data, dict) else None
+            if source != "transport":
+                logger.info(
+                    "[EVENT QUEUE] Provider tts_started received before confirmed audio output; "
+                    "deferring player open until transport audio starts (source=%s)",
+                    source or "provider",
+                )
+                return
+
             # Dedup bursty duplicate starts (e.g., direct speak + provider start).
             # Some paths emit two near-identical tts_started events within ~1s,
             # which creates double session accounting and choppy/non-fluid playback.
@@ -301,8 +310,17 @@ class EventHandlerMixin:
                 )
                 return
             self._event_dedup_cache[dedup_key] = now
-            # Dedup: skip duplicate tts_stopped with duration <= 0 within 0.5s
-            # These arrive in bursts during PTT activation and cause redundant stop/animation resets
+            if duration <= 0.0 and not interrupted and self._tts_active_sessions > 0:
+                logger.warning(
+                    "[EVENT QUEUE] Ignoring zero-duration tts_stopped while playback is active "
+                    "(active_sessions=%d). Waiting for playback_finished or safety fallback.",
+                    self._tts_active_sessions,
+                )
+                return
+
+            # Interrupt stops are authoritative. Zero-duration non-interrupt
+            # stops only close the player when no active playback session exists;
+            # otherwise they can race ahead of audio and make TTS look silent.
             if interrupted or duration <= 0.0:
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
                 self._tts_active_sessions = 0
@@ -315,6 +333,13 @@ class EventHandlerMixin:
                 self._close_player_if_tts_complete("tts_stopped interrupt")
             else:
                 # Normal non-interrupt stop: playback may still be draining.
+                if self._tts_active_sessions <= 0:
+                    logger.warning(
+                        "[EVENT QUEUE] Non-interrupt tts_stopped with no confirmed transport playback "
+                        "(duration=%.3f). Player was not opened; ignoring close.",
+                        float(duration or 0.0),
+                    )
+                    return
                 # Track this utterance as awaiting playback_finished, but keep a
                 # duration-aware fallback for transports that never emit it.
                 self._tts_pending_non_interrupt_closes += 1

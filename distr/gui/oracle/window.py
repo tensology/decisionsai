@@ -65,7 +65,8 @@ class RoundContainer(QtWidgets.QWidget):
             return  # Transparent — nothing to paint
         painter = QtGui.QPainter(self)
         painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
-        painter.setBrush(QtGui.QColor(255, 255, 255))
+        # Match dark UI / chroma edges: white backing reads as a light halo on dark desktops.
+        painter.setBrush(QtGui.QColor(0, 0, 0))
         painter.setPen(QtCore.Qt.PenStyle.NoPen)
         painter.drawEllipse(self.rect())
 
@@ -165,7 +166,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # windows (about, settings) to hide when focus moves to another app on macOS.
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
 
-        self._shadow_color = QtGui.QColor(0, 0, 0, 100)
+        # Alpha must stay 0 until GlowEngine drives a visible ring; non-zero here
+        # draws a semi-transparent stroke that composites as a light halo on dark desktops.
+        self._shadow_color = QtGui.QColor(0, 0, 0, 0)
 
         # Legacy animation group — kept as empty stub for lifecycle.py cleanup
         self.animation_group = QParallelAnimationGroup(self)
@@ -479,8 +482,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if idle_resp:
             self._play_animation(idle_resp)
 
-        # Reset glow visual
-        self._shadow_color = QtGui.QColor(0, 0, 0, 50)
+        # No idle ring — GlowEngine + hooks own visible glow; non-zero alpha here caused a gray rim.
+        self._shadow_color = QtGui.QColor(0, 0, 0, 0)
 
         # Apply geometry (padding, mask, container shape) for the new skin type
         self._apply_skin_geometry()
@@ -848,6 +851,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if not self.is_listening or self.dragging:
             logging.info(f"[ORACLE] Push-to-talk NOT requested - conditions not met (listening={self.is_listening}, dragging={self.dragging})")
             return
+
+        self._dismiss_tts_player_for_capture("ptt_press")
         
         # Visual feedback via skin system
         logging.info("[ORACLE] PTT: firing ptt_active hook")
@@ -908,6 +913,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _apply_immediate_release_visual(self):
         """Reset the glow and border instantly when the user releases the mouse."""
         self._cleanup_ptt()
+
+    def _dismiss_tts_player_for_capture(self, reason: str):
+        """Hide/stop the TTS player immediately when voice capture starts."""
+        try:
+            logging.info("[ORACLE] %s: dismissing TTS player before voice capture", reason)
+            signal_manager.player_stop.emit()
+            signal_manager.emit_hide_player_window()
+            signal_manager.interrupt_tts.emit()
+        except Exception as exc:
+            logging.debug("[ORACLE] Could not dismiss TTS player for %s: %s", reason, exc)
 
     def _cleanup_ptt(self):
         """Clean up all PTT state — reverts hook, resets flags."""
@@ -1026,7 +1041,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         if self._render_strategy is not None:
             self._render_strategy.paint(painter, content_rect)
 
-        # Glow ring — only for oracle type skins
+        # Glow ring — only for oracle type skins (stroke only; leave brush clear so we
+        # don't re-fill with the last OracleRenderer brush).
         is_oracle = self._skin_config and self._skin_config.type == "oracle"
         if is_oracle and self._shadow_color.alpha() > 0:
             glow_pen = QtGui.QPen(
@@ -1036,6 +1052,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 QtCore.Qt.PenCapStyle.RoundCap,
                 QtCore.Qt.PenJoinStyle.RoundJoin
             )
+            painter.setBrush(Qt.BrushStyle.NoBrush)
             painter.setPen(glow_pen)
             painter.drawEllipse(content_rect)
 
@@ -1421,6 +1438,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._dictation_hotkey_active = True
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        self._dismiss_tts_player_for_capture("dictation_hotkey_press")
         if not getattr(self, "is_dictating", False):
             self.is_dictating = True
             self._update_dictation_menu_state()
@@ -1932,7 +1950,7 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         """Reset glow to off state immediately."""
         self.animation_group.stop()
         self._glow_engine.stop()
-        self._shadow_color = QtGui.QColor(0, 0, 0, 50)
+        self._shadow_color = QtGui.QColor(0, 0, 0, 0)
         self.update()
 
 

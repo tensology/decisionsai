@@ -2,6 +2,7 @@
 
 from distr.core.agent.services.llm.text_utils import (
     _PATH_REDACT_PLACEHOLDER,
+    clean_model_text_for_chat,
     redact_filesystem_paths_for_conversation,
 )
 
@@ -27,3 +28,12 @@ def test_redact_windows_path():
     out = redact_filesystem_paths_for_conversation(text)
     assert r"C:\Users" not in out
     assert _PATH_REDACT_PLACEHOLDER in out
+
+
+def test_clean_model_text_for_chat_strips_markdown_noise():
+    raw = "**Fix:** use `dictation` mode.\n\n### Next\n- Do the thing"
+    out = clean_model_text_for_chat(raw)
+    assert "*" not in out
+    assert "`" not in out
+    assert "#" not in out
+    assert out == "Fix: use dictation mode. Next Do the thing"

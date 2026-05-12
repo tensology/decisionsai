@@ -158,6 +158,7 @@ def _get_tool_definitions(
         ("DocumentExtractorTool", {}),
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
+        ("DeveloperContextTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
         (
@@ -478,6 +479,7 @@ TOOL_REGISTRY = {
     "OpenPageTool":            ("chat.open_page", "OpenPageTool"),
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
+    "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
     "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
@@ -606,6 +608,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "OpenPageTool": "Open a specific page in the DecisionsAI app: chat, ticket boards, board, settings, preferences, actions, skills, projects, workflows, docs, activity log, audio, models, skins, or about. Use for: open ticket boards, go to settings, show the board, open chat page, open skills.",
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
+    "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
     "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",
     "MemoryReadTool": "Read line ranges from cross-chat AGENT.md, USER.md, MEMORY.md, or EVENTS.md persistent files.",
     "MemoryAddTool": "Append a new section to MEMORY.md or USER.md with confirmation when file-change prompts are enabled.",

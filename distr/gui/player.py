@@ -114,11 +114,18 @@ class PlayerWindow(QtWidgets.QWidget):
         self.voice_container.setStyleSheet("""
             #voiceContainer {
                 background-color: black;
-                border: 1px solid black;
+                border: none;
                 border-radius: 30px;
             }
         """)
         layout.addWidget(self.voice_container)
+        self._apply_rounded_window_mask()
+
+    def _apply_rounded_window_mask(self):
+        """Clip to the pill so macOS/Windows compositors do not show a light fringe outside the shape."""
+        path = QtGui.QPainterPath()
+        path.addRoundedRect(0, 0, self.width(), self.height(), 30, 30)
+        self.setMask(QtGui.QRegion(path.toFillPolygon().toPolygon()))
 
     def ensure_visibility(self):
         self.show()
@@ -133,7 +140,10 @@ class PlayerWindow(QtWidgets.QWidget):
         path = QtGui.QPainterPath()
         path.addRoundedRect(0, 0, self.width(), self.height(), 30, 30)
         painter.setClipPath(path)
+        # Source: reduce premultiplied fringe on WA_TranslucentBackground (light edge on dark mode).
+        painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_Source)
         painter.fillPath(path, QtGui.QColor(0, 0, 0))
+        painter.setCompositionMode(QtGui.QPainter.CompositionMode.CompositionMode_SourceOver)
 
     def update_position(self):
         """Update position - delegate to Oracle since it knows its own position"""

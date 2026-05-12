@@ -19,7 +19,6 @@ from PyQt6.QtGui import (
     QBrush,
     QColor,
     QPainter,
-    QPen,
     QRegion,
 )
 from PyQt6.QtWidgets import QMainWindow
@@ -66,12 +65,10 @@ class OracleRenderer(RenderStrategy):
             shadow_rect = content_rect.adjusted(2, 2, 2, 2)
             painter.drawEllipse(shadow_rect)
 
-        if self.border:
-            pen = QPen(QColor(0, 0, 0), 2)
-            painter.setPen(pen)
-        else:
-            painter.setPen(Qt.PenStyle.NoPen)
-
+        # Black fill only: a contrasting pen on a translucent window anti-aliases
+        # to a light gray rim on dark desktops; border=True still reserves padding
+        # via skin geometry without drawing this stroke.
+        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(0, 0, 0)))
         painter.drawEllipse(content_rect)
 

@@ -17,6 +17,7 @@ class ContextBundle:
     available_tools: list = field(default_factory=list)
     skills: list = field(default_factory=list)
     recent_audit: list = field(default_factory=list)
+    developer_context: dict = field(default_factory=dict)
     initiative_settings: dict = field(default_factory=dict)
     current_datetime: str = ""
     # R8 memory files — trimmed for LLM (not full AGENT/USER/MEMORY bodies)
@@ -92,6 +93,14 @@ class ContextAssembler:
         except Exception:
             logger.warning("ContextAssembler: failed to fetch recent audit", exc_info=True)
 
+        developer_context = {}
+        try:
+            from distr.core.developer_context import build_developer_context
+
+            developer_context = build_developer_context(settings=settings).to_dict()
+        except Exception:
+            logger.warning("ContextAssembler: failed to fetch developer workflow context", exc_info=True)
+
         memory_agent, memory_user, memory_long_term = "", "", ""
         try:
             memory_agent, memory_user, memory_long_term = self._fetch_memory_snippets()
@@ -108,6 +117,7 @@ class ContextAssembler:
             available_tools=available_tools,
             skills=skills,
             recent_audit=recent_audit,
+            developer_context=developer_context,
             initiative_settings=settings,
             current_datetime=now.isoformat(),
             memory_agent=memory_agent,

@@ -49,8 +49,9 @@ def test_planner_preserves_computer_use_action_type_from_llm():
          patch("distr.core.llm_override.get_llm_override", return_value=None):
         steps = planning._call_llm_for_plan("Use the screen to click Submit")
 
-    assert steps == [{
-        "title": "Use screen",
-        "instruction": "Click Submit",
-        "action_type": "computer_use",
-    }]
+    assert steps[0]["title"] == "Use screen"
+    assert steps[0]["instruction"] == "Click Submit"
+    assert steps[0]["action_type"] == "computer_use"
+    assert steps[0]["config"]["goal"] == "Click Submit"
+    assert steps[0]["config"]["stuck_threshold"] == 3
+    assert steps[0]["validation_type"] == "llm_judgment"

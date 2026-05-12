@@ -15,6 +15,7 @@ from distr.core.agent.libs import (
     sf, SOUNDFILE_AVAILABLE,
     AudioSegment, PYDUB_AVAILABLE,
 )
+from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -196,15 +197,7 @@ class F5TTSTTSService(TTSService):
         return audio, sr
 
     def _extract_complete_sentences(self, text: str):
-        sentences = []
-        remaining = text
-        while True:
-            match = re.search(r'([^.!?]*\w[^.!?]*[.!?]+)(\s+|$)', remaining)
-            if not match:
-                break
-            sentences.append(match.group(1).strip())
-            remaining = remaining[match.end():]
-        return sentences, remaining
+        return extract_complete_sentences(text)
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)

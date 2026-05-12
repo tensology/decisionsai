@@ -24,6 +24,10 @@ from distr.core.agent.libs import (
     AudioRawFrame, OutputAudioRawFrame,
 )
 from distr.core.agent.services.llm.utils import clean_text_for_tts
+from distr.core.agent.services.tts.sentence_split import (
+    extract_complete_sentences,
+    is_redundant_sentence,
+)
 from distr.core.agent.constants import SAMPLE_RATE_COQUI, DEFAULT_COQUI_VOICE
 
 logger = logging.getLogger(__name__)
@@ -138,34 +142,10 @@ class CoquiTTSService(TTSService):
     # ------------------------------------------------------------------
 
     def _extract_complete_sentences(self, text: str):
-        import re
-        sentences, remaining = [], text
-        while True:
-            m = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', remaining)
-            if not m:
-                break
-            s = m.group(1).strip()
-            if s:
-                sentences.append(s)
-            remaining = remaining[len(m.group(0)):]
-        return sentences, remaining
+        return extract_complete_sentences(text)
 
     def _is_duplicate_sentence(self, normalized: str) -> bool:
-        if normalized in self._processed_sentences:
-            return True
-        if len(normalized) > 20:
-            for processed in self._processed_sentences:
-                if len(processed) > 20:
-                    if normalized in processed:
-                        return True
-                    words1 = set(normalized.split())
-                    words2 = set(processed.split())
-                    if len(words1) > 4 and len(words2) > 4:
-                        overlap = len(words1 & words2)
-                        total_unique = len(words1 | words2)
-                        if total_unique > 0 and overlap / total_unique > 0.9:
-                            return True
-        return False
+        return is_redundant_sentence(normalized, self._processed_sentences)
 
     def _generate_audio(self, text: str):
         """Blocking call — runs in executor. Returns (audio_float32, sample_rate)."""
@@ -407,7 +387,10 @@ class CoquiTTSService(TTSService):
                     is_audio = isinstance(audio_frame, AudioRawFrame) or (
                         OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
                     )
-                    if is_audio or isinstance(audio_frame, ErrorFrame):
+                    if (
+                        is_audio
+                        or isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame, ErrorFrame))
+                    ):
                         await self.push_frame(audio_frame, direction)
             return
 
@@ -415,6 +398,7 @@ class CoquiTTSService(TTSService):
             self._cancelled = False
             self._in_response_after_start = True
             self._llm_response_started_at = time.monotonic()  # Timestamp to ignore stale InterruptionFrames
+            self._text_buffer = ""
             self._processed_sentences.clear()
             self._tts_session_active = True
             self._total_audio_duration = 0.0
@@ -437,7 +421,7 @@ class CoquiTTSService(TTSService):
                     is_audio = isinstance(audio_frame, AudioRawFrame) or (
                         OutputAudioRawFrame and isinstance(audio_frame, OutputAudioRawFrame)
                     )
-                    if is_audio:
+                    if is_audio or isinstance(audio_frame, (TTSStartedFrame, TTSStoppedFrame)):
                         await self.push_frame(audio_frame, direction)
             if self._tts_session_active:
                 self._tts_session_active = False

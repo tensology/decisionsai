@@ -33,6 +33,10 @@ from distr.core.agent.libs import (
     OutputAudioRawFrame,
 )
 from distr.core.agent.services.llm.utils import clean_text_for_tts
+from distr.core.agent.services.tts.sentence_split import (
+    extract_complete_sentences,
+    is_redundant_sentence,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -116,35 +120,10 @@ class VibeVoiceRealtimeTTSService(TTSService):
 
     @staticmethod
     def _extract_complete_sentences(text: str):
-        import re
-
-        sentences, remaining = [], text
-        while True:
-            m = re.search(r"([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)", remaining)
-            if not m:
-                break
-            s = m.group(1).strip()
-            if s:
-                sentences.append(s)
-            remaining = remaining[len(m.group(0)) :]
-        return sentences, remaining
+        return extract_complete_sentences(text)
 
     def _is_duplicate_sentence(self, normalized: str) -> bool:
-        if normalized in self._processed_sentences:
-            return True
-        if len(normalized) > 20:
-            for processed in self._processed_sentences:
-                if len(processed) > 20:
-                    if normalized in processed:
-                        return True
-                    words1 = set(normalized.split())
-                    words2 = set(processed.split())
-                    if len(words1) > 4 and len(words2) > 4:
-                        overlap = len(words1 & words2)
-                        total_unique = len(words1 | words2)
-                        if total_unique > 0 and overlap / total_unique > 0.9:
-                            return True
-        return False
+        return is_redundant_sentence(normalized, self._processed_sentences)
 
     def _synthesize_to_48k_mono(self, text: str) -> tuple[np.ndarray, int]:
         from distr.core.audio.tts_handler import _resample_audio

@@ -386,6 +386,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         if '<tool_call>' in full_content or '<think>' in full_content:
                             tool_call_detected = True
 
+                    display_chunk = delta.content
+                    if not tool_call_detected:
+                        from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
+                        display_chunk = clean_model_text_for_chat(delta.content, strip_whitespace=False)
+
                     if self._speaker_enabled and not tool_call_detected and not getattr(self, '_is_telegram_request', False):
                         from distr.core.agent.services.llm.text_utils import clean_text_for_tts
                         # Keep boundary whitespace in streamed deltas; stripping each chunk
@@ -393,8 +398,8 @@ class OpenAICompatibleLLMService(BaseLLMService):
                         tts_chunk = clean_text_for_tts(delta.content, strip_whitespace=False)
                         if tts_chunk:
                             await self.push_frame(TextFrame(text=tts_chunk))
-                    if self.event_queue and not tool_call_detected:
-                        self.event_queue.put(('chat_stream_token', {'token': delta.content}), block=False)
+                    if self.event_queue and not tool_call_detected and display_chunk:
+                        self.event_queue.put(('chat_stream_token', {'token': display_chunk}), block=False)
 
                 if delta.tool_calls:
                     tool_call_detected = True
@@ -436,7 +441,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
             full_content = re.sub(r'<think>\s*.*?\s*</think>', '', full_content, flags=re.DOTALL).strip()
             full_content = re.sub(r'<think>.*', '', full_content, flags=re.DOTALL).strip()
 
-        return full_content, tool_calls
+        from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
+
+        return clean_model_text_for_chat(full_content), tool_calls
 
     def _parse_text_tool_calls(self, content: str) -> list:
         """Parse tool calls emitted as <tool_call>JSON</tool_call> in the text stream."""
@@ -626,7 +633,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     # Final TTS is handled once in _handle_follow_up_content()
                     # to avoid duplicate speech for tool follow-ups.
                     if self.event_queue and not tool_call_detected:
-                        self.event_queue.put(('chat_stream_token', {'token': c}), block=False)
+                        from distr.core.agent.services.llm.text_utils import clean_model_text_for_chat
+                        display_chunk = clean_model_text_for_chat(c, strip_whitespace=False)
+                        if display_chunk:
+                            self.event_queue.put(('chat_stream_token', {'token': display_chunk}), block=False)
 
         try:
             await asyncio.wait_for(_inner(), timeout=30.0)
@@ -895,11 +905,11 @@ class OpenAICompatibleLLMService(BaseLLMService):
         should_suppress = getattr(threading.current_thread(), 'suppress_tts_for_tool_chain', False)
 
         from distr.core.agent.services.llm.text_utils import (
+            clean_model_text_for_chat,
             clean_text_for_tts,
-            redact_filesystem_paths_for_conversation,
         )
 
-        display = redact_filesystem_paths_for_conversation(content)
+        display = clean_model_text_for_chat(content)
         self._messages.append({"role": "assistant", "content": display})
         if self.chat_manager:
             chat = self.chat_manager.get_current_chat()
@@ -1109,10 +1119,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
             chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
             if chat_id:
                 from distr.core.agent.services.llm.text_utils import (
-                    redact_filesystem_paths_for_conversation,
+                    clean_model_text_for_chat,
                 )
 
-                result_text = redact_filesystem_paths_for_conversation(
+                result_text = clean_model_text_for_chat(
                     follow_up_content or full_content or ""
                 )
                 self.event_queue.put(

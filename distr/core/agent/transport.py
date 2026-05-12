@@ -115,6 +115,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._hardware_check_disabled = False
         self._last_burst_output_bytes = 0  # bytes queued since last TTSStartedFrame
         self._burst_needs_reset = False  # reset burst counter on next audio frame
+        self._tts_started_event_emitted = False
         # Playback watermark: the wall-clock time at which all currently-queued
         # audio will have finished playing.  Accounts for generation gaps
         # (silence between sentences while Kokoro generates the next one).
@@ -232,6 +233,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._software_audio_start_time = None
             self._stream_start_time = None
             self._playback_watermark = 0.0
+            self._tts_started_event_emitted = False
             
         elif new_state == AudioPlaybackState.SYNTHESIZING:
             if self._playback_monitor_task and not self._playback_monitor_task.done():
@@ -248,6 +250,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             self._software_audio_start_time = None
             self._stream_start_time = None
             self._playback_watermark = 0.0
+            self._tts_started_event_emitted = False
             
         elif new_state == AudioPlaybackState.DRAINING:
             if self._playback_monitor_task and not self._playback_monitor_task.done():
@@ -584,6 +587,29 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     # Feed AEC reference buffer
                     if self._aec_ref_buf is not None:
                         self._aec_ref_buf.push(processed_audio)
+
+                    has_audible_samples = bool(np.max(np.abs(processed_audio)) > 1e-4)
+                    if not self._tts_started_event_emitted and self.event_queue and has_audible_samples:
+                        try:
+                            self.event_queue.put(
+                                (
+                                    'tts_started',
+                                    {
+                                        'source': 'transport',
+                                        'bytes': len(output_bytes),
+                                        'sample_rate': self._original_sample_rate,
+                                    },
+                                ),
+                                block=False,
+                            )
+                            self._tts_started_event_emitted = True
+                            logger.debug(
+                                "Transport: emitted confirmed tts_started bytes=%d sample_rate=%s",
+                                len(output_bytes),
+                                self._original_sample_rate,
+                            )
+                        except Exception as e:
+                            logger.debug("Transport: could not emit confirmed tts_started: %s", e)
                     
                     await super().process_frame(frame, direction)
                     

@@ -331,8 +331,21 @@ class KanbanTicketTool(BaseTool):
                 .order_by(KanbanBoard.name)
                 .all()
             )
-            return [{"id": b.id, "name": b.name, "description": b.description or "",
-                     "default_project_id": b.default_project_id} for b in boards]
+            return [self._board_dict(b) for b in boards]
+
+    @staticmethod
+    def _board_dict(board) -> Dict:
+        return {
+            "id": board.id,
+            "name": board.name,
+            "description": board.description or "",
+            "default_project_id": board.default_project_id,
+            "default_workflow_id": board.default_workflow_id,
+            "default_action_id": board.default_action_id,
+            "send_to_cli": bool(board.send_to_cli),
+            "agent_source_lane": board.agent_source_lane or "",
+            "agent_done_lane": board.agent_done_lane or "",
+        }
 
     def _find_board(self, board_id: Optional[int] = None, board_name: Optional[str] = None) -> Optional[Dict]:
         """Find a board by ID or fuzzy name match. Falls back to the in_use board if nothing specified."""
@@ -341,8 +354,7 @@ class KanbanTicketTool(BaseTool):
             if board_id:
                 b = orm_get_by_id(s, KanbanBoard, board_id)
                 if b:
-                    return {"id": b.id, "name": b.name, "description": b.description or "",
-                            "default_project_id": b.default_project_id}
+                    return self._board_dict(b)
                 return None
             if board_name:
                 name_lower = board_name.strip().lower()
@@ -359,19 +371,16 @@ class KanbanTicketTool(BaseTool):
                 # Exact match first
                 for b in boards:
                     if b.name.lower() == name_lower:
-                        return {"id": b.id, "name": b.name, "description": b.description or "",
-                                "default_project_id": b.default_project_id}
+                        return self._board_dict(b)
                 # Substring match
                 for b in boards:
                     if name_lower in b.name.lower() or b.name.lower() in name_lower:
-                        return {"id": b.id, "name": b.name, "description": b.description or "",
-                                "default_project_id": b.default_project_id}
+                        return self._board_dict(b)
                 # Stripped match (handles STT: "mary pack" vs "merrypak")
                 for b in boards:
                     board_stripped = re.sub(r'[^a-z0-9]', '', b.name.lower())
                     if name_stripped in board_stripped or board_stripped in name_stripped:
-                        return {"id": b.id, "name": b.name, "description": b.description or "",
-                                "default_project_id": b.default_project_id}
+                        return self._board_dict(b)
                 # Word overlap — if most words match, it's probably the right board
                 name_words = set(name_lower.split())
                 best_overlap = 0
@@ -383,13 +392,10 @@ class KanbanTicketTool(BaseTool):
                         best_overlap = overlap
                         best_board = b
                 if best_board and best_overlap > 0:
-                    return {"id": best_board.id, "name": best_board.name, "description": best_board.description or "",
-                            "default_project_id": best_board.default_project_id}
+                    return self._board_dict(best_board)
                 # Single board? Use it.
                 if len(boards) == 1:
-                    b = boards[0]
-                    return {"id": b.id, "name": b.name, "description": b.description or "",
-                            "default_project_id": b.default_project_id}
+                    return self._board_dict(boards[0])
             else:
                 active_board, _was_recovered = self._get_active_board(auto_recover=True)
                 if active_board:
@@ -411,12 +417,7 @@ class KanbanTicketTool(BaseTool):
                 .first()
             )
             if active:
-                return ({
-                    "id": active.id,
-                    "name": active.name,
-                    "description": active.description or "",
-                    "default_project_id": active.default_project_id,
-                }, False)
+                return (self._board_dict(active), False)
 
             boards = (
                 s.query(KanbanBoard)
@@ -433,23 +434,13 @@ class KanbanTicketTool(BaseTool):
             # Keep behavior deterministic for callers even when no active board exists.
             candidate = boards[0]
             if not auto_recover:
-                return ({
-                    "id": candidate.id,
-                    "name": candidate.name,
-                    "description": candidate.description or "",
-                    "default_project_id": candidate.default_project_id,
-                }, False)
+                return (self._board_dict(candidate), False)
 
             # Self-heal: enforce one active board so "in use" queries remain consistent.
             s.query(KanbanBoard).filter(KanbanBoard.in_use == True).update({"in_use": False})
             candidate.in_use = True
             s.commit()
-            return ({
-                "id": candidate.id,
-                "name": candidate.name,
-                "description": candidate.description or "",
-                "default_project_id": candidate.default_project_id,
-            }, True)
+            return (self._board_dict(candidate), True)
 
     def _get_lanes(self, board_id: int) -> List[Dict]:
         from distr.core.db.kanban import KanbanLane
@@ -1664,7 +1655,10 @@ class KanbanTicketTool(BaseTool):
                         "No boards found. Create one first with action='create_board'.",
                     )
 
-        # Resolve lane
+        # Resolve lane. When a board has an agent source lane, new tickets should
+        # land where that board expects execution work to begin.
+        if not lane_name:
+            lane_name = board.get("agent_source_lane") or ""
         lane = self._find_lane(board["id"], lane_name)
         if not lane:
             return voice_then_reference(
@@ -1708,10 +1702,12 @@ class KanbanTicketTool(BaseTool):
             # Check if board has a default project
             board_obj = orm_get_by_id(s, KB, board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
-            effective_workflow_id = linked_workflow_id or None
+            effective_workflow_id = linked_workflow_id or (board_obj.default_workflow_id if board_obj else None)
+            effective_action_id = board_obj.default_action_id if board_obj else None
             effective_send_to_cli = send_to_cli or (board_obj.send_to_cli if board_obj else False)
             if effective_send_to_cli:
                 effective_workflow_id = None  # CLI and workflow are mutually exclusive
+                effective_action_id = None
 
             ticket = KanbanTicket(
                 lane_id=lane["id"],
@@ -1721,6 +1717,7 @@ class KanbanTicketTool(BaseTool):
                 position=max_pos + 1,
                 linked_project_id=effective_project_id,
                 linked_workflow_id=effective_workflow_id,
+                linked_action_id=effective_action_id,
                 send_to_cli=effective_send_to_cli,
                 source_chat_id=self._source_chat_id_for_new_ticket(),
             )
@@ -1760,10 +1757,12 @@ class KanbanTicketTool(BaseTool):
             max_pos = max([t.position for t in lane_obj.tickets], default=-1) if lane_obj else -1
             board_obj = orm_get_by_id(s, KB, board["id"])
             effective_project_id = linked_project_id or (board_obj.default_project_id if board_obj else None)
-            effective_workflow_id = linked_workflow_id or None
+            effective_workflow_id = linked_workflow_id or (board_obj.default_workflow_id if board_obj else None)
+            effective_action_id = board_obj.default_action_id if board_obj else None
             effective_send_to_cli = board_obj.send_to_cli if board_obj else False
             if effective_send_to_cli:
                 effective_workflow_id = None
+                effective_action_id = None
 
             for item in tickets_data:
                 if not isinstance(item, dict):
@@ -1780,6 +1779,7 @@ class KanbanTicketTool(BaseTool):
                     priority=t_priority, position=max_pos,
                     linked_project_id=effective_project_id,
                     linked_workflow_id=effective_workflow_id,
+                    linked_action_id=effective_action_id,
                     send_to_cli=effective_send_to_cli,
                     source_chat_id=self._source_chat_id_for_new_ticket(),
                 )

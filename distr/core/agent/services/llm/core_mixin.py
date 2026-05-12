@@ -890,7 +890,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         from distr.core.agent.services.llm.prompt import build_tools_description
 
         dropped_files_context = self._get_dropped_files_context(chat_id=chat_id)
-        ctx_hash = hash((dropped_files_context, include_tools_description))
+        developer_context_text = ""
+        try:
+            from distr.core.developer_context import build_developer_context
+
+            developer_context_text = build_developer_context(chat_id=chat_id).to_prompt_text(max_chars=2200)
+        except Exception:
+            logger.warning("Could not build developer workflow context", exc_info=True)
+
+        ctx_hash = hash((dropped_files_context, developer_context_text, include_tools_description))
 
         if (hasattr(self, '_cached_template_hash')
                 and self._cached_template_hash == ctx_hash
@@ -925,6 +933,9 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 template += f"\n\n{project_context}"
         except Exception as e:
             logger.warning("Could not inject project context: %s", e)
+
+        if developer_context_text:
+            template += f"\n\n{developer_context_text}"
 
         self._cached_template = template
         self._cached_template_hash = ctx_hash
@@ -1359,29 +1370,37 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             self._last_ptt_transcription_text = text
             self._last_ptt_transcription_mono = _now
 
-            # Live preview for web chat (voice / hands-free incremental STT)
-            cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
-            if cid:
-                self._notify_transcription_progress(int(cid), text, False, False)
             text_lower = text.lower().strip()
 
-            # When listening is disabled, only wake phrases get through — unless we are in
-            # hold-to-dictate mode, which must still receive transcripts for typing.
-            if not self._is_listening:
-                if self._check_start_listening_command(text_lower):
-                    return
-                if not self._is_dictating:
-                    return
-
-            # Dictation mode takes priority
-            if self._check_dictation_commands(text_lower, text):
-                return
+            # Dictation is a text-entry mode. It must win before wake phrases,
+            # voice commands, fast actions, or the conversational agent can see
+            # the transcript.
             if self._is_dictating:
+                cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+                if cid:
+                    self._notify_transcription_progress(int(cid), "", True, True)
+                if not getattr(self, '_dictation_one_shot', False) and self._check_dictation_commands(text_lower, text):
+                    return
+                self._last_dictation_transcription_mono = time.monotonic()
                 text_to_type = self._process_dictation_text(text)
                 if text_to_type:
                     await self._type_dictation_text(text_to_type)
                 if getattr(self, '_dictation_one_shot', False):
                     self._stop_dictation()
+                return
+
+            # When listening is disabled, only wake phrases get through.
+            if not self._is_listening:
+                if self._check_start_listening_command(text_lower):
+                    return
+                return
+
+            # Live preview for web chat only when the transcript is going to the agent.
+            cid = self.chat_manager.get_current_chat() if getattr(self, "chat_manager", None) else None
+            if cid:
+                self._notify_transcription_progress(int(cid), text, False, False)
+
+            if self._check_dictation_commands(text_lower, text):
                 return
 
             # Voice commands

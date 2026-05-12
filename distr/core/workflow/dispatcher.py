@@ -411,6 +411,13 @@ def start_workflow_run(
                 step.result = None
 
         normalized_metadata = dict(run_metadata or {})
+        if (board_id is not None or ticket_id is not None) and not normalized_metadata.get("developer_context"):
+            try:
+                from distr.core.developer_context import build_developer_context
+
+                normalized_metadata["developer_context"] = build_developer_context().to_dict()
+            except Exception:
+                logger.debug("start_workflow_run: developer context assembly failed", exc_info=True)
         risk_profile = infer_risk_profile((context or ""))
         normalized_metadata.setdefault("risk_profile", risk_profile)
         normalized_metadata.setdefault(

@@ -47,6 +47,7 @@ def generate_tts_audio(
     If provider/voice not specified, reads from settings DB (tts_provider, kokoro_voice/elevenlabs_voice/openai_voice).
     """
     from distr.core.utils import load_settings_from_db
+    from distr.core.agent.services.llm.text_utils import clean_text_for_tts
     settings = load_settings_from_db()
     prov = _tts_provider_to_internal(provider or settings.get("tts_provider", "Kokoro (Offline)"))
     if voice is None:
@@ -62,6 +63,10 @@ def generate_tts_audio(
     text = (text or "").strip()
     if not text:
         raise ValueError("Text is required for TTS")
+    # Clean text for TTS (remove markdown, emojis, etc.) to match agent's TTS pipeline
+    text = clean_text_for_tts(text)
+    if not text:
+        raise ValueError("Text is required for TTS (after cleaning)")
     speed = max(0.5, min(2.0, float(speed)))
     os.makedirs(TMP_DIR, exist_ok=True)
     cache_key = hashlib.md5(f"{text}:{prov}:{voice}:{speed}".encode()).hexdigest()[:12]

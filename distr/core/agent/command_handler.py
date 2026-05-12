@@ -8,6 +8,7 @@ Each handler receives the AgentSession instance and the params dict.
 import asyncio
 import logging
 import os
+import time
 
 import requests
 
@@ -620,18 +621,22 @@ def _cmd_dictation_hotkey_pressed(session, params):
 def _cmd_dictation_hotkey_released(session, params):
     """End capture; LLM stops one-shot dictation after transcript is processed."""
     session.logger.debug("Dictation hotkey: released")
+    release_mono = time.monotonic()
     _cmd_push_to_talk_stop(session, params)
 
     def _clear_stuck_one_shot_dictation():
         try:
             llm = getattr(session, 'llm_service', None)
+            last_transcript_mono = getattr(llm, '_last_dictation_transcription_mono', 0.0) if llm else 0.0
             if (
                 llm
                 and getattr(llm, '_dictation_one_shot', False)
                 and getattr(llm, '_is_dictating', False)
+                and last_transcript_mono < release_mono
             ):
                 session.logger.warning(
-                    "Dictation hotkey: clearing stuck one-shot dictation (no transcript arrived)"
+                    "Dictation hotkey: clearing stuck one-shot dictation after %.1fs (no transcript arrived)",
+                    time.monotonic() - release_mono,
                 )
                 llm._stop_dictation()
         except Exception as exc:
@@ -641,7 +646,7 @@ def _cmd_dictation_hotkey_released(session, params):
     if loop and getattr(loop, 'is_running', lambda: False)():
 
         async def _delayed_cleanup():
-            await asyncio.sleep(15.0)
+            await asyncio.sleep(60.0)
             _clear_stuck_one_shot_dictation()
 
         try:

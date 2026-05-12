@@ -279,6 +279,12 @@ class SignalBridgeMixin:
         signal_manager.chat_stream_token.connect(on_chat_stream_token_web)
 
         def on_chat_stream_finished_web(chat_id):
+            active_cid = getattr(self, "_web_stream_chat_id", None)
+            resp_text = getattr(self, '_last_stream_response_text', None)
+            if active_cid is None and not (resp_text or "").strip():
+                self._last_stream_response_text = None
+                logger.debug("Ignoring empty chat_stream_finished with no active web stream (chat_id=%s)", chat_id)
+                return
             if self._web_stream_flush_timer is not None:
                 self._web_stream_flush_timer.stop()
                 self._web_stream_flush_timer = None
@@ -287,7 +293,6 @@ class SignalBridgeMixin:
             evt = {"event": "stream_finished", "chat_id": int(chat_id)}
             # Include response_text so the web UI can replace streamed content
             # (e.g. strip <tool_call> blocks that were partially streamed)
-            resp_text = getattr(self, '_last_stream_response_text', None)
             if resp_text is not None:
                 evt["response_text"] = resp_text
                 self._last_stream_response_text = None

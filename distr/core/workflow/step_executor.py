@@ -599,6 +599,28 @@ class StepExecutorMixin:
                                 )
                             else:
                                 workflow_input_context = packet_context
+                        developer_context = run_data.get("developer_context")
+                        if developer_context:
+                            try:
+                                from distr.core.developer_context import (
+                                    format_developer_context_dict_for_prompt,
+                                )
+
+                                developer_context_text = format_developer_context_dict_for_prompt(
+                                    developer_context,
+                                    max_chars=2200,
+                                )
+                                if developer_context_text:
+                                    if workflow_input_context:
+                                        workflow_input_context = (
+                                            workflow_input_context
+                                            + "\n\n"
+                                            + developer_context_text
+                                        )
+                                    else:
+                                        workflow_input_context = developer_context_text
+                            except Exception as ce:
+                                logger.debug("_build_agent_prompt: developer context render failed: %s", ce)
             except Exception as e:
                 logger.debug("_build_agent_prompt: failed loading ticket metadata context: %s", e)
 

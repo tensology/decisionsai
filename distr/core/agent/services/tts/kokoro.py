@@ -13,6 +13,7 @@ from distr.core.agent.libs import (
 
 # Import text cleaning utility to remove markdown formatting
 from distr.core.agent.services.llm.utils import clean_text_for_tts
+from distr.core.agent.services.tts.sentence_split import extract_complete_sentences
 
 logger = logging.getLogger(__name__)
 
@@ -158,31 +159,8 @@ class KokoroTTSService(TTSService):
         logger.debug(f"TTS: set_ptt_active(active={active})")
 
     def _extract_complete_sentences(self, text: str):
-        """Extract complete sentences from text buffer"""
-        sentences = []
-        remaining = text
-        
-        # First, protect decimal/version numbers from being split on their periods.
-        # Replace "digit.digit" periods with a placeholder, split sentences, then restore.
-        _DECIMAL_PLACEHOLDER = '\x00DEC\x00'
-        protected = re.sub(r'(\d)\.(\d)', r'\1' + _DECIMAL_PLACEHOLDER + r'\2', remaining)
-        
-        # Require at least one word character before terminal punctuation to avoid matching
-        # single-char fragments like "g." from mid-stream tokens (e.g. "ing." split mid-word).
-        while True:
-            match = re.search(r'([^\.!\?]*\w[^\.!\?]*[\.!\?]+)(\s+|$)', protected)
-            if not match:
-                break
-            
-            sentence = match.group(1).strip().replace(_DECIMAL_PLACEHOLDER, '.')
-            if sentence:
-                sentences.append(sentence)
-            
-            protected = protected[len(match.group(0)):]
-        
-        remaining = protected.replace(_DECIMAL_PLACEHOLDER, '.')
-            
-        return sentences, remaining
+        """Extract complete sentences from text buffer."""
+        return extract_complete_sentences(text)
 
     async def run_tts(self, text: str):
         """Process text and yield audio frames"""
@@ -653,15 +631,6 @@ class KokoroTTSService(TTSService):
                                     logger.warning(f"TTS: Skipping duplicate (subset): '{sentence[:50]}...'")
                                     is_duplicate = True
                                     break
-                                words1 = set(normalized_sentence.split())
-                                words2 = set(processed.split())
-                                if len(words1) > 4 and len(words2) > 4:
-                                    overlap = len(words1 & words2)
-                                    total_unique = len(words1 | words2)
-                                    if total_unique > 0 and overlap / total_unique > 0.9:
-                                        logger.warning(f"TTS: Skipping duplicate (word overlap {overlap}/{total_unique}): '{sentence[:50]}...'")
-                                        is_duplicate = True
-                                        break
                     
                     if is_duplicate:
                         continue

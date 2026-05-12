@@ -32,6 +32,8 @@ You can choose from these step types (action_type):
 
 Rules:
 - Keep each step atomic (one clear action per step).
+- Every step must have an observable verification/success criterion.
+- Every step must describe what to do if it cannot make progress.
 - Use "playwright" for all web browser tasks (navigate, login, fill forms, scrape, screenshot).
 - Use "computer_use" for local GUI tasks that require screen control but are mechanical/repetitive and do not need orchestration reasoning on every click.
 - Use "agent_instruction" for desktop app interaction and general-purpose tasks.
@@ -49,12 +51,14 @@ Respond with a JSON array of steps. Each step must have:
 - "title": short label (e.g., "Open website")
 - "instruction": detailed description of what to do
 - "action_type": one of the valid types listed above
-- Optional "verification": what to check after the step
+- "verification": observable success criteria for this step
+- Optional "stuck_behavior": what to report or collect if the step cannot proceed
+- Optional "config": type-specific execution config. For "run_command" include {{"command":"..."}}. For "http_request" include {{"url":"...","method":"GET"}}.
 
 Example:
 [
-  {{"title": "Open website", "instruction": "Navigate to https://example.com and verify the page loads", "action_type": "playwright", "verification": "Page title contains 'Example'"}},
-  {{"title": "Login", "instruction": "Fill in the username and password fields, then click the login button", "action_type": "playwright"}},
+  {{"title": "Open website", "instruction": "Navigate to https://example.com and verify the page loads", "action_type": "playwright", "verification": "Page title contains 'Example'", "stuck_behavior": "Report the URL, visible error, and screenshot path if navigation fails."}},
+  {{"title": "Login", "instruction": "Fill in the username and password fields, then click the login button", "action_type": "playwright", "verification": "Authenticated dashboard or expected post-login page is visible."}},
   {{"title": "Verify dashboard", "instruction": "Take a screenshot and confirm the dashboard is visible", "action_type": "playwright", "verification": "Dashboard heading is visible"}}
 ]
 
@@ -95,6 +99,36 @@ _GENERIC_STEP_TITLES = {
     "execute task",
 }
 
+_GENERIC_STEP_INSTRUCTIONS = _GENERIC_STEP_TITLES | {
+    "do it",
+    "complete the task",
+    "perform the task",
+    "user request",
+    "request from user",
+}
+
+_ACTION_TIMEOUT_SECONDS = {
+    "agent_instruction": 300,
+    "computer_use": 180,
+    "run_command": 120,
+    "send_to_project_cli": 300,
+    "http_request": 60,
+    "execute_code": 180,
+    "playwright": 240,
+    "play_recording": 180,
+}
+
+_ACTION_MAX_RETRIES = {
+    "agent_instruction": 1,
+    "computer_use": 1,
+    "run_command": 1,
+    "send_to_project_cli": 0,
+    "http_request": 1,
+    "execute_code": 1,
+    "playwright": 1,
+    "play_recording": 0,
+}
+
 
 def _derive_step_title(instruction: str, index: int) -> str:
     text = re.sub(r"\s+", " ", (instruction or "").strip())
@@ -106,6 +140,71 @@ def _derive_step_title(instruction: str, index: int) -> str:
     if len(title) > 70:
         title = title[:67].rstrip() + "..."
     return title[:1].upper() + title[1:] if title else f"Step {index + 1}"
+
+
+def _coerce_config(value: Any) -> Dict[str, Any]:
+    if isinstance(value, dict):
+        return dict(value)
+    if isinstance(value, str) and value.strip():
+        try:
+            parsed = json.loads(value)
+            return dict(parsed) if isinstance(parsed, dict) else {}
+        except Exception:
+            return {}
+    return {}
+
+
+def _default_verification(instruction: str, action_type: str) -> str:
+    base = re.sub(r"\s+", " ", (instruction or "").strip()).rstrip(".")
+    if len(base) > 180:
+        base = base[:177].rstrip() + "..."
+    if action_type == "run_command":
+        return f"Command exits successfully and output confirms: {base}."
+    if action_type == "send_to_project_cli":
+        return f"Project CLI acknowledges completion or returns actionable failure details for: {base}."
+    if action_type == "http_request":
+        return f"HTTP response status and body indicate the requested operation completed: {base}."
+    if action_type in {"execute_code", "playwright"}:
+        return f"Generated code runs without errors and its output confirms: {base}."
+    if action_type == "computer_use":
+        return f"Final screen state visibly confirms: {base}."
+    if action_type == "play_recording":
+        return f"Recorded action completes and the expected resulting UI state is visible: {base}."
+    return f"Step result explicitly confirms completion of: {base}."
+
+
+def _default_stuck_behavior(action_type: str) -> str:
+    if action_type == "computer_use":
+        return "Stop after 3 unchanged/failed screen attempts and report the visible blocker plus screenshot context."
+    if action_type in {"playwright", "execute_code", "run_command"}:
+        return "Stop after one retry and report the command/code error, relevant output, and next diagnostic step."
+    if action_type == "send_to_project_cli":
+        return "Report the CLI response, terminal state, and whether the project shell needs user attention."
+    return "Report the blocker, evidence observed, and the exact next input needed from the user."
+
+
+def _default_config(action_type: str, instruction: str, config: Dict[str, Any]) -> Dict[str, Any]:
+    cfg = dict(config or {})
+    if action_type == "run_command":
+        cfg.setdefault("command", instruction)
+        cfg.setdefault("timeout_seconds", _ACTION_TIMEOUT_SECONDS[action_type])
+    elif action_type == "http_request":
+        url_match = re.search(r"https?://[^\s)>\]\"']+", instruction or "")
+        if url_match:
+            cfg.setdefault("url", url_match.group(0).rstrip(".,"))
+        cfg.setdefault("method", "GET")
+        cfg.setdefault("timeout_seconds", _ACTION_TIMEOUT_SECONDS[action_type])
+    elif action_type == "computer_use":
+        cfg.setdefault("goal", instruction)
+        cfg.setdefault("instruction", instruction)
+        cfg.setdefault("max_iterations", 12)
+        cfg.setdefault("stuck_threshold", 3)
+        cfg.setdefault("screenshot_resize_width", 1280)
+    elif action_type == "send_to_project_cli":
+        cfg.setdefault("instruction", instruction)
+    elif action_type in {"execute_code", "playwright"}:
+        cfg.setdefault("instruction", instruction)
+    return cfg
 
 
 def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: str) -> List[Dict[str, Any]]:
@@ -132,7 +231,7 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         if not isinstance(raw_step, dict):
             continue
         instruction = str(raw_step.get("instruction") or raw_step.get("text") or "").strip()
-        if not instruction:
+        if not instruction or instruction.lower() in _GENERIC_STEP_INSTRUCTIONS:
             instruction = (source_instruction or "").strip()
         title = str(raw_step.get("title") or raw_step.get("label") or "").strip()
         if title.lower() in _GENERIC_STEP_TITLES or re.fullmatch(r"step\s*\d+", title.lower() or ""):
@@ -144,6 +243,23 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         step["title"] = title or f"Step {i + 1}"
         step["instruction"] = instruction
         step["action_type"] = action_type
+        verification = (
+            str(
+                raw_step.get("verification")
+                or raw_step.get("success_criteria")
+                or raw_step.get("validation_prompt")
+                or ""
+            ).strip()
+        )
+        if not verification:
+            verification = _default_verification(instruction, action_type)
+        step["verification"] = verification
+        step["validation_prompt"] = verification
+        step["validation_type"] = str(raw_step.get("validation_type") or "llm_judgment").strip() or "llm_judgment"
+        step["stuck_behavior"] = str(raw_step.get("stuck_behavior") or "").strip() or _default_stuck_behavior(action_type)
+        step["max_retries"] = int(raw_step.get("max_retries", _ACTION_MAX_RETRIES[action_type]) or 0)
+        step["timeout_seconds"] = int(raw_step.get("timeout_seconds", _ACTION_TIMEOUT_SECONDS[action_type]) or 300)
+        step["config"] = _default_config(action_type, instruction, _coerce_config(raw_step.get("config")))
         normalized.append(step)
     return normalized
 
@@ -224,6 +340,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
                 title = str(item.get("title") or item.get("label") or f"Step {i + 1}")
                 inst = str(item.get("instruction") or item.get("text") or "")
                 verification = str(item.get("verification") or "").strip() or None
+                stuck_behavior = str(item.get("stuck_behavior") or "").strip() or None
                 # Map action_type from LLM response — validate and default to agent_instruction
                 action_type = str(item.get("action_type") or "").strip().lower()
                 if action_type not in valid_action_types:
@@ -232,6 +349,8 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
                     step = {"title": title, "instruction": inst, "action_type": action_type}
                     if verification:
                         step["verification"] = verification
+                    if stuck_behavior:
+                        step["stuck_behavior"] = stuck_behavior
                     steps.append(step)
             elif isinstance(item, str):
                 steps.append({"title": f"Step {i + 1}", "instruction": item, "action_type": "agent_instruction"})
@@ -299,14 +418,16 @@ def plan_workflow(
                 action_type=s.get("action_type", "agent_instruction"),
                 status="pending",
                 step_type=s.get("action_type", "agent_instruction"),
-                config=s.get("config"),
+                config=json.dumps(s.get("config") or {}),
                 code=s.get("code"),
+                validation_type=s.get("validation_type") or "llm_judgment",
+                validation_prompt=s.get("validation_prompt") or s.get("verification"),
+                verification=s.get("verification"),
+                max_retries=s.get("max_retries", 0),
+                timeout_seconds=s.get("timeout_seconds", 300),
             )
-            # Map LLM verification output to proper validation fields
-            verification = s.get("verification")
-            if verification and verification.strip():
-                step.validation_prompt = verification.strip()
-                step.validation_type = "llm_judgment"
+            if s.get("stuck_behavior"):
+                step.description = f"Stuck behavior: {s['stuck_behavior']}"
             db.add(step)
         db.commit()
         db.refresh(wf)
@@ -461,14 +582,16 @@ def generate_steps(workflow_id: int, instruction: str) -> List[Dict[str, Any]]:
                 action_type=s.get("action_type", "agent_instruction"),
                 status="pending",
                 step_type=s.get("action_type", "agent_instruction"),
-                config=s.get("config"),
+                config=json.dumps(s.get("config") or {}),
                 code=s.get("code"),
+                validation_type=s.get("validation_type") or "llm_judgment",
+                validation_prompt=s.get("validation_prompt") or s.get("verification"),
+                verification=s.get("verification"),
+                max_retries=s.get("max_retries", 0),
+                timeout_seconds=s.get("timeout_seconds", 300),
             )
-            # Map LLM verification output to proper validation fields
-            verification = s.get("verification")
-            if verification and verification.strip():
-                step.validation_prompt = verification.strip()
-                step.validation_type = "llm_judgment"
+            if s.get("stuck_behavior"):
+                step.description = f"Stuck behavior: {s['stuck_behavior']}"
             db.add(step)
             db.flush()
             created.append({
