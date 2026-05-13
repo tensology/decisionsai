@@ -357,7 +357,17 @@ class EventHandlerMixin:
             provider = data.get('provider', 'TTS')
             error_type = data.get('error_type', 'unknown')
             message = data.get('message', 'An error occurred with the TTS service')
-            logger.error(f"[EVENT QUEUE] TTS error from {provider}: {message}")
+            now = time.time()
+            last_key = getattr(self, '_last_tts_error_key', None)
+            last_at = getattr(self, '_last_tts_error_at', 0.0)
+            error_key = (provider, error_type, message)
+            is_duplicate = error_key == last_key and now - last_at < 60.0
+            self._last_tts_error_key = error_key
+            self._last_tts_error_at = now
+            if is_duplicate:
+                logger.debug(f"[EVENT QUEUE] Suppressed duplicate {provider} TTS error ({error_type})")
+                return
+            logger.warning(f"[EVENT QUEUE] {provider} TTS unavailable ({error_type}): {message}")
             msg_box = QtWidgets.QMessageBox()
             msg_box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
             msg_box.setWindowTitle(f"{provider} TTS Error")
@@ -1416,6 +1426,8 @@ class EventHandlerMixin:
                 return audio_file
             except ImportError:
                 logger.warning(f"{provider_id} TTS library not available")
+            except ValueError as e:
+                logger.warning("%s TTS unavailable for Telegram voice note: %s", provider_id, e)
             except Exception as e:
                 logger.error(f"Failed to generate {provider_id} TTS audio: {e}", exc_info=True)
 

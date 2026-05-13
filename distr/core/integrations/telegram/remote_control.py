@@ -246,7 +246,10 @@ class TelegramRemoteControlMixin:
                             },
                         })
                     except Exception as err:
-                        logger.error("WebRTC offer handling failed: %s", err, exc_info=True)
+                        if "Event loop is closed" in str(err):
+                            logger.warning("WebRTC stream reset after stale event loop; retry the remote view")
+                        else:
+                            logger.error("WebRTC offer handling failed: %s", err, exc_info=True)
                         self._send_websocket_message({
                             "type": "remote_control_response",
                             "command": "webrtc_offer",

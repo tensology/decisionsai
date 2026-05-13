@@ -19,6 +19,34 @@ from distr.core.agent.services.tts.sentence_split import extract_complete_senten
 logger = logging.getLogger(__name__)
 
 
+def _elevenlabs_clean_error(error):
+    """Return (kind, message) without provider headers or trace dumps."""
+    error_str = str(error)
+    error_lower = error_str.lower()
+    body = getattr(error, "body", None)
+    status_code = getattr(error, "status_code", None)
+    detail = body.get("detail") if isinstance(body, dict) else None
+    provider_status = detail.get("status") if isinstance(detail, dict) else None
+    provider_message = detail.get("message") if isinstance(detail, dict) else None
+
+    if provider_status == "quota_exceeded" or "quota_exceeded" in error_lower or ("quota" in error_lower and "exceeded" in error_lower):
+        return (
+            "quota_exceeded",
+            provider_message or "ElevenLabs quota exceeded. Switch to another TTS provider or add ElevenLabs credits.",
+        )
+    if status_code == 429 or "rate limit" in error_lower or "too many requests" in error_lower:
+        return (
+            "rate_limited",
+            "ElevenLabs is rate limiting requests. Please wait a moment or switch to another TTS provider.",
+        )
+    if status_code in (401, 403) or "unauthorized" in error_lower or "forbidden" in error_lower:
+        return (
+            "auth_failed",
+            "ElevenLabs rejected the request. Check the ElevenLabs API key and billing status.",
+        )
+    return ("unknown", "ElevenLabs TTS failed. Please try again or switch to another TTS provider.")
+
+
 class ElevenLabsTTSService(TTSService):
     """ElevenLabs-based TTS service using Pipecat"""
     
@@ -203,53 +231,10 @@ class ElevenLabsTTSService(TTSService):
                 return audio_data, sample_rate
                 
             except Exception as e:
-                # Check if it's a quota exceeded error from ElevenLabs API
-                error_str = str(e)
-                error_body = None
-                status_code = None
-                
-                # Try to extract error details from ElevenLabs ApiError
-                if hasattr(e, 'body'):
-                    error_body = e.body
-                if hasattr(e, 'status_code'):
-                    status_code = e.status_code
-                
-                # Check for quota exceeded in various formats
-                is_quota_exceeded = False
-                quota_message = None
-                
-                if error_body and isinstance(error_body, dict):
-                    detail = error_body.get('detail', {})
-                    if isinstance(detail, dict):
-                        status = detail.get('status', '')
-                        if status == 'quota_exceeded':
-                            is_quota_exceeded = True
-                            quota_message = detail.get('message', 'ElevenLabs quota exceeded')
-                
-                # Also check error string for quota messages
-                if 'quota_exceeded' in error_str.lower() or ('quota' in error_str.lower() and 'exceeded' in error_str.lower()):
-                    is_quota_exceeded = True
-                    if not quota_message:
-                        # Extract message from error string if available
-                        if 'message' in error_str:
-                            try:
-                                import json
-                                # Try to parse JSON from error string
-                                if 'body:' in error_str:
-                                    body_start = error_str.find("body:") + 5
-                                    body_end = error_str.find("}", body_start) + 1
-                                    if body_end > body_start:
-                                        body_json = error_str[body_start:body_end]
-                                        parsed = json.loads(body_json)
-                                        detail = parsed.get('detail', {})
-                                        if isinstance(detail, dict):
-                                            quota_message = detail.get('message', 'ElevenLabs quota exceeded')
-                            except (json.JSONDecodeError, ValueError, KeyError):
-                                pass
-                
-                if is_quota_exceeded:
-                    user_message = quota_message or 'ElevenLabs quota exceeded. Please upgrade your plan or switch to Kokoro (Offline) TTS in Settings > General > Voice Setup.'
-                    logger.error(f"ElevenLabs quota exceeded: {quota_message or error_str}")
+                error_kind, user_message = _elevenlabs_clean_error(e)
+
+                if error_kind == "quota_exceeded":
+                    logger.warning("ElevenLabs quota exceeded: %s", user_message)
                     # Emit user-friendly error message via event queue
                     if self.event_queue:
                         try:
@@ -261,10 +246,24 @@ class ElevenLabsTTSService(TTSService):
                         except Exception:
                             pass
                     # Raise a more specific exception - don't retry quota errors
-                    raise ValueError(f"ElevenLabs quota exceeded: {user_message}")
+                    raise ValueError(user_message)
+
+                if error_kind in ("rate_limited", "auth_failed"):
+                    logger.warning("ElevenLabs TTS unavailable: %s", user_message)
+                    if self.event_queue:
+                        try:
+                            self.event_queue.put(('tts_error', {
+                                'provider': 'ElevenLabs',
+                                'error_type': error_kind,
+                                'message': user_message,
+                            }), block=False)
+                        except Exception:
+                            pass
+                    raise ValueError(user_message)
                 
                 # Check if this is a retryable error (transient network/API issues)
                 is_retryable = False
+                error_str = str(e)
                 error_str_lower = error_str.lower()
                 
                 # Retry on: network errors, rate limits (429), server errors (5xx), timeout errors
@@ -401,17 +400,7 @@ class ElevenLabsTTSService(TTSService):
             # Handle quota exceeded and other user-friendly errors
             error_str = str(e)
             if 'quota exceeded' in error_str.lower():
-                logger.error(f"ElevenLabs TTS quota exceeded: {error_str}")
-                # Emit user-friendly error message for main app UI
-                if self.event_queue:
-                    try:
-                        self.event_queue.put(('tts_error', {
-                            'provider': 'ElevenLabs',
-                            'error_type': 'quota_exceeded',
-                            'message': error_str
-                        }), block=False)
-                    except Exception:
-                        pass
+                logger.warning("ElevenLabs TTS quota exceeded: %s", error_str)
                 # Fallback to Kokoro when callback is provided (avoids looping on repeated failures)
                 if self._on_quota_exceeded:
                     try:

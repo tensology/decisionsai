@@ -28,6 +28,24 @@ ELEVENLABS_DEFAULTS = {
 DEFAULT_ELEVENLABS_AGENT = "Heart"
 
 
+def _clean_elevenlabs_descriptor_error(error: Exception) -> tuple[str, str]:
+    body = getattr(error, "body", None)
+    status_code = getattr(error, "status_code", None)
+    error_str = str(error)
+    error_lower = error_str.lower()
+    detail = body.get("detail") if isinstance(body, dict) else None
+    provider_status = detail.get("status") if isinstance(detail, dict) else None
+    provider_message = detail.get("message") if isinstance(detail, dict) else None
+
+    if provider_status == "quota_exceeded" or "quota_exceeded" in error_lower or ("quota" in error_lower and "exceeded" in error_lower):
+        return "quota_exceeded", provider_message or "ElevenLabs quota exceeded. Switch to another TTS provider or add ElevenLabs credits."
+    if status_code == 429 or "rate limit" in error_lower or "too many requests" in error_lower:
+        return "rate_limited", "ElevenLabs is rate limiting requests. Please wait a moment or switch to another TTS provider."
+    if status_code in (401, 403) or "unauthorized" in error_lower or "forbidden" in error_lower:
+        return "auth_failed", "ElevenLabs rejected the request. Check the ElevenLabs API key and billing status."
+    return "unknown", "ElevenLabs TTS failed. Please try again or switch to another TTS provider."
+
+
 class ElevenLabsDescriptor(TTSProviderDescriptor):
     """Provider descriptor for ElevenLabs (Online) TTS."""
 
@@ -179,20 +197,27 @@ class ElevenLabsDescriptor(TTSProviderDescriptor):
 
         api_speed = max(0.7, min(1.2, float(speed)))
 
-        audio_stream = client.text_to_speech.convert(
-            text=text,
-            voice_id=resolved_voice,
-            model_id="eleven_multilingual_v2",
-            output_format="mp3_44100_128",
-            voice_settings={
-                "stability": stability,
-                "similarity_boost": similarity_boost,
-                "style": style,
-                "use_speaker_boost": use_speaker_boost,
-                "speed": api_speed,
-            },
-        )
-        audio_bytes = b"".join(audio_stream)
+        try:
+            audio_stream = client.text_to_speech.convert(
+                text=text,
+                voice_id=resolved_voice,
+                model_id="eleven_multilingual_v2",
+                output_format="mp3_44100_128",
+                voice_settings={
+                    "stability": stability,
+                    "similarity_boost": similarity_boost,
+                    "style": style,
+                    "use_speaker_boost": use_speaker_boost,
+                    "speed": api_speed,
+                },
+            )
+            audio_bytes = b"".join(audio_stream)
+        except Exception as err:
+            kind, message = _clean_elevenlabs_descriptor_error(err)
+            if kind in {"quota_exceeded", "rate_limited", "auth_failed"}:
+                logger.warning("ElevenLabs TTS unavailable: %s", message)
+                raise ValueError(message) from None
+            raise
 
         try:
             from pydub import AudioSegment

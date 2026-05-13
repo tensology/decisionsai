@@ -127,4 +127,12 @@ class WebRTCSession:
         pc = self._pc
         self._pc = None
         if pc:
-            await pc.close()
+            try:
+                await pc.close()
+            except RuntimeError as err:
+                if "Event loop is closed" in str(err):
+                    logger.warning("WebRTC peer cleanup skipped because its event loop was already closed")
+                    return
+                raise
+            except Exception as err:
+                logger.warning("WebRTC peer cleanup failed: %s", err)
