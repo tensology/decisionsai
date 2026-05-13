@@ -2095,3 +2095,17 @@ def run_migrations():
             logger.info("Dropped legacy workflows / workflow_projects tables if present")
     except Exception as e:
         logger.warning("Legacy Workflow table cleanup failed: %s", e)
+
+    # Snippets are owned by the DecisionsAI app. Remote control clients should
+    # read/write hotkey metadata through the app API rather than browser storage.
+    try:
+        with engine.connect() as conn:
+            inspector = inspect(engine)
+            if inspector.has_table("snippets"):
+                cols = [c["name"] for c in inspector.get_columns("snippets")]
+                if "remote_hotkey" not in cols:
+                    conn.execute(text("ALTER TABLE snippets ADD COLUMN remote_hotkey VARCHAR DEFAULT ''"))
+                    conn.commit()
+                    logger.info("Added remote_hotkey column to snippets table")
+    except Exception as e:
+        logger.warning("Could not add snippets.remote_hotkey column: %s", e)

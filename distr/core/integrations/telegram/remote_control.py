@@ -52,7 +52,7 @@ class TelegramRemoteControlMixin:
     def _handle_remote_control_command(self, data: dict):
         """
         Handle remote control commands from the server via WebSocket.
-        Supported commands: list_screens, screenshot, set_mouse_position, left_click, right_click, double_click, type_text,
+        Supported commands: list_screens, screenshot, set_mouse_position, left_click, right_click, double_click, type_text, paste_text,
         key_up, key_down, key_enter, key_page_up, key_page_down, key_break,
         key_select_all, key_copy, key_paste, instruction
         """
@@ -633,6 +633,34 @@ class TelegramRemoteControlMixin:
                             {
                                 "type": "remote_control_response",
                                 "command": "type_text",
+                                "request_id": request_id,
+                                "error": "Missing text parameter",
+                                "data": {},
+                            }
+                        )
+
+                elif command == "paste_text":
+                    text_to_paste = command_data.get("text", "")
+                    if text_to_paste:
+                        success = self._paste_text_quick(
+                            str(text_to_paste), take_screenshot=take_screenshot
+                        )
+                        self._send_websocket_message(
+                            {
+                                "type": "remote_control_response",
+                                "command": "paste_text",
+                                "request_id": request_id,
+                                "data": {
+                                    "success": success,
+                                    "text_length": len(str(text_to_paste)),
+                                },
+                            }
+                        )
+                    else:
+                        self._send_websocket_message(
+                            {
+                                "type": "remote_control_response",
+                                "command": "paste_text",
                                 "request_id": request_id,
                                 "error": "Missing text parameter",
                                 "data": {},
@@ -1820,6 +1848,53 @@ class TelegramRemoteControlMixin:
             return True
         except Exception as e:
             logger.error(f"Error performing double click: {e}")
+            return False
+
+    def _paste_text_quick(self, text: str, take_screenshot: bool = False) -> bool:
+        """Paste text through the clipboard without appending Enter."""
+        try:
+            import platform
+            import time
+
+            if not pyautogui:
+                logger.error("pyautogui not available")
+                return False
+
+            from distr.core.agent.tools.clipboard.clipboard_actions import (
+                set_clipboard_content,
+            )
+
+            if not set_clipboard_content(text):
+                logger.error("Failed to set clipboard for remote paste_text")
+                return False
+
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            time.sleep(0.08)
+            pyautogui.hotkey(modifier, "v")
+            success = True
+
+            if take_screenshot:
+                time.sleep(0.2)
+                from distr.core.screen_utils import get_current_mouse_screen_simple
+
+                screen_info = get_current_mouse_screen_simple()
+                if screen_info and "screen_number" in screen_info:
+                    target_screen_number = screen_info["screen_number"]
+                    screenshot_data = self._capture_screen_screenshot(
+                        target_screen_number, draw_cursor=True
+                    )
+                    if "error" not in screenshot_data:
+                        channel = self._get_chat_id() or self.telegram_user_id
+                        if channel:
+                            self._post_screenshot_to_server(
+                                channel=str(channel),
+                                screen_number=target_screen_number,
+                                image_data=screenshot_data.get("image_data"),
+                                image_format=screenshot_data.get("format", "webp"),
+                            )
+            return success
+        except Exception as e:
+            logger.error(f"Error pasting text: {e}", exc_info=True)
             return False
 
     def _type_text_quick(self, text: str, take_screenshot: bool = False) -> bool:

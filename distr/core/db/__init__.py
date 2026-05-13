@@ -296,6 +296,7 @@ class Snippet(Base):
     description = Column(String)
 
     additional_trigger_words = Column(Text)  # Store as JSON string
+    remote_hotkey = Column(String, default="")
     snippet = Column(Text)  # Store as JSON string
 
     created_date = Column(DateTime, default=datetime.utcnow)
@@ -578,6 +579,19 @@ try:
                         pass
 except Exception as _mig_err:
     logging.getLogger(__name__).warning(f"Column migration block failed: {_mig_err}")
+
+# Add snippet remote-control metadata columns before create_all. Existing
+# installs need ALTER TABLE because SQLAlchemy create_all will not add columns.
+try:
+    with engine.connect() as _conn:
+        _result = _conn.execute(sa_text("SELECT name FROM sqlite_master WHERE type='table' AND name='snippets'"))
+        if _result.fetchone():
+            _existing = {row[1] for row in _conn.execute(sa_text("PRAGMA table_info(snippets)"))}
+            if "remote_hotkey" not in _existing:
+                _conn.execute(sa_text("ALTER TABLE snippets ADD COLUMN remote_hotkey VARCHAR DEFAULT ''"))
+                _conn.commit()
+except Exception as _snippet_mig_err:
+    logging.getLogger(__name__).warning(f"Snippet column migration failed: {_snippet_mig_err}")
 
 # Add workflow unification columns to existing auto_workflow* tables before create_all
 try:

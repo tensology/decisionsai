@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+
+{% block title %}Snippets{% endblock %}
+
+{% block content %}
+<div class="w-full px-6 py-8 h-[calc(100vh-4rem)]">
+  <div class="h-full bg-[#1a1f3a] border border-white/20 rounded-lg overflow-hidden flex flex-col">
+    <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between gap-4">
+      <div>
+        <h2 class="text-xl font-semibold text-white">Snippets</h2>
+      </div>
+      <button type="button" id="snippet-add" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Snippet</button>
+    </div>
+
+    <div class="grid gap-3 px-6 py-3 border-b border-white/10 text-xs font-semibold uppercase tracking-wide text-gray-500" style="grid-template-columns: 56px minmax(0, 1fr) 220px 96px;">
+      <div>#</div>
+      <div>Snippet</div>
+      <div>Hotkey</div>
+      <div></div>
+    </div>
+
+    <div id="snippets-list" class="flex-1 overflow-y-auto">
+      <div class="p-6 text-sm text-gray-400">Loading snippets...</div>
+    </div>
+  </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/shared/js/api.js"></script>
+<script src="/snippets/static/js/snippets.js"></script>
+{% endblock %}

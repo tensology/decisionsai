@@ -19,6 +19,7 @@ def register_routes(router, templates):
                 title=payload.title or "New Snippet",
                 description=payload.description or "",
                 additional_trigger_words=payload.additional_trigger_words or "[]",
+                remote_hotkey=payload.remote_hotkey or "",
             )
             session.add(snippet)
             session.commit()
@@ -27,6 +28,7 @@ def register_routes(router, templates):
                 "title": snippet.title,
                 "description": snippet.description,
                 "additional_trigger_words": snippet.additional_trigger_words,
+                "remote_hotkey": snippet.remote_hotkey or "",
             })
 
     @router.get("/snippets")
@@ -40,6 +42,7 @@ def register_routes(router, templates):
                 "id": s.id, "title": s.title or "",
                 "description": s.description or "",
                 "additional_trigger_words": s.additional_trigger_words or "[]",
+                "remote_hotkey": s.remote_hotkey or "",
             } for s in snippets])
 
     @router.put("/snippets/{snippet_id}")
@@ -57,6 +60,8 @@ def register_routes(router, templates):
                 snippet.description = payload.description
             if payload.additional_trigger_words is not None:
                 snippet.additional_trigger_words = payload.additional_trigger_words
+            if payload.remote_hotkey is not None:
+                snippet.remote_hotkey = payload.remote_hotkey or ""
             session.commit()
             return JSONResponse({"success": True})
 

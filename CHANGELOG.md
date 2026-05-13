@@ -12,6 +12,28 @@ That means more work on orchestration quality, ticket parsing, tool selection, w
 
 ---
 
+## [2.7.15] - 2026-05-13
+
+### Snippets, Codex plugin groundwork, remote control polish, and stronger agentic workflow handoff
+
+**Snippets are back as a first-class app feature.** The main web UI now has a simpler Snippets area focused on the actual text and optional hotkey, while the remote control can open the shared snippet list from a dedicated round button. Snippets can be added quickly, shown as numbered options, and pasted directly into the active cursor position for fast reusable text anywhere on the desktop.
+
+**The DecisionsAI Codex plugin work began.** A new Codex-side plugin wrapper was scaffolded so DecisionsAI can hand project, ticket, workflow, and Initiative work into Codex with clearer operating instructions. It includes the first DecisionsAI Codex worker skill, local install notes, backend checks, and the feedback shape needed for Codex progress to flow back into DecisionsAI.
+
+**The remote control got a cleaner, more capable control surface.** Dictation, agent submission, screenshots, snippets, skills, workflows, and tab actions now have clearer separation and stronger connection handling. The remote app gained Skills/Workflows parity, better screenshot handling, and a smoother launch experience from the website.
+
+**TTS, dictation, and spoken instructions are smoother in live use.** ElevenLabs and other live TTS providers now get stronger sentence normalization and stream handling for slashes, punctuation, long-form speech, and sentence boundaries. Dictation also understands contextual phrases like "type that out" as an instruction to use the previous assistant response.
+
+**Project CLI backends moved closer to a real adapter system.** Pi remains the default, while project coding work now has a cleaner backend shape for Cursor CLI, Claude Code, Codex, and future CLIs. The Projects CLI tab was tightened so backend selection, setup state, model availability, and project details share one clearer contract.
+
+**Initiative, workflows, and ticket execution are more connected.** Initiative settings now have stronger boundaries for proactive behavior, work scanning, Telegram prompts, and workflow handoff. Workflow steps gained better result packets, feedback contracts, Codex-aware execution plumbing, and regression coverage around ticket-to-workflow-to-agent loops, giving the agent a clearer path from noticing work to asking, executing, and reporting back.
+
+**Telegram and WhatsApp relay stability improved on the server side.** The remote relay moved toward Postgres-backed production storage, runtime artifacts are ignored properly, screenshot/media cleanup is in place, websocket auth paths are restored, and the relay services were rebuilt/redeployed cleanly. The result is a steadier bridge between the desktop app, Telegram, WhatsApp, and the remote web UI.
+
+**Regression coverage expanded across the agentic loop.** Added and extended tests for TTS sentence streaming, live provider cleaning, dictation context, Telegram delivery stability, project CLI backend contracts, Codex workflow handoff, result packets, workflow feedback, initiative work actions, and remote workflow behavior.
+
+---
+
 ## [2.7.14] - 2026-05-10
 
 ### Agentic workflow tightening, chat trace polish, hotkeys, dictation, and audit follow-through

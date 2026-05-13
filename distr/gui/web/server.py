@@ -100,6 +100,7 @@ def create_app() -> FastAPI:
     _mount_static(app, "/docs/static/js", static_dir / "docs" / "js", "docs_js")
     _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js")
     _mount_static(app, "/actions/static/js", static_dir / "actions" / "js", "actions_js")
+    _mount_static(app, "/snippets/static/js", static_dir / "snippets" / "js", "snippets_js")
     _mount_static(app, "/workflows/static/js", static_dir / "workflows" / "js", "workflows_js")
     _mount_static(app, "/skills/static/js", static_dir / "skills" / "js", "skills_js")
     _mount_static(app, "/projects/static/js", static_dir / "projects" / "js", "projects_js")
@@ -287,6 +288,14 @@ def create_app() -> FastAPI:
     @app.get("/actions", response_class=HTMLResponse)
     async def actions_redirect():
         return RedirectResponse(url="/actions/", status_code=302)
+
+    @app.get("/snippets/", response_class=HTMLResponse)
+    async def snippets_page(request: Request):
+        return page_templates.TemplateResponse(request, "snippets/snippets.html", _template_context(request, "/snippets"))
+
+    @app.get("/snippets", response_class=HTMLResponse)
+    async def snippets_redirect():
+        return RedirectResponse(url="/snippets/", status_code=302)
 
     @app.get("/skills/", response_class=HTMLResponse)
     async def skills_page(request: Request):
