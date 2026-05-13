@@ -204,11 +204,27 @@ class TelegramRemoteControlMixin:
                     screen_number = command_data.get("screen_number", 1)
                     import struct
                     screenshot_data = self._capture_screen_screenshot(screen_number)
-                    if "error" not in screenshot_data:
-                        image_data = screenshot_data.get("image_data")
-                        if image_data:
-                            header = struct.pack(">H", screen_number)
-                            self._send_websocket_binary(header + image_data)
+                    if "error" in screenshot_data:
+                        self._send_websocket_message({
+                            "type": "remote_control_response",
+                            "command": "screenshot_stream",
+                            "request_id": request_id,
+                            "error": screenshot_data.get("error") or "Screenshot capture failed",
+                            "data": {"screen_number": screen_number},
+                        })
+                        return
+                    image_data = screenshot_data.get("image_data")
+                    if image_data:
+                        header = struct.pack(">H", screen_number)
+                        self._send_websocket_binary(header + image_data)
+                    else:
+                        self._send_websocket_message({
+                            "type": "remote_control_response",
+                            "command": "screenshot_stream",
+                            "request_id": request_id,
+                            "error": "Screenshot capture returned no image",
+                            "data": {"screen_number": screen_number},
+                        })
                     # No JSON response needed — the binary frame IS the response
 
                 elif command == "webrtc_offer":
