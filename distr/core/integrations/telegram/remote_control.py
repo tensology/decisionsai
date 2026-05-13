@@ -2202,12 +2202,60 @@ class TelegramRemoteControlMixin:
             return None
 
     def _run_coro_sync(self, coro):
-        """Execute async coroutine from this sync command handler."""
-        loop = asyncio.new_event_loop()
+        """Execute a WebRTC coroutine on a persistent loop.
+
+        aiortc keeps ICE and peer-connection tasks alive after the answer is
+        created. Creating a throwaway loop per command closes the loop while
+        those tasks still own transports, which breaks reconnect/cleanup.
+        """
+        loop = self._ensure_webrtc_loop()
+        future = None
         try:
-            return loop.run_until_complete(coro)
-        finally:
-            loop.close()
+            future = asyncio.run_coroutine_threadsafe(coro, loop)
+            return future.result(timeout=15)
+        except Exception:
+            if future is not None:
+                future.cancel()
+            elif hasattr(coro, "close"):
+                try:
+                    coro.close()
+                except Exception:
+                    pass
+            raise
+
+    def _ensure_webrtc_loop(self):
+        """Start or return the persistent asyncio loop used by aiortc."""
+        loop = getattr(self, "_webrtc_loop", None)
+        thread = getattr(self, "_webrtc_loop_thread", None)
+        if loop and not loop.is_closed() and thread and thread.is_alive():
+            return loop
+
+        ready = threading.Event()
+        loop = asyncio.new_event_loop()
+
+        def _run_loop():
+            asyncio.set_event_loop(loop)
+            ready.set()
+            try:
+                loop.run_forever()
+            finally:
+                pending = asyncio.all_tasks(loop)
+                for task in pending:
+                    task.cancel()
+                if pending:
+                    loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
+                loop.close()
+
+        thread = threading.Thread(
+            target=_run_loop,
+            name="TelegramWebRTCLoop",
+            daemon=True,
+        )
+        self._webrtc_loop = loop
+        self._webrtc_loop_thread = thread
+        thread.start()
+        ready.wait(timeout=2)
+        return loop
 
     def _create_webrtc_answer(
         self, screen_number: int, fps: float, offer_sdp: str, offer_type: str = "offer"
@@ -2232,8 +2280,17 @@ class TelegramRemoteControlMixin:
             self._screen_streamer.stop()
             self._screen_streamer = None
         if hasattr(self, "_webrtc_session") and self._webrtc_session:
-            self._run_coro_sync(self._webrtc_session.close())
+            session = self._webrtc_session
             self._webrtc_session = None
+            try:
+                self._run_coro_sync(session.close())
+            except RuntimeError as err:
+                if "Event loop is closed" in str(err):
+                    logger.warning("WebRTC session cleanup hit a closed loop; dropping stale session")
+                else:
+                    raise
+            except Exception as err:
+                logger.warning("WebRTC session cleanup failed: %s", err, exc_info=True)
 
     def _post_screenshot_to_server(
         self, channel: str, screen_number: int, image_data: bytes, image_format: str
