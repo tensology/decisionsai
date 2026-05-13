@@ -705,12 +705,6 @@ class TelegramWebSocketManager(
         # Release sleep prevention
         self._release_sleep()
 
-        # Stop any active screen stream
-        try:
-            self._stop_screen_stream()
-        except Exception:
-            pass
-
         if not self._active_disconnect:
             logger.warning(
                 "[Telegram] ⚠️ WebSocket disconnected unexpectedly (will auto-reconnect, attempt #%d)",
@@ -1057,4 +1051,3 @@ class TelegramWebSocketManager(
             )
         except Exception as e:
             logger.error(f"Error refreshing screens: {e}")
-
