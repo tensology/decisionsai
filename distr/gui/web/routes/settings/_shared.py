@@ -327,9 +327,10 @@ class ActionCreate(BaseModel):
 
 class SnippetUpdate(BaseModel):
     title: Optional[str] = None
+    text: Optional[str] = None
     description: Optional[str] = None
-    additional_trigger_words: Optional[str] = "[]"
-    remote_hotkey: Optional[str] = ""
+    additional_trigger_words: Optional[str] = None
+    remote_hotkey: Optional[str] = None
 
 
 class ProjectUpdate(BaseModel):

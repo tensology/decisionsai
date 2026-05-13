@@ -50,9 +50,8 @@
     return parts.join("+");
   }
 
-  function snippetTitle(index, text) {
-    var firstLine = String(text || "").trim().split(/\n/)[0].trim();
-    return firstLine ? firstLine.slice(0, 80) : "Snippet " + (index + 1);
+  function getSnippetText(snippet) {
+    return String((snippet && (snippet.text || snippet.description)) || "");
   }
 
   function render() {
@@ -65,7 +64,7 @@
     root.innerHTML = snippets.map(function(snippet, index) {
       return "<div class=\"snippet-row grid gap-3 px-6 py-4 border-b border-white/10 items-start\" style=\"grid-template-columns:56px minmax(0,1fr) 220px 96px\" data-id=\"" + snippet.id + "\">" +
         "<div class=\"snippet-num w-8 h-8 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold text-gray-300\">" + (index + 1) + "</div>" +
-        "<textarea class=\"snippet-text w-full min-h-[54px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm resize-y focus:border-[#f97316] focus:outline-none\" rows=\"2\" placeholder=\"Snippet text...\">" + esc(snippet.description || "") + "</textarea>" +
+        "<textarea class=\"snippet-text w-full min-h-[54px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm resize-y focus:border-[#f97316] focus:outline-none\" rows=\"2\" placeholder=\"Snippet text...\">" + esc(getSnippetText(snippet)) + "</textarea>" +
         "<div class=\"space-y-2\">" +
           "<button type=\"button\" class=\"snippet-hotkey w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-left text-sm " + (snippet.remote_hotkey ? "text-[#93c5fd]" : "text-gray-500") + "\" data-hotkey=\"" + esc(snippet.remote_hotkey || "") + "\">" + (snippet.remote_hotkey ? esc(formatHotkey(snippet.remote_hotkey)) : "Optional") + "</button>" +
           (snippet.remote_hotkey ? "<button type=\"button\" class=\"snippet-clear text-xs text-red-400 hover:text-red-300\">Clear</button>" : "") +
@@ -134,14 +133,12 @@
   function saveSnippet(row, id) {
     var text = (row.querySelector(".snippet-text").value || "").trim();
     var hotkey = row.querySelector(".snippet-hotkey").getAttribute("data-hotkey") || "";
-    var index = snippets.findIndex(function(s) { return s.id === id; });
     apiFetch("/api/snippets/" + id, {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: snippetTitle(index, text),
+        text: text,
         description: text,
-        additional_trigger_words: "[]",
         remote_hotkey: hotkey
       })
     }).then(function() {
@@ -153,14 +150,12 @@
   }
 
   function addSnippet() {
-    var next = snippets.length + 1;
     apiFetch("/api/snippets", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        title: "Snippet " + next,
+        text: "",
         description: "",
-        additional_trigger_words: "[]",
         remote_hotkey: ""
       })
     }).then(function() {
