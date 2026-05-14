@@ -147,6 +147,7 @@ def register_routes(router, templates):
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
             "kanban_provider": (settings.get("kanban_agent_orchestrator_provider") or "").strip().lower() or "",
             "kanban_model": (settings.get("kanban_agent_orchestrator_model") or "").strip(),
+            "instant_dictation": settings.get("instant_dictation", True),
         })
 
     @router.post("/llms")
@@ -209,6 +210,7 @@ def register_routes(router, templates):
         settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
         settings["kanban_agent_orchestrator_provider"] = (settings_data.kanban_provider or "").strip()
         settings["kanban_agent_orchestrator_model"] = (settings_data.kanban_model or "").strip()
+        settings["instant_dictation"] = bool(settings_data.instant_dictation)
 
         save_settings_to_db(settings)
 

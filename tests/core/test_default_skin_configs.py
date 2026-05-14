@@ -91,13 +91,13 @@ class TestOracleSkin:
         assert oracle.events["dictation"].glow_style == "fade"
 
     def test_dictation_glow_color(self, oracle) -> None:
-        assert tuple(oracle.events["dictation"].glow_color) == (255, 193, 7)
+        assert tuple(oracle.events["dictation"].glow_color) == (76, 175, 80)
 
     def test_ptt_active_glow_style(self, oracle) -> None:
         assert oracle.events["ptt_active"].glow_style == "pulse"
 
     def test_file_drop_success_glow_style(self, oracle) -> None:
-        assert oracle.events["file_drop_success"].glow_style == "flash"
+        assert oracle.events["file_drop_success"].glow_style == "fade"
 
     def test_recording_action_tray_icon(self, oracle) -> None:
         assert oracle.events["recording_action"].tray_icon == "recording"

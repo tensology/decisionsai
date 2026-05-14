@@ -66,9 +66,9 @@
       "show_chat_bubble": false,
       "glow": true,
       "glow_color": [
-        255,
-        193,
-        7
+        76,
+        175,
+        80
       ],
       "glow_speed": 1000,
       "glow_style": "fade",
@@ -96,12 +96,12 @@
       "show_chat_bubble": false,
       "glow": true,
       "glow_color": [
-        0,
         255,
-        0
+        255,
+        255
       ],
-      "glow_speed": 500,
-      "glow_style": "flash",
+      "glow_speed": 650,
+      "glow_style": "fade",
       "tray_icon": "default",
       "playback": "loop"
     },

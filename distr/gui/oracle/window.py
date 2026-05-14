@@ -683,8 +683,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         is_round = r.shape == "round"
 
         if has_border or has_shadow:
-            self.shadow_size = int(self.content_size * 0.022)
-            self.stroke_width = int(self.content_size * 0.033)
+            self.shadow_size = max(3, int(self.content_size * 0.033))
+            self.stroke_width = max(4, int(self.content_size * 0.045))
         else:
             self.shadow_size = 0
             self.stroke_width = 0
@@ -1045,16 +1045,24 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         # don't re-fill with the last OracleRenderer brush).
         is_oracle = self._skin_config and self._skin_config.type == "oracle"
         if is_oracle and self._shadow_color.alpha() > 0:
-            glow_pen = QtGui.QPen(
-                QtGui.QColor(self._shadow_color),
-                max(1, int(self.stroke_width * 1.5)),
-                QtCore.Qt.PenStyle.SolidLine,
-                QtCore.Qt.PenCapStyle.RoundCap,
-                QtCore.Qt.PenJoinStyle.RoundJoin
-            )
             painter.setBrush(Qt.BrushStyle.NoBrush)
-            painter.setPen(glow_pen)
-            painter.drawEllipse(content_rect)
+            base_color = QtGui.QColor(self._shadow_color)
+            glow_rect = QtCore.QRectF(content_rect).adjusted(-self.stroke_width * 0.55,
+                                                             -self.stroke_width * 0.55,
+                                                             self.stroke_width * 0.55,
+                                                             self.stroke_width * 0.55)
+            for width_factor, alpha_factor in ((3.2, 0.20), (2.1, 0.38), (1.1, 0.78)):
+                color = QtGui.QColor(base_color)
+                color.setAlpha(max(0, min(255, int(base_color.alpha() * alpha_factor))))
+                glow_pen = QtGui.QPen(
+                    color,
+                    max(1, int(self.stroke_width * width_factor)),
+                    QtCore.Qt.PenStyle.SolidLine,
+                    QtCore.Qt.PenCapStyle.RoundCap,
+                    QtCore.Qt.PenJoinStyle.RoundJoin
+                )
+                painter.setPen(glow_pen)
+                painter.drawEllipse(glow_rect)
 
 
 

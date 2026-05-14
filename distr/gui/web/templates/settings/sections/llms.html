@@ -6,18 +6,39 @@
 
     <div class="space-y-4">
         <!-- Speech to Text (STT) -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-3 text-center text-base font-semibold text-white">Speech to Text (STT)</h3>
-            <div class="flex items-center gap-4 llms-row">
-                <label for="stt_model" class="text-sm font-medium text-[#ececf1] w-16 text-right">Model:</label>
-                <select id="stt_model" name="stt_model"
-                        class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
-                                focus:outline-none focus:border-[#10a37f] transition-colors
-                                hover:border-[#7a7c8c] cursor-pointer">
-                    <option value="vosk">Vosk (Local & Offline)</option>
-                    <option value="whisper">Whisper.cpp (Local & Offline)</option>
-                    <!-- Online/local optional providers are populated only when available. -->
-                </select>
+        <div class="grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(240px,320px)]">
+            <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                <h3 class="mb-3 text-center text-base font-semibold text-white">Speech to Text (STT)</h3>
+                <div class="flex items-center gap-4 llms-row">
+                    <label for="stt_model" class="text-sm font-medium text-[#ececf1] w-16 text-right">Model:</label>
+                    <select id="stt_model" name="stt_model"
+                            class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-2 text-white text-sm
+                                    focus:outline-none focus:border-[#10a37f] transition-colors
+                                    hover:border-[#7a7c8c] cursor-pointer">
+                        <option value="vosk">Vosk (Local & Offline)</option>
+                        <option value="whisper">Whisper.cpp (Local & Offline)</option>
+                        <!-- Online/local optional providers are populated only when available. -->
+                    </select>
+                </div>
+            </div>
+
+            <!-- Instant Dictation -->
+            <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+                <label class="flex items-start cursor-pointer group">
+                    <input type="checkbox" id="instant_dictation" name="instant_dictation"
+                            class="w-4 h-4 mt-0.5 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 min-w-0">
+                        <span class="block text-sm text-[#ececf1] group-hover:text-white transition-colors">
+                            Instant dictation
+                        </span>
+                        <span class="block text-xs text-gray-400 mt-1 leading-5">
+                            Insert dictated text in one fast pass without using the clipboard.
+                        </span>
+                    </span>
+                </label>
             </div>
         </div>
 

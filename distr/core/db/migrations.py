@@ -1720,6 +1720,7 @@ def run_migrations():
         ("dictation_hotkey_enabled", f"BOOLEAN DEFAULT {int(HOTKEY_DEFAULTS['dictation_hotkey_enabled'])}"),
         ("dictation_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_modifier']}'"),
         ("dictation_hotkey_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_key']}'"),
+        ("instant_dictation", "BOOLEAN DEFAULT 1"),
     ]:
         try:
             with Session() as session:

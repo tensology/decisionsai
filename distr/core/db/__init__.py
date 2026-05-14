@@ -143,6 +143,7 @@ class Settings(Base):
     dictation_hotkey_enabled = Column(Boolean, default=HOTKEY_DEFAULTS['dictation_hotkey_enabled'])
     dictation_hotkey_modifier = Column(String, default=HOTKEY_DEFAULTS['dictation_hotkey_modifier'])
     dictation_hotkey_key = Column(String, default=HOTKEY_DEFAULTS['dictation_hotkey_key'])
+    instant_dictation = Column(Boolean, default=True)
     skin_nav_hotkey_previous_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier'])
     skin_nav_hotkey_previous_key = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key'])
     skin_nav_hotkey_next_modifier = Column(String, default=HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier'])

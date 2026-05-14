@@ -89,6 +89,7 @@ DEFAULT_SETTINGS = {
     'dictation_hotkey_enabled': HOTKEY_DEFAULTS['dictation_hotkey_enabled'],
     'dictation_hotkey_modifier': HOTKEY_DEFAULTS['dictation_hotkey_modifier'],
     'dictation_hotkey_key': HOTKEY_DEFAULTS['dictation_hotkey_key'],
+    'instant_dictation': True,
     'skin_nav_hotkey_previous_modifier': HOTKEY_DEFAULTS['skin_nav_hotkey_previous_modifier'],
     'skin_nav_hotkey_previous_key': HOTKEY_DEFAULTS['skin_nav_hotkey_previous_key'],
     'skin_nav_hotkey_next_modifier': HOTKEY_DEFAULTS['skin_nav_hotkey_next_modifier'],
@@ -307,4 +308,4 @@ def validate_settings(settings: Dict[str, Any]) -> bool:
         return True
     except Exception as e:
         logging.error(f"Error validating settings: {str(e)}")
-        return False 
+        return False

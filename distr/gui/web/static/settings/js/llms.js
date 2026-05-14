@@ -71,6 +71,10 @@ async function loadLLMsSettings() {
         const settings = await response.json();
 
         populateSttOptions(settings);
+        const instantDictation = document.getElementById('instant_dictation');
+        if (instantDictation) {
+            instantDictation.checked = settings.instant_dictation !== undefined ? settings.instant_dictation : true;
+        }
 
         const llmTypes = ['conversational', 'coding', 'vision', 'image', 'workflow', 'computer_use', 'kanban'];
         const optionalTypes = ['workflow', 'computer_use', 'kanban'];
@@ -143,7 +147,8 @@ async function saveLLMsSettings() {
             computer_use_provider: document.getElementById('computer_use_provider').value,
             computer_use_model: document.getElementById('computer_use_model').value,
             kanban_provider: document.getElementById('kanban_provider').value,
-            kanban_model: document.getElementById('kanban_model').value
+            kanban_model: document.getElementById('kanban_model').value,
+            instant_dictation: document.getElementById('instant_dictation') ? document.getElementById('instant_dictation').checked : true
         };
 
         const response = await fetch('/api/llms', {

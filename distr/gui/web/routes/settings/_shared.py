@@ -237,6 +237,7 @@ class LLMSettings(BaseModel):
     computer_use_model: str = ""
     kanban_provider: str = ""
     kanban_model: str = ""
+    instant_dictation: bool = True
 
 
 class AdvancedSettings(BaseModel):

@@ -59,17 +59,16 @@ class OracleRenderer(RenderStrategy):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self.shadow:
-            shadow_color = QColor(0, 0, 0, 80)
-            painter.setBrush(QBrush(shadow_color))
+            halo_rect = content_rect.adjusted(-2, -2, 2, 2)
             painter.setPen(Qt.PenStyle.NoPen)
-            shadow_rect = content_rect.adjusted(2, 2, 2, 2)
-            painter.drawEllipse(shadow_rect)
+            painter.setBrush(QBrush(QColor(0, 0, 0, 80)))
+            painter.drawEllipse(halo_rect)
 
-        # Black fill only: a contrasting pen on a translucent window anti-aliases
-        # to a light gray rim on dark desktops; border=True still reserves padding
-        # via skin geometry without drawing this stroke.
-        painter.setPen(Qt.PenStyle.NoPen)
         painter.setBrush(QBrush(QColor(0, 0, 0)))
+        if self.border:
+            painter.setPen(QColor(0, 0, 0, 220))
+        else:
+            painter.setPen(Qt.PenStyle.NoPen)
         painter.drawEllipse(content_rect)
 
     def create_mask(self, width: int, height: int) -> QRegion:
