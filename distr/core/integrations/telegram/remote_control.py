@@ -2146,9 +2146,11 @@ class TelegramRemoteControlMixin:
                 "screen_number": str(screen_number),
                 "format": image_format,
             }
+            relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+            headers = {"X-Relay-Internal-Token": relay_token} if relay_token else {}
 
             logger.info(f"POSTing screenshot to {api_url} (size={len(image_data)})")
-            response = requests.post(api_url, data=form_data, files=files, timeout=30)
+            response = requests.post(api_url, data=form_data, files=files, headers=headers, timeout=30)
 
             if response.status_code == 200:
                 return response.json()

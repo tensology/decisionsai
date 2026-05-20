@@ -930,6 +930,9 @@ def register_routes(router, templates):
 
             api_url = f"{server_base.rstrip('/')}/api/telegram/link/request/"
             headers = {"Content-Type": "application/json"}
+            relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+            if relay_token:
+                headers["X-Relay-Internal-Token"] = relay_token
 
             payload_str = "{}"
 

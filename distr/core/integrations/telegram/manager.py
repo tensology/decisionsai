@@ -11,6 +11,7 @@ from typing import Optional, Dict, Any, List
 from datetime import datetime, timezone
 import platform
 import subprocess
+from urllib.parse import quote
 
 # Qt Imports
 from PyQt6.QtCore import QObject, pyqtSignal, pyqtSlot, QTimer, QUrl, QThread
@@ -412,11 +413,12 @@ class TelegramWebSocketManager(
 
         # Prepare URL
         url_str = self.server_url
+        ws_token = self._fetch_ws_token()
+        if not ws_token:
+            logger.error("Cannot connect: relay did not issue a websocket token")
+            return
         params = []
-        if self.telegram_user_id:
-            params.append(f"telegram_user_id={self.telegram_user_id}")
-        elif self.app_user_id:
-            params.append(f"app_user_id={self.app_user_id}")
+        params.append(f"token={quote(ws_token, safe='')}")
 
         if params:
             url_str = f"{url_str}?{'&'.join(params)}"
@@ -454,6 +456,31 @@ class TelegramWebSocketManager(
             logger.debug("[Telegram] Could not pre-configure SSL (non-critical): %s", e)
 
         self.socket.open(QUrl(url_str))
+
+    def _fetch_ws_token(self) -> Optional[str]:
+        """Request a short-lived relay WebSocket JWT using the internal relay token."""
+        if requests is None:
+            return None
+        base = self.server_url.split("/ws/")[0]
+        base = base.replace("wss://", "https://").replace("ws://", "http://")
+        api_url = f"{base}/api/telegram/ws-token"
+        relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+        headers = {"Content-Type": "application/json"}
+        if relay_token:
+            headers["X-Relay-Internal-Token"] = relay_token
+        payload = {"app_user_id": self.app_user_id or ""}
+        if self.telegram_user_id:
+            payload["telegram_user_id"] = self.telegram_user_id
+        try:
+            response = requests.post(api_url, headers=headers, json=payload, timeout=10)
+            if response.status_code != 200:
+                logger.error("[Telegram] WS token request failed: HTTP %s %s", response.status_code, response.text[:200])
+                return None
+            token = (response.json().get("token") or "").strip()
+            return token or None
+        except Exception as e:
+            logger.error("[Telegram] WS token request error: %s", e, exc_info=True)
+            return None
 
     def disconnect(self, check_staleness: bool = False):
         """
