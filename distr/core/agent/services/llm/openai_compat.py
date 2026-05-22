@@ -1064,47 +1064,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
     async def _handle_generation_error(self, e):
         """Parse and handle API errors. Send user-friendly messages."""
-        err_str = str(e).lower()
-        error_code = getattr(e, 'status_code', None)
-
-        is_rate_limit = any(k in err_str for k in ('429', 'rate_limit', 'rate-limited', 'insufficient_quota', 'exceeded your current quota'))
-
-        if is_rate_limit:
-            is_quota = 'insufficient_quota' in err_str or 'exceeded your current quota' in err_str
-            if is_quota:
-                user_msg = f"{self.SERVICE_NAME} API Quota Exceeded. Check your billing. Model: {self._model_name}"
-            else:
-                user_msg = f"{self.SERVICE_NAME} Rate Limit Exceeded. Model: {self._model_name}"
-            await self.push_frame(ErrorFrame(error=user_msg))
-            if getattr(self, '_is_telegram_request', False):
-                self._telegram_fallback_text = "Sorry, the API is temporarily overloaded. Please try again in a moment."
-            if self.event_queue:
-                chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                self.event_queue.put(('chat_stream_error', {'error': user_msg, 'chat_id': chat_id}), block=False)
-        else:
-            error_msg = str(e)
-            if self.SERVICE_NAME == "OpenRouterLLMService":
-                if "401" in err_str or "user not found" in err_str:
-                    error_msg = "OpenRouter authentication failed (401). Check your OpenRouter key in Settings."
-                elif "no endpoints found matching your data policy" in err_str:
-                    error_msg = ("OpenRouter blocked this model: your privacy settings don't allow it. "
-                                 "Open https://openrouter.ai/settings/privacy to adjust.")
-                elif "developer instruction" in err_str:
-                    error_msg = "This OpenRouter model does not support system instructions. Try another model."
-
-            await self.push_frame(ErrorFrame(error=error_msg))
-            if getattr(self, '_is_telegram_request', False):
-                if 'connection' in err_str:
-                    tg_err = "Sorry, I couldn't connect to the API."
-                elif 'timeout' in err_str:
-                    tg_err = "Sorry, the request timed out."
-                else:
-                    tg_err = "Sorry, something went wrong. Please try again."
-                self._telegram_fallback_text = tg_err
-            if self.event_queue:
-                chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                fmt = f"Error code: {error_code} - {error_msg}" if error_code else error_msg
-                self.event_queue.put(('chat_stream_error', {'error': fmt, 'chat_id': chat_id}), block=False)
+        await self._surface_model_error(e, operation="generate a response")
 
     def _cleanup_generation(self, end_frame_sent, full_content="", follow_up_content=""):
         """Cleanup telegram flags, emit typing finished. Returns True if EndFrame needed."""

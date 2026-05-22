@@ -1236,6 +1236,9 @@ function createChatItem(chat) {
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
     div.setAttribute('title', 'Double-click to load into agent');
+    div.setAttribute('tabindex', '0');
+    div.setAttribute('role', 'option');
+    div.setAttribute('aria-selected', chat.id === currentChatId ? 'true' : 'false');
     if (chat.id === currentChatId) {
         div.classList.add('active');
     }
@@ -1264,6 +1267,9 @@ function createChatItem(chat) {
     div.addEventListener('click', (e) => {
         selectChat(chat.id);
     });
+    div.addEventListener('focus', () => {
+        if (currentChatId !== chat.id) selectChat(chat.id);
+    });
     div.addEventListener('dblclick', (e) => {
         loadChat(chat.id);
     });
@@ -1281,6 +1287,30 @@ function createChatItem(chat) {
 
     return div;
 }
+
+function bindChatListKeyboard() {
+    if (!chatList || chatList.dataset.keyboardBound === '1') return;
+    chatList.dataset.keyboardBound = '1';
+    chatList.addEventListener('keydown', (e) => {
+        if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
+        const row = e.target && e.target.closest ? e.target.closest('.chat-item') : null;
+        if (!row) return;
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            const rows = Array.from(chatList.querySelectorAll('.chat-item'));
+            const idx = rows.indexOf(row);
+            const next = rows[Math.max(0, Math.min(rows.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
+            if (next) next.focus();
+        } else if (e.key === 'Enter') {
+            e.preventDefault();
+            selectChat(parseInt(row.getAttribute('data-chat-id'), 10));
+        } else if (e.key === 'Delete') {
+            e.preventDefault();
+            deleteChat(parseInt(row.getAttribute('data-chat-id'), 10));
+        }
+    });
+}
+bindChatListKeyboard();
 
 function showChatContextMenu(e, chatId) {
     contextMenuChatId = chatId;
@@ -1451,6 +1481,7 @@ function updateActiveChat() {
     document.querySelectorAll('.chat-item').forEach(item => {
         const id = parseInt(item.getAttribute('data-chat-id'), 10);
         item.classList.toggle('active', id === currentChatId);
+        item.setAttribute('aria-selected', id === currentChatId ? 'true' : 'false');
         item.classList.toggle('loaded', id === loadedChatId);
         const inAgent = (id === agentCurrentChatId);
         item.classList.toggle('in-agent', inAgent);
@@ -3378,7 +3409,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'supertonic', 'chatterbox']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;
@@ -3468,13 +3499,32 @@ function openChatCustomVoiceModal(context) {
 
     // Show/hide gender row (only for kokoro)
     document.getElementById('chatCv_genderRow').style.display = (provider === 'kokoro') ? '' : 'none';
+    const audioInput = document.getElementById('chatCv_audio');
+    const help = document.getElementById('chatCv_uploadHelp');
+    const recordBtn = document.getElementById('chatCv_mode_record');
+    if (provider === 'supertonic') {
+        audioInput.accept = '.json';
+        audioInput.multiple = false;
+        if (help) help.textContent = 'Upload a Supertonic Voice Builder .json voice style file.';
+        if (recordBtn) recordBtn.classList.add('hidden');
+    } else if (provider === 'chatterbox') {
+        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
+        audioInput.multiple = false;
+        if (help) help.textContent = 'Upload a clean 5-20 second reference clip for Chatterbox voice cloning';
+        if (recordBtn) recordBtn.classList.remove('hidden');
+    } else {
+        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
+        audioInput.multiple = true;
+        if (help) help.textContent = 'Upload audio clips of the voice to clone';
+        if (recordBtn) recordBtn.classList.remove('hidden');
+    }
 
     const modal = document.getElementById('chatCustomVoiceModal');
     modal.classList.remove('hidden');
     modal.classList.add('flex');
     document.getElementById('chatCv_name').focus();
 
-    document.getElementById('chatCv_audio').onchange = function() {
+    audioInput.onchange = function() {
         document.getElementById('chatCv_submitBtn').disabled = !(this.files && this.files.length > 0);
     };
 }
@@ -3531,8 +3581,14 @@ function submitChatCustomVoice(e) {
     const isRecord = _chatCvAudioMode === 'record';
 
     if (!name) { errEl.textContent = 'Name is required'; errEl.classList.remove('hidden'); return false; }
+    if (provider === 'supertonic' && isRecord) { errEl.textContent = 'Supertonic custom voices require a Voice Builder .json file'; errEl.classList.remove('hidden'); return false; }
     if (isRecord && !_chatCvRecordedBlob) { errEl.textContent = 'Please record a voice sample'; errEl.classList.remove('hidden'); return false; }
     if (!isRecord && (!audioInput.files || audioInput.files.length === 0)) { errEl.textContent = 'Audio file required'; errEl.classList.remove('hidden'); return false; }
+    if (provider === 'supertonic' && !Array.from(audioInput.files).some(f => f.name.toLowerCase().endsWith('.json'))) {
+        errEl.textContent = 'Supertonic custom voices require a Voice Builder .json file';
+        errEl.classList.remove('hidden');
+        return false;
+    }
 
     const fd = new FormData();
     fd.append('name', name);

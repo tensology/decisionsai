@@ -36,6 +36,7 @@ class BackendTaskResult:
     output: str = ""
     error: str = ""
     session_id: Optional[int] = None
+    execution_session_id: Optional[int] = None
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
@@ -49,8 +50,16 @@ class ProjectTask:
     instruction: str
     chat_id: Optional[int] = None
     audit_id: Optional[int] = None
+    run_id: Optional[int] = None
+    workflow_id: Optional[int] = None
+    step_id: Optional[int] = None
     origin: str = "cli"
     model: str = ""
+    ticket_id: Optional[int] = None
+    ticket_complexity: str = "medium"
+    codex_reasoning_effort: str = ""
+    codex_service_tier: str = ""
+    execution_session_id: Optional[int] = None
 
 
 class ProjectCliBackend:

@@ -303,11 +303,11 @@
                 <!-- Upload panel -->
                 <div id="cv_upload_panel">
                     <input type="file" id="cv_audio" name="audio" multiple
-                           accept=".wav,.mp3,.m4a,.ogg,.flac,.webm"
+                           accept=".wav,.mp3,.m4a,.ogg,.flac,.webm,.json"
                            class="w-full text-sm text-gray-400 file:mr-3 file:py-1.5 file:px-3 file:rounded-md
                                   file:border file:border-[#565869] file:bg-[#454655] file:text-[#ececf1] file:text-xs
                                   file:cursor-pointer file:hover:bg-[#565869] file:transition-colors cursor-pointer">
-                    <p class="text-xs text-gray-500 mt-1">Upload 1 or more audio clips of the voice to clone (.wav, .mp3, .m4a, .ogg, .flac)</p>
+                    <p id="cv_upload_help" class="text-xs text-gray-500 mt-1">Upload 1 or more audio clips of the voice to clone (.wav, .mp3, .m4a, .ogg, .flac)</p>
                 </div>
                 <!-- Record panel (wizard) -->
                 <div id="cv_record_panel" class="hidden">

@@ -20,6 +20,31 @@
         return !!msg && !waMsgHasLinkedTicket(msg);
     }
 
+    function parseWaDateSeconds(value) {
+        if (!value) return 0;
+        if (typeof value === "number") return value > 100000000000 ? Math.floor(value / 1000) : value;
+        var numeric = Number(value);
+        if (!isNaN(numeric) && numeric > 0) return numeric > 100000000000 ? Math.floor(numeric / 1000) : numeric;
+        var parsed = Date.parse(value);
+        return isNaN(parsed) ? 0 : Math.floor(parsed / 1000);
+    }
+
+    function getWaMessageSortTs(msg) {
+        if (!msg) return 0;
+        return parseWaDateSeconds(msg.whatsapp_timestamp) ||
+            parseWaDateSeconds(msg.timestamp) ||
+            parseWaDateSeconds(msg.created_date) ||
+            parseWaDateSeconds(msg.received_at) ||
+            parseWaDateSeconds(msg.received_at_utc) ||
+            0;
+    }
+
+    function sortWaMessagesAsc(a, b) {
+        var diff = getWaMessageSortTs(a) - getWaMessageSortTs(b);
+        if (diff) return diff;
+        return (Number(a && a.id) || 0) - (Number(b && b.id) || 0);
+    }
+
     function dedupeThreadMessages(messages) {
         var seen = {};
         return (messages || []).filter(function(msg) {
@@ -57,6 +82,25 @@
         if (sender.indexOf("@") !== -1) return sender;
         if (chatType === "group") return sender + "@g.us";
         return sender + "@s.whatsapp.net";
+    }
+
+    function waThreadMessagesUrl(sender, limit) {
+        return "/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=" + (limit || 200) + "&sort=desc";
+    }
+
+    function scrollWaThreadToBottom(msgList) {
+        if (!msgList) return;
+        var scrollNow = function() {
+            msgList.scrollTop = msgList.scrollHeight;
+        };
+        scrollNow();
+        requestAnimationFrame(scrollNow);
+        setTimeout(scrollNow, 100);
+        setTimeout(scrollNow, 350);
+        msgList.querySelectorAll("img, video").forEach(function(el) {
+            el.addEventListener("load", scrollNow, { once: true });
+            el.addEventListener("loadedmetadata", scrollNow, { once: true });
+        });
     }
 
     function waBlobToBase64(blob) {
@@ -701,7 +745,7 @@
             var chatListEl = document.getElementById("kb-wa-chats");
             var state = deps.getState();
             if (!state.waChats || !state.waChats.length || forceRefresh) el.textContent = "Loading...";
-            var localUrl = "/api/kanban/whatsapp/messages?limit=500";
+            var localUrl = "/api/kanban/whatsapp/messages?limit=2000&sort=desc";
 
             Promise.all([
                 deps.apiFetch(localUrl).then(function(data) {
@@ -795,7 +839,8 @@
                     chatMap[chatPhone] = { sender: chatPhone, name: chatName, messages: [], lastTs: 0, unread: 0, chat_type: isGroup ? "group" : "private" };
                 }
                 chatMap[chatPhone].messages.push(msg);
-                if (msg.whatsapp_timestamp && msg.whatsapp_timestamp > chatMap[chatPhone].lastTs) chatMap[chatPhone].lastTs = msg.whatsapp_timestamp;
+                var msgTs = getWaMessageSortTs(msg);
+                if (msgTs > chatMap[chatPhone].lastTs) chatMap[chatPhone].lastTs = msgTs;
                 if (!msg.processed) chatMap[chatPhone].unread++;
                 if (!msg.from_me && msg.sender_push_name && chatMap[chatPhone].chat_type !== "group") chatMap[chatPhone].name = msg.sender_push_name;
             });
@@ -835,13 +880,22 @@
                     if (!bestKey || bestDiff > ALIAS_WINDOW_SECONDS) return;
                     var target = chatMap[bestKey];
                     target.messages = (target.messages || []).concat(aliasChat.messages || []);
-                    target.messages.sort(function(a, b) { return (a.whatsapp_timestamp || 0) - (b.whatsapp_timestamp || 0); });
+                    target.messages.sort(sortWaMessagesAsc);
                     target.lastTs = Math.max(target.lastTs || 0, aliasChat.lastTs || 0);
                     delete chatMap[aliasKey];
                 });
             }
             state.waChats = Object.values(chatMap);
-            state.waChats.sort(function(a, b) { return b.lastTs - a.lastTs; });
+            state.waChats.forEach(function(chat) {
+                chat.messages = (chat.messages || []).sort(sortWaMessagesAsc);
+                var latest = chat.messages.length ? chat.messages[chat.messages.length - 1] : null;
+                chat.lastTs = latest ? getWaMessageSortTs(latest) : (chat.lastTs || 0);
+            });
+            state.waChats.sort(function(a, b) {
+                var diff = (b.lastTs || 0) - (a.lastTs || 0);
+                if (diff) return diff;
+                return String(a.name || a.sender || "").localeCompare(String(b.name || b.sender || ""));
+            });
 
             if (messages.length === 0) {
                 // Keep empty-state copy in one place (chat list), avoid duplicate text.
@@ -913,13 +967,44 @@
                 if (chat.lastTs) timeStr = new Date(chat.lastTs * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
                 var groupBadge = chat.chat_type === "group" ? ' <span class="text-[8px] bg-[#25D366]/20 text-[#25D366] px-1 rounded">Group</span>' : "";
                 var rowSel = state.waSidebarChatListMode ? (!!state.waSelectedChatPhones[sender] ? " checked" : "") : "";
-                html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5' + active + '" data-wa-sender="' + deps.esc(sender) + '" data-wa-name="' + deps.esc(name) + '" data-wa-chat-type="' + (chat.chat_type || "private") + '">';
+                html += '<div class="flex items-center gap-2 px-2 py-1.5 rounded cursor-pointer text-xs hover:bg-white/5 focus:outline-none focus:ring-2 focus:ring-[#25D366]/50' + active + '" data-wa-sender="' + deps.esc(sender) + '" data-wa-name="' + deps.esc(name) + '" data-wa-chat-type="' + (chat.chat_type || "private") + '" tabindex="0" role="option" aria-selected="' + (state.waSelectedJid === chat.sender ? "true" : "false") + '">';
                 if (state.waSidebarChatListMode) html += '<input type="checkbox" class="accent-[#25D366] w-3.5 h-3.5 shrink-0 kb-wa-chat-select" data-wa-phone="' + deps.esc(sender) + '"' + rowSel + " />";
                 html += '<div class="w-8 h-8 rounded-full bg-[#25D366]/20 flex items-center justify-center text-[#25D366] text-xs font-bold flex-shrink-0">' + deps.esc(name.charAt(0).toUpperCase()) + "</div>";
                 html += '<div class="flex-1 min-w-0"><div class="flex items-center justify-between"><span class="text-white truncate font-medium">' + name + "</span>" + groupBadge + '<span class="text-gray-500 text-[10px] ml-1 flex-shrink-0">' + timeStr + "</span></div>";
                 html += '<div class="text-gray-500 truncate">' + deps.esc(preview) + (unread ? ' <span class="text-[#25D366] font-bold">(' + unread + ")</span>" : "") + "</div></div></div>";
             });
             chatListEl.innerHTML = html;
+            function activateChatRow(row) {
+                var sender = String(row.dataset.waSender || "");
+                if (!sender) return;
+                var stateNow = deps.getState();
+                stateNow.waSelectedJid = sender;
+                stateNow.waSelectedChatType = String(row.dataset.waChatType || "private");
+                deps.setState(stateNow);
+                renderWhatsAppChatList();
+                showWhatsAppThread(sender, row.dataset.waName || sender);
+            }
+            chatListEl.onkeydown = function(e) {
+                if (e.target && e.target.closest && e.target.closest("input,textarea,select")) return;
+                var row = e.target && e.target.closest ? e.target.closest("[data-wa-sender]") : null;
+                if (!row) return;
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    var rows = Array.prototype.slice.call(chatListEl.querySelectorAll("[data-wa-sender]"));
+                    var idx = rows.indexOf(row);
+                    var next = rows[Math.max(0, Math.min(rows.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)))];
+                    if (next) {
+                        next.focus();
+                        activateChatRow(next);
+                    }
+                } else if (e.key === "Enter") {
+                    e.preventDefault();
+                    activateChatRow(row);
+                } else if (e.key === "Delete") {
+                    e.preventDefault();
+                    deps.waRunDeleteChatConfirm(row.dataset.waSender || "", row.dataset.waName || row.dataset.waSender || "this chat");
+                }
+            };
             chatListEl.querySelectorAll("[data-wa-sender]").forEach(function(row) {
                 row.addEventListener("click", function(e) {
                     var sender = String(row.dataset.waSender || "");
@@ -940,6 +1025,9 @@
                     deps.setState(stateNow);
                     renderWhatsAppChatList();
                     showWhatsAppThread(sender, row.dataset.waName || sender);
+                });
+                row.addEventListener("focus", function() {
+                    if (!deps.getState().waSidebarChatListMode) activateChatRow(row);
                 });
             });
             chatListEl.querySelectorAll(".kb-wa-chat-select").forEach(function(el) {
@@ -963,10 +1051,10 @@
             if (!msgList) return;
             var msgView = document.getElementById("kb-wa-thread-view");
             if (!msgView || msgView.classList.contains("hidden")) return;
-            deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(state.waSelectedJid) + "&limit=200").then(function(data) {
+            deps.apiFetch(waThreadMessagesUrl(state.waSelectedJid, 200)).then(function(data) {
                 if (!data || !data.messages) return;
                 var messages = deps.dedupeThreadMessages(data.messages || []);
-                messages.sort(function(a, b) { return (a.whatsapp_timestamp || 0) - (b.whatsapp_timestamp || 0); });
+                messages.sort(sortWaMessagesAsc);
                 if (messages.length === state.waThreadMessages.length) {
                     var sameSet = true;
                     for (var i = 0; i < messages.length; i++) {
@@ -1022,10 +1110,10 @@
             deps.setState(state);
             deps.updateWaThreadSelectToggleUi();
 
-            deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").then(function(data) {
+            deps.apiFetch(waThreadMessagesUrl(sender, 200)).then(function(data) {
                 if (data.messages && data.messages.length > 0) return data;
                 return deps.apiFetch("/api/kanban/whatsapp/sync", { method: "POST" }).then(function() {
-                    return deps.apiFetch("/api/kanban/whatsapp/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200");
+                    return deps.apiFetch(waThreadMessagesUrl(sender, 200));
                 }).catch(function() {
                     return deps.apiFetch("/api/kanban/whatsapp/relay/messages?jid_phone=" + encodeURIComponent(sender) + "&limit=200").catch(function() {
                         return { messages: [] };
@@ -1045,9 +1133,13 @@
                     });
                 }
                 deps.setState(nextState);
-                countEl.textContent = messages.length + " messages";
+                var totalMessages = Number(data.total);
+                var countText = (!isNaN(totalMessages) && totalMessages > messages.length)
+                    ? messages.length + " of " + totalMessages + " messages"
+                    : messages.length + " messages";
+                countEl.textContent = countText;
                 var snapCountEl = document.getElementById("kb-wa-thread-snapshot-count");
-                if (snapCountEl) snapCountEl.textContent = messages.length + " messages";
+                if (snapCountEl) snapCountEl.textContent = countText;
                 if (!messages.length) {
                     msgList.innerHTML = '<div class="text-sm text-gray-500 text-center py-8">No messages from this number yet</div>';
                     deps.setWaThreadControlsEnabled(false);
@@ -1064,7 +1156,7 @@
                         break;
                     }
                 }
-                messages.sort(function(a, b) { return (a.whatsapp_timestamp || 0) - (b.whatsapp_timestamp || 0); });
+                messages.sort(sortWaMessagesAsc);
                 var html = "";
                 var lastDateStr = "";
                 messages.forEach(function(msg) {
@@ -1106,7 +1198,7 @@
                 if (unticketedCount > 0) html += '<div class="flex items-center gap-3 py-4 mt-2 px-4"><div class="flex-1 h-px bg-white/10"></div><button type="button" id="kb-wa-thread-create-tickets" class="bg-[#f97316]/20 text-[#f97316] border border-[#f97316]/50 px-5 py-2 rounded-lg font-semibold text-sm hover:bg-[#f97316]/30 transition-colors inline-flex items-center gap-2 whitespace-nowrap">' + (deps.getState().waSelectionMode ? "Snapshot Selected Messages" : "Create Ticket from Messages") + "</button><div class=\"flex-1 h-px bg-white/10\"></div></div>";
                 else html += '<div class="flex items-center justify-center py-4 mt-2"><span class="text-xs text-gray-500 italic">All messages have been added to tickets</span></div>';
                 msgList.innerHTML = html;
-                msgList.scrollTop = msgList.scrollHeight;
+                scrollWaThreadToBottom(msgList);
                 var createTicketBtn = document.getElementById("kb-wa-thread-create-tickets");
                 if (createTicketBtn) createTicketBtn.addEventListener("click", function() { deps.waCtxSnapshotToBoardBottom(); });
                 msgList.querySelectorAll(".kb-wa-msg-select").forEach(function(el) {

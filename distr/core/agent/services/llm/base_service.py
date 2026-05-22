@@ -60,6 +60,7 @@ class BaseLLMService(LLMSharedMixin, LLMService):
         self._is_listening = is_listening
         self._is_dictating = False
         self._dictation_one_shot = False  # True when hold-to-dictate hotkey (commit after one transcript)
+        self._dictation_output_mode = "plain"
         self._hands_free_before_dictation = False
         self.event_queue = event_queue
         self.chat_manager = chat_manager
@@ -309,3 +310,30 @@ class BaseLLMService(LLMSharedMixin, LLMService):
     def _get_provider_name(self) -> str:
         """Return the provider name. Override in subclass."""
         return self.SERVICE_NAME.replace("LLMService", "")
+
+    async def _surface_model_error(self, exc, operation: str = "generate a response") -> str:
+        """Show model/provider failures in chat/TTS instead of hiding them in logs."""
+        from distr.core.agent.libs import ErrorFrame, TextFrame
+        from distr.core.llm_errors import format_model_error
+
+        msg = format_model_error(
+            exc,
+            provider=self._get_provider_name(),
+            model=getattr(self, "_model_name", ""),
+            operation=operation,
+        )
+        try:
+            await self.push_frame(TextFrame(text=msg), getattr(self, "_pipeline_direction", None))
+        except Exception:
+            pass
+        try:
+            await self.push_frame(ErrorFrame(error=msg), getattr(self, "_pipeline_direction", None))
+        except Exception:
+            pass
+        self._save_assistant_message(msg)
+        if getattr(self, "event_queue", None):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            self.event_queue.put(("chat_stream_error", {"error": msg, "chat_id": chat_id}), block=False)
+        if getattr(self, "_is_telegram_request", False):
+            self._telegram_fallback_text = msg
+        return msg

@@ -111,7 +111,7 @@ Done:
 Still needed:
 
 - Browser regression for chat activity order, dedupe, refresh consistency, blank bubble prevention, and correct attachment to the assistant turn.
-- Stress tests for TTS across Coqui, Kokoro, OpenAI, ElevenLabs, F5-TTS, VibeVoice, and VoxCPM with streaming and playback comparison.
+- Stress tests for TTS across Coqui, Kokoro, OpenAI, ElevenLabs, F5-TTS, and VoxCPM with streaming and playback comparison.
 - Audio hot-swap tests for input/output devices, provider changes, voice changes, speed changes, interruption, and resume.
 - Settings live-reload tests proving saved hotkeys/audio settings take effect immediately.
 

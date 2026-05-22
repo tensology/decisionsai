@@ -8,9 +8,6 @@ from distr.core.agent.config_loader import resolve_stt_config
 @pytest.mark.parametrize(
     "label,expected_engine",
     [
-        ("VibeVoice ASR (Local)", "vibevoice_asr"),
-        ("vibevoice asr (local)", "vibevoice_asr"),
-        ("VibeVoice ASR", "vibevoice_asr"),
         ("Whisper.cpp (Local & Offline)", "whisper"),
         ("Vosk (Local & Offline)", "vosk"),
         ("AssemblyAI (universal-2)", "assemblyai"),

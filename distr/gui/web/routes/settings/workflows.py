@@ -35,6 +35,21 @@ def _workflow_feedback_message(action: str, result: dict | None = None) -> dict:
             "message": "Workflow stopped and reset.",
             "next_action": "Run it again when the steps look right.",
         }
+    if action == "clear_audit":
+        return {
+            "message": "Workflow run history cleared.",
+            "next_action": "Executor sessions and orchestration events were left intact.",
+        }
+    if action == "clear_events":
+        return {
+            "message": "Workflow events cleared.",
+            "next_action": "New orchestration events will appear when the workflow runs again.",
+        }
+    if action == "clear_executor":
+        return {
+            "message": "Executor log cleared.",
+            "next_action": "New CLI or IDE sessions will appear when a run reaches an executor step.",
+        }
     if action == "continued":
         decision = result.get("action") or ""
         if decision == "next_step":
@@ -122,6 +137,21 @@ class WorkflowUpdateRequest(BaseModel):
     start_step_position: Optional[int] = None
     workflow_type: Optional[str] = None
     context_rules: Optional[str] = None
+    run_settings: Optional[dict] = None
+
+
+class CodexBridgeEventRequest(BaseModel):
+    event_type: str = "codex_event"
+    status: Optional[str] = None
+    message: str = ""
+    input: str = ""
+    output: str = ""
+    execution_session_id: Optional[int] = None
+    step_id: Optional[int] = None
+    ticket_id: Optional[int] = None
+    project_id: Optional[int] = None
+    payload: Optional[dict] = None
+    evidence: Optional[dict] = None
 
 
 class StepCreateRequest(BaseModel):
@@ -308,6 +338,171 @@ def register_routes(router, templates):
         save_settings_to_db(settings)
         return JSONResponse({"success": True})
 
+    @router.get("/workflows/hermes-setup")
+    async def get_hermes_setup():
+        """Return Hermes readiness and ticket complexity routing for workflow onboarding."""
+        from distr.core.settings import load_settings_from_db
+        from distr.core.hermes import (
+            ensure_hermes_tables,
+            list_correction_attempts,
+            list_events,
+            list_project_runtime_sessions,
+            list_validation_records,
+        )
+        from distr.core.project_cli_backends import get_backend_statuses
+
+        settings = load_settings_from_db()
+        ledger_ready = True
+        ledger_error = ""
+        try:
+            ensure_hermes_tables()
+        except Exception as exc:
+            ledger_ready = False
+            ledger_error = str(exc)
+
+        routing = {}
+        for level, default_backend, default_model in [
+            ("low", "cursor", "auto"),
+            ("medium", "codex", "auto"),
+            ("high", "codex", "gpt-5.3-codex"),
+        ]:
+            routing[level] = {
+                "backend": (settings.get(f"project_cli_{level}_backend") or default_backend).strip().lower(),
+                "model": (settings.get(f"project_cli_{level}_model") or default_model).strip(),
+            }
+
+        try:
+            accounts = json.loads(settings.get("connected_accounts") or "[]")
+        except Exception:
+            accounts = []
+        connected_sources = sorted({
+            (account.get("provider") or account.get("type") or account.get("service") or "").strip().lower()
+            for account in accounts
+            if isinstance(account, dict) and (account.get("provider") or account.get("type") or account.get("service"))
+        })
+
+        backends = get_backend_statuses(routing["medium"]["backend"])
+        backend_rows = backends.get("backends") or []
+        ready_backends = [
+            row for row in backend_rows
+            if row.get("id") in {routing[level]["backend"] for level in routing}
+            and row.get("available", row.get("ready", False))
+        ]
+
+        readiness = [
+            {
+                "id": "ledger",
+                "label": "Run ledger",
+                "status": "ready" if ledger_ready else "blocked",
+                "detail": "Event, runtime, validation, and correction tables are available." if ledger_ready else ledger_error,
+            },
+            {
+                "id": "executor_routing",
+                "label": "Complexity routing",
+                "status": "ready" if all(routing[level]["backend"] and routing[level]["model"] for level in routing) else "needs_setup",
+                "detail": "Low, medium, and high tickets have executor/model routes.",
+            },
+            {
+                "id": "executors",
+                "label": "Executor backends",
+                "status": "ready" if ready_backends else "needs_setup",
+                "detail": "Codex, Cursor, IDE, or other executors need to be installed and available.",
+            },
+        ]
+
+        counts = {"events": 0, "runtime_sessions": 0, "validations": 0, "corrections": 0}
+        if ledger_ready:
+            try:
+                counts = {
+                    "events": len(list_events(limit=500)),
+                    "runtime_sessions": len(list_project_runtime_sessions(limit=200)),
+                    "validations": len(list_validation_records(limit=500)),
+                    "corrections": len(list_correction_attempts(limit=500)),
+                }
+            except Exception:
+                pass
+
+        return JSONResponse({
+            "enabled": bool(settings.get("hermes_enabled", True)),
+            "memory_export_enabled": bool(settings.get("hermes_memory_export_enabled", False)),
+            "routing": routing,
+            "readiness": readiness,
+            "counts": counts,
+            "backends": backends,
+            "connected_sources": connected_sources,
+        })
+
+    @router.post("/workflows/hermes-setup")
+    async def save_hermes_setup(request: Request):
+        """Save Hermes workflow onboarding settings."""
+        from distr.core.settings import load_settings_from_db, save_settings_to_db
+        from distr.core.project_cli_backends import normalize_backend_id
+
+        data = await request.json()
+        settings = load_settings_from_db()
+        settings["hermes_enabled"] = bool(data.get("enabled", True))
+        if "memory_export_enabled" in data:
+            settings["hermes_memory_export_enabled"] = bool(data.get("memory_export_enabled", False))
+
+        models = data.get("models") or {}
+        if "models" in data:
+            for role in ["orchestrator", "validator", "correction"]:
+                row = models.get(role) or {}
+                settings[f"hermes_{role}_provider"] = (row.get("provider") or "").strip()
+                settings[f"hermes_{role}_model"] = (row.get("model") or "").strip()
+
+        routing = data.get("routing") or {}
+        if "routing" in data:
+            for level, default_backend, default_model in [
+                ("low", "cursor", "auto"),
+                ("medium", "codex", "auto"),
+                ("high", "codex", "gpt-5.3-codex"),
+            ]:
+                row = routing.get(level) or {}
+                settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
+                settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
+
+        # Keep the existing workflow LLM fallback aligned with Hermes orchestration
+        # so older code paths still resolve to the same brain.
+        orchestrator = models.get("orchestrator") or {}
+        if "models" in data and (orchestrator.get("provider") or orchestrator.get("model")):
+            settings["workflow_llm_provider"] = (orchestrator.get("provider") or "").strip()
+            settings["workflow_llm_model"] = (orchestrator.get("model") or "").strip()
+
+        save_settings_to_db(settings)
+        return JSONResponse({"success": True})
+
+    @router.get("/workflows/actions/catalog")
+    async def get_workflow_actions_catalog():
+        """Return saved Decisions Actions usable by workflow/Hermes steps."""
+        from distr.core.db import get_session, Action
+        from sqlalchemy import desc, nulls_last
+        with get_session() as session:
+            actions = session.query(Action).order_by(
+                nulls_last(desc(Action.last_run_date)),
+                desc(Action.modified_date),
+            ).all()
+            rows = []
+            for action in actions:
+                is_instruction = bool(action.is_instruction) if action.is_instruction is not None else False
+                recording_filename = action.recording_filename or ""
+                instruction_text = action.instruction_text or ""
+                mode = "instruction" if is_instruction else "recording"
+                usable = bool(instruction_text.strip()) if is_instruction else bool(recording_filename.strip())
+                rows.append({
+                    "id": action.id,
+                    "title": action.title or f"Action #{action.id}",
+                    "description": action.description or "",
+                    "mode": mode,
+                    "is_instruction": is_instruction,
+                    "recording_filename": recording_filename,
+                    "has_recording": bool(recording_filename.strip()),
+                    "has_instruction": bool(instruction_text.strip()),
+                    "usable": usable,
+                    "last_run_date": action.last_run_date.isoformat() if action.last_run_date else None,
+                })
+            return JSONResponse(rows)
+
     @router.post("/workflows/seed-fixtures")
     async def seed_workflow_fixtures(data: WorkflowSeedFixturesRequest):
         """Seed workflow fixtures. Optional force reset for dynamic template updates."""
@@ -474,6 +669,15 @@ def register_routes(router, templates):
             logger.error("Workflow generation failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.get("/workflows/active-runs")
+    async def workflow_active_runs(limit: int = 50, workflow_id: Optional[int] = None):
+        try:
+            from distr.core.workflow.service import get_active_runs
+            return JSONResponse(get_active_runs(limit=limit, workflow_id=workflow_id))
+        except Exception as e:
+            logger.error("Workflow active runs failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.get("/workflows/{workflow_id}")
     async def workflow_get(workflow_id: int):
         try:
@@ -493,6 +697,8 @@ def register_routes(router, templates):
                 return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
             from distr.core.workflow.service import update_workflow
             updates = {k: v for k, v in data.dict().items() if v is not None}
+            if "run_settings" in updates:
+                updates["run_settings"] = json.dumps(updates["run_settings"])
             if not update_workflow(workflow_id, **updates):
                 return JSONResponse({"detail": "Workflow not found"}, status_code=404)
             return JSONResponse({"success": True})
@@ -572,14 +778,149 @@ def register_routes(router, templates):
             logger.error("Workflow runs failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
-    @router.get("/workflows/active-runs")
-    async def workflow_active_runs(limit: int = 50, workflow_id: Optional[int] = None):
+    @router.get("/workflows/{workflow_id}/hermes-events")
+    async def workflow_hermes_events(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None):
         try:
-            from distr.core.workflow.service import get_active_runs
-            return JSONResponse(get_active_runs(limit=limit, workflow_id=workflow_id))
+            from distr.core.hermes import list_events
+
+            return JSONResponse(list_events(
+                workflow_id=workflow_id,
+                ticket_id=ticket_id,
+                run_id=run_id,
+                limit=limit,
+            ))
         except Exception as e:
-            logger.error("Workflow active runs failed: %s", e, exc_info=True)
+            logger.error("Workflow Hermes events failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/{workflow_id}/validations")
+    async def workflow_validations(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, verdict: Optional[str] = None):
+        try:
+            from distr.core.hermes import list_validation_records
+
+            return JSONResponse(list_validation_records(
+                workflow_id=workflow_id,
+                ticket_id=ticket_id,
+                run_id=run_id,
+                verdict=verdict,
+                limit=limit,
+            ))
+        except Exception as e:
+            logger.error("Workflow validation records failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/{workflow_id}/corrections")
+    async def workflow_corrections(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, validation_record_id: Optional[int] = None):
+        try:
+            from distr.core.hermes import list_correction_attempts
+
+            return JSONResponse(list_correction_attempts(
+                workflow_id=workflow_id,
+                ticket_id=ticket_id,
+                run_id=run_id,
+                validation_record_id=validation_record_id,
+                limit=limit,
+            ))
+        except Exception as e:
+            logger.error("Workflow correction attempts failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.delete("/workflows/{workflow_id}/runs")
+    async def workflow_clear_runs(workflow_id: int):
+        """Clear this workflow's completed run history without touching other logs."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.workflow.service import clear_workflow_history
+            result = clear_workflow_history(workflow_id)
+            if "error" in result:
+                return JSONResponse(_workflow_error_payload(result["error"], "clear_audit"), status_code=404)
+            result.update(_workflow_feedback_message("clear_audit", result))
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow clear runs failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "clear_audit"), status_code=500)
+
+    @router.delete("/workflows/{workflow_id}/events")
+    async def workflow_clear_events(workflow_id: int):
+        """Clear orchestration events for this workflow only."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.db import get_session
+            from distr.core.db.hermes import HermesEvent
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            with get_session() as db:
+                wf = db.query(AutoWorkflow.id).filter(AutoWorkflow.id == workflow_id).first()
+                if not wf:
+                    return JSONResponse(_workflow_error_payload("Workflow not found", "clear_events"), status_code=404)
+                deleted_events = (
+                    db.query(HermesEvent)
+                    .filter(HermesEvent.workflow_id == workflow_id)
+                    .delete(synchronize_session=False)
+                )
+                db.commit()
+            increment_workflow_updated()
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                "deleted_events": deleted_events,
+                **_workflow_feedback_message("clear_events", {"deleted_events": deleted_events}),
+            })
+        except Exception as e:
+            logger.error("Workflow clear events failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "clear_events"), status_code=500)
+
+    @router.delete("/workflows/{workflow_id}/executor-sessions")
+    async def workflow_clear_executor_sessions(workflow_id: int):
+        """Clear CLI/IDE execution sessions for this workflow only."""
+        try:
+            if _is_audit_workflow(workflow_id):
+                return JSONResponse({"detail": "Audit workflows are read-only"}, status_code=403)
+            from distr.core.db import get_session
+            from distr.core.db.kanban import ProjectExecutionEvent, ProjectExecutionSession
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            with get_session() as db:
+                wf = db.query(AutoWorkflow.id).filter(AutoWorkflow.id == workflow_id).first()
+                if not wf:
+                    return JSONResponse(_workflow_error_payload("Workflow not found", "clear_executor"), status_code=404)
+                session_ids = [
+                    row[0]
+                    for row in (
+                        db.query(ProjectExecutionSession.id)
+                        .filter(ProjectExecutionSession.workflow_id == workflow_id)
+                        .all()
+                    )
+                ]
+                deleted_events = 0
+                deleted_sessions = 0
+                if session_ids:
+                    deleted_events = (
+                        db.query(ProjectExecutionEvent)
+                        .filter(ProjectExecutionEvent.session_id.in_(session_ids))
+                        .delete(synchronize_session=False)
+                    )
+                    deleted_sessions = (
+                        db.query(ProjectExecutionSession)
+                        .filter(ProjectExecutionSession.id.in_(session_ids))
+                        .delete(synchronize_session=False)
+                    )
+                db.commit()
+            increment_workflow_updated()
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                "deleted_sessions": deleted_sessions,
+                "deleted_events": deleted_events,
+                **_workflow_feedback_message("clear_executor", {"deleted_sessions": deleted_sessions}),
+            })
+        except Exception as e:
+            logger.error("Workflow clear executor sessions failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "clear_executor"), status_code=500)
 
     # Execution
     @router.post("/workflows/{workflow_id}/run")
@@ -666,6 +1007,116 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow continue run failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "continue"), status_code=500)
+
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/codex-events")
+    async def workflow_codex_bridge_event(workflow_id: int, run_id: int, event: CodexBridgeEventRequest):
+        """Record Codex IDE/plugin steering and execution events into Decisions/Hermes.
+
+        This endpoint is intentionally not limited to waiting runs. Codex may report
+        mid-run steering, interruption, progress, or completion while the workflow is
+        still running, waiting, or already terminal.
+        """
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.kanban.project_execution import append_execution_event
+            from distr.core.workflow.standards_memory import capture_feedback_as_standard
+            from distr.core.hermes import emit_event
+            from distr.gui.web.workflow_events import increment_workflow_updated
+
+            event_type = (event.event_type or "codex_event").strip() or "codex_event"
+            status = (event.status or "").strip() or None
+            message = (event.message or event.input or event.output or "").strip()
+            payload = dict(event.payload or {})
+            if event.input:
+                payload["input"] = event.input
+            if event.output:
+                payload["output"] = event.output
+            payload.setdefault("bridge", "codex")
+
+            with get_session() as db:
+                run = (
+                    db.query(AutoWorkflowRun)
+                    .filter(AutoWorkflowRun.id == int(run_id))
+                    .filter(AutoWorkflowRun.workflow_id == int(workflow_id))
+                    .first()
+                )
+                if not run:
+                    return JSONResponse(_workflow_error_payload("Run not found", "codex_event"), status_code=404)
+                run_data = {}
+                try:
+                    run_data = json.loads(run.run_data or "{}") or {}
+                except Exception:
+                    run_data = {}
+                step_id = event.step_id or run.current_step_id
+                ticket_id = event.ticket_id or run.ticket_id
+                board_id = run.board_id
+                project_id = event.project_id or run_data.get("project_id")
+                execution_session_id = event.execution_session_id or payload.get("execution_session_id")
+
+                history = run_data.get("codex_bridge_events") or []
+                history.append({
+                    "event_type": event_type,
+                    "status": status,
+                    "message": message,
+                    "step_id": step_id,
+                    "ticket_id": ticket_id,
+                    "project_id": project_id,
+                    "execution_session_id": execution_session_id,
+                    "ts": time.time(),
+                })
+                run_data["codex_bridge_events"] = history[-50:]
+                if event_type in {"user_steer", "codex_interrupted", "codex_waiting", "codex_needs_input"}:
+                    run_data["last_codex_bridge_state"] = {
+                        "event_type": event_type,
+                        "status": status,
+                        "message": message,
+                        "step_id": step_id,
+                        "execution_session_id": execution_session_id,
+                    }
+                run.run_data = json.dumps(run_data)
+                db.commit()
+
+            append_execution_event(
+                int(execution_session_id) if execution_session_id else None,
+                event_type,
+                status=status,
+                message=message,
+                payload=payload,
+            )
+
+            hermes_event_id = emit_event(
+                source="codex",
+                event_type=event_type,
+                status=status,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=int(step_id) if step_id else None,
+                ticket_id=int(ticket_id) if ticket_id else None,
+                board_id=int(board_id) if board_id else None,
+                project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                execution_session_id=int(execution_session_id) if execution_session_id else None,
+                summary=message or f"Codex bridge event: {event_type}",
+                payload=payload,
+                evidence=event.evidence or {},
+            )
+
+            captured_standard = False
+            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input"} and message:
+                captured_standard = capture_feedback_as_standard(workflow_id, message)
+
+            increment_workflow_updated()
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "event_type": event_type,
+                "hermes_event_id": hermes_event_id,
+                "captured_standard": captured_standard,
+            })
+        except Exception as e:
+            logger.error("Workflow Codex bridge event failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "codex_event"), status_code=500)
 
     @router.get("/workflows/{workflow_id}/active-run")
     async def workflow_active_run(workflow_id: int):

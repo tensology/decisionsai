@@ -398,19 +398,6 @@ def _vosk_transcription_preflight() -> Tuple[bool, str]:
     return True, f"model '{DEFAULT_VOSK_MODEL_DIR}' present"
 
 
-def _vibevoice_asr_preflight() -> Tuple[bool, str]:
-    try:
-        from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-    except Exception as e:
-        return False, f'runtime check import error: {e}'
-    if vibevoice_asr_runtime_ready():
-        return True, 'vibevoice package importable'
-    return (
-        False,
-        'vibevoice not installed or not importable — run ./scripts/install_vibevoice.sh in your venv',
-    )
-
-
 def check_transcription_backends(assemblyai_key: Optional[str] = None, openai_key: Optional[str] = None) -> Dict[str, Any]:
     """Check which transcription backends are available.
     
@@ -454,14 +441,6 @@ def check_transcription_backends(assemblyai_key: Optional[str] = None, openai_ke
         'reason': vosk_reason,
     })
 
-    # VibeVoice ASR (local — Settings → LLMs; requires separate install)
-    vv_available, vv_reason = _vibevoice_asr_preflight()
-    backends.append({
-        'name': 'VibeVoice ASR (local)',
-        'available': vv_available,
-        'reason': vv_reason,
-    })
-    
     # Check ffmpeg
     ffmpeg_available = False
     ffmpeg_reason = "Not checked"
@@ -639,4 +618,3 @@ class VideoTranscriberTool(BaseTool):
         """Async version of _run."""
         # Filter out any unexpected arguments (like 'last_user_message' from LLM service)
         return self._run(video_file_path, output_format, keep_audio, backend_priority)
-

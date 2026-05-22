@@ -34,6 +34,50 @@
 .chevron { transition: transform 0.15s; display: inline-block; }
 .chevron.open { transform: rotate(90deg); }
 .wf-live-run { border-color: rgba(34,197,94,0.35); background: rgba(34,197,94,0.08); }
+@keyframes wf-spin { to { transform: rotate(360deg); } }
+.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; }
+.kb-modal-overlay:not(.hidden) { display: flex; }
+.kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 680px; max-width: 95vw; max-height: 86vh; overflow: hidden; display: flex; flex-direction: column; }
+.kb-tm-tab { cursor: pointer; }
+.kb-tm-tab.active { color: #fff; border-color: #f97316; }
+.kb-ticket-modal-body { min-height: 260px; max-height: calc(86vh - 128px); overflow-y: auto; }
+.kb-modal-action-btn { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; border-radius: 0.375rem; }
+.kb-modal-action-btn:hover { background: rgba(255,255,255,0.08); }
+.wf-wa-media-preview-btn { cursor: pointer; }
+.wf-wa-media-preview-btn:hover { border-color: rgba(249,115,22,0.55); background: rgba(249,115,22,0.08); }
+.wf-workflow-ticket-complexity {
+    min-height: 2.25rem;
+    color-scheme: dark;
+    background-color: #0d1333 !important;
+    color: #ffffff !important;
+    border-color: rgba(249,115,22,0.45) !important;
+    font-size: 0.8125rem;
+    font-weight: 600;
+}
+.wf-workflow-ticket-complexity option {
+    background-color: #0d1333;
+    color: #ffffff;
+}
+.wf-count-badge {
+    display: inline-flex;
+    height: 1.5rem;
+    min-width: 1.5rem;
+    align-items: center;
+    justify-content: center;
+    border-radius: 9999px;
+    border: 1px solid rgba(255,255,255,0.22);
+    background: #0d1333;
+    color: #fff;
+    padding: 0 0.45rem;
+    font-size: 0.6875rem;
+    font-weight: 700;
+    line-height: 1;
+}
+.wf-count-badge-muted {
+    border-color: rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.08);
+    color: #d1d5db;
+}
 </style>
 {% endblock %}
 
@@ -42,28 +86,15 @@
     <div class="flex gap-6 h-[calc(100vh-140px)]">
         <!-- Left panel -->
         <div class="w-80 flex-shrink-0 flex flex-col gap-4">
-            <!-- Create + Plan -->
-            <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4 space-y-3">
-                <div class="flex gap-2">
-                    <input type="text" id="wf-new-name" placeholder="New workflow name..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
-                    <button type="button" id="wf-create-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Create</button>
-                </div>
-                <div class="flex gap-2">
-                    <input type="text" id="wf-builder-desc" placeholder="Describe what to automate..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
-                    <button type="button" id="wf-plan-btn" class="px-3 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20 whitespace-nowrap">⚡ Plan</button>
-                </div>
-                <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Planning...</span>
-                <p id="wf-builder-error" class="hidden text-xs text-red-400"></p>
-            </div>
             <!-- Workflow list -->
             <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
                 <div class="flex gap-2 mb-3 relative">
                     <input type="text" id="wf-search" placeholder="Search..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500">
-                    <!-- Cog: presets dropdown + workflow LLM settings -->
+                    <!-- Cog: presets dropdown + execution setup -->
                     <button type="button" id="wf-presets-btn" class="hidden px-2 py-1.5 rounded border border-white/20 text-gray-400 text-sm hover:bg-white/10 hover:text-white" title="Presets">
                         <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg>
                     </button>
-                    <button type="button" id="wf-sr-llm-btn" title="Workflow LLM settings" class="flex-shrink-0 px-2 py-1.5 rounded border border-white/20 text-gray-400 hover:bg-white/10 hover:text-white">
+                    <button type="button" id="wf-sr-llm-btn" title="Execution setup" class="flex-shrink-0 px-2 py-1.5 rounded border border-white/20 text-gray-400 hover:bg-white/10 hover:text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -77,120 +108,460 @@
                     </div>
                 </div>
                 <div id="wf-list" class="flex-1 overflow-y-auto space-y-1"></div>
+                <div class="mt-3 pt-3 border-t border-white/10 space-y-3">
+                    <p class="text-xs uppercase tracking-wide text-gray-500 mb-1">Workflows</p>
+                    <p class="text-sm text-gray-300">Create a workflow or ask the agent to define the rules.</p>
+                    <div class="flex gap-2">
+                        <input type="text" id="wf-new-name" placeholder="New workflow..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="wf-create-btn" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Create</button>
+                    </div>
+                    <div class="flex gap-2">
+                        <input type="text" id="wf-builder-desc" placeholder="Describe the workflow to plan..." class="flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm placeholder-gray-500 focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="wf-plan-btn" class="px-3 py-2 rounded bg-[#1a237e] text-white text-sm font-medium hover:bg-[#283593] border border-white/20 whitespace-nowrap">⚡ Plan</button>
+                    </div>
+                    <span id="wf-builder-spinner" class="hidden text-xs text-gray-400">Planning...</span>
+                    <p id="wf-builder-error" class="hidden text-xs text-red-400"></p>
+                </div>
+            </div>
+        </div>
+        <!-- Board tickets panel -->
+        <div class="w-80 flex-shrink-0 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
+            <div class="mb-3">
+                <p class="text-xs uppercase tracking-wide text-gray-500 mb-1">Board Tickets</p>
+                <div class="flex items-center gap-2">
+                    <select id="wf-board-select" class="min-w-0 flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">
+                        <option value="">Loading boards...</option>
+                    </select>
+                    <button type="button" id="wf-edit-board-link" class="h-[38px] flex-shrink-0 px-2 rounded border border-white/20 text-gray-400 hover:bg-white/10 hover:text-white focus:border-[#f97316] focus:outline-none inline-flex items-center justify-center" title="Edit board" aria-label="Edit board">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+            <div id="wf-board-ticket-list" class="flex-1 overflow-y-auto space-y-3 min-h-0">
+                <p class="text-sm text-gray-500">Select a board to view tickets.</p>
             </div>
         </div>
         <!-- Right panel -->
         <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
             <div id="wf-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
-                <p class="text-gray-400 text-sm max-w-md mb-4">Create a workflow or describe what to automate. Each workflow contains steps with actions, conditions, validation, and routing.</p>
+                <p class="text-gray-300 text-base font-medium max-w-md mb-2">Select a workflow.</p>
+                <p class="text-gray-400 text-sm max-w-md mb-4">View its queued tickets, runs, and execution rules.</p>
             </div>
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
                 <!-- Header -->
                 <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-3 min-w-0 flex-1 pr-3">
-                        <input type="text" id="wf-detail-name" readonly class="bg-transparent text-lg font-semibold text-white border-0 focus:outline-none w-full min-w-0" value="">
+                    <div class="flex items-center gap-2 min-w-0 flex-1 pr-3">
+                        <input type="text" id="wf-detail-name" class="bg-transparent text-lg font-semibold text-white border border-transparent rounded px-2 py-1 focus:border-[#f97316] focus:bg-[#152054] focus:outline-none w-full min-w-0" value="" aria-label="Workflow name">
+                        <button type="button" id="wf-save-name-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 hover:text-white" title="Save workflow name">Save</button>
+                        <span id="wf-name-save-status" class="text-xs text-gray-500 min-w-[44px]"></span>
                     </div>
                     <div class="flex items-center gap-2 flex-shrink-0">
                         <div id="wf-board-consumers" class="hidden items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5"></div>
-                        <button type="button" id="wf-run-btn" class="px-3 py-1 rounded bg-green-600 text-white text-xs font-medium hover:bg-green-700">▶ Run</button>
-                        <button type="button" id="wf-stop-reset-btn" class="px-2 py-1 rounded border border-orange-500/60 text-orange-300 text-xs hover:bg-orange-500/20" title="Cancel active run and reset all step states/results">⟲ Stop & Reset</button>
                         <button type="button" id="wf-delete-btn" class="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
                     </div>
                 </div>
-                <!-- Active run bar -->
-                <div id="wf-run-bar"></div>
                 <!-- Tabs -->
                 <div class="border-b border-white/20 px-6 flex gap-1">
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="steps">Steps</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Agent Context</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Run History</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="schedule">Schedule</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="tickets">Tickets</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Runs</button>
+                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Rules</button>
                 </div>
                 <!-- Tab content -->
-                <div class="flex-1 overflow-y-auto p-6">
-                    <!-- Steps tab -->
-                    <div id="wf-tab-steps" class="wf-tab-content">
-                        <div class="flex justify-between items-center mb-4">
-                            <p class="text-xs text-gray-500">Click a step to expand and edit it.</p>
-                            <div class="flex gap-2">
-                                <button type="button" id="wf-add-step-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Step</button>
-                            </div>
-                        </div>
-                        <div id="wf-steps-list" class="space-y-2"></div>
-                        <div class="mt-4 flex justify-center">
-                            <button type="button" id="wf-generate-steps-btn" class="px-3 py-1.5 rounded border border-blue-500/50 text-blue-400 text-xs hover:bg-blue-500/20">⚡ Add Steps from AI</button>
-                        </div>
-                    </div>
-                    <!-- Schedule tab -->
-                    <div id="wf-tab-schedule" class="wf-tab-content hidden">
-                        <div class="max-w-lg">
-                            <label class="flex items-center gap-2 mb-4 cursor-pointer">
-                                <input type="checkbox" id="wf-sched-enabled">
-                                <span class="text-sm text-white">Enable schedule</span>
-                            </label>
-                            <div id="wf-sched-options" class="hidden">
-                                <div class="flex gap-1 mb-3">
-                                    <button type="button" class="wf-freq-btn wf-pill flex-1 px-2 py-1.5 rounded text-xs font-medium" data-freq="hourly">Hourly</button>
-                                    <button type="button" class="wf-freq-btn wf-pill flex-1 px-2 py-1.5 rounded text-xs font-medium" data-freq="daily">Daily</button>
-                                    <button type="button" class="wf-freq-btn wf-pill flex-1 px-2 py-1.5 rounded text-xs font-medium" data-freq="weekly">Weekly</button>
-                                </div>
-                                <input type="hidden" id="wf-sched-preset" value="daily">
-                                <div id="wf-sched-time-wrap" class="mb-3">
-                                    <label class="block text-xs text-gray-500 mb-1">Time</label>
-                                    <input type="time" id="wf-sched-time" value="09:00" class="sr-time-input px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">
-                                </div>
-                                <div id="wf-sched-days-wrap" class="hidden mb-3">
-                                    <label class="block text-xs text-gray-500 mb-1">Days</label>
-                                    <div class="flex gap-1">
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="0">Sun</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="1">Mon</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="2">Tue</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="3">Wed</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="4">Thu</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="5">Fri</button>
-                                        <button type="button" class="wf-day-btn wf-pill flex-1 py-1.5 rounded text-xs font-medium" data-day="6">Sat</button>
-                                    </div>
-                                </div>
-                            </div>
-                            <button type="button" id="wf-sched-save" class="px-4 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c] mt-3">Save Schedule</button>
-                        </div>
-                    </div>
+                <div class="flex-1 min-h-0 flex flex-col">
+                    <div class="flex-1 min-h-0 overflow-y-auto p-6">
                     <!-- Context & Rules tab -->
-                    <div id="wf-tab-context" class="wf-tab-content hidden">
-                        <div class="max-w-2xl">
-                            <p class="text-xs text-gray-500 mb-3">Add multiple context items the workflow agent should use on every step (rules, credentials, conventions, reusable snippets, or operating notes).</p>
-                            <div id="wf-context-items-list" class="space-y-2"></div>
-                            <div class="mt-3 flex justify-start">
-                                <button type="button" id="wf-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Context Item</button>
+                    <div id="wf-tab-context" class="wf-tab-content hidden space-y-3">
+                        <div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-1.5 text-xs text-gray-400">
+                            <span class="font-semibold text-white">Execution rules</span>
+                            <span class="mx-1 text-gray-600">/</span>
+                            The agent uses these rules, the ticket complexity, and the linked project to choose the executor path.
+                        </div>
+                        <div id="wf-run-settings-panel" class="rounded border border-white/10 bg-[#152054]/40 p-3">
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Run policy</p>
+                                    <p id="wf-run-settings-lock-note" class="text-xs text-gray-500">Controls how queued tickets are scheduled before a run starts.</p>
+                                </div>
+                                <button type="button" id="wf-run-settings-save" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Ticket execution</span>
+                                    <select id="wf-run-execution-mode" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
+                                        <option value="sequential">One at a time</option>
+                                        <option value="parallel">Async batch</option>
+                                    </select>
+                                </label>
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Concurrency scope</span>
+                                    <select id="wf-run-concurrency-scope" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
+                                        <option value="workflow">One run for this workflow</option>
+                                        <option value="project">One at a time per project</option>
+                                    </select>
+                                </label>
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Async ticket limit</span>
+                                    <input id="wf-run-max-parallel" type="number" min="1" max="12" value="3" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
+                                </label>
+                                <label class="flex h-full min-h-[3.4rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">
+                                    <input id="wf-run-branch-per-ticket" type="checkbox" class="wf-run-setting accent-[#f97316]">
+                                    <span class="text-xs text-gray-200">Create branch per ticket</span>
+                                </label>
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Correction attempts</span>
+                                    <input id="wf-run-max-corrections" type="number" min="0" max="5" value="1" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
+                                </label>
+                                <label class="flex h-full min-h-[3.4rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">
+                                    <input id="wf-run-auto-corrections" type="checkbox" class="wf-run-setting accent-[#f97316]">
+                                    <span class="text-xs text-gray-200">Auto-dispatch corrections</span>
+                                </label>
+                            </div>
+                        </div>
+                        <div class="w-full">
+                            <div class="flex items-center justify-between gap-3 mb-2">
+                                <p class="text-xs text-gray-500">Agent context rules, quality standards, and learned feedback used by this workflow.</p>
+                                <button type="button" id="wf-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>
+                            </div>
+                            <div class="rounded border border-white/10 overflow-hidden">
+                                <table class="w-full table-fixed text-sm">
+                                    <colgroup>
+                                        <col>
+                                        <col style="width: 9rem;">
+                                    </colgroup>
+                                    <thead class="bg-[#0d1333] border-b border-white/10">
+                                        <tr>
+                                            <th class="text-left text-xs font-medium text-gray-400 px-3 py-2">Rule</th>
+                                            <th class="w-36 text-right text-xs font-medium text-gray-400 px-3 py-2">Actions</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="wf-context-items-list" class="divide-y divide-white/10"></tbody>
+                                </table>
                             </div>
                             <p id="wf-context-save-status" class="text-xs text-gray-500 mt-2"></p>
                         </div>
                     </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">
-                        <div class="mb-4">
+                        <div class="mb-4 flex items-center justify-between gap-3 border-b border-white/10">
+                            <div class="flex gap-1">
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-white border-b-2 border-[#f97316]" data-runs-tab="active">Active</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="sessions">Executor</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="timeline">Events</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="recent">History</button>
+                            </div>
+                        </div>
+                        <div id="wf-runs-pane-active" class="wf-runs-pane">
                             <div class="flex items-center justify-between mb-2">
-                                <p class="text-xs text-gray-400">Active check-ins across boards</p>
+                                <p class="text-xs text-gray-400">Active workflow runs across boards and tickets</p>
                                 <div class="flex items-center gap-2">
                                     <select id="wf-active-runs-scope" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs">
                                         <option value="all">All active runs</option>
                                         <option value="current">This workflow only</option>
                                     </select>
                                     <button type="button" id="wf-refresh-active-runs" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                    <button type="button" id="wf-stop-reset-btn" class="hidden px-2 py-1 rounded border border-orange-500/60 text-orange-300 text-xs font-medium hover:bg-orange-500/20" title="Stop all active runs for this workflow">Stop all</button>
                                 </div>
                             </div>
                             <div id="wf-active-runs-list" class="space-y-2"></div>
                             <p id="wf-active-runs-empty" class="text-sm text-gray-500">No active runs.</p>
                         </div>
-                        <div class="border-t border-white/10 pt-4">
-                            <p class="text-xs text-gray-400 mb-2">Recent runs for this workflow</p>
-                        <div id="wf-runs-list" class="space-y-2"></div>
-                        <p id="wf-runs-empty" class="text-sm text-gray-500">No runs yet.</p>
+                        <div id="wf-runs-pane-sessions" class="wf-runs-pane hidden">
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-xs text-gray-400">Executor sessions</p>
+                                    <p class="text-[11px] text-gray-500">CLI/IDE handoffs and model output tied to this workflow.</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" id="wf-refresh-execution-sessions" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                    <button type="button" id="wf-clear-execution-sessions" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear executor log</button>
+                                </div>
+                            </div>
+                            <div id="wf-execution-sessions-list" class="space-y-2"></div>
+                            <p id="wf-execution-sessions-empty" class="text-sm text-gray-500">No executor activity yet.</p>
+                        </div>
+                        <div id="wf-runs-pane-timeline" class="wf-runs-pane hidden">
+                            <div class="mb-3 flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Event stream</p>
+                                    <p class="text-xs text-gray-500">Orchestration events emitted while tickets move through the workflow.</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <button type="button" id="wf-refresh-hermes-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                    <button type="button" id="wf-clear-hermes-events" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear events</button>
+                                </div>
+                            </div>
+                            <div id="wf-hermes-events-list" class="space-y-2"></div>
+                            <p id="wf-hermes-events-empty" class="text-sm text-gray-500">No run events yet. Start a ticket run to populate the timeline.</p>
+                        </div>
+                        <div id="wf-runs-pane-recent" class="wf-runs-pane hidden">
+                            <div class="mb-2 flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-xs text-gray-400">Run history</p>
+                                    <p class="text-[11px] text-gray-500">Completed, failed, or cancelled run records for this workflow.</p>
+                                </div>
+                                <button type="button" id="wf-clear-runs-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 disabled:opacity-40 disabled:cursor-not-allowed">Clear history</button>
+                            </div>
+                            <div id="wf-runs-list" class="space-y-2"></div>
+                            <p id="wf-runs-empty" class="text-sm text-gray-500">No runs yet.</p>
+                        </div>
+                    </div>
+                    <!-- Tickets tab -->
+                    <div id="wf-tab-tickets" class="wf-tab-content h-full flex flex-col min-h-[420px]">
+                        <div class="mb-3 rounded border border-white/10 bg-[#10183f]/70 px-3 py-2 text-xs text-gray-400">
+                            <span class="font-semibold text-white">Run path</span>
+                            <span class="mx-1 text-gray-600">/</span>
+                            Queue ticket -> agent chooses route -> executor works -> validation checks -> result is reported.
+                        </div>
+                        <div class="flex items-center justify-between mb-3">
+                            <p class="text-xs text-gray-400">Workflow ticket queue</p>
+                            <button type="button" id="wf-refresh-workflow-tickets" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                        </div>
+                        <div id="wf-workflow-tickets-list" class="flex-1 min-h-[320px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
+                        <p id="wf-workflow-tickets-empty" class="hidden"></p>
+                    </div>
+                    </div>
+                    <!-- Workflow details -->
+                    <div id="wf-control-overview" class="flex-shrink-0 border-t border-white/10 px-6 py-2"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="kb-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0">
+        <div class="flex items-start justify-between gap-4 px-5 pt-4 pb-0">
+            <h3 id="kb-modal-title" class="text-lg font-semibold text-white leading-snug line-clamp-2">Ticket</h3>
+            <button type="button" id="kb-modal-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div class="flex gap-1 border-b border-white/20 px-5 mt-3">
+            <button type="button" class="kb-tm-tab active px-3 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-ttab="details">Details</button>
+            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="links">Links</button>
+            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="todo">To-do</button>
+            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="report">Report</button>
+            <button type="button" class="kb-tm-tab px-3 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-ttab="advanced">Advanced</button>
+        </div>
+        <div class="kb-ticket-modal-body">
+            <div id="kb-tm-tab-details" class="kb-tm-pane p-5 space-y-3">
+                <div id="kb-modal-external-meta" class="hidden mb-3 p-3 bg-[#152054] rounded border border-blue-500/30"></div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Title</label>
+                    <textarea id="kb-modal-ticket-title" rows="2" class="w-full min-h-[3.25rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Description</label>
+                    <textarea id="kb-modal-ticket-desc" rows="6" class="w-full min-h-[9rem] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y"></textarea>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Initial Estimate</label>
+                        <input type="text" id="kb-modal-ticket-estimate" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="e.g. 2h, 1d">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Actual Duration</label>
+                        <input type="text" id="kb-modal-ticket-duration" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="e.g. 45m, 3h">
+                    </div>
+                </div>
+                <p class="text-xs text-gray-500">Use duration values like <code>30m</code>, <code>2h</code>, or <code>1d 3h</code>.</p>
+            </div>
+            <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-5 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Links</label>
+                    <div id="kb-modal-links" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="kb-modal-link-title" placeholder="Title" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <input type="text" id="kb-modal-link-url" placeholder="https://..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="kb-modal-add-link" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Save link</button>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Files</label>
+                    <div id="kb-modal-files" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="file" id="kb-modal-file-input" multiple class="hidden">
+                        <button type="button" id="kb-modal-upload-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Upload Files</button>
+                    </div>
+                </div>
+            </div>
+            <div id="kb-tm-tab-todo" class="kb-tm-pane hidden p-5 space-y-4">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">To-do List</label>
+                    <div id="kb-modal-todos" class="space-y-1 mb-2"></div>
+                    <div class="flex gap-2">
+                        <input type="text" id="kb-modal-todo-input" placeholder="Add a to-do item..." class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                        <button type="button" id="kb-modal-add-todo" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add</button>
+                    </div>
+                </div>
+            </div>
+            <div id="kb-tm-tab-report" class="kb-tm-pane hidden p-5 space-y-4">
+                <div class="flex items-center justify-between gap-3">
+                    <div class="text-sm text-gray-400">Ticket Execution Report</div>
+                    <button type="button" id="kb-modal-clear-report" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Clear Report</button>
+                </div>
+                <div id="kb-modal-audit-summary" class="grid grid-cols-3 gap-2"></div>
+                <div id="kb-modal-audit-runs" class="space-y-3"></div>
+                <div class="text-xs text-gray-500">Full audit trail</div>
+                <div id="kb-modal-audit-entries" class="space-y-2"></div>
+            </div>
+            <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-5 space-y-4">
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
+                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
+                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="low">I - Low</option>
+                            <option value="medium">II - Medium</option>
+                            <option value="high">III - High</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
+                    </div>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Link to</label>
+                    <div class="grid grid-cols-2 gap-2">
+                        <div>
+                            <label class="text-xs text-gray-500">Workflow</label>
+                            <select id="kb-modal-link-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none"></select>
+                        </div>
+                        <div>
+                            <label class="text-xs text-gray-500">Project</label>
+                            <select id="kb-modal-link-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none"></select>
                         </div>
                     </div>
                 </div>
             </div>
         </div>
+        <div class="flex justify-between items-center gap-4 px-5 py-3 border-t border-white/20">
+            <div class="flex items-center gap-1" id="kb-modal-actions">
+                <button type="button" id="kb-modal-act-copy" class="kb-modal-action-btn text-gray-400 hover:text-white transition-colors" title="Copy title & description" aria-label="Copy title and description">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>
+                </button>
+                <button type="button" id="kb-modal-act-discuss" class="kb-modal-action-btn text-gray-400 hover:text-[#c4b5fd] transition-colors" title="Discuss ticket with agent" aria-label="Discuss ticket with agent">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>
+                </button>
+                <button type="button" id="kb-modal-act-project" class="kb-modal-action-btn text-gray-400 hover:text-blue-400 transition-colors" title="Send to Project" aria-label="Send to Project">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+                </button>
+                <button type="button" id="kb-modal-act-workflow" class="kb-modal-action-btn text-gray-400 hover:text-sky-400 transition-colors" title="Link to selected workflow" aria-label="Link to selected workflow">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>
+                </button>
+                <button type="button" id="kb-modal-transfer-ext" class="hidden kb-modal-action-btn text-gray-400 hover:text-green-400 transition-colors" title="Copy to local board" aria-label="Copy to local board">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>
+                </button>
+            </div>
+            <div class="flex gap-2">
+                <button type="button" id="kb-modal-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+                <button type="button" id="kb-modal-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 text-sm hover:bg-red-500/20">Delete</button>
+                <button type="button" id="kb-modal-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="wf-run-preview-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: 520px;">
+        <div class="flex items-start justify-between gap-4 px-5 py-4 border-b border-white/10">
+            <div>
+                <h3 class="text-lg font-semibold text-white">Start Ticket Run</h3>
+                <p id="wf-run-preview-subtitle" class="text-xs text-gray-500 mt-0.5">Checking route...</p>
+            </div>
+            <button type="button" id="wf-run-preview-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div class="p-5 space-y-4">
+            <div id="wf-run-preview-body" class="rounded border border-white/10 bg-[#10183f]/70 p-3 text-sm text-gray-300">
+                Loading ticket route...
+            </div>
+            <div id="wf-run-preview-warning" class="hidden rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-200"></div>
+        </div>
+        <div class="flex justify-end items-center gap-3 px-5 py-3 border-t border-white/20">
+            <button type="button" id="wf-run-preview-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="wf-run-preview-confirm" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Run ticket</button>
+        </div>
+    </div>
+</div>
+
+<div id="wf-wa-ticket-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0 relative" style="width: 560px;">
+        <div id="wf-wa-ticket-loading" class="absolute inset-0 z-20 bg-[#0b1020]/95 rounded-xl flex items-center justify-center">
+            <div class="flex flex-col items-center gap-3 text-center px-6">
+                <svg class="animate-spin h-8 w-8 text-[#f97316]" fill="none" viewBox="0 0 24 24">
+                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+                <div id="wf-wa-ticket-loading-title" class="text-sm text-white font-medium">Preparing WhatsApp Ticket...</div>
+                <div id="wf-wa-ticket-loading-detail" class="text-xs text-gray-400">Finding unread WhatsApp messages for this board.</div>
+                <div class="w-full max-w-[360px] h-1.5 rounded-full bg-white/10 overflow-hidden">
+                    <div id="wf-wa-ticket-loading-bar" class="h-full rounded-full bg-[#f97316] transition-all duration-500" style="width: 8%;"></div>
+                </div>
+                <div id="wf-wa-ticket-loading-step" class="text-[11px] text-gray-500">Starting intake</div>
+            </div>
+        </div>
+        <div class="flex items-center justify-between px-5 py-4 border-b border-white/10">
+            <div>
+                <h3 class="text-lg font-semibold text-white">Create Ticket from WhatsApp</h3>
+                <p id="wf-wa-ticket-meta" class="text-xs text-gray-500 mt-0.5">Board WhatsApp intake</p>
+            </div>
+            <button type="button" id="wf-wa-ticket-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div class="p-5 space-y-4 overflow-y-auto" style="max-height: calc(86vh - 132px);">
+            <div id="wf-wa-ticket-status" class="text-xs text-[#f97316]">Draft ready; loading WhatsApp context...</div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Title <span class="text-red-400">*</span></label>
+                <input type="text" id="wf-wa-ticket-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="Ticket title">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Description</label>
+                <textarea id="wf-wa-ticket-desc" rows="8" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Describe the ticket..."></textarea>
+            </div>
+            <div class="grid grid-cols-2 gap-3">
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                    <select id="wf-wa-ticket-priority" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                        <option value="critical">Critical</option>
+                    </select>
+                </div>
+                <div>
+                    <label class="block text-sm text-gray-400 mb-1">Complexity</label>
+                    <select id="wf-wa-ticket-complexity" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                        <option value="low">Low</option>
+                        <option value="medium">Medium</option>
+                        <option value="high">High</option>
+                    </select>
+                </div>
+            </div>
+            <div id="wf-wa-ticket-media" class="space-y-2"></div>
+        </div>
+        <div class="flex justify-end gap-2 px-5 py-3 border-t border-white/20">
+            <button type="button" id="wf-wa-ticket-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
+            <button type="button" id="wf-wa-ticket-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
+        </div>
+    </div>
+</div>
+
+<div id="wf-wa-media-preview-modal" class="kb-modal-overlay hidden" role="dialog" aria-modal="true">
+    <div class="kb-modal p-0" style="width: min(920px, 94vw);">
+        <div class="flex items-center justify-between gap-4 px-5 py-3 border-b border-white/10">
+            <div class="min-w-0">
+                <h3 id="wf-wa-media-preview-title" class="text-base font-semibold text-white truncate">WhatsApp media</h3>
+                <p id="wf-wa-media-preview-meta" class="text-xs text-gray-500 mt-0.5 truncate"></p>
+            </div>
+            <button type="button" id="wf-wa-media-preview-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
+        </div>
+        <div id="wf-wa-media-preview-body" class="p-4 bg-[#0b1020] flex items-center justify-center min-h-[320px]"></div>
     </div>
 </div>
 {% endblock %}
@@ -200,24 +571,30 @@
 <script>
 (function() {
     var modalHtml = [
-        '<div id="sr-llm-modal" class="fixed inset-0 z-50 hidden items-center justify-center bg-black/60">',
-        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-6 w-full max-w-md shadow-2xl">',
-        '<div class="flex items-center justify-between mb-4">',
-        '<h3 class="text-white font-semibold text-base">Workflow LLM</h3>',
+        '<div id="sr-llm-modal" class="fixed inset-0 z-[10000] hidden items-center justify-center bg-black/60">',
+        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-4 w-full max-w-2xl max-h-[86vh] overflow-y-auto shadow-2xl">',
+        '<div class="flex items-center justify-between mb-3">',
+        '<h3 class="text-white font-semibold text-lg">Execution setup</h3>',
         '<button id="sr-llm-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>',
         '</div>',
-        '<p class="text-xs text-gray-400 mb-5">Choose which LLM the workflow engine uses for planning and executing steps. Leave on "Use global setting" to follow your Conversational LLM.</p>',
-        '<div class="flex items-center gap-3 mb-3">',
-        '<label class="text-sm font-medium text-[#ececf1] w-20 text-right flex-shrink-0">Provider:</label>',
-        '<select id="sr-llm-provider" class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] hover:border-[#7a7c8c] cursor-pointer">',
-        '<option value="">— Use global setting —</option>',
-        '</select>',
+        '<div id="hermes-readiness-strip" class="mb-3 rounded border border-white/10 bg-[#10183f] px-3 py-2 text-xs text-gray-400">Execution readiness loading...</div>',
+        '<div class="mb-4 border-b border-white/10 pb-2">',
+        '<h4 class="text-sm font-semibold text-white">Ticket complexity routing</h4>',
+        '<p class="text-xs text-gray-500 mb-3">Ticket complexity chooses the implementation agent and model.</p>',
+        '<div class="space-y-2">',
+        ['low', 'medium', 'high'].map(function(level) {
+            var label = level.charAt(0).toUpperCase() + level.slice(1);
+            return '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr);">' +
+                '<label class="text-xs text-gray-400 font-medium">' + label + '</label>' +
+                '<select id="wf-cli-' + level + '-backend" class="wf-cli-backend px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
+                    '<option value="pi">Pi</option><option value="cursor">Cursor CLI</option><option value="codex">Codex CLI</option><option value="claude_code">Claude Code</option><option value="cursor_ide">Cursor IDE</option><option value="vscode_ide">VS Code IDE</option>' +
+                '</select>' +
+                '<select id="wf-cli-' + level + '-model" class="wf-cli-model px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
+                    '<option value="auto">Auto</option>' +
+                '</select>' +
+            '</div>';
+        }).join(''),
         '</div>',
-        '<div class="flex items-center gap-3 mb-6">',
-        '<label class="text-sm font-medium text-[#ececf1] w-20 text-right flex-shrink-0">Model:</label>',
-        '<select id="sr-llm-model-select" class="flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] hover:border-[#7a7c8c] cursor-pointer">',
-        '<option value="">Select model...</option>',
-        '</select>',
         '</div>',
         '<div class="flex gap-2 justify-end">',
         '<button id="sr-llm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>',
@@ -229,66 +606,114 @@
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 
     var modal = document.getElementById('sr-llm-modal');
-    var providerEl = document.getElementById('sr-llm-provider');
-    var modelEl = document.getElementById('sr-llm-model-select');
-    var savedModel = '';
+    var readinessEl = document.getElementById('hermes-readiness-strip');
+    var routeDefaults = {
+        low: { backend: 'cursor', model: 'auto' },
+        medium: { backend: 'codex', model: 'auto' },
+        high: { backend: 'codex', model: 'gpt-5.3-codex' }
+    };
 
-    function loadProviders(callback) {
-        fetch('/api/llms/available-providers')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                var opts = '<option value="">— Use global setting —</option>';
-                (data.providers || []).forEach(function(p) {
-                    opts += '<option value="' + p.id + '">' + p.name + '</option>';
-                });
-                providerEl.innerHTML = opts;
-                if (callback) callback();
-            })
-            .catch(function() { if (callback) callback(); });
+    function routeModelLabel(model) {
+        if (!model) return '';
+        if (typeof model === 'string') return model;
+        var name = model.name || model.id || model.model || '';
+        return name;
     }
 
-    function loadModels(provider, currentModel) {
-        if (!provider) {
-            modelEl.innerHTML = '<option value="">— follows global setting —</option>';
-            modelEl.disabled = true;
-            return;
-        }
-        modelEl.innerHTML = '<option value="">Loading...</option>';
-        modelEl.disabled = true;
-        fetch('/api/llms/models?type=conversational&provider=' + encodeURIComponent(provider))
+    function routeModelValue(model) {
+        if (!model) return '';
+        if (typeof model === 'string') return model;
+        return model.id || model.model || model.name || '';
+    }
+
+    function loadRouteModels(level, backendId, selectedModel) {
+        var select = document.getElementById('wf-cli-' + level + '-model');
+        if (!select) return;
+        var current = selectedModel || routeDefaults[level].model || 'auto';
+        select.disabled = true;
+        select.innerHTML = '';
+        var loadingOpt = document.createElement('option');
+        loadingOpt.value = current;
+        loadingOpt.textContent = 'Loading...';
+        select.appendChild(loadingOpt);
+        fetch('/api/projects/cli-models?backend_id=' + encodeURIComponent(backendId || 'codex'))
             .then(function(r) { return r.json(); })
             .then(function(data) {
-                var models = data.models || [];
-                modelEl.innerHTML = '<option value="">Select model...</option>';
-                models.forEach(function(m) {
-                    var val = (typeof m === 'object' && m.id != null) ? m.id : m;
-                    var label = (typeof m === 'object' && m.name != null) ? m.name : m;
+                var models = Array.isArray(data.models) ? data.models : [];
+                var seen = {};
+                select.innerHTML = '';
+                function append(value, label) {
+                    value = value || 'auto';
+                    if (seen[value]) return;
+                    seen[value] = true;
                     var opt = document.createElement('option');
-                    opt.value = val; opt.textContent = label;
-                    modelEl.appendChild(opt);
-                });
-                if (currentModel) {
-                    modelEl.value = currentModel;
-                    if (!modelEl.value) {
-                        var opt = document.createElement('option');
-                        opt.value = currentModel; opt.textContent = currentModel;
-                        modelEl.appendChild(opt);
-                        modelEl.value = currentModel;
-                    }
+                    opt.value = value;
+                    opt.textContent = label || value;
+                    select.appendChild(opt);
                 }
-                modelEl.disabled = false;
+                append('auto', 'Auto');
+                models.forEach(function(model) {
+                    var value = routeModelValue(model);
+                    if (!value) return;
+                    append(value, routeModelLabel(model));
+                });
+                if (current && !seen[current]) append(current, current);
+                select.value = current || 'auto';
+                select.disabled = false;
             })
-            .catch(function() { modelEl.innerHTML = '<option value="">Error loading models</option>'; modelEl.disabled = false; });
+            .catch(function() {
+                select.innerHTML = '';
+                var opt = document.createElement('option');
+                opt.value = current;
+                opt.textContent = current;
+                select.appendChild(opt);
+                select.disabled = false;
+            });
+    }
+
+    function renderReadiness(items, counts, sources) {
+        if (!readinessEl) return;
+        var list = Array.isArray(items) ? items : [];
+        var ready = list.filter(function(item) { return item && item.status === 'ready'; }).length;
+        var total = list.length;
+        var blocked = list.filter(function(item) { return item && item.status === 'blocked'; }).length;
+        var needs = list.filter(function(item) { return item && item.status && item.status !== 'ready' && item.status !== 'blocked'; }).length;
+        var readyItems = list.filter(function(item) { return item && item.status === 'ready'; }).slice(0, 3).map(function(item) { return item.label; });
+        var problemItems = list.filter(function(item) { return item && item.status !== 'ready'; }).slice(0, 2).map(function(item) { return item.label; });
+        var statusText = total ? ready + '/' + total + ' ready' : 'ready';
+        var detail = problemItems.length ? 'Needs setup: ' + problemItems.join(', ') : readyItems.join(' · ');
+        var sourcesText = (sources && sources.length) ? 'Sources: ' + sources.join(', ') : 'Sources: none';
+        var cls = blocked ? 'border-red-500/30 bg-red-500/10 text-red-200' : (needs ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200');
+        readinessEl.className = 'mb-3 rounded border px-3 py-2 text-xs ' + cls;
+        readinessEl.innerHTML = '<div class="flex flex-wrap items-center gap-x-3 gap-y-1">' +
+            '<span class="font-semibold text-white">Execution readiness</span>' +
+            '<span>' + statusText + '</span>' +
+            (detail ? '<span class="text-current opacity-80">' + detail + '</span>' : '') +
+            '<span class="ml-auto text-current opacity-70">' + sourcesText + '</span>' +
+        '</div>';
+        if (counts) {
+            readinessEl.innerHTML += '<div class="mt-1 text-[11px] opacity-70">Ledger: ' + ((counts && counts.events) || 0) + ' events · ' + ((counts && counts.validations) || 0) + ' validations · ' + ((counts && counts.corrections) || 0) + ' corrections</div>';
+        }
     }
 
     function openModal() {
-        fetch('/api/workflows/llm-settings')
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                savedModel = data.model || '';
-                loadProviders(function() {
-                    providerEl.value = data.provider || '';
-                    loadModels(data.provider || '', savedModel);
+        Promise.all([
+            fetch('/api/workflows/hermes-setup').then(function(r) { return r.json(); }),
+            fetch('/api/llms').then(function(r) { return r.json(); }).catch(function() { return {}; })
+        ])
+            .then(function(results) {
+                var data = results[0] || {};
+                var llm = results[1] || {};
+                renderReadiness(data.readiness || [], data.counts || {}, data.connected_sources || []);
+                ['low', 'medium', 'high'].forEach(function(level) {
+                    var backend = document.getElementById('wf-cli-' + level + '-backend');
+                    var model = document.getElementById('wf-cli-' + level + '-model');
+                    var route = (data.routing && data.routing[level]) || {};
+                    var backendValue = route.backend || llm['project_cli_' + level + '_backend'] || routeDefaults[level].backend;
+                    var modelValue = route.model || llm['project_cli_' + level + '_model'] || routeDefaults[level].model;
+                    if (backend) backend.value = backendValue;
+                    if (model) model.value = modelValue;
+                    loadRouteModels(level, backendValue, modelValue);
                 });
                 modal.classList.remove('hidden');
                 modal.classList.add('flex');
@@ -297,22 +722,34 @@
 
     function closeModal() { modal.classList.add('hidden'); modal.classList.remove('flex'); }
 
-    providerEl.addEventListener('change', function() { loadModels(this.value, ''); });
+    document.querySelectorAll('.wf-cli-backend').forEach(function(select) {
+        select.addEventListener('change', function() {
+            loadRouteModels(select.dataset.level, select.value, 'auto');
+        });
+    });
     document.getElementById('wf-sr-llm-btn').addEventListener('click', openModal);
     document.getElementById('sr-llm-close').addEventListener('click', closeModal);
     document.getElementById('sr-llm-cancel').addEventListener('click', closeModal);
     modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
 
     document.getElementById('sr-llm-save').addEventListener('click', function() {
-        fetch('/api/workflows/llm-settings', {
+        var routing = {};
+        ['low', 'medium', 'high'].forEach(function(level) {
+            var backend = document.getElementById('wf-cli-' + level + '-backend');
+            var model = document.getElementById('wf-cli-' + level + '-model');
+            routing[level] = {
+                backend: (backend && backend.value) || routeDefaults[level].backend,
+                model: (model && model.value) || routeDefaults[level].model
+            };
+        });
+        fetch('/api/workflows/hermes-setup', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ provider: providerEl.value.trim(), model: modelEl.value.trim() })
-        })
-        .then(function(r) { return r.json(); })
+            body: JSON.stringify({ enabled: true, routing: routing })
+        }).then(function(r) { return r.json(); })
         .then(function() {
             closeModal();
-            window.DecisionsAPI && window.DecisionsAPI.snackbar('Workflow LLM saved', 'success');
+            window.DecisionsAPI && window.DecisionsAPI.snackbar('Execution setup saved', 'success');
         });
     });
 })();

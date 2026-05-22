@@ -116,6 +116,7 @@ _ACTION_TIMEOUT_SECONDS = {
     "execute_code": 180,
     "playwright": 240,
     "play_recording": 180,
+    "decision_action": 180,
 }
 
 _ACTION_MAX_RETRIES = {
@@ -127,6 +128,7 @@ _ACTION_MAX_RETRIES = {
     "execute_code": 1,
     "playwright": 1,
     "play_recording": 0,
+    "decision_action": 0,
 }
 
 
@@ -168,8 +170,8 @@ def _default_verification(instruction: str, action_type: str) -> str:
         return f"Generated code runs without errors and its output confirms: {base}."
     if action_type == "computer_use":
         return f"Final screen state visibly confirms: {base}."
-    if action_type == "play_recording":
-        return f"Recorded action completes and the expected resulting UI state is visible: {base}."
+    if action_type in {"play_recording", "decision_action"}:
+        return f"Saved action completes and the expected resulting state is visible: {base}."
     return f"Step result explicitly confirms completion of: {base}."
 
 
@@ -224,6 +226,7 @@ def _normalize_plan_steps(steps_data: List[Dict[str, Any]], source_instruction: 
         "playwright",
         "computer_use",
         "play_recording",
+        "decision_action",
     }
     for i, raw_step in enumerate(steps_data or []):
         if isinstance(raw_step, str):
@@ -334,7 +337,7 @@ def _call_llm_for_plan(instruction: str) -> Optional[List[Dict[str, str]]]:
             logger.warning("LLM returned non-array: %s", type(parsed))
             return None
         steps = []
-        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "computer_use", "play_recording"}
+        valid_action_types = {"agent_instruction", "run_command", "send_to_project_cli", "http_request", "execute_code", "playwright", "computer_use", "play_recording", "decision_action"}
         for i, item in enumerate(parsed):
             if isinstance(item, dict):
                 title = str(item.get("title") or item.get("label") or f"Step {i + 1}")

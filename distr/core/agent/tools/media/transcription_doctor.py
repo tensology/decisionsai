@@ -20,8 +20,6 @@ _REFERENCE_MARKER = "\n\nREFERENCE:\n"
 
 
 def _engine_to_plain(engine: Optional[str]) -> str:
-    if engine == "vibevoice_asr":
-        return "VibeVoice for speech to text"
     if engine == "whisper":
         return "Whisper on your machine for speech to text"
     if engine == "vosk":
@@ -44,31 +42,12 @@ def _build_voice_friendly_summary(
     check_backends: bool,
 ) -> str:
     """Two to four sentences, no markdown, no emoji, safe for TTS."""
-    from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-
     want = _engine_to_plain(resolved_engine)
-    vv_ready = False
-    try:
-        vv_ready = bool(vibevoice_asr_runtime_ready())
-    except Exception:
-        vv_ready = False
 
     lines = []
-    if resolved_engine == "vibevoice_asr":
-        if vv_ready:
-            lines.append(
-                f"In Settings you chose {transcription_model or 'VibeVoice'}. "
-                "The VibeVoice package is present, so push to talk should use VibeVoice for speech to text."
-            )
-        else:
-            lines.append(
-                f"In Settings you chose {transcription_model or 'VibeVoice'}, but the VibeVoice package is not installed in this Python environment. "
-                "The live microphone falls back to local Whisper or Vosk until you run the install VibeVoice script in your app virtual environment."
-            )
-    else:
-        lines.append(
-            f"Your saved speech to text choice is {transcription_model or 'not set'}, which resolves to {want}."
-        )
+    lines.append(
+        f"Your saved speech to text choice is {transcription_model or 'not set'}, which resolves to {want}."
+    )
 
     # None = ffmpeg check skipped (do not claim broken — the model often omits check_ffmpeg).
     if ffmpeg_state is True:
@@ -102,7 +81,7 @@ class TranscriptionDoctorTool(BaseTool):
     
     name: str = "transcription_doctor"
     description: str = (
-        "Check speech-to-text health: saved Settings choice, whether VibeVoice can run, ffmpeg, and file backends.\n"
+        "Check speech-to-text health: saved Settings choice, ffmpeg, and file backends.\n"
         "Returns a short voice-safe paragraph FIRST, then a line REFERENCE: and technical details below it.\n"
         "You MUST speak only the paragraph above REFERENCE to the user over TTS; never read the block below REFERENCE aloud.\n"
         "Use when the user asks which STT is active, to verify setup, or after changing speech to text in Settings.\n"
@@ -182,7 +161,6 @@ class TranscriptionDoctorTool(BaseTool):
                     tech.append("   - Whisper.cpp: pywhispercpp (see requirements.txt)\n")
                     tech.append("   - OpenAI Whisper: openai + API key\n")
                     tech.append("   - Vosk: python bin/setup_vosk.py\n")
-                    tech.append("   - VibeVoice ASR: ./scripts/install_vibevoice.sh\n")
 
             return spoken + _REFERENCE_MARKER + "".join(tech)
             
@@ -193,4 +171,3 @@ class TranscriptionDoctorTool(BaseTool):
     async def _arun(self, check_ffmpeg: bool = True, check_backends: bool = True, **kwargs) -> str:
         """Async version of _run."""
         return self._run(check_ffmpeg, check_backends)
-

@@ -3,7 +3,7 @@ from distr.core.utils import load_settings_from_db, save_settings_to_db, get_scr
 from distr.core.paths import AVATARS_DIR
 from distr.core.db import get_session, ScreenPosition, Chat
 from distr.core.signals import signal_manager
-from distr.core.skin_config import SkinConfig
+from distr.core.skin_config import EventResponse, SkinConfig
 from distr.core.skin_discovery import get_skin_by_name
 from distr.core.skin_migration import migrate_selected_oracle
 from distr.core.hotkeys import (
@@ -41,6 +41,8 @@ class _GlobalPttBridge(QtCore.QObject):
     hotkey_action = QtCore.pyqtSignal(str)
     dictation_pressed = QtCore.pyqtSignal()
     dictation_released = QtCore.pyqtSignal()
+    ticket_dictation_pressed = QtCore.pyqtSignal()
+    ticket_dictation_released = QtCore.pyqtSignal()
 
 
 class RoundContainer(QtWidgets.QWidget):
@@ -282,6 +284,8 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._global_ptt_bridge.hotkey_action.connect(self._on_global_hotkey_action)
         self._global_ptt_bridge.dictation_pressed.connect(self._on_dictation_hotkey_pressed)
         self._global_ptt_bridge.dictation_released.connect(self._on_dictation_hotkey_released)
+        self._global_ptt_bridge.ticket_dictation_pressed.connect(self._on_ticket_dictation_hotkey_pressed)
+        self._global_ptt_bridge.ticket_dictation_released.connect(self._on_ticket_dictation_hotkey_released)
         self._setup_global_ptt_hotkey()
 
         if self.settings.get('restore_position'):
@@ -506,6 +510,19 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
 
         response = self._event_dispatcher.get_event_response(new_hook)
+        if response is None and new_hook == "ticket_dictation":
+            base_response = self._event_dispatcher.get_event_response("dictation")
+            response = EventResponse(
+                animation=(base_response.animation if base_response else "9.webm"),
+                show_player=False,
+                show_chat_bubble=False,
+                glow=True,
+                glow_color=(168, 85, 247),
+                glow_speed=900,
+                glow_style="pulse",
+                tray_icon="default",
+                playback=(base_response.playback if base_response else "loop"),
+            )
         if response is None:
             logger.info("[ORACLE] No Event_Response for hook '%s' — keeping current state", new_hook)
             return
@@ -1256,6 +1273,9 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 get_dictation_combo=self._get_dictation_hotkey_combo,
                 on_dictation_pressed=lambda: self._global_ptt_bridge.dictation_pressed.emit(),
                 on_dictation_released=lambda: self._global_ptt_bridge.dictation_released.emit(),
+                get_ticket_dictation_combo=self._get_ticket_dictation_hotkey_combo,
+                on_ticket_dictation_pressed=lambda: self._global_ptt_bridge.ticket_dictation_pressed.emit(),
+                on_ticket_dictation_released=lambda: self._global_ptt_bridge.ticket_dictation_released.emit(),
             )
             self._global_ptt_listener.start()
 
@@ -1437,6 +1457,31 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
                 return None
         return (modifier, key)
 
+    def _get_ticket_dictation_hotkey_combo(self):
+        try:
+            current_settings = load_settings_from_db()
+        except Exception:
+            current_settings = self.settings
+        if not current_settings.get("ticket_dictation_hotkey_enabled", False):
+            return None
+        modifier = str(current_settings.get("ticket_dictation_hotkey_modifier", HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"])).strip().lower()
+        key = str(current_settings.get("ticket_dictation_hotkey_key", "") or "").strip().lower()
+        if modifier not in CHORD_MODIFIERS or (key and key not in VALID_HOTKEY_KEYS):
+            return None
+        if self._is_global_ptt_hotkey_enabled():
+            ptt_combo = self._get_global_ptt_hotkey_combo()
+            ticket_mods = GlobalPttHotkeyListener._modifier_tokens(modifier)
+            if ticket_mods and ticket_mods == ptt_combo:
+                logging.warning("[HOTKEY] Ticket dictation hotkey ignored because it overlaps Push-to-Talk: %s + %s", modifier, key)
+                return None
+        dict_combo = self._get_dictation_hotkey_combo()
+        if dict_combo:
+            dict_modifier, dict_key = dict_combo
+            if dict_modifier == modifier and dict_key == key:
+                logging.warning("[HOTKEY] Ticket dictation hotkey ignored because it overlaps plain Dictation: %s + %s", modifier, key)
+                return None
+        return (modifier, key)
+
     def _on_dictation_hotkey_pressed(self):
         """Start dictation via hold-to-dictate hotkey.
 
@@ -1457,6 +1502,24 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         try:
             from distr.core.signals import signal_manager
             signal_manager.dictation_hotkey_pressed.emit()
+        except Exception:
+            pass
+
+    def _on_ticket_dictation_hotkey_pressed(self):
+        self._dictation_hotkey_active = True
+        self._dictation_started_from_hotkey = True
+        self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        self._dismiss_tts_player_for_capture("ticket_dictation_hotkey_press")
+        if not getattr(self, "is_dictating", False):
+            self.is_dictating = True
+            self._update_dictation_menu_state()
+        try:
+            self._event_dispatcher.fire_hook("ticket_dictation", trigger="oracle:ticket_dictation_hotkey_press")
+        except Exception as exc:
+            logging.debug("[ORACLE] ticket dictation hook fire failed: %s", exc)
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.ticket_dictation_hotkey_pressed.emit()
         except Exception:
             pass
 
@@ -1495,6 +1558,31 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         try:
             from distr.core.signals import signal_manager
             signal_manager.dictation_hotkey_released.emit()
+        except Exception:
+            pass
+
+    def _on_ticket_dictation_hotkey_released(self):
+        self._dictation_hotkey_active = False
+        self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        if getattr(self, "is_dictating", False):
+            self.is_dictating = False
+            self._update_dictation_menu_state()
+        try:
+            self._event_dispatcher.revert_hook("ticket_dictation", trigger="oracle:ticket_dictation_hotkey_release")
+        except Exception as exc:
+            logging.debug("[ORACLE] ticket dictation hook revert failed: %s", exc)
+        try:
+            current = self._event_dispatcher.get_current_hook()
+            if current in {"dictation", "ticket_dictation"}:
+                self._event_dispatcher.force_idle("ticket_dictation_hotkey_release_safety")
+            elif current == "ptt_active":
+                self._event_dispatcher.force_idle("ticket_dictation_hotkey_release_stale_ptt")
+        except Exception as exc:
+            logging.debug("[ORACLE] ticket dictation cleanup check failed: %s", exc)
+        self.update()
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.ticket_dictation_hotkey_released.emit()
         except Exception:
             pass
 
@@ -1554,7 +1642,50 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         skin_select_modifier = str(current_settings.get("skin_select_hotkey_modifier", HOTKEY_DEFAULTS["skin_select_hotkey_modifier"])).strip().lower()
         for idx in range(1, 10):
             combos[f"skin_select_{idx}"] = (skin_select_modifier, str(idx))
+        try:
+            from distr.core.db import Snippet
+
+            with get_session() as session:
+                snippets = (
+                    session.query(Snippet.id, Snippet.remote_hotkey)
+                    .filter(Snippet.remote_hotkey.isnot(None))
+                    .all()
+                )
+            for snippet_id, remote_hotkey in snippets:
+                combo = self._snippet_remote_hotkey_to_global_combo(remote_hotkey)
+                if combo:
+                    combos[f"paste_snippet_{snippet_id}"] = combo
+        except Exception as exc:
+            logger.debug("[HOTKEY] Failed to load snippet hotkeys: %s", exc)
         return combos
+
+    @staticmethod
+    def _snippet_remote_hotkey_to_global_combo(remote_hotkey: str | None) -> tuple[str, str] | None:
+        aliases = {
+            "ctrl": "control",
+            "control": "control",
+            "alt": "option",
+            "option": "option",
+            "cmd": "command",
+            "command": "command",
+            "meta": "command",
+            "shift": "shift",
+        }
+        parts = [p.strip().lower() for p in str(remote_hotkey or "").replace("_", "+").split("+") if p.strip()]
+        if not parts:
+            return None
+        modifiers = []
+        key = ""
+        for part in parts:
+            normalized = aliases.get(part)
+            if normalized:
+                if normalized not in modifiers:
+                    modifiers.append(normalized)
+            else:
+                key = part
+        if not modifiers or not key:
+            return None
+        return ("_".join(modifiers), key)
 
     def _get_skin_shortcut_order(self) -> list[str]:
         try:
@@ -1625,6 +1756,37 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             return
         if action_name == "open_preferences":
             self._open_web_url("/settings")
+            return
+        if action_name.startswith("paste_snippet_"):
+            try:
+                snippet_id = int(action_name.rsplit("_", 1)[-1])
+            except Exception:
+                logger.warning("[HOTKEY] Invalid snippet action name: %s", action_name)
+                return
+            self._paste_snippet_by_hotkey(snippet_id)
+
+    def _paste_snippet_by_hotkey(self, snippet_id: int) -> None:
+        try:
+            from distr.core.db import Snippet
+            from distr.core.agent.tools.clipboard.clipboard_actions import set_clipboard_content
+
+            with get_session() as session:
+                snippet = session.query(Snippet).filter(Snippet.id == snippet_id).first()
+                text = (snippet.description or "") if snippet else ""
+            if not text:
+                logger.warning("[HOTKEY] Snippet %s is empty or missing; nothing to paste", snippet_id)
+                return
+            if not set_clipboard_content(text):
+                logger.warning("[HOTKEY] Failed to write snippet %s to clipboard", snippet_id)
+                return
+            import pyautogui
+
+            modifier = "command" if platform.system() == "Darwin" else "ctrl"
+            time.sleep(0.08)
+            pyautogui.hotkey(modifier, "v")
+            logger.info("[HOTKEY] Pasted snippet %s via global hotkey", snippet_id)
+        except Exception as exc:
+            logger.warning("[HOTKEY] Failed to paste snippet %s: %s", snippet_id, exc, exc_info=True)
 
 
     def on_move_event(self, event):

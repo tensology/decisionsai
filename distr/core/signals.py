@@ -57,6 +57,8 @@ class SignalManager(QObject):
     # Dictation hotkey signals (GUI hotkey -> Agent)
     dictation_hotkey_pressed = pyqtSignal()
     dictation_hotkey_released = pyqtSignal()
+    ticket_dictation_hotkey_pressed = pyqtSignal()
+    ticket_dictation_hotkey_released = pyqtSignal()
 
     # Shortcut settings changed (web/native settings -> live hotkey listeners)
     shortcut_settings_changed = pyqtSignal()

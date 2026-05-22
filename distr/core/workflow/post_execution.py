@@ -105,6 +105,16 @@ class PostExecutionMixin:
                     dispatcher = StepDispatcher()
                     dispatcher.run_in_workflow(next_step_id, run_id)
 
+                elif decision.get("action") == "correction_retry":
+                    retry_step_id = decision["step_id"]
+                    with self._routed_lock:
+                        self._routed_steps.discard(retry_step_id)
+                    os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(retry_step_id)
+                    _update_workflow_thread_step(retry_step_id)
+                    increment_workflow_updated()
+                    dispatcher = StepDispatcher()
+                    dispatcher.run_in_workflow(retry_step_id, run_id)
+
                 elif decision.get("action") == "end_run":
                     status = decision.get("status", "completed")
                     complete_run(run_id, status)

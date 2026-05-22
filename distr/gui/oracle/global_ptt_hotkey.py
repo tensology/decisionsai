@@ -15,9 +15,18 @@ class GlobalPttHotkeyListener:
     def _modifier_tokens(modifier: str) -> Set[str]:
         if not modifier:
             return set()
-        if "_" in modifier:
-            return {token for token in modifier.split("_") if token}
-        return {modifier}
+        aliases = {
+            "ctrl": "control",
+            "control": "control",
+            "alt": "option",
+            "option": "option",
+            "cmd": "command",
+            "command": "command",
+            "meta": "command",
+            "shift": "shift",
+        }
+        parts = modifier.replace("+", "_").split("_")
+        return {aliases.get(token, token) for token in parts if token}
 
     """Listen for a two-modifier combo and emit press/release callbacks."""
 
@@ -38,6 +47,9 @@ class GlobalPttHotkeyListener:
         get_dictation_combo: Optional[Callable[[], Tuple[str, str]]] = None,
         on_dictation_pressed: Optional[Callable[[], None]] = None,
         on_dictation_released: Optional[Callable[[], None]] = None,
+        get_ticket_dictation_combo: Optional[Callable[[], Tuple[str, str]]] = None,
+        on_ticket_dictation_pressed: Optional[Callable[[], None]] = None,
+        on_ticket_dictation_released: Optional[Callable[[], None]] = None,
     ) -> None:
         self._on_combo_pressed = on_combo_pressed
         self._on_combo_released = on_combo_released
@@ -54,10 +66,14 @@ class GlobalPttHotkeyListener:
         self._get_dictation_combo = get_dictation_combo
         self._on_dictation_pressed = on_dictation_pressed
         self._on_dictation_released = on_dictation_released
+        self._get_ticket_dictation_combo = get_ticket_dictation_combo
+        self._on_ticket_dictation_pressed = on_ticket_dictation_pressed
+        self._on_ticket_dictation_released = on_ticket_dictation_released
         self._pressed_modifiers: Set[str] = set()
         self._pressed_keys: Set[str] = set()
         self._combo_active = False
         self._dictation_active = False
+        self._ticket_dictation_active = False
         self._active_modifier_only_shortcuts: Set[Tuple[str, str]] = set()
         self._listener = None
         self._lock = threading.Lock()
@@ -85,8 +101,10 @@ class GlobalPttHotkeyListener:
             self._pressed_keys.clear()
             was_active = self._combo_active
             was_dictating = self._dictation_active
+            was_ticket_dictating = self._ticket_dictation_active
             self._combo_active = False
             self._dictation_active = False
+            self._ticket_dictation_active = False
             self._active_modifier_only_shortcuts.clear()
 
         if was_active:
@@ -99,6 +117,11 @@ class GlobalPttHotkeyListener:
                 self._on_dictation_released()
             except Exception:
                 logger.debug("[PTT HOTKEY] Dictation release callback failed during stop", exc_info=True)
+        if was_ticket_dictating and self._on_ticket_dictation_released:
+            try:
+                self._on_ticket_dictation_released()
+            except Exception:
+                logger.debug("[PTT HOTKEY] Ticket dictation release callback failed during stop", exc_info=True)
 
         if self._listener is not None:
             try:
@@ -124,8 +147,10 @@ class GlobalPttHotkeyListener:
             self._pressed_keys.clear()
             was_active = self._combo_active
             was_dictating = self._dictation_active
+            was_ticket_dictating = self._ticket_dictation_active
             self._combo_active = False
             self._dictation_active = False
+            self._ticket_dictation_active = False
             self._active_modifier_only_shortcuts.clear()
 
         if was_active:
@@ -138,6 +163,11 @@ class GlobalPttHotkeyListener:
                 self._on_dictation_released()
             except Exception:
                 logger.debug("[PTT HOTKEY] Dictation release callback failed during reset", exc_info=True)
+        if was_ticket_dictating and self._on_ticket_dictation_released:
+            try:
+                self._on_ticket_dictation_released()
+            except Exception:
+                logger.debug("[PTT HOTKEY] Ticket dictation release callback failed during reset", exc_info=True)
 
     def _on_press(self, key) -> None:
         normalized_key = self._normalize_key(key)
@@ -158,6 +188,7 @@ class GlobalPttHotkeyListener:
         emit_record_toggle = False
         emit_action_names: list[str] = []
         emit_dictation_pressed = False
+        emit_ticket_dictation_pressed = False
 
         with self._lock:
             down_combo = self._get_size_down_combo() if self._get_size_down_combo else None
@@ -195,6 +226,15 @@ class GlobalPttHotkeyListener:
                         if not self._dictation_active:
                             self._dictation_active = True
                             emit_dictation_pressed = True
+            if self._get_ticket_dictation_combo and self._on_ticket_dictation_pressed:
+                ticket_combo = self._get_ticket_dictation_combo()
+                if ticket_combo and len(ticket_combo) == 2:
+                    ticket_modifier, ticket_key = ticket_combo
+                    ticket_modifiers = self._modifier_tokens(ticket_modifier)
+                    if ticket_key and ticket_modifiers.issubset(self._pressed_modifiers) and normalized_key == ticket_key:
+                        if not self._ticket_dictation_active:
+                            self._ticket_dictation_active = True
+                            emit_ticket_dictation_pressed = True
 
             if not mod:
                 # Non-modifier key press handled only for option+bracket shortcuts.
@@ -213,6 +253,15 @@ class GlobalPttHotkeyListener:
                             if not self._dictation_active:
                                 self._dictation_active = True
                                 emit_dictation_pressed = True
+                if self._get_ticket_dictation_combo and self._on_ticket_dictation_pressed:
+                    ticket_combo = self._get_ticket_dictation_combo()
+                    if ticket_combo and len(ticket_combo) == 2:
+                        ticket_modifier, ticket_key = ticket_combo
+                        ticket_modifiers = self._modifier_tokens(ticket_modifier)
+                        if not ticket_key and ticket_modifiers.issubset(self._pressed_modifiers):
+                            if not self._ticket_dictation_active:
+                                self._ticket_dictation_active = True
+                                emit_ticket_dictation_pressed = True
                 for action_name, combo_tuple, callback_enabled in (
                     ("__size_down__", down_combo, bool(self._on_size_down)),
                     ("__size_up__", up_combo, bool(self._on_size_up)),
@@ -280,6 +329,8 @@ class GlobalPttHotkeyListener:
             self._on_combo_released()
         if emit_dictation_pressed and self._on_dictation_pressed:
             self._on_dictation_pressed()
+        if emit_ticket_dictation_pressed and self._on_ticket_dictation_pressed:
+            self._on_ticket_dictation_pressed()
 
     def _on_release(self, key) -> None:
         normalized_key = self._normalize_key(key)
@@ -295,6 +346,7 @@ class GlobalPttHotkeyListener:
         # Previously we returned early on non-modifier releases, so release never fired if
         # the user let go of D before the modifiers.
         dictation_released = False
+        ticket_dictation_released = False
         with self._lock:
             if self._dictation_active and self._get_dictation_combo and self._on_dictation_released:
                 dict_combo = self._get_dictation_combo()
@@ -313,9 +365,28 @@ class GlobalPttHotkeyListener:
                     if not still_dict_active:
                         self._dictation_active = False
                         dictation_released = True
+            if self._ticket_dictation_active and self._get_ticket_dictation_combo and self._on_ticket_dictation_released:
+                ticket_combo = self._get_ticket_dictation_combo()
+                if ticket_combo and len(ticket_combo) == 2:
+                    ticket_modifier, ticket_key = ticket_combo
+                    ticket_modifiers = self._modifier_tokens(ticket_modifier)
+                    if not ticket_key and mod:
+                        remaining_modifiers = set(self._pressed_modifiers)
+                        remaining_modifiers.discard(mod)
+                        still_ticket_active = ticket_modifiers.issubset(remaining_modifiers)
+                    else:
+                        still_ticket_active = (
+                            ticket_modifiers.issubset(self._pressed_modifiers)
+                            and ticket_key in self._pressed_keys
+                        )
+                    if not still_ticket_active:
+                        self._ticket_dictation_active = False
+                        ticket_dictation_released = True
 
         if dictation_released:
             self._on_dictation_released()
+        if ticket_dictation_released:
+            self._on_ticket_dictation_released()
 
         if not mod:
             return
@@ -440,6 +511,8 @@ class GlobalPttHotkeyListener:
         if "equal" in key_name:
             return "equal"
         if key_name in {"0", "1", "2", "3", "4", "5", "6", "7", "8", "9"}:
+            return key_name
+        if key_name in {f"f{i}" for i in range(1, 13)}:
             return key_name
         if len(key_name) == 1 and key_name in "abcdefghijklmnopqrstuvwxyz":
             return key_name

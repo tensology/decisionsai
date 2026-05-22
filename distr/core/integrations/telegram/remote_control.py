@@ -555,7 +555,9 @@ class TelegramRemoteControlMixin:
                             )
                             return
                         success = self._type_text_quick(
-                            text_to_type, take_screenshot=take_screenshot
+                            text_to_type,
+                            take_screenshot=take_screenshot,
+                            dictation=bool(command_data.get("dictation")),
                         )
                         self._send_websocket_message(
                             {
@@ -1003,7 +1005,7 @@ class TelegramRemoteControlMixin:
                                 speak=False,
                             )
                         elif mode == "dictate":
-                            self._type_text_quick(text)
+                            self._type_text_quick(text, dictation=True)
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "voice_text_input",
                             "request_id": request_id, "data": {"text": text, "mode": mode},
@@ -1837,55 +1839,13 @@ class TelegramRemoteControlMixin:
             logger.error(f"Error pasting text: {e}", exc_info=True)
             return False
 
-    def _type_text_quick(self, text: str, take_screenshot: bool = False) -> bool:
+    def _type_text_quick(self, text: str, take_screenshot: bool = False, dictation: bool = False) -> bool:
         """Quickly type text as keyboard input."""
         try:
             import time
-            import platform
+            from distr.core.audio.dictation import insert_text
 
-            if not pyautogui:
-                logger.error("pyautogui not available")
-                return False
-
-            success = False
-            system = platform.system()
-
-            if system == "Darwin":  # macOS
-                import subprocess
-
-                # AppleScript for safer/faster typing on macOS
-                escaped_text = text.replace("\\", "\\\\").replace('"', '\\"')
-                applescript = (
-                    f'tell application "System Events" to keystroke "{escaped_text}"'
-                )
-                try:
-                    subprocess.run(
-                        ["osascript", "-e", applescript],
-                        capture_output=True,
-                        timeout=10,
-                    )
-                    # Enter
-                    time.sleep(0.3)
-                    subprocess.run(
-                        [
-                            "osascript",
-                            "-e",
-                            'tell application "System Events" to key code 36',
-                        ],
-                        capture_output=True,
-                        timeout=5,
-                    )
-                    success = True
-                except Exception:
-                    # Fallback
-                    pyautogui.typewrite(text)
-                    pyautogui.press("enter")
-                    success = True
-            else:
-                # Windows/Linux
-                pyautogui.typewrite(text)
-                pyautogui.press("enter")
-                success = True
+            success = insert_text(text, instant=None if dictation else True, press_enter=True)
 
             if take_screenshot and success:
                 try:

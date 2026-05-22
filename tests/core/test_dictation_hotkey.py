@@ -15,6 +15,7 @@ def test_dictation_hotkey_defaults_in_hotkeys_py():
     assert DEFAULTS["dictation_hotkey_enabled"] is True
     assert "dictation_hotkey_modifier" in DEFAULTS
     assert DEFAULTS["dictation_hotkey_modifier"] == "control_command"
+    assert DEFAULTS["ticket_dictation_hotkey_modifier"] == "control_shift"
     assert "dictation_hotkey_key" in DEFAULTS
     assert DEFAULTS["dictation_hotkey_key"] == ""
 
@@ -50,6 +51,7 @@ def test_dictation_hotkey_defaults_in_settings_py():
         assert DEFAULT_SETTINGS["dictation_hotkey_enabled"] is True
         assert "dictation_hotkey_modifier" in DEFAULT_SETTINGS
         assert DEFAULT_SETTINGS["dictation_hotkey_modifier"] == "control_command"
+        assert DEFAULT_SETTINGS["ticket_dictation_hotkey_modifier"] == "control_shift"
         assert "dictation_hotkey_key" in DEFAULT_SETTINGS
         assert DEFAULT_SETTINGS["dictation_hotkey_key"] == ""
     finally:
@@ -89,6 +91,44 @@ def test_global_ptt_listener_accepts_dictation_callbacks():
     assert listener._on_dictation_pressed is on_pressed
     assert listener._on_dictation_released is on_released
     assert listener._dictation_active is False
+
+
+def test_global_ptt_listener_accepts_ticket_dictation_callbacks():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    on_pressed = MagicMock()
+    on_released = MagicMock()
+
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value={"option", "command"}),
+        get_ticket_dictation_combo=MagicMock(return_value=("control_shift", "")),
+        on_ticket_dictation_pressed=on_pressed,
+        on_ticket_dictation_released=on_released,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class ShiftKey:
+        name = "shift"
+        char = None
+        vk = None
+
+    listener._on_press(ControlKey())
+    on_pressed.assert_not_called()
+
+    listener._on_press(ShiftKey())
+    on_pressed.assert_called_once()
+    assert listener._ticket_dictation_active is True
+
+    listener._on_release(ShiftKey())
+    on_released.assert_called_once()
+    assert listener._ticket_dictation_active is False
 
 
 # ---------------------------------------------------------------------------
@@ -170,6 +210,76 @@ def test_dictation_hotkey_maps_control_character_letter_and_releases():
 
     released_cb.assert_called_once()
     assert listener._dictation_active is False
+
+
+def test_global_hotkey_listener_accepts_web_style_ctrl_alt_number_action_combo():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    action_cb = MagicMock()
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_action_combos=MagicMock(return_value={"paste_snippet_7": ("ctrl_alt", "1")}),
+        on_hotkey_action=action_cb,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class OptionKey:
+        name = "alt"
+        char = None
+        vk = None
+
+    class OptionOne:
+        name = ""
+        char = "¡"
+        vk = None
+
+    listener._on_press(ControlKey())
+    listener._on_press(OptionKey())
+    listener._on_press(OptionOne())
+
+    action_cb.assert_called_once_with("paste_snippet_7")
+
+
+def test_global_hotkey_listener_accepts_default_snippet_function_key_combo():
+    from distr.gui.oracle.global_ptt_hotkey import GlobalPttHotkeyListener
+
+    action_cb = MagicMock()
+    listener = GlobalPttHotkeyListener(
+        on_combo_pressed=MagicMock(),
+        on_combo_released=MagicMock(),
+        get_enabled=MagicMock(return_value=True),
+        get_combo=MagicMock(return_value=set()),
+        get_action_combos=MagicMock(return_value={"paste_snippet_3": ("control_shift", "f3")}),
+        on_hotkey_action=action_cb,
+    )
+
+    class ControlKey:
+        name = "ctrl"
+        char = None
+        vk = None
+
+    class ShiftKey:
+        name = "shift"
+        char = None
+        vk = None
+
+    class F3Key:
+        name = "f3"
+        char = None
+        vk = None
+
+    listener._on_press(ControlKey())
+    listener._on_press(ShiftKey())
+    listener._on_press(F3Key())
+
+    action_cb.assert_called_once_with("paste_snippet_3")
 
 
 def test_dictation_hotkey_uses_dynamic_combo_from_settings_callback():

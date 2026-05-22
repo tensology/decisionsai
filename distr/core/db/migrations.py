@@ -539,22 +539,31 @@ def run_migrations():
             except Exception as e:
                 logger.warning(f"Could not add voxcpm_voice column: {e}")
 
-    # VibeVoice Realtime TTS voice preset id (matches demo/voices/streaming_model/*.pt stem)
+    # Handle database migration for supertonic_voice column
     try:
         with Session() as session:
-            session.execute(text("SELECT vibevoice_realtime_voice FROM settings LIMIT 1"))
+            session.execute(text("SELECT supertonic_voice FROM settings LIMIT 1"))
     except Exception:
         with engine.connect() as conn:
             try:
-                conn.execute(
-                    text(
-                        "ALTER TABLE settings ADD COLUMN vibevoice_realtime_voice VARCHAR DEFAULT 'en-carter_man'"
-                    )
-                )
+                conn.execute(text("ALTER TABLE settings ADD COLUMN supertonic_voice VARCHAR DEFAULT 'M1'"))
                 conn.commit()
-                logger.info("Added vibevoice_realtime_voice column to settings table")
+                logger.info("Added supertonic_voice column to settings table")
             except Exception as e:
-                logger.warning("Could not add vibevoice_realtime_voice column: %s", e)
+                logger.warning(f"Could not add supertonic_voice column: {e}")
+
+    # Handle database migration for chatterbox_voice column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT chatterbox_voice FROM settings LIMIT 1"))
+    except Exception:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN chatterbox_voice VARCHAR DEFAULT 'default'"))
+                conn.commit()
+                logger.info("Added chatterbox_voice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add chatterbox_voice column: {e}")
 
     # Handle database migration for coqui_voice column (Coqui TTS offline voices)
     try:
@@ -747,6 +756,30 @@ def run_migrations():
             with engine.connect() as conn:
                 try:
                     conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} VARCHAR DEFAULT {_default}"))
+                    conn.commit()
+                    logger.info("Added %s column to settings table", _col)
+                except Exception as e:
+                    logger.warning("Could not add %s column: %s", _col, e)
+
+    # Hermes orchestration setup columns. These control the workflow driving
+    # brain separately from generic chat and coding defaults.
+    for _col, _ddl in [
+        ("hermes_enabled", "BOOLEAN DEFAULT 1"),
+        ("hermes_orchestrator_provider", "VARCHAR DEFAULT ''"),
+        ("hermes_orchestrator_model", "VARCHAR DEFAULT ''"),
+        ("hermes_validator_provider", "VARCHAR DEFAULT ''"),
+        ("hermes_validator_model", "VARCHAR DEFAULT ''"),
+        ("hermes_correction_provider", "VARCHAR DEFAULT ''"),
+        ("hermes_correction_model", "VARCHAR DEFAULT ''"),
+        ("hermes_memory_export_enabled", "BOOLEAN DEFAULT 0"),
+    ]:
+        try:
+            with Session() as session:
+                session.execute(text(f"SELECT {_col} FROM settings LIMIT 1"))
+        except Exception:
+            with engine.connect() as conn:
+                try:
+                    conn.execute(text(f"ALTER TABLE settings ADD COLUMN {_col} {_ddl}"))
                     conn.commit()
                     logger.info("Added %s column to settings table", _col)
                 except Exception as e:
@@ -1357,6 +1390,7 @@ def run_migrations():
     # Ticket boards: add agent check-in columns
     _kanban_agent_columns = [
         ("agent_enabled", "BOOLEAN DEFAULT 0"),
+        ("whatsapp_checkin_enabled", "BOOLEAN DEFAULT 0"),
         ("agent_frequency", "VARCHAR DEFAULT 'daily'"),
         ("agent_time", "VARCHAR DEFAULT '09:00'"),
         ("agent_days", "TEXT DEFAULT '[]'"),
@@ -1476,6 +1510,18 @@ def run_migrations():
         ("kanban_agent_sub_model", "VARCHAR DEFAULT ''"),
         ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
         ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
+        ("project_cli_low_backend", "VARCHAR DEFAULT 'cursor'"),
+        ("project_cli_low_model", "VARCHAR DEFAULT 'auto'"),
+        ("project_cli_medium_backend", "VARCHAR DEFAULT 'codex'"),
+        ("project_cli_medium_model", "VARCHAR DEFAULT 'auto'"),
+        ("project_cli_high_backend", "VARCHAR DEFAULT 'codex'"),
+        ("project_cli_high_model", "VARCHAR DEFAULT 'gpt-5.3-codex'"),
+        ("project_cli_low_codex_intelligence", "VARCHAR DEFAULT ''"),
+        ("project_cli_low_codex_speed", "VARCHAR DEFAULT ''"),
+        ("project_cli_medium_codex_intelligence", "VARCHAR DEFAULT ''"),
+        ("project_cli_medium_codex_speed", "VARCHAR DEFAULT ''"),
+        ("project_cli_high_codex_intelligence", "VARCHAR DEFAULT ''"),
+        ("project_cli_high_codex_speed", "VARCHAR DEFAULT ''"),
         ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
     ]
     try:
@@ -1604,6 +1650,7 @@ def run_migrations():
     for _tcol, _ttype, _tdef in [
         ("time_estimate", "VARCHAR", "NULL"),
         ("time_spent", "VARCHAR", "NULL"),
+        ("workflow_queue_position", "INTEGER", "0"),
     ]:
         try:
             with Session() as s:
@@ -1647,6 +1694,7 @@ def run_migrations():
                     ("chat_id", "INTEGER"),
                     ("context_rules", "TEXT"),
                     ("workflow_input", "TEXT"),
+                    ("run_settings", "TEXT"),
                 ]:
                     try:
                         conn.execute(text(f"ALTER TABLE auto_workflows ADD COLUMN {col} {col_def}"))
@@ -1720,7 +1768,14 @@ def run_migrations():
         ("dictation_hotkey_enabled", f"BOOLEAN DEFAULT {int(HOTKEY_DEFAULTS['dictation_hotkey_enabled'])}"),
         ("dictation_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_modifier']}'"),
         ("dictation_hotkey_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['dictation_hotkey_key']}'"),
+        ("ticket_dictation_hotkey_enabled", f"BOOLEAN DEFAULT {int(HOTKEY_DEFAULTS['ticket_dictation_hotkey_enabled'])}"),
+        ("ticket_dictation_hotkey_modifier", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['ticket_dictation_hotkey_modifier']}'"),
+        ("ticket_dictation_hotkey_key", f"VARCHAR DEFAULT '{HOTKEY_DEFAULTS['ticket_dictation_hotkey_key']}'"),
         ("instant_dictation", "BOOLEAN DEFAULT 1"),
+        ("dictation_ticket_use_llm", "BOOLEAN DEFAULT 1"),
+        ("dictation_ticket_model", "VARCHAR DEFAULT 'qwen2.5:0.5b'"),
+        ("dictation_ticket_timeout", "VARCHAR DEFAULT '1.2'"),
+        ("dictation_ticket_prompt", "TEXT DEFAULT ''"),
     ]:
         try:
             with Session() as session:
@@ -1733,6 +1788,23 @@ def run_migrations():
                     logger.info("Added %s column to settings table", _col_name)
                 except Exception as e:
                     logger.warning("Could not add %s column: %s", _col_name, e)
+
+    try:
+        with engine.connect() as conn:
+            conn.execute(text(
+                "UPDATE settings "
+                "SET dictation_hotkey_modifier = :plain_mod "
+                "WHERE dictation_hotkey_modifier = :ticket_mod "
+                "AND COALESCE(dictation_hotkey_key, '') = '' "
+                "AND ticket_dictation_hotkey_modifier = :ticket_mod "
+                "AND COALESCE(ticket_dictation_hotkey_key, '') = ''"
+            ), {
+                "plain_mod": HOTKEY_DEFAULTS["dictation_hotkey_modifier"],
+                "ticket_mod": HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"],
+            })
+            conn.commit()
+    except Exception as e:
+        logger.debug("Could not separate dictation and ticket dictation defaults: %s", e)
 
     # Recording shortcut settings
     for _col_name, _col_type in [
@@ -1923,6 +1995,13 @@ def run_migrations():
         ("workflow_status", "VARCHAR", "NULL"),
         ("parent_ticket_id", "INTEGER", "NULL"),
         ("source_chat_id", "INTEGER", "NULL"),
+        ("complexity", "VARCHAR", "'medium'"),
+        ("source_provider", "VARCHAR", "NULL"),
+        ("source_external_id", "VARCHAR", "NULL"),
+        ("source_thread_id", "VARCHAR", "NULL"),
+        ("source_contact", "VARCHAR", "NULL"),
+        ("source_url", "VARCHAR", "NULL"),
+        ("source_label", "VARCHAR", "NULL"),
     ]:
         try:
             with Session() as s:

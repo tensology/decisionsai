@@ -156,7 +156,8 @@ class GeneralSettings(BaseModel):
     qwen3_voice: str = "aiden"
     f5tts_voice: str = "default"
     voxcpm_voice: str = "default"
-    vibevoice_realtime_voice: str = "en-carter_man"
+    supertonic_voice: str = "M1"
+    chatterbox_voice: str = "default"
     playback_speed: float = 1.0
     speech_volume: int = 100
     vad_threshold: int = 50
@@ -200,6 +201,13 @@ class ShortcutSettings(BaseModel):
     dictation_hotkey_enabled: bool = HOTKEY_DEFAULTS["dictation_hotkey_enabled"]
     dictation_hotkey_modifier: str = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
     dictation_hotkey_key: str = HOTKEY_DEFAULTS["dictation_hotkey_key"]
+    ticket_dictation_hotkey_enabled: bool = HOTKEY_DEFAULTS["ticket_dictation_hotkey_enabled"]
+    ticket_dictation_hotkey_modifier: str = HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"]
+    ticket_dictation_hotkey_key: str = HOTKEY_DEFAULTS["ticket_dictation_hotkey_key"]
+    dictation_ticket_use_llm: bool = True
+    dictation_ticket_model: str = "qwen2.5:0.5b"
+    dictation_ticket_timeout: str = "1.2"
+    dictation_ticket_prompt: str = ""
 
 
 class AudioSettings(BaseModel):
@@ -237,12 +245,32 @@ class LLMSettings(BaseModel):
     computer_use_model: str = ""
     kanban_provider: str = ""
     kanban_model: str = ""
+    project_cli_low_backend: str = "cursor"
+    project_cli_low_model: str = "auto"
+    project_cli_medium_backend: str = "codex"
+    project_cli_medium_model: str = "auto"
+    project_cli_high_backend: str = "codex"
+    project_cli_high_model: str = "gpt-5.3-codex"
+    project_cli_low_codex_intelligence: str = ""
+    project_cli_low_codex_speed: str = ""
+    project_cli_medium_codex_intelligence: str = ""
+    project_cli_medium_codex_speed: str = ""
+    project_cli_high_codex_intelligence: str = ""
+    project_cli_high_codex_speed: str = ""
     instant_dictation: bool = True
 
 
 class AdvancedSettings(BaseModel):
     exclude_types: str = ""
     indexed_folders: List[str] = Field(default_factory=list)
+    hermes_enabled: bool = True
+    hermes_memory_export_enabled: bool = False
+    hermes_orchestrator_provider: str = ""
+    hermes_orchestrator_model: str = ""
+    hermes_validator_provider: str = ""
+    hermes_validator_model: str = ""
+    hermes_correction_provider: str = ""
+    hermes_correction_model: str = ""
 
 
 class InitiativeSettings(BaseModel):

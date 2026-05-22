@@ -557,6 +557,30 @@ function openCustomVoiceModal() {
     // Clear any previous recording
     _cvRecordedBlob = null;
 
+    const audioInput = document.getElementById('cv_audio');
+    const uploadHelp = document.getElementById('cv_upload_help');
+    const recordModeBtn = document.getElementById('cv_mode_record');
+    const promptLabel = document.querySelector('label[for="cv_prompt"]');
+    if (provider === 'supertonic') {
+        audioInput.accept = '.json';
+        audioInput.multiple = false;
+        if (uploadHelp) uploadHelp.textContent = 'Upload a Supertonic Voice Builder .json voice style file. Raw audio cloning is not local in Supertonic.';
+        if (recordModeBtn) recordModeBtn.classList.add('hidden');
+        if (promptLabel) promptLabel.textContent = 'Notes';
+    } else if (provider === 'chatterbox') {
+        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
+        audioInput.multiple = false;
+        if (uploadHelp) uploadHelp.textContent = 'Upload a clean 5-20 second reference clip for Chatterbox voice cloning.';
+        if (recordModeBtn) recordModeBtn.classList.remove('hidden');
+        if (promptLabel) promptLabel.textContent = 'Notes';
+    } else {
+        audioInput.accept = '.wav,.mp3,.m4a,.ogg,.flac,.webm';
+        audioInput.multiple = true;
+        if (uploadHelp) uploadHelp.textContent = 'Upload 1 or more audio clips of the voice to clone (.wav, .mp3, .m4a, .ogg, .flac)';
+        if (recordModeBtn) recordModeBtn.classList.remove('hidden');
+        if (promptLabel) promptLabel.textContent = 'Reference Text';
+    }
+
     // Show limit info for providers with a cap
     const limitEl = document.getElementById('cv_limit_info');
     let limitReached = false;
@@ -578,11 +602,10 @@ function openCustomVoiceModal() {
     document.getElementById('cv_name').focus();
 
     // Wire up auto-transcription on file selection and enable submit when file is picked
-    const audioInput = document.getElementById('cv_audio');
     audioInput.onchange = function() {
         if (this.files && this.files.length > 0) {
             if (!limitReached) document.getElementById('cv_submit_btn').disabled = false;
-            _autoTranscribe(this.files[0]);
+            if (provider !== 'supertonic') _autoTranscribe(this.files[0]);
         } else {
             document.getElementById('cv_submit_btn').disabled = true;
         }
@@ -625,8 +648,13 @@ function submitCustomVoice(e) {
     const isRecordMode = _cvAudioMode === 'record';
 
     if (!name) { _showCvError('Name is required'); return false; }
+    if (provider === 'supertonic' && isRecordMode) { _showCvError('Supertonic custom voices require a Voice Builder .json file'); return false; }
     if (isRecordMode && !_cvRecordedBlob) { _showCvError('Please record a voice sample first'); return false; }
     if (!isRecordMode && (!audioInput.files || audioInput.files.length === 0)) { _showCvError('At least one audio file is required'); return false; }
+    if (provider === 'supertonic' && !Array.from(audioInput.files).some(f => f.name.toLowerCase().endsWith('.json'))) {
+        _showCvError('Supertonic custom voices require a Voice Builder .json file');
+        return false;
+    }
 
     const fd = new FormData();
     fd.append('name', name);
@@ -648,7 +676,9 @@ function submitCustomVoice(e) {
     document.getElementById('cv_submit_btn').disabled = true;
     document.getElementById('cv_form').classList.add('hidden');
     document.getElementById('cv_processing').classList.remove('hidden');
-    document.getElementById('cv_processing_text').textContent = 'Processing voice clone...';
+    document.getElementById('cv_processing_text').textContent = provider === 'supertonic'
+        ? 'Importing Supertonic voice style...'
+        : (provider === 'chatterbox' ? 'Registering Chatterbox reference voice...' : 'Processing voice clone...');
 
     fetch('/api/custom-voices', { method: 'POST', body: fd })
         .then(r => r.json().then(data => ({ ok: r.ok, data })))

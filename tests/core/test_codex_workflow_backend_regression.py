@@ -188,12 +188,34 @@ def test_workflow_ticket_routes_to_codex_backend_and_advances_to_validation(tmp_
 
     captured = {}
 
-    async def fake_run_project_task(project, instruction, *, chat_id=None, audit_id=None, on_event=None, origin="cli"):
+    async def fake_run_project_task(
+        project,
+        instruction,
+        *,
+        chat_id=None,
+        audit_id=None,
+        run_id=None,
+        workflow_id=None,
+        step_id=None,
+        on_event=None,
+        origin="cli",
+        ticket_id=None,
+        ticket_complexity="medium",
+        backend_id_override=None,
+        model_override=None,
+    ):
         captured["project_id"] = project.id
         captured["backend"] = project.coding_backend
         captured["model"] = project.coding_backend_model
         captured["origin"] = origin
+        captured["ticket_id"] = ticket_id
+        captured["ticket_complexity"] = ticket_complexity
+        captured["backend_id_override"] = backend_id_override
+        captured["model_override"] = model_override
         captured["audit_id"] = audit_id
+        captured["run_id"] = run_id
+        captured["workflow_id"] = workflow_id
+        captured["step_id"] = step_id
         captured["instruction"] = instruction
         Path(project.folder_location, "index.html").write_text(
             """<!doctype html>

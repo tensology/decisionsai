@@ -45,7 +45,7 @@
         el.innerHTML = filtered.map(function(p) {
             var inUse = p.in_use ? " <span class=\"text-xs text-[#f97316]\">(in use)</span>" : "";
             var active = currentProjectId === p.id ? " bg-white/10 border-[#f97316]" : " border-transparent hover:bg-white/5";
-            return "<div class=\"project-item-wrapper flex items-center gap-1 rounded border" + active + " group\" data-id=\"" + p.id + "\">" +
+            return "<div class=\"project-item-wrapper flex items-center gap-1 rounded border" + active + " group focus:outline-none focus:ring-2 focus:ring-[#f97316]/60\" data-id=\"" + p.id + "\" tabindex=\"0\" role=\"option\" aria-selected=\"" + (currentProjectId === p.id ? "true" : "false") + "\">" +
                 "<button type=\"button\" class=\"project-item flex-1 min-w-0 text-left px-3 py-2 text-white text-sm\" data-id=\"" + p.id + "\">" + escapeAttr(p.name || "Untitled") + inUse + "</button>" +
                 "<button type=\"button\" class=\"project-item-delete p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/20 flex-shrink-0\" data-id=\"" + p.id + "\" aria-label=\"Delete\">" + deleteSvg + "</button>" +
                 "</div>";
@@ -68,6 +68,55 @@
                 e.preventDefault();
                 showProjectContextMenu(parseInt(wrap.getAttribute("data-id"), 10), e.clientX, e.clientY);
             });
+            wrap.addEventListener("focus", function() {
+                var id = parseInt(wrap.getAttribute("data-id"), 10);
+                if (id && currentProjectId !== id) selectProject(id);
+            });
+        });
+    }
+
+    function isTypingTarget(target) {
+        if (!target) return false;
+        var tag = (target.tagName || "").toLowerCase();
+        return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
+    }
+
+    function focusProjectRowByOffset(offset) {
+        var rows = Array.prototype.slice.call(document.querySelectorAll("#projects-list .project-item-wrapper"));
+        if (!rows.length) return;
+        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".project-item-wrapper") : null;
+        var idx = rows.indexOf(active);
+        if (idx < 0 && currentProjectId != null) {
+            idx = rows.findIndex(function(row) { return String(row.getAttribute("data-id")) === String(currentProjectId); });
+        }
+        if (idx < 0) idx = offset > 0 ? -1 : 0;
+        var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
+        if (next) next.focus();
+    }
+
+    function bindProjectListKeyboard() {
+        var listEl = document.getElementById("projects-list");
+        if (!listEl || listEl.dataset.keyboardBound === "1") return;
+        listEl.dataset.keyboardBound = "1";
+        listEl.addEventListener("keydown", function(e) {
+            if (isTypingTarget(e.target)) return;
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                focusProjectRowByOffset(e.key === "ArrowDown" ? 1 : -1);
+            } else if (e.key === "Enter") {
+                var row = e.target && e.target.closest ? e.target.closest(".project-item-wrapper") : null;
+                if (row) {
+                    e.preventDefault();
+                    selectProject(parseInt(row.getAttribute("data-id"), 10));
+                }
+            } else if (e.key === "Delete") {
+                var delRow = e.target && e.target.closest ? e.target.closest(".project-item-wrapper") : null;
+                var id = delRow ? parseInt(delRow.getAttribute("data-id"), 10) : currentProjectId;
+                if (id) {
+                    e.preventDefault();
+                    deleteProjectFromList(id);
+                }
+            }
         });
     }
 
@@ -157,12 +206,9 @@
         if (triggersInput) triggersInput.value = "";
         document.getElementById("detail-provider").value = project.provider || "";
         document.getElementById("detail-startup").value = project.startup_instructions || "";
-        var backendSel = document.getElementById("detail-coding-backend");
-        if (backendSel) backendSel.value = project.coding_backend || "pi";
         var terminalBackendSel = document.getElementById("terminal-backend-select");
         if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
         loadProjectCliBackends(project.id, project.coding_backend || "pi");
-        loadCodexSync(project.id);
         loadCliModels(project.coding_backend || "pi");
         loadBoardProvidersAndSelect(project.provider || "", project.board_id || "", project.board_name || "");
         loadKanbanBoardStatus();
@@ -471,7 +517,6 @@
             folder_location: (document.getElementById("detail-folder").value || "").trim(),
             additional_trigger_words: JSON.stringify(getTriggerWordsArray()),
             startup_instructions: (document.getElementById("detail-startup").value || "").trim(),
-            coding_backend: (document.getElementById("detail-coding-backend")?.value || "pi").trim(),
             provider: (document.getElementById("detail-provider").value || "").trim() || null,
             board_id: boardId,
             board_name: boardName
@@ -533,7 +578,7 @@
         var terminalSel = document.getElementById("terminal-backend-select");
         var list = document.getElementById("coding-backend-status-list");
         var pill = document.getElementById("coding-backend-active-pill");
-        if (!sel || !list) return;
+        if (!sel && !terminalSel && !list && !pill) return;
         activeBackend = activeBackend || "pi";
         apiFetch("/api/projects/" + projectId + "/cli-backends")
             .then(function(data) {
@@ -546,20 +591,22 @@
                     pill.textContent = activeItem ? (activeItem.name + " / " + activeItem.state) : "Pi / default";
                     pill.className = "text-xs px-2 py-1 rounded border " + (activeItem && activeItem.ready ? "border-green-500/40 text-green-300 bg-green-500/10" : "border-amber-400/40 text-amber-200 bg-amber-500/10");
                 }
-                list.innerHTML = backends.map(function(b) {
-                    var activeBadge = b.active ? "<span class=\"text-[10px] px-1.5 py-0.5 rounded bg-[#f97316]/20 text-[#fdba74]\">Active</span>" : "";
-                    var stateLabel = b.ready ? "Ready" : (b.setup_required ? "Setup required" : (b.state || "Unavailable"));
-                    var setup = b.ready ? "" : "<div class=\"mt-1 text-[11px] text-gray-400 leading-snug\">" + escapeAttr(b.setup_instructions || b.message || "") + "</div>";
-                    return "<div class=\"rounded border p-2 text-xs " + backendStateClasses(b.state, b.active) + "\">" +
-                        "<div class=\"flex items-center justify-between gap-2\"><span class=\"font-medium text-white\">" + escapeAttr(b.name) + "</span>" + activeBadge + "</div>" +
-                        "<div class=\"mt-1 text-gray-300\">" + escapeAttr(stateLabel) + "</div>" +
-                        "<div class=\"mt-0.5 text-[11px] text-gray-500\">" + escapeAttr(b.path || "Not found on PATH") + "</div>" +
-                        setup +
-                        "</div>";
-                }).join("");
+                if (list) {
+                    list.innerHTML = backends.map(function(b) {
+                        var activeBadge = b.active ? "<span class=\"text-[10px] px-1.5 py-0.5 rounded bg-[#f97316]/20 text-[#fdba74]\">Active</span>" : "";
+                        var stateLabel = b.ready ? "Ready" : (b.setup_required ? "Setup required" : (b.state || "Unavailable"));
+                        var setup = b.ready ? "" : "<div class=\"mt-1 text-[11px] text-gray-400 leading-snug\">" + escapeAttr(b.setup_instructions || b.message || "") + "</div>";
+                        return "<div class=\"rounded border p-2 text-xs " + backendStateClasses(b.state, b.active) + "\">" +
+                            "<div class=\"flex items-center justify-between gap-2\"><span class=\"font-medium text-white\">" + escapeAttr(b.name) + "</span>" + activeBadge + "</div>" +
+                            "<div class=\"mt-1 text-gray-300\">" + escapeAttr(stateLabel) + "</div>" +
+                            "<div class=\"mt-0.5 text-[11px] text-gray-500\">" + escapeAttr(b.path || "Not found on PATH") + "</div>" +
+                            setup +
+                            "</div>";
+                    }).join("");
+                }
             })
             .catch(function() {
-                list.innerHTML = "<div class=\"text-xs text-amber-300\">Could not load CLI backend status.</div>";
+                if (list) list.innerHTML = "<div class=\"text-xs text-amber-300\">Could not load CLI backend status.</div>";
                 if (pill) pill.textContent = "Unavailable";
             });
     }
@@ -936,6 +983,7 @@
     function init() {
         var listEl = document.getElementById("projects-list");
         if (!listEl) return;
+        bindProjectListKeyboard();
 
         document.addEventListener("click", function(e) {
             var menu = document.getElementById("project-context-menu");
@@ -1095,6 +1143,7 @@
 
         // Load CLI models into dropdown
         loadCliModels();
+        wireCliPreflightPanel();
 
         // Shell terminal tab
         var shellRestartBtn = document.getElementById("shell-terminal-restart");
@@ -1165,6 +1214,211 @@
     var _currentAssistantText = "";  // Current streaming text buffer
     var _termAgentRunning = false;   // Is pi currently processing?
     var _termActivityHideTimer = null;
+    var _cliPreflightOk = true;      // Last preflight result for Pi CLI
+    var _cliPreflightDismissed = false;
+    var _lastPreflightPayload = null;
+
+    function _checkLabel(id) {
+        var labels = {
+            pi_binary: "Pi installed",
+            project_folder: "Project folder",
+            model_configured: "Model selected",
+            ollama_running: "Ollama running",
+            ollama_model_installed: "Model installed locally",
+            ollama_model_probe: "Model responds",
+            provider: "Provider"
+        };
+        return labels[id] || id.replace(/_/g, " ");
+    }
+
+    function _applyCliModelFromPreflight(model, provider) {
+        if (!model) return Promise.resolve(false);
+        return apiFetch("/api/projects/cli-model", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+                project_id: currentProjectId,
+                backend_id: "pi",
+                model: model,
+                provider: provider || "ollama"
+            })
+        }).then(function(resp) {
+            if (resp.success) {
+                showSnackbar("Switched CLI model to " + model, "success");
+                loadCliModels();
+                return refreshCliPreflight();
+            }
+            var err = resp.error || (resp.preflight && resp.preflight.user_message) || "Could not set model";
+            showSnackbar(err, "error", { duration: 14000 });
+            if (resp.preflight) renderCliPreflightPanel(resp.preflight);
+            return false;
+        });
+    }
+
+    function _runPreflightFix(fix) {
+        if (!fix || !fix.action) return;
+        var payload = fix.payload || {};
+        if (fix.action === "use_model") {
+            _applyCliModelFromPreflight(payload.model, payload.provider);
+            return;
+        }
+        if (fix.action === "open_url" && payload.url) {
+            window.open(payload.url, "_blank", "noopener,noreferrer");
+            return;
+        }
+        if (fix.action === "copy_command" && payload.command) {
+            if (navigator.clipboard && navigator.clipboard.writeText) {
+                navigator.clipboard.writeText(payload.command).then(function() {
+                    showSnackbar("Copied: " + payload.command, "success");
+                }).catch(function() {
+                    showSnackbar(payload.command, "info", { duration: 12000 });
+                });
+            } else {
+                showSnackbar(payload.command, "info", { duration: 12000 });
+            }
+            return;
+        }
+        if (fix.action === "focus_model") {
+            var sel = document.getElementById("terminal-model-select");
+            if (sel) {
+                sel.focus();
+                sel.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            }
+            return;
+        }
+        if (fix.action === "recheck") {
+            _cliPreflightDismissed = false;
+            refreshCliPreflight();
+        }
+    }
+
+    function renderCliPreflightPanel(pf) {
+        _lastPreflightPayload = pf || null;
+        var panel = document.getElementById("terminal-preflight-panel");
+        var okBar = document.getElementById("terminal-preflight-ok");
+        var sendBtn = document.getElementById("terminal-input-send");
+        var termInput = document.getElementById("terminal-input");
+        if (!panel || !okBar) return;
+
+        _cliPreflightOk = !!(pf && pf.ok);
+        var isPi = activeCodingBackend() === "pi";
+
+        if (!isPi) {
+            panel.classList.add("hidden");
+            okBar.classList.add("hidden");
+            if (sendBtn) sendBtn.disabled = false;
+            if (termInput) termInput.disabled = false;
+            return;
+        }
+
+        if (_cliPreflightOk) {
+            panel.classList.add("hidden");
+            okBar.classList.remove("hidden");
+            var okText = document.getElementById("terminal-preflight-ok-text");
+            if (okText) {
+                var modelLine = pf && pf.model ? (pf.provider || "ollama") + "/" + pf.model : "";
+                okText.textContent = modelLine ? ("CLI ready — " + modelLine) : "CLI ready — you can send prompts.";
+            }
+            if (sendBtn) sendBtn.disabled = false;
+            if (termInput) termInput.disabled = false;
+            return;
+        }
+
+        okBar.classList.add("hidden");
+        if (_cliPreflightDismissed) {
+            panel.classList.add("hidden");
+        } else {
+            panel.classList.remove("hidden");
+        }
+        if (sendBtn) sendBtn.disabled = true;
+        if (termInput) termInput.disabled = true;
+
+        var title = document.getElementById("terminal-preflight-title");
+        if (title) title.textContent = "Fix CLI before sending prompts";
+        var summary = document.getElementById("terminal-preflight-summary");
+        if (summary) summary.textContent = (pf && pf.user_message) ? pf.user_message : "Something is blocking the coding agent.";
+
+        var checksEl = document.getElementById("terminal-preflight-checks");
+        if (checksEl) {
+            checksEl.innerHTML = "";
+            (pf.checks || []).forEach(function(c) {
+                var li = document.createElement("li");
+                li.className = "flex gap-2 items-start";
+                var icon = c.ok ? "\u2713" : "\u2717";
+                var color = c.ok ? "text-emerald-400" : "text-red-300";
+                li.innerHTML = "<span class=\"" + color + " shrink-0\">" + icon + "</span><span>" + _checkLabel(c.id) + ": " + (c.message || "") + "</span>";
+                checksEl.appendChild(li);
+            });
+        }
+
+        var actionsEl = document.getElementById("terminal-preflight-actions");
+        if (actionsEl) {
+            actionsEl.innerHTML = "";
+            (pf.fixes || []).forEach(function(fix) {
+                var btn = document.createElement("button");
+                btn.type = "button";
+                btn.className = "text-xs px-2.5 py-1.5 rounded border border-amber-400/50 text-amber-50 bg-amber-900/40 hover:bg-amber-800/60";
+                btn.textContent = fix.label || "Fix";
+                btn.addEventListener("click", function() { _runPreflightFix(fix); });
+                actionsEl.appendChild(btn);
+            });
+        }
+    }
+
+    function wireCliPreflightPanel() {
+        var dismiss = document.getElementById("terminal-preflight-dismiss");
+        if (dismiss && !dismiss.dataset.wired) {
+            dismiss.dataset.wired = "1";
+            dismiss.addEventListener("click", function() {
+                _cliPreflightDismissed = true;
+                var panel = document.getElementById("terminal-preflight-panel");
+                if (panel) panel.classList.add("hidden");
+            });
+        }
+        var recheckOk = document.getElementById("terminal-preflight-recheck-ok");
+        if (recheckOk && !recheckOk.dataset.wired) {
+            recheckOk.dataset.wired = "1";
+            recheckOk.addEventListener("click", function() {
+                _cliPreflightDismissed = false;
+                refreshCliPreflight();
+            });
+        }
+    }
+
+    function _applyCliPreflight(pf, opts) {
+        opts = opts || {};
+        renderCliPreflightPanel(pf);
+        if (pf && pf.ok) return;
+        var msg = (pf && pf.user_message) ? pf.user_message : "CLI is not ready. Check the coding model.";
+        if (!opts.silentSnackbar) {
+            showSnackbar(msg, "error", { duration: 14000 });
+        }
+        if (opts.appendTranscript) {
+            var transcript = document.getElementById("terminal-transcript");
+            if (transcript) {
+                appendTranscriptLine(transcript, "error", msg);
+                scrollTranscript();
+            }
+        }
+        setTerminalActivity("done");
+        _termAgentRunning = false;
+    }
+
+    function refreshCliPreflight() {
+        if (!currentProjectId || activeCodingBackend() !== "pi") {
+            _cliPreflightOk = true;
+            return Promise.resolve(true);
+        }
+        wireCliPreflightPanel();
+        return apiFetch("/api/projects/" + currentProjectId + "/cli/preflight?probe=true")
+            .then(function(pf) {
+                _applyCliPreflight(pf, { silentSnackbar: true });
+                return !!pf.ok;
+            })
+            .catch(function() {
+                return true;
+            });
+    }
 
     function setLastSubmittedQuestionDisplay(text) {
         var el = document.getElementById("terminal-last-question-text");
@@ -1234,6 +1488,9 @@
         _clearTerminalState();
         _termTranscript = [];
         setLastSubmittedQuestionDisplay("");
+        _cliPreflightDismissed = false;
+        _cliPreflightOk = true;
+        wireCliPreflightPanel();
         connectTerminalWs();
     }
 
@@ -1307,6 +1564,9 @@
             var transcript = document.getElementById("terminal-transcript");
             if (transcript && !transcript.querySelector(".transcript-msg")) {
                 transcript.innerHTML = '<div class="transcript-msg system">Ready — type a prompt to start</div>';
+            }
+            if (activeCodingBackend() === "pi") {
+                refreshCliPreflight();
             }
         };
 
@@ -1468,11 +1728,24 @@
             case "message_end": {
                 var m = msg.message || {};
                 endThinkingCallout();
-                if (m.role === "assistant" && _currentAssistantEl) {
-                    finalizeAssistantMessage(transcript);
+                if (m.role === "assistant") {
+                    if (m.stopReason === "error" || m.errorMessage) {
+                        var errText = m.errorMessage || "The model returned an error.";
+                        appendTranscriptLine(transcript, "error", errText);
+                        _termAgentRunning = false;
+                        setTerminalActivity("done");
+                        _clearTerminalState();
+                        _cliPreflightOk = false;
+                    } else if (_currentAssistantEl) {
+                        finalizeAssistantMessage(transcript);
+                    }
                 }
                 break;
             }
+
+            case "preflight":
+                _applyCliPreflight(msg, { silentSnackbar: true });
+                break;
 
             // ?? Tool execution (the real tool call) ??
             case "tool_execution_start": {
@@ -1550,6 +1823,13 @@
             case "error":
                 appendTranscriptLine(transcript, "error", msg.message || "Unknown error");
                 updateTerminalStatus("error");
+                setTerminalActivity("done");
+                _termAgentRunning = false;
+                _clearTerminalState();
+                if (msg.preflight && msg.preflight.ok === false) {
+                    _cliPreflightDismissed = false;
+                    renderCliPreflightPanel(msg.preflight);
+                }
                 break;
 
             // ?? Keepalives ??
@@ -1994,8 +2274,14 @@
                     provider: provider
                 })
             }).then(function(resp) {
-                if (resp.success) showSnackbar("Model set to " + model, "success");
-                else showSnackbar("Failed to set model", "error");
+                if (resp.success) {
+                    showSnackbar("Model set to " + model, "success");
+                    refreshCliPreflight();
+                } else {
+                    var err = resp.error || (resp.preflight && resp.preflight.user_message) || "Failed to set model";
+                    showSnackbar(err, "error", { duration: 14000 });
+                    if (resp.preflight) _applyCliPreflight(resp.preflight, { appendTranscript: false });
+                }
             }).catch(function() {
                 showSnackbar("Failed to set model", "error");
             });
@@ -2004,6 +2290,16 @@
 
     function sendTerminalPrompt(instruction) {
         if (!instruction || !instruction.trim()) return;
+        if (activeCodingBackend() === "pi" && !_cliPreflightOk) {
+            _cliPreflightDismissed = false;
+            if (_lastPreflightPayload) {
+                renderCliPreflightPanel(_lastPreflightPayload);
+            } else {
+                refreshCliPreflight();
+            }
+            showSnackbar("Fix the issues in the CLI setup panel above before sending.", "error");
+            return;
+        }
         if (!_termWs || _termWs.readyState !== WebSocket.OPEN) {
             showSnackbar("Terminal not connected � try restarting", "error");
             return;

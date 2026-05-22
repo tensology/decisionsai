@@ -13,3 +13,6 @@ def test_system_prompt_contains_orchestration_routing():
     assert "find_skill" in text
     assert "push_skill" in text
     assert "list_workflows" in text or "run_workflow" in text
+    assert "MULTI-ACTION TOOL EXECUTION" in text
+    assert "ordered action queue" in text
+    assert "verify material tool results" in text.lower()

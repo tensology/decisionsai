@@ -676,9 +676,8 @@ class TelegramMessagesMixin:
                     if resolved:
                         entry = resolved
                 self.send_to_telegram(
-                    f"Pending Initiative action:\n\n{entry.description}\n\n"
-                    f"Draft:\n{entry.draft}\n\n"
-                    f"Reply 'yes continue' to approve, 'reject it' to reject, or include id {entry.id[:8]}."
+                    f"Pending approval: {entry.description}\n\n"
+                    f"Reply approve {entry.id[:8]} or reject {entry.id[:8]}. You can also manage it in the app."
                 )
                 return True
 

@@ -297,6 +297,11 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             threading.current_thread().telegram_input_type = self._telegram_input_type
 
         self._ensure_user_message_persisted(text)
+        from distr.core.agent.services.llm.bulk_instruction import augment_bulk_instruction
+        user_text_for_model = augment_bulk_instruction(
+            text,
+            source="telegram" if is_telegram else "chat",
+        )
 
         # Vision handling
         image_path = get_image_path_from_context(uploaded_image_path)
@@ -305,20 +310,20 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             if vision_supported:
                 try:
                     base64_image, mime_type = convert_image_to_base64(image_path)
-                    self._messages.append({"role": "user", "content": text, "images": [base64_image]})
+                    self._messages.append({"role": "user", "content": user_text_for_model, "images": [base64_image]})
                 except Exception as e:
                     logger.error("Failed to include image: %s", e, exc_info=True)
-                    self._messages.append({"role": "user", "content": text})
+                    self._messages.append({"role": "user", "content": user_text_for_model})
             else:
                 analysis = await analyze_image_with_vision_llm(image_path, text)
                 if analysis:
-                    self._messages.append({"role": "user", "content": f"[Image analysis: {analysis}]\n\nUser's question: {text}"})
+                    self._messages.append({"role": "user", "content": f"[Image analysis: {analysis}]\n\nUser's question: {user_text_for_model}"})
                 else:
-                    self._messages.append({"role": "user", "content": text})
+                    self._messages.append({"role": "user", "content": user_text_for_model})
         elif image_path:
-            self._messages.append({"role": "user", "content": text})
+            self._messages.append({"role": "user", "content": user_text_for_model})
         else:
-            self._messages.append({"role": "user", "content": text})
+            self._messages.append({"role": "user", "content": user_text_for_model})
 
         # Cancel previous generation
         if self._generation_task and not self._generation_task.done():
@@ -776,7 +781,7 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
             return
         except Exception as e:
             logger.error("LLM Error (%.3fs): %s", time.time() - start_time, e, exc_info=True)
-            await self.push_frame(ErrorFrame(error=str(e)))
+            full_response = await self._surface_model_error(e, operation="generate an Ollama response")
         finally:
             logger.info("LLM: total generation: %.3fs", time.time() - start_time)
             self._emit_telegram_response(full_response)

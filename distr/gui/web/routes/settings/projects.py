@@ -486,6 +486,12 @@ def register_routes(router, templates):
         if backend_id == "codex":
             models, source, message = _codex_models(settings)
             return {"models": models, "source": source, "message": message}
+        if backend_id in ("cursor_ide", "vscode_ide"):
+            return {
+                "models": [_model_entry("auto", backend_id, "Auto")],
+                "source": "editor-bridge",
+                "message": "IDE routes create an editor work packet; model choice is controlled inside the editor.",
+            }
         return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
@@ -533,7 +539,7 @@ def register_routes(router, templates):
             current_provider = backend_id
         current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
         if not current_model:
-            current_model = "auto" if backend_id in ("cursor", "codex") else ("default" if backend_id == "claude_code" else "")
+            current_model = "auto" if backend_id in ("cursor", "codex", "cursor_ide", "vscode_ide") else ("default" if backend_id == "claude_code" else "")
             current_provider = backend_id
 
         return JSONResponse({
@@ -544,6 +550,27 @@ def register_routes(router, templates):
             "current_provider": current_provider,
             "current_model": current_model,
         })
+
+    @router.get("/projects/{project_id}/cli/preflight")
+    async def get_cli_preflight(project_id: int, probe: bool = True):
+        """Pre-flight Pi + coding model before starting the project CLI agent."""
+        from distr.core.pi_preflight import preflight_pi_coding_cli
+
+        try:
+            from distr.core.db import get_session as db_session
+            from distr.core.db.projects import Project
+
+            with db_session() as session:
+                project = session.query(Project).filter(Project.id == project_id).first()
+                if not project:
+                    return JSONResponse({"ok": False, "user_message": "Project not found"}, status_code=404)
+                cwd = (project.folder_location or "").strip() or os.path.expanduser("~")
+        except Exception as e:
+            return JSONResponse({"ok": False, "user_message": str(e)}, status_code=500)
+
+        pf = preflight_pi_coding_cli(project_id=project_id, cwd=cwd, probe_model=bool(probe))
+        status = 200 if pf.ok else 400
+        return JSONResponse(pf.to_dict(), status_code=status)
 
     @router.post("/projects/cli-model")
     async def set_cli_model(request: Request):
@@ -557,6 +584,25 @@ def register_routes(router, templates):
         project_id = body.get("project_id")
         if not model:
             return JSONResponse({"success": False, "error": "model required"}, status_code=400)
+
+        if backend_id == "pi":
+            from distr.core.pi_preflight import preflight_pi_coding_cli
+
+            pf = preflight_pi_coding_cli(
+                project_id=int(project_id) if project_id else None,
+                provider=provider or "ollama",
+                model=model,
+                probe_model=True,
+            )
+            if not pf.ok:
+                return JSONResponse(
+                    {
+                        "success": False,
+                        "error": pf.user_message,
+                        "preflight": pf.to_dict(),
+                    },
+                    status_code=400,
+                )
 
         try:
             from distr.core.db import get_session as db_session
@@ -682,6 +728,7 @@ def register_routes(router, templates):
         from distr.core.db.projects import Project
         from distr.core.project_cli_backends import get_backend_statuses
 
+        plugin_install = _install_local_codex_plugin()
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
             if not project:
@@ -1600,6 +1647,11 @@ def register_routes(router, templates):
         buffer_messages = rpc.get_messages()
         await websocket.send_json({"type": "connected", "project_id": project_id, "buffer": buffer_messages})
 
+        from distr.core.pi_preflight import preflight_pi_coding_cli
+
+        pf = preflight_pi_coding_cli(project_id=project_id, cwd=cwd, probe_model=True)
+        await websocket.send_json({"type": "preflight", **pf.to_dict()})
+
         async def _forward_events():
             """Forward RPC events to WebSocket client."""
             while True:
@@ -1632,9 +1684,18 @@ def register_routes(router, templates):
                     # User sent a prompt to pi via the CLI input
                     instruction = msg.get("message", "")
                     if instruction:
+                        pf_prompt = preflight_pi_coding_cli(project_id=project_id, cwd=cwd, probe_model=True)
+                        if not pf_prompt.ok:
+                            await websocket.send_json({
+                                "type": "error",
+                                "message": pf_prompt.user_message,
+                                "preflight": pf_prompt.to_dict(),
+                            })
+                            continue
                         # send_prompt auto-starts pi if lazy-started (first prompt)
                         if not rpc.send_prompt(instruction, origin="cli"):
-                            await websocket.send_json({"type": "error", "message": "Failed to send prompt — pi may not be available"})
+                            err = getattr(rpc, "_last_preflight_error", None) or "Failed to send prompt — pi may not be available"
+                            await websocket.send_json({"type": "error", "message": err})
                 elif msg_type == "steer":
                     # User is steering/redirecting pi
                     instruction = msg.get("message", "")

@@ -7,6 +7,7 @@ import logging
 import mimetypes
 import os
 import queue
+import re
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -17,6 +18,21 @@ except ImportError:
     requests = None
 
 logger = logging.getLogger(__name__)
+
+
+def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
+    if not text:
+        return text
+    clean = str(text).strip()
+    clean = re.sub(r"^\s*\[Initiative\]\s*", "", clean)
+    clean = re.sub(r"\[APPROVE\]|\[ESCALATE\]|\[SUGGEST_ONLY\]", "", clean)
+    clean = re.sub(r"\n{2,}Draft:\n.*?(?=\n{2,}Payload:|\n{2,}[A-Z][A-Za-z ]{2,}:|\Z)", "", clean, flags=re.S)
+    clean = re.sub(r"\n{2,}Payload:\s*\{.*?\}(?=\n|$)", "", clean, flags=re.S)
+    clean = re.sub(r"\nPayload:\s*\{.*?\}(?=\n|$)", "", clean, flags=re.S)
+    clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
+    if len(clean) > 1800:
+        clean = clean[:1790].rstrip() + "\n...(full detail is in the app)"
+    return clean
 
 
 class TelegramSenderMixin:
@@ -104,6 +120,7 @@ class TelegramSenderMixin:
 
         # CRITICAL: Block any disconnect/reconnect messages from being sent
         if text:
+            text = _audit_outbound_telegram_text(text)
             text_lower = text.lower()
             # Block disconnect/reconnect messages (except "has shut down" which is only on manual disconnect)
             if (
@@ -746,4 +763,3 @@ class TelegramSenderMixin:
         logger.info("[Telegram] Cleared all stored group messages")
 
     # ── Persistent typing indicator timer ────────────────────────────────────
-

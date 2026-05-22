@@ -21,6 +21,34 @@ def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):
     assert "create_ticket" in forced_tool_names_for_text("create a ticket for this bug")
     assert "create_ticket" in forced_tool_names_for_text("create a Jira ticket for the login bug")
     assert "create_ticket" in forced_tool_names_for_text("make a Trello card for the UI bug")
+    assert "create_ticket" in forced_tool_names_for_text("move ticket 12 from the wrong board to DecisionsAI")
+    assert "create_ticket" in forced_tool_names_for_text("transfer this card to the ThatShirtShow board")
+
+
+def test_forces_ticket_tool_for_whatsapp_agent_requests(monkeypatch):
+    monkeypatch.setenv("DEBUG", "False")
+
+    assert "create_ticket" in forced_tool_names_for_text("list WhatsApp messages from the client")
+    assert "create_ticket" in forced_tool_names_for_text("create a ticket from those WhatsApp messages")
+    assert "create_ticket" in forced_tool_names_for_text("show WhatsApp context for this thread")
+
+
+def test_forces_file_operations_for_ticket_file_destinations(monkeypatch):
+    monkeypatch.setenv("DEBUG", "False")
+
+    forced = forced_tool_names_for_text("create a ticket in Downloads for the onboarding bug")
+
+    assert "file_operations" in forced
+    assert "create_ticket" not in forced
+
+
+def test_forces_type_text_for_type_out_ticket_requests(monkeypatch):
+    monkeypatch.setenv("DEBUG", "False")
+
+    forced = forced_tool_names_for_text("type out a ticket for the login bug")
+
+    assert "type_text" in forced
+    assert "create_ticket" not in forced
 
 
 def test_forces_cursor_ticket_for_decisionsai_ticket_only_in_debug(monkeypatch):

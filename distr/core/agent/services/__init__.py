@@ -24,15 +24,6 @@ except ImportError as e:
     logger.warning(f"Error importing AssemblyAISTTService: {e}")
     AssemblyAISTTService = None
 
-try:
-    from .stt.vibevoice_asr import VibeVoiceAsrSTTService
-except ImportError as e:
-    logger.warning(
-        "VibeVoiceAsrSTTService not importable (VibeVoice STT disabled until fixed): %s",
-        e,
-    )
-    VibeVoiceAsrSTTService = None
-
 # TTS services
 from .tts.kokoro import KokoroTTSService
 from .tts.elevenlabs import ElevenLabsTTSService
@@ -56,6 +47,16 @@ try:
     from .tts.voxcpm import VoxCPMTTSService
 except ImportError:
     VoxCPMTTSService = None
+
+try:
+    from .tts.supertonic import SupertonicTTSService
+except ImportError:
+    SupertonicTTSService = None
+
+try:
+    from .tts.chatterbox import ChatterboxTTSService
+except ImportError:
+    ChatterboxTTSService = None
 
 # LLM services
 from .llm.providers.ollama import OllamaLLMService
@@ -105,6 +106,10 @@ if F5TTSTTSService:
     __all__.append("F5TTSTTSService")
 if VoxCPMTTSService:
     __all__.append("VoxCPMTTSService")
+if SupertonicTTSService:
+    __all__.append("SupertonicTTSService")
+if ChatterboxTTSService:
+    __all__.append("ChatterboxTTSService")
 if OpenAILLMService:
     __all__.append("OpenAILLMService")
 if OpenRouterLLMService:
@@ -121,5 +126,3 @@ if OpenAIWhisperSTTService:
     __all__.append("OpenAIWhisperSTTService")
 if AssemblyAISTTService:
     __all__.append("AssemblyAISTTService")
-if VibeVoiceAsrSTTService:
-    __all__.append("VibeVoiceAsrSTTService")

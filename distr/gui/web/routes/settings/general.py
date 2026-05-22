@@ -61,7 +61,8 @@ def register_routes(router, templates):
             "qwen3_voice": settings.get("qwen3_voice", "aiden"),
             "f5tts_voice": settings.get("f5tts_voice", "default"),
             "voxcpm_voice": settings.get("voxcpm_voice", "default"),
-            "vibevoice_realtime_voice": settings.get("vibevoice_realtime_voice", "en-carter_man"),
+            "supertonic_voice": settings.get("supertonic_voice", "M1"),
+            "chatterbox_voice": settings.get("chatterbox_voice", "default"),
             "playback_speed": settings.get("playback_speed", 1.0),
             "speech_volume": settings.get("speech_volume", 100),
             "vad_threshold": settings.get("vad_threshold", 50),
@@ -166,12 +167,10 @@ def register_routes(router, templates):
         from starlette.responses import Response
         from distr.core.settings import load_settings_from_db
 
-        provider_raw = (request.provider or "").strip().lower()
-        provider = {
-            "kokoro (offline)": "kokoro",
-            "elevenlabs (online)": "elevenlabs",
-            "openai (online)": "openai",
-        }.get(provider_raw, provider_raw)
+        from distr.core.agent.constants import normalize_voice_provider
+
+        provider_raw = (request.provider or "").strip()
+        provider = normalize_voice_provider(provider_raw)
         voice = (request.voice or "").strip()
         voice_name = (request.voice_name or "").strip() or voice
 

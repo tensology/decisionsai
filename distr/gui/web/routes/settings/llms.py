@@ -39,7 +39,6 @@ def register_routes(router, templates):
         "whisper": "Whisper.cpp (Local & Offline)",
         "assemblyai": "AssemblyAI (universal-2)",
         "openai_whisper": "OpenAI Whisper (whisper-1)",
-        "vibevoice_asr": "VibeVoice ASR (Local)",
     }
 
     def _stt_short_from_full(raw: str) -> str:
@@ -51,7 +50,6 @@ def register_routes(router, templates):
             "assemblyai (nano)": "assemblyai",
             "assemblyai (best)": "assemblyai",
             "openai whisper (whisper-1)": "openai_whisper",
-            "vibevoice asr (local)": "vibevoice_asr",
         }
         lowered = raw.lower()
         return stt_map_to_short.get(
@@ -60,7 +58,6 @@ def register_routes(router, templates):
             else "vosk" if "vosk" in lowered
             else "openai_whisper" if "openai" in lowered
             else "assemblyai" if "assemblyai" in lowered
-            else "vibevoice_asr" if "vibevoice" in lowered and "asr" in lowered
             else "whisper",
         )
 
@@ -73,16 +70,6 @@ def register_routes(router, templates):
             if settings.get("openai_enabled") and (settings.get("openai_key") or "").strip():
                 return True, ""
             return False, "OpenAI Whisper needs an enabled OpenAI API key in Third Party Providers."
-        if stt_id == "vibevoice_asr":
-            try:
-                from distr.core.agent.libs import PIPECAT_AVAILABLE
-                from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-
-                if PIPECAT_AVAILABLE and vibevoice_asr_runtime_ready():
-                    return True, ""
-            except Exception:
-                pass
-            return False, "VibeVoice ASR is not installed/importable. Run scripts/install_vibevoice.sh in this environment."
         return True, ""
 
     def _available_stt_options(settings: dict) -> tuple[list[dict], dict]:
@@ -147,6 +134,18 @@ def register_routes(router, templates):
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
             "kanban_provider": (settings.get("kanban_agent_orchestrator_provider") or "").strip().lower() or "",
             "kanban_model": (settings.get("kanban_agent_orchestrator_model") or "").strip(),
+            "project_cli_low_backend": (settings.get("project_cli_low_backend") or "cursor").strip().lower(),
+            "project_cli_low_model": (settings.get("project_cli_low_model") or "auto").strip(),
+            "project_cli_medium_backend": (settings.get("project_cli_medium_backend") or "codex").strip().lower(),
+            "project_cli_medium_model": (settings.get("project_cli_medium_model") or "auto").strip(),
+            "project_cli_high_backend": (settings.get("project_cli_high_backend") or "codex").strip().lower(),
+            "project_cli_high_model": (settings.get("project_cli_high_model") or "gpt-5.3-codex").strip(),
+            "project_cli_low_codex_intelligence": (settings.get("project_cli_low_codex_intelligence") or "").strip(),
+            "project_cli_low_codex_speed": (settings.get("project_cli_low_codex_speed") or "").strip(),
+            "project_cli_medium_codex_intelligence": (settings.get("project_cli_medium_codex_intelligence") or "").strip(),
+            "project_cli_medium_codex_speed": (settings.get("project_cli_medium_codex_speed") or "").strip(),
+            "project_cli_high_codex_intelligence": (settings.get("project_cli_high_codex_intelligence") or "").strip(),
+            "project_cli_high_codex_speed": (settings.get("project_cli_high_codex_speed") or "").strip(),
             "instant_dictation": settings.get("instant_dictation", True),
         })
 
@@ -176,6 +175,12 @@ def register_routes(router, templates):
                 (s.get("computer_use_model") or "").strip(),
                 (s.get("kanban_agent_orchestrator_provider") or "").strip().lower(),
                 (s.get("kanban_agent_orchestrator_model") or "").strip(),
+                (s.get("project_cli_low_backend") or "").strip().lower(),
+                (s.get("project_cli_low_model") or "").strip(),
+                (s.get("project_cli_medium_backend") or "").strip().lower(),
+                (s.get("project_cli_medium_model") or "").strip(),
+                (s.get("project_cli_high_backend") or "").strip().lower(),
+                (s.get("project_cli_high_model") or "").strip(),
             )
 
         _fp_before = _agent_llm_settings_fingerprint(settings)
@@ -210,6 +215,28 @@ def register_routes(router, templates):
         settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
         settings["kanban_agent_orchestrator_provider"] = (settings_data.kanban_provider or "").strip()
         settings["kanban_agent_orchestrator_model"] = (settings_data.kanban_model or "").strip()
+        from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
+        from distr.core.project_cli_backends import normalize_backend_id
+        settings["project_cli_low_backend"] = normalize_backend_id(settings_data.project_cli_low_backend or "cursor")
+        settings["project_cli_low_model"] = (settings_data.project_cli_low_model or "auto").strip()
+        settings["project_cli_medium_backend"] = normalize_backend_id(settings_data.project_cli_medium_backend or "codex")
+        settings["project_cli_medium_model"] = (settings_data.project_cli_medium_model or "auto").strip()
+        settings["project_cli_high_backend"] = normalize_backend_id(settings_data.project_cli_high_backend or "codex")
+        settings["project_cli_high_model"] = (settings_data.project_cli_high_model or "gpt-5.3-codex").strip()
+        settings["project_cli_low_codex_intelligence"] = normalize_codex_intelligence(
+            settings_data.project_cli_low_codex_intelligence
+        )
+        settings["project_cli_low_codex_speed"] = normalize_codex_speed(settings_data.project_cli_low_codex_speed)
+        settings["project_cli_medium_codex_intelligence"] = normalize_codex_intelligence(
+            settings_data.project_cli_medium_codex_intelligence
+        )
+        settings["project_cli_medium_codex_speed"] = normalize_codex_speed(
+            settings_data.project_cli_medium_codex_speed
+        )
+        settings["project_cli_high_codex_intelligence"] = normalize_codex_intelligence(
+            settings_data.project_cli_high_codex_intelligence
+        )
+        settings["project_cli_high_codex_speed"] = normalize_codex_speed(settings_data.project_cli_high_codex_speed)
         settings["instant_dictation"] = bool(settings_data.instant_dictation)
 
         save_settings_to_db(settings)

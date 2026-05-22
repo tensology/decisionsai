@@ -71,6 +71,13 @@ pydub
 tqdm
 # kokoro-onnx 0.4.x+ works with v1.0 model files
 kokoro-onnx>=0.4.0
+# Supertonic: lightweight on-device ONNX TTS with importable Voice Builder JSON styles
+supertonic>=1.3.0
+# Chatterbox: local TTS with zero-shot voice cloning from reference audio.
+# Install separately on Apple Silicon to avoid its strict NumPy pin fighting the app:
+#   pip install --no-deps chatterbox-mlx>=1.0.4
+#   pip install --no-deps mlx mlx-lm s3tokenizer conformer pykakasi spacy-pkuseg resemble-perth
+#   pip install "setuptools<81" onnx
 # Kanade voice conversion model for Kokoro voice cloning (KokoClone)
 kanade-tokenizer @ git+https://github.com/frothywater/kanade-tokenizer
 # VoxCPM: tokenizer-free TTS with voice cloning (https://github.com/OpenBMB/VoxCPM)
@@ -101,9 +108,6 @@ openpyxl>=3.1.0
 rarfile>=4.1
 # Audio transcription
 assemblyai>=0.28.0
-# Microsoft VibeVoice is NOT listed here: vibevoice[streamingtts] pins transformers==4.51.3 which
-# conflicts with coqui-tts (transformers>=4.57) and litellm tokenizers pins. After pip install -r,
-# bin/decisions.sh runs scripts/install_vibevoice.sh automatically (opt out: DECISIONS_AI_SKIP_VIBEVOICE=1).
 # Groq SDK for Groq API integration
 groq>=1.0.0
 # MCP SDK

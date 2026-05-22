@@ -51,8 +51,7 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame()
-    text.text = "The answer is <tool_call>{bad}</tool_call> ahhhhh stable."
+    text = TextFrame("The answer is <tool_call>{bad}</tool_call> ahhhhh stable.")
 
     asyncio.run(service.process_frame(start, None))
     asyncio.run(service.process_frame(text, None))

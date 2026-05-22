@@ -176,12 +176,27 @@ class ChatManagerCore:
                             getattr(settings, "voxcpm_voice", "default") or "default"
                         )
                         agent_name = voxcpm_voice.capitalize() if voxcpm_voice != "default" else "VoxCPM"
-                    elif tts_provider == "VibeVoice Realtime (Local)":
-                        vv = (
-                            getattr(settings, "vibevoice_realtime_voice", "en-carter_man")
-                            or "en-carter_man"
+                    elif tts_provider == "Supertonic (Offline)":
+                        supertonic_voice = (
+                            getattr(settings, "supertonic_voice", "M1") or "M1"
                         )
-                        agent_name = vv.replace("en-", "").replace("_", " ").title() if vv else "VibeVoice"
+                        try:
+                            from distr.core.agent.services.tts.supertonic_descriptor import SUPERTONIC_VOICES
+                            agent_name = SUPERTONIC_VOICES.get(supertonic_voice, supertonic_voice)
+                        except Exception:
+                            agent_name = supertonic_voice
+                    elif tts_provider == "Chatterbox (Offline)":
+                        chatterbox_voice = (
+                            getattr(settings, "chatterbox_voice", "default") or "default"
+                        )
+                        if str(chatterbox_voice).startswith("custom_"):
+                            try:
+                                from distr.core.agent.services.tts.chatterbox_descriptor import ChatterboxDescriptor
+                                agent_name = ChatterboxDescriptor._resolve_custom_voice_name(chatterbox_voice) or "Chatterbox"
+                            except Exception:
+                                agent_name = "Chatterbox"
+                        else:
+                            agent_name = "Chatterbox"
         except Exception as e:
             logger.warning(
                 "ChatManagerCore: Could not determine agent from settings: %s", e

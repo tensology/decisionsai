@@ -77,6 +77,14 @@ def register_routes(router, templates):
         return JSONResponse({
             "indexed_folders": indexed_folders,
             "exclude_types": settings.get("excluded_files", ""),
+            "hermes_enabled": bool(settings.get("hermes_enabled", True)),
+            "hermes_memory_export_enabled": bool(settings.get("hermes_memory_export_enabled", False)),
+            "hermes_orchestrator_provider": settings.get("hermes_orchestrator_provider", "") or "",
+            "hermes_orchestrator_model": settings.get("hermes_orchestrator_model", "") or "",
+            "hermes_validator_provider": settings.get("hermes_validator_provider", "") or "",
+            "hermes_validator_model": settings.get("hermes_validator_model", "") or "",
+            "hermes_correction_provider": settings.get("hermes_correction_provider", "") or "",
+            "hermes_correction_model": settings.get("hermes_correction_model", "") or "",
         })
 
     @router.post("/advanced")
@@ -88,6 +96,17 @@ def register_routes(router, templates):
         settings = load_settings_from_db()
         settings["excluded_files"] = (settings_data.exclude_types or "").strip()
         settings["indexed_folders"] = settings_data.indexed_folders
+        settings["hermes_enabled"] = bool(settings_data.hermes_enabled)
+        settings["hermes_memory_export_enabled"] = bool(settings_data.hermes_memory_export_enabled)
+        settings["hermes_orchestrator_provider"] = (settings_data.hermes_orchestrator_provider or "").strip()
+        settings["hermes_orchestrator_model"] = (settings_data.hermes_orchestrator_model or "").strip()
+        settings["hermes_validator_provider"] = (settings_data.hermes_validator_provider or "").strip()
+        settings["hermes_validator_model"] = (settings_data.hermes_validator_model or "").strip()
+        settings["hermes_correction_provider"] = (settings_data.hermes_correction_provider or "").strip()
+        settings["hermes_correction_model"] = (settings_data.hermes_correction_model or "").strip()
+        if settings["hermes_orchestrator_provider"] or settings["hermes_orchestrator_model"]:
+            settings["workflow_llm_provider"] = settings["hermes_orchestrator_provider"]
+            settings["workflow_llm_model"] = settings["hermes_orchestrator_model"]
         save_settings_to_db(settings)
 
         return JSONResponse({"success": True, "message": "Advanced settings saved"})

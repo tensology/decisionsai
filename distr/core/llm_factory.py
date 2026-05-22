@@ -7,6 +7,8 @@ Eliminates duplicate streaming code across chat.py, web routes, etc.
 import logging
 from typing import Dict, Any, Generator, List, Optional, Tuple
 
+from distr.core.llm_errors import LLMModelError
+
 logger = logging.getLogger(__name__)
 
 _PROVIDER_NORMALIZE = {
@@ -152,42 +154,52 @@ def create_stream(
     """
     prov = (provider or "ollama").strip().lower()
 
-    if prov == "ollama":
-        yield from _stream_ollama(model, messages, settings)
-    elif prov == "openai":
-        yield from _stream_openai_compat(
-            model, messages, settings,
-            key_name="openai_key",
-            base_url=None,
-        )
-    elif prov == "anthropic":
-        yield from _stream_anthropic(model, messages, settings)
-    elif prov == "groq":
-        yield from _stream_openai_compat(
-            model, messages, settings,
-            key_name="groq_key",
-            base_url="https://api.groq.com/openai/v1",
-        )
-    elif prov == "openrouter":
-        yield from _stream_openai_compat(
-            model, messages, settings,
-            key_name="openrouter_key",
-            base_url="https://openrouter.ai/api/v1",
-        )
-    elif prov == "kilocode":
-        yield from _stream_openai_compat(
-            model, messages, settings,
-            key_name="kilo_key",
-            base_url="https://api.kilo.ai/api/gateway",
-        )
-    elif prov == "gemini" or prov == "google gemini":
-        yield from _stream_openai_compat(
-            model, messages, settings,
-            key_name="gemini_key",
-            base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
-        )
-    else:
-        raise ValueError(f"Unknown or unsupported LLM provider: {provider}")
+    try:
+        if prov == "ollama":
+            yield from _stream_ollama(model, messages, settings)
+        elif prov == "openai":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="openai_key",
+                base_url=None,
+            )
+        elif prov == "anthropic":
+            yield from _stream_anthropic(model, messages, settings)
+        elif prov == "groq":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="groq_key",
+                base_url="https://api.groq.com/openai/v1",
+            )
+        elif prov == "openrouter":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="openrouter_key",
+                base_url="https://openrouter.ai/api/v1",
+            )
+        elif prov == "kilocode":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="kilo_key",
+                base_url="https://api.kilo.ai/api/gateway",
+            )
+        elif prov == "gemini" or prov == "google gemini":
+            yield from _stream_openai_compat(
+                model, messages, settings,
+                key_name="gemini_key",
+                base_url="https://generativelanguage.googleapis.com/v1beta/openai/",
+            )
+        else:
+            raise ValueError(f"Unknown or unsupported LLM provider: {provider}")
+    except LLMModelError:
+        raise
+    except Exception as exc:
+        raise LLMModelError(
+            exc,
+            provider=normalize_provider(provider),
+            model=model,
+            operation="generate a streamed response",
+        ) from exc
 
 
 # ---- private streaming helpers ----

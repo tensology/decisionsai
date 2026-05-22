@@ -169,7 +169,11 @@ class WorkflowAgent:
                 sys_content = (
                     "You are a workflow step executor. Execute the given instruction using "
                     "the tools available to you. Do not explain what you would do — actually "
-                    "do it by calling the appropriate tools. When done, provide a brief summary."
+                    "do it by calling the appropriate tools. If the instruction contains "
+                    "multiple actions, split them into an ordered queue, run ready actions "
+                    "through the right tools, verify each material result before dependent "
+                    "actions, and stop for a clear blocker instead of guessing. When done, "
+                    "provide a brief summary of completed and blocked items."
                 )
             self._messages.insert(0, {"role": "system", "content": sys_content})
 
@@ -271,8 +275,16 @@ class WorkflowAgent:
                 # OpenAI-compatible: openai, groq, openrouter, kilocode, gemini
                 return self._call_openai_compat()
         except Exception as exc:
-            logger.error("WorkflowAgent: LLM call failed (%s/%s): %s", prov, self._model, exc, exc_info=True)
-            return f"Error: {exc}", []
+            from distr.core.llm_errors import format_model_error
+
+            msg = format_model_error(
+                exc,
+                provider=self._provider,
+                model=self._model,
+                operation="run the workflow agent",
+            )
+            logger.error("WorkflowAgent: LLM call failed (%s/%s): %s", prov, self._model, msg, exc_info=True)
+            return msg, []
 
     @property
     def _provider_lower(self) -> str:
@@ -299,8 +311,9 @@ class WorkflowAgent:
         call_kwargs = {
             "model": self._model,
             "messages": self._validated_messages_openai(),
-            "max_tokens": 4096,
         }
+        token_param = "max_completion_tokens" if self._uses_max_completion_tokens(self._model) else "max_tokens"
+        call_kwargs[token_param] = 4096
         if tools_list:
             call_kwargs["tools"] = tools_list
 
@@ -308,8 +321,14 @@ class WorkflowAgent:
             resp = client.chat.completions.create(**call_kwargs)
         except Exception as e:
             err = str(e).lower()
+            if "max_tokens" in call_kwargs and "max_completion_tokens" in err:
+                call_kwargs["max_completion_tokens"] = call_kwargs.pop("max_tokens")
+                resp = client.chat.completions.create(**call_kwargs)
+            elif "max_completion_tokens" in call_kwargs and "max_completion_tokens" in err and "unsupported" in err:
+                call_kwargs["max_tokens"] = call_kwargs.pop("max_completion_tokens")
+                resp = client.chat.completions.create(**call_kwargs)
             # Model doesn't support tools — retry without
-            if tools_list and ("tool" in err and ("not support" in err or "404" in err or "not found" in err)):
+            elif tools_list and ("tool" in err and ("not support" in err or "404" in err or "not found" in err)):
                 logger.warning("WorkflowAgent: model %s doesn't support tools, retrying without", self._model)
                 call_kwargs.pop("tools", None)
                 resp = client.chat.completions.create(**call_kwargs)
@@ -330,6 +349,11 @@ class WorkflowAgent:
                     "arguments": tc.function.arguments,
                 })
         return text, tool_calls
+
+    @staticmethod
+    def _uses_max_completion_tokens(model: str) -> bool:
+        name = (model or "").strip().lower()
+        return name.startswith("gpt-5") or name.startswith("o1") or name.startswith("o3") or name.startswith("o4")
 
     def _resolve_openai_creds(self) -> tuple:
         """Resolve (api_key, base_url) for the current OpenAI-compatible provider."""

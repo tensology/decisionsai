@@ -26,6 +26,7 @@ CRITICAL = [
     ("vosk", "vosk"),
     ("pipecat", "pipecat"),
     ("kokoro_onnx", "kokoro_onnx"),
+    ("supertonic", "supertonic"),
     ("kanade_tokenizer", "kanade_tokenizer"),
     ("sqlalchemy", "sqlalchemy"),
     ("beautifulsoup4", "bs4"),
@@ -42,11 +43,9 @@ CRITICAL = [
     ("colorama", "colorama"),
 ]
 
-# Not in requirements.txt (transformers pin conflicts with coqui-tts / voxcpm).
-# Install via ./scripts/install_vibevoice.sh — warn only, do not fail startup.
 OPTIONAL = [
     ("pywhispercpp", "pywhispercpp"),
-    ("vibevoice", "vibevoice"),
+    ("chatterbox-mlx", "chatterbox"),
 ]
 
 # Packages checked via pip metadata rather than import (heavy deps that may

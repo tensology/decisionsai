@@ -179,6 +179,26 @@ function getCheckedPaths() {
     return result;
 }
 
+function setAdvancedFieldValue(id, value) {
+    var el = document.getElementById(id);
+    if (el) el.value = value || '';
+}
+
+function setAdvancedCheckbox(id, checked) {
+    var el = document.getElementById(id);
+    if (el) el.checked = !!checked;
+}
+
+function getAdvancedFieldValue(id) {
+    var el = document.getElementById(id);
+    return el ? el.value : '';
+}
+
+function getAdvancedCheckbox(id) {
+    var el = document.getElementById(id);
+    return el ? !!el.checked : false;
+}
+
 // Load advanced settings from backend
 async function loadAdvancedSettings() {
     try {
@@ -187,6 +207,14 @@ async function loadAdvancedSettings() {
         var settings = await response.json();
 
         document.getElementById('exclude_types').value = settings.exclude_types || '';
+        setAdvancedCheckbox('hermes_enabled', settings.hermes_enabled !== false);
+        setAdvancedCheckbox('hermes_memory_export_enabled', settings.hermes_memory_export_enabled);
+        setAdvancedFieldValue('hermes_orchestrator_provider', settings.hermes_orchestrator_provider);
+        setAdvancedFieldValue('hermes_orchestrator_model', settings.hermes_orchestrator_model);
+        setAdvancedFieldValue('hermes_validator_provider', settings.hermes_validator_provider);
+        setAdvancedFieldValue('hermes_validator_model', settings.hermes_validator_model);
+        setAdvancedFieldValue('hermes_correction_provider', settings.hermes_correction_provider);
+        setAdvancedFieldValue('hermes_correction_model', settings.hermes_correction_model);
         advancedCheckedPaths = new Set(settings.indexed_folders || []);
         loadTreeRoot();
 
@@ -211,7 +239,15 @@ async function saveAdvancedSettings() {
     try {
         var settings = {
             indexed_folders: getCheckedPaths(),
-            exclude_types: document.getElementById('exclude_types').value
+            exclude_types: document.getElementById('exclude_types').value,
+            hermes_enabled: getAdvancedCheckbox('hermes_enabled'),
+            hermes_memory_export_enabled: getAdvancedCheckbox('hermes_memory_export_enabled'),
+            hermes_orchestrator_provider: getAdvancedFieldValue('hermes_orchestrator_provider'),
+            hermes_orchestrator_model: getAdvancedFieldValue('hermes_orchestrator_model'),
+            hermes_validator_provider: getAdvancedFieldValue('hermes_validator_provider'),
+            hermes_validator_model: getAdvancedFieldValue('hermes_validator_model'),
+            hermes_correction_provider: getAdvancedFieldValue('hermes_correction_provider'),
+            hermes_correction_model: getAdvancedFieldValue('hermes_correction_model')
         };
 
         var response = await fetch('/api/advanced', {

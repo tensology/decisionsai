@@ -98,6 +98,8 @@ def create_app() -> FastAPI:
     _mount_static(app, "/chat/static/js", static_dir / "chat" / "js", "chat_js")
     _mount_static(app, "/docs/static/css", static_dir / "docs" / "css", "docs_css")
     _mount_static(app, "/docs/static/js", static_dir / "docs" / "js", "docs_js")
+    _mount_static(app, "/irc/static/css", static_dir / "irc" / "css", "irc_css")
+    _mount_static(app, "/irc/static/js", static_dir / "irc" / "js", "irc_js")
     _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js")
     _mount_static(app, "/actions/static/js", static_dir / "actions" / "js", "actions_js")
     _mount_static(app, "/snippets/static/js", static_dir / "snippets" / "js", "snippets_js")
@@ -226,6 +228,14 @@ def create_app() -> FastAPI:
     async def chat_page_with_slash(request: Request):
         return page_templates.TemplateResponse(request, "chat/chat.html", _template_context(request, "/chat"))
 
+    @app.get("/irc", response_class=HTMLResponse)
+    async def irc_page_no_slash(request: Request):
+        return page_templates.TemplateResponse(request, "irc/irc.html", _template_context(request, "/irc"))
+
+    @app.get("/irc/", response_class=HTMLResponse)
+    async def irc_page_with_slash(request: Request):
+        return page_templates.TemplateResponse(request, "irc/irc.html", _template_context(request, "/irc"))
+
     try:
         from distr.gui.web.routes.integrations_hooks import router as integrations_hooks_router
 
@@ -241,6 +251,14 @@ def create_app() -> FastAPI:
         logger.info("Chat API routes mounted at /api")
     except Exception as e:
         logger.error("Failed to load Chat routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.irc import create_routes as create_irc_routes
+        irc_router = create_irc_routes()
+        app.include_router(irc_router, prefix="/api", tags=["irc"])
+        logger.info("IRC chat proxy routes mounted at /api/irc")
+    except Exception as e:
+        logger.error("Failed to load IRC chat routes: %s", e, exc_info=True)
 
     try:
         from distr.gui.web.routes.docs import create_routes as create_docs_routes
@@ -404,8 +422,18 @@ def create_app() -> FastAPI:
 
         try:
             overview = await asyncio.get_running_loop().run_in_executor(None, _generate_overview)
-        except Exception:
-            raise HTTPException(status_code=500, detail="Could not generate skill overview from the LLM.")
+        except Exception as exc:
+            from distr.core.llm_errors import format_model_error
+
+            raise HTTPException(
+                status_code=500,
+                detail=format_model_error(
+                    exc,
+                    provider=provider,
+                    model=model,
+                    operation="generate a skill overview",
+                ),
+            )
 
         if not overview:
             raise HTTPException(status_code=500, detail="Overview was empty.")

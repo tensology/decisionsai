@@ -29,6 +29,11 @@ _startup_queue_lock = asyncio.Lock()
 # ── ANSI escape regex (compiled once) ─────────────────────────────────────
 import re
 _ANSI_RE = re.compile(r'\x1b\[[0-9;]*[a-zA-Z]|\x1b\].*?\x07|\x1b\[.*?[a-zA-Z]')
+_LOCAL_URL_RE = re.compile(r'https?://(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(?::(\d{2,5}))?(?:/[^\s]*)?', re.IGNORECASE)
+_PORT_HINT_RE = re.compile(
+    r'(?:localhost|127\.0\.0\.1|0\.0\.0\.0|port|listening|server|vite|next).*?(?::|\s)(\d{2,5})',
+    re.IGNORECASE,
+)
 
 
 def _startup_queue_path() -> str:
@@ -352,6 +357,13 @@ class TerminalSession:
                 logger.debug(f"Terminal read error: {e}")
         finally:
             self._running = False
+            if self.purpose in ("startup", "cli_shell"):
+                try:
+                    from distr.core.hermes import mark_project_runtime_session_stopped
+
+                    mark_project_runtime_session_stopped(self.session_key, status="stopped")
+                except Exception:
+                    pass
             try:
                 loop.remove_reader(self.master_fd)
             except Exception:
@@ -606,6 +618,7 @@ async def create_startup_shell_session(project_id: int, cwd: str, shell_command:
                                shell_command=shell_command, session_key=terminal_id, purpose=purpose)
     await session.start_with_shell_command()
     _startup_sessions[terminal_id] = session
+    _sync_runtime_session_to_hermes(session)
     logger.info(f"Startup session created: key={terminal_id} cmd={shell_command!r} cwd={cwd}")
     return terminal_id, session
 
@@ -614,6 +627,12 @@ async def kill_startup_session(terminal_id: str) -> bool:
     session = _startup_sessions.pop(terminal_id, None)
     if session:
         await session.kill()
+        try:
+            from distr.core.hermes import mark_project_runtime_session_stopped
+
+            mark_project_runtime_session_stopped(terminal_id, status="stopped")
+        except Exception:
+            pass
         return True
     return False
 
@@ -623,6 +642,12 @@ def cleanup_dead_startup_sessions() -> int:
     dead_keys = [k for k, s in _startup_sessions.items() if not s.is_alive]
     for k in dead_keys:
         _startup_sessions.pop(k, None)
+        try:
+            from distr.core.hermes import mark_project_runtime_session_stopped
+
+            mark_project_runtime_session_stopped(k, status="dead")
+        except Exception:
+            pass
     return len(dead_keys)
 
 
@@ -634,6 +659,7 @@ def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "
         if sess.project_id == project_id and sess.is_alive:
             if purpose and sess.purpose != purpose:
                 continue
+            _sync_runtime_session_to_hermes(sess)
             results.append({
                 "process_id": session_key,
                 "pid": sess.pid,
@@ -642,6 +668,110 @@ def get_startup_sessions_for_project(project_id: int, purpose: Optional[str] = "
                 "purpose": sess.purpose,
             })
     return results
+
+
+def _sync_runtime_session_to_hermes(sess: TerminalSession) -> None:
+    try:
+        from distr.core.hermes import upsert_project_runtime_session
+
+        buffer = sess.get_buffer(80)
+        upsert_project_runtime_session(
+            terminal_id=sess.session_key,
+            project_id=sess.project_id,
+            pid=sess.pid,
+            command=sess.shell_command or sess.command or "",
+            cwd=sess.cwd,
+            purpose=sess.purpose,
+            owner="decisions_project_runtime",
+            status="running" if sess.is_alive else "dead",
+            urls=_infer_urls_from_terminal_buffer(buffer),
+            buffer_preview=buffer,
+            created_at_epoch=sess.created_at,
+        )
+    except Exception:
+        pass
+
+
+def _infer_urls_from_terminal_buffer(buffer: str) -> list[dict[str, Any]]:
+    """Infer local app URLs from recent terminal output."""
+    seen: set[str] = set()
+    urls: list[dict[str, Any]] = []
+    for match in _LOCAL_URL_RE.finditer(buffer or ""):
+        raw_url = match.group(0).rstrip(".,;)")
+        port_text = match.group(1)
+        normalized = raw_url.replace("localhost", "127.0.0.1").replace("0.0.0.0", "127.0.0.1").rstrip("/")
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        urls.append({
+            "url": normalized,
+            "port": int(port_text) if port_text and port_text.isdigit() else None,
+            "source": "terminal_output",
+        })
+
+    for match in _PORT_HINT_RE.finditer(buffer or ""):
+        port_text = match.group(1)
+        if not port_text or not port_text.isdigit():
+            continue
+        port = int(port_text)
+        if port < 80 or port > 65535:
+            continue
+        url = f"http://127.0.0.1:{port}"
+        if url in seen:
+            continue
+        seen.add(url)
+        urls.append({"url": url, "port": port, "source": "terminal_output"})
+    return urls[:8]
+
+
+def get_project_runtime_snapshot(project_id: int) -> dict[str, Any]:
+    """Return the live runtime context Hermes should know before acting.
+
+    This is intentionally read-only. It reports active project terminals and
+    likely local app URLs without restarting, killing, or claiming ownership of
+    anything.
+    """
+    cleanup_dead_startup_sessions()
+    sessions: list[dict[str, Any]] = []
+    url_by_value: dict[str, dict[str, Any]] = {}
+
+    for session_key, sess in list(_startup_sessions.items()):
+        if sess.project_id != project_id or not sess.is_alive:
+            continue
+        _sync_runtime_session_to_hermes(sess)
+        buffer = sess.get_buffer(80)
+        inferred_urls = _infer_urls_from_terminal_buffer(buffer)
+        for item in inferred_urls:
+            if item.get("url"):
+                url_by_value[str(item["url"])] = item
+        sessions.append({
+            "process_id": session_key,
+            "terminal_id": session_key,
+            "pid": sess.pid,
+            "command": sess.shell_command or "",
+            "cwd": sess.cwd,
+            "alive": True,
+            "purpose": sess.purpose,
+            "created_at": sess.created_at,
+            "urls": inferred_urls,
+            "owner": "decisions_project_runtime",
+        })
+    durable_sessions = []
+    try:
+        from distr.core.hermes import list_project_runtime_sessions
+
+        durable_sessions = list_project_runtime_sessions(project_id=int(project_id), active_only=False, limit=20)
+    except Exception:
+        durable_sessions = []
+
+    return {
+        "project_id": int(project_id),
+        "active_terminal_count": len(sessions),
+        "sessions": sessions,
+        "durable_sessions": durable_sessions,
+        "urls": list(url_by_value.values()),
+        "safe_restart_policy": "Only restart Decisions-owned project runtime terminals; do not kill user-owned terminals without approval.",
+    }
 
 
 # ── Cleanup on exit ────────────────────────────────────────────────────────

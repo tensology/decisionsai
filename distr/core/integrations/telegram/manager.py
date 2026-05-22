@@ -710,11 +710,19 @@ class TelegramWebSocketManager(
             )
             # Don't reset _online_message_sent on auto-reconnect - keep it True to prevent sending again
         elif not self._online_message_sent:
-            # We delay slightly or just send it. Let's send via queue to rate limit cleanly.
-            logger.info(
-                "[Telegram] 📤 Sending 'come back online' message (initial connection only)"
-            )
-            self.send_to_telegram(f"{self._get_agent_name()} is back online and ready to help!", None, None)
+            try:
+                from distr.core.settings import load_settings_from_db
+                settings = load_settings_from_db()
+                send_online_notice = bool(settings.get("telegram_send_online_notice", False))
+            except Exception:
+                send_online_notice = False
+            if send_online_notice:
+                logger.info(
+                    "[Telegram] 📤 Sending online message (enabled in settings)"
+                )
+                self.send_to_telegram(f"{self._get_agent_name()} is online.", None, None)
+            else:
+                logger.debug("[Telegram] ⏭️ Skipping online message (disabled)")
             self._online_message_sent = True
         else:
             logger.debug(

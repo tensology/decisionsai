@@ -130,10 +130,16 @@ def _verify_llm_judgment(result: str, validation_prompt: str) -> bool:
     """Send the result + validation prompt to the LLM for judgment."""
     try:
         from distr.core.signals import signal_manager
+        try:
+            from distr.core.workflow.standards_memory import UNIVERSAL_WORKFLOW_STANDARDS
+            standards = "\n\nQUALITY STANDARDS:\n" + UNIVERSAL_WORKFLOW_STANDARDS.strip()
+        except Exception:
+            standards = ""
         # Build a judgment prompt
         judgment_prompt = (
             f"You are a validation judge. Evaluate whether the following result passes the validation criteria.\n\n"
             f"VALIDATION CRITERIA:\n{validation_prompt}\n\n"
+            f"{standards}\n\n"
             f"RESULT TO VALIDATE:\n{result}\n\n"
             f"Respond with exactly PASS or FAIL followed by a brief explanation."
         )
@@ -145,9 +151,8 @@ def _verify_llm_judgment(result: str, validation_prompt: str) -> bool:
                 return response.strip().upper().startswith("PASS")
         except ImportError:
             pass
-        # Fallback: trust caller
-        logger.warning("LLM judgment not available, defaulting to pass")
-        return True
+        logger.warning("LLM judgment not available, failing closed")
+        return False
     except Exception as e:
         logger.error("LLM judgment failed: %s", e, exc_info=True)
         return False

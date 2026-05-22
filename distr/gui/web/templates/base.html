@@ -82,6 +82,13 @@
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"/>
                         </svg>
                     </a>
+                    <a href="/irc/"
+                       class="nav-tab nav-chat-bubble p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
+                       title="Shared rooms">
+                        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 8h2a2 2 0 012 2v7a2 2 0 01-2 2h-8l-4 3v-3H5a2 2 0 01-2-2v-1m14-8V5a2 2 0 00-2-2H5a2 2 0 00-2 2v7a2 2 0 002 2h8l4 3V8z"/>
+                        </svg>
+                    </a>
                     <a href="/settings" id="nav-settings-icon"
                        class="p-2 rounded-md text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors"
                        title="Settings">
@@ -124,11 +131,11 @@
     (function() {
       function setActiveNavTab() {
         var path = window.location.pathname.replace(/\/$/, '') || '';
-        document.querySelectorAll('.nav-tab').forEach(function(tab) {
+        document.querySelectorAll('.nav-tab, .nav-chat-bubble').forEach(function(tab) {
           var href = tab.getAttribute('href');
           if (!href) return;
           var tabPath = href.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/';
-          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/kanban' && (path === '/kanban' || path.startsWith('/kanban/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
+          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/irc' && (path === '/irc' || path.startsWith('/irc/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/kanban' && (path === '/kanban' || path.startsWith('/kanban/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
           tab.classList.toggle('active', isActive);
         });
         // Highlight settings gear icon when on /settings

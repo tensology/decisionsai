@@ -20,6 +20,7 @@ class KanbanBoard(Base):
 
     # Agent check-in settings
     agent_enabled = Column(Boolean, default=False)
+    whatsapp_checkin_enabled = Column(Boolean, default=False)
     agent_frequency = Column(String, default='daily')  # 'daily', 'weekly', 'monthly'
     agent_time = Column(String, default='09:00')  # HH:MM
     agent_days = Column(Text, default='[]')  # JSON list of day indices (0=Sun..6=Sat) for weekly
@@ -73,6 +74,7 @@ class KanbanTicket(Base):
     title = Column(String, nullable=False)
     description = Column(Text)
     priority = Column(String, default='medium')  # low, medium, high, critical
+    complexity = Column(String, default='medium')  # low, medium, high
     time_estimate = Column(String, nullable=True)  # Initial estimate (e.g. "2h", "1d")
     time_spent = Column(String, nullable=True)  # Actual duration spent (e.g. "45m", "3h")
     position = Column(Integer, default=0)
@@ -84,6 +86,7 @@ class KanbanTicket(Base):
 
     # Linking to other entities
     linked_workflow_id = Column(Integer, nullable=True)
+    workflow_queue_position = Column(Integer, default=0)
     linked_project_id = Column(Integer, nullable=True)
     linked_snippet_id = Column(Integer, nullable=True)
     linked_action_id = Column(Integer, nullable=True)
@@ -93,6 +96,14 @@ class KanbanTicket(Base):
     # WhatsApp source (if ticket was created from a WhatsApp message)
     whatsapp_message_id = Column(Integer, nullable=True)  # FK to whatsapp_messages.id
     whatsapp_message_wa_id = Column(String, nullable=True)  # WhatsApp's own message ID
+
+    # Durable origin metadata for routing follow-ups back to the right surface.
+    source_provider = Column(String, nullable=True)  # whatsapp, gmail, telegram, jira, trello, web, manual
+    source_external_id = Column(String, nullable=True)
+    source_thread_id = Column(String, nullable=True)
+    source_contact = Column(String, nullable=True)
+    source_url = Column(String, nullable=True)
+    source_label = Column(String, nullable=True)
 
     # Workflow execution status — mirrors the latest linked AutoWorkflowRun status
     workflow_status = Column(String, nullable=True)  # None | running | completed | failed | cancelled | waiting
@@ -174,3 +185,58 @@ class KanbanTicketAuditEntry(Base):
     summary = Column(Text, nullable=True)
     details = Column(Text, nullable=True)
     created_date = Column(DateTime, default=datetime.utcnow)
+
+
+class ProjectExecutionSession(Base):
+    __tablename__ = "project_execution_sessions"
+
+    id = Column(Integer, primary_key=True)
+    ticket_id = Column(Integer, ForeignKey("kanban_tickets.id"), nullable=True)
+    project_id = Column(Integer, nullable=False)
+    workflow_id = Column(Integer, ForeignKey("auto_workflows.id"), nullable=True)
+    run_id = Column(Integer, ForeignKey("auto_workflow_runs.id"), nullable=True)
+    step_id = Column(Integer, ForeignKey("auto_workflow_steps.id"), nullable=True)
+    audit_id = Column(Integer, nullable=True)
+
+    route_type = Column(String, nullable=False, default="project_cli")
+    route_backend = Column(String, nullable=False, default="")
+    selected_model = Column(String, nullable=True)
+    selection_reason = Column(Text, nullable=True)
+    complexity = Column(String, nullable=True)
+    origin = Column(String, nullable=True)
+
+    status = Column(String, nullable=False, default="queued")
+    input_packet = Column(Text, nullable=True)
+    output_packet = Column(Text, nullable=True)
+    error = Column(Text, nullable=True)
+
+    started_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    completed_at = Column(DateTime, nullable=True)
+
+    events = relationship(
+        "ProjectExecutionEvent",
+        back_populates="session",
+        cascade="all, delete-orphan",
+        order_by="ProjectExecutionEvent.created_at",
+    )
+
+
+class ProjectExecutionEvent(Base):
+    __tablename__ = "project_execution_events"
+
+    id = Column(Integer, primary_key=True)
+    session_id = Column(Integer, ForeignKey("project_execution_sessions.id"), nullable=False)
+    event_type = Column(String, nullable=False, default="event")
+    status = Column(String, nullable=True)
+    message = Column(Text, nullable=True)
+    payload = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+    session = relationship("ProjectExecutionSession", back_populates="events")
+
+
+Index("ix_project_execution_sessions_ticket_id", ProjectExecutionSession.ticket_id)
+Index("ix_project_execution_sessions_project_id", ProjectExecutionSession.project_id)
+Index("ix_project_execution_sessions_status", ProjectExecutionSession.status)
+Index("ix_project_execution_events_session_id", ProjectExecutionEvent.session_id)

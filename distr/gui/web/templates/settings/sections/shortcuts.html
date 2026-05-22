@@ -64,6 +64,69 @@
         </div>
 
         <div class="flex-1 min-w-0 border border-[#565869] rounded-lg p-4 sm:p-6 bg-[#1a1f3a]">
+            <h3 class="text-base font-semibold text-white mb-4">Ticket Dictation</h3>
+            <div class="space-y-4">
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="shortcuts_ticket_dictation_hotkey_enabled"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">Enabled</span>
+                </label>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Hold combo</label>
+                    <div class="hotkey-capture"
+                         data-type="modifier-key"
+                         data-modifier-field="shortcuts_ticket_dictation_hotkey_modifier"
+                         data-key-field="shortcuts_ticket_dictation_hotkey_key">
+                      <div class="hotkey-display" tabindex="0" role="button" aria-label="Click then press your ticket dictation shortcut keys">
+                        <span class="hotkey-placeholder">Click to set</span>
+                      </div>
+                      <button type="button" class="hotkey-clear" title="Clear">&#x2715;</button>
+                      <input type="hidden" id="shortcuts_ticket_dictation_hotkey_modifier" value="">
+                      <input type="hidden" id="shortcuts_ticket_dictation_hotkey_key"      value="">
+                    </div>
+                    <p class="text-xs text-gray-500 mt-2">Hold to record. Release to type a cleaned ticket.</p>
+                </div>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-2">Fast model</label>
+                        <input type="text" id="shortcuts_dictation_ticket_model"
+                                class="w-full bg-[#111827] border border-[#565869] rounded-md px-3 py-2 text-sm text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors"
+                                style="background-color: #111827; color: #ffffff;"
+                                placeholder="qwen2.5:0.5b">
+                    </div>
+                    <div>
+                        <label class="block text-xs text-gray-400 mb-2">Timeout</label>
+                        <input type="text" id="shortcuts_dictation_ticket_timeout"
+                                class="w-full bg-[#111827] border border-[#565869] rounded-md px-3 py-2 text-sm text-white
+                                        focus:outline-none focus:border-[#10a37f] transition-colors"
+                                style="background-color: #111827; color: #ffffff;"
+                                placeholder="1.2">
+                    </div>
+                </div>
+                <label class="flex items-center cursor-pointer group">
+                    <input type="checkbox" id="shortcuts_dictation_ticket_use_llm"
+                            class="w-4 h-4 bg-[#1a1f3a] border border-[#565869] rounded
+                                    checked:bg-[#10a37f] checked:border-[#10a37f]
+                                    focus:outline-none focus:ring-2 focus:ring-[#10a37f] focus:ring-offset-0
+                                    transition-colors cursor-pointer">
+                    <span class="ml-3 text-sm text-[#ececf1] group-hover:text-white transition-colors">Use local LLM when available</span>
+                </label>
+                <div>
+                    <label class="block text-xs text-gray-400 mb-2">Ticket prompt</label>
+                    <textarea id="shortcuts_dictation_ticket_prompt" rows="4"
+                            class="w-full bg-[#111827] border border-[#565869] rounded-md px-3 py-2 text-sm text-white
+                                    focus:outline-none focus:border-[#10a37f] transition-colors resize-y"
+                            style="background-color: #111827; color: #ffffff;"
+                            placeholder="Rewrite the dictated text as a concise implementation ticket..."></textarea>
+                </div>
+            </div>
+        </div>
+
+        <div class="flex-1 min-w-0 border border-[#565869] rounded-lg p-4 sm:p-6 bg-[#1a1f3a]">
             <h3 class="text-base font-semibold text-white mb-4">Recording</h3>
             <div class="space-y-4">
                 <label class="flex items-center cursor-pointer group">

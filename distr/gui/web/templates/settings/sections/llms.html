@@ -241,4 +241,28 @@
             </div>
         </div>
 
+        <!-- Project Ticket Routing -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <h3 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h3>
+            <p class="mb-4 text-center text-xs text-gray-500">Global backend and model used when tickets are sent to project implementation agents.</p>
+            <div id="project_cli_routes" class="space-y-3">
+                {% for level, label in [("low", "Low complexity"), ("medium", "Medium complexity"), ("high", "High complexity")] %}
+                <div class="grid gap-3 md:grid-cols-[11rem_minmax(0,1fr)_minmax(0,1fr)] md:items-center">
+                    <div class="text-sm font-medium text-[#ececf1]">{{ label }}</div>
+                    <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
+                        <option value="pi">Pi</option>
+                        <option value="cursor">Cursor CLI</option>
+                        <option value="codex">Codex CLI</option>
+                        <option value="claude_code">Claude Code</option>
+                        <option value="cursor_ide">Cursor IDE</option>
+                        <option value="vscode_ide">VS Code IDE</option>
+                    </select>
+                    <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
+                        <option value="">Select model...</option>
+                    </select>
+                </div>
+                {% endfor %}
+            </div>
+        </div>
+
     </div>

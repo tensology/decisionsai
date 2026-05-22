@@ -48,6 +48,7 @@ class StepRouter:
         run_id: int,
         *,
         skip_wait: bool = False,
+        skip_approval: bool = False,
     ) -> Dict[str, Any]:
         """After a step completes: verify → store result → determine next step.
 
@@ -55,9 +56,11 @@ class StepRouter:
             {"action": "next_step", "step_id": <id>}
             {"action": "end_run", "status": "completed"}
             {"action": "waiting", "notify_main_agent": True}
+            {"action": "correction_retry", "step_id": <id>}
 
         Set ``skip_wait=True`` when resuming from feedback to avoid re-entering
         the wait state for a ``wait_for_continue`` step that has already waited.
+        Set ``skip_approval=True`` when resuming after a human approval gate.
         """
         with get_session() as db:
             step = db.query(AutoWorkflowStep).filter(
@@ -74,6 +77,11 @@ class StepRouter:
             # ── verify ──
             verified_passed = _run_verification(step, result, passed)
             validation_snapshot = build_validation_snapshot(step, result, passed, verified_passed)
+
+            # ── approval gate (after verify, before marking passed) ──
+            if step.require_approval and verified_passed and not skip_approval:
+                return self._enter_approval_state(db, step, run_id, result, verified_passed)
+
             status = "passed" if verified_passed else "failed"
 
             # ── store result ──
@@ -117,6 +125,114 @@ class StepRouter:
                 validation_snapshot=validation_snapshot,
             )
             run_data["result_packet"] = packet
+            run.run_data = json.dumps(run_data)
+            # Hermes is the cross-cutting ledger and writes through its own
+            # session. Persist the canonical step result/run packet first so
+            # Hermes validation and event rows cannot be blocked by this write
+            # transaction, especially on SQLite-backed local installs.
+            db.commit()
+            validation_record_id = None
+            correction_attempt_id = None
+            correction_packet: dict[str, Any] = {}
+            try:
+                from distr.core.db.kanban import KanbanTicket, ProjectExecutionSession
+                from distr.core.hermes import (
+                    build_correction_packet,
+                    create_correction_attempt,
+                    record_validation,
+                )
+                from distr.core.workflow.standards_memory import build_standards_context
+
+                latest_execution = (
+                    db.query(ProjectExecutionSession)
+                    .filter(ProjectExecutionSession.run_id == int(run_id))
+                    .filter(ProjectExecutionSession.step_id == int(step_id))
+                    .order_by(ProjectExecutionSession.started_at.desc(), ProjectExecutionSession.id.desc())
+                    .first()
+                )
+                validation_record_id = record_validation(
+                    workflow_id=run.workflow_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    step_result_id=getattr(step_result_row, "id", None),
+                    ticket_id=getattr(run, "ticket_id", None),
+                    board_id=getattr(run, "board_id", None),
+                    project_id=(
+                        getattr(latest_execution, "project_id", None)
+                        or run_data.get("project_id")
+                    ),
+                    execution_session_id=getattr(latest_execution, "id", None),
+                    validation_snapshot=validation_snapshot,
+                    standards_context=build_standards_context(getattr(run.workflow, "context_rules", None)),
+                    payload={
+                        "step_name": step.name or f"Step {step_id}",
+                        "action_type": step.action_type,
+                        "decision": decision,
+                    },
+                )
+                if validation_record_id:
+                    validation_snapshot["validation_record_id"] = validation_record_id
+                if validation_record_id and not verified_passed:
+                    ticket = None
+                    if getattr(run, "ticket_id", None):
+                        ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
+                    execution_input = {}
+                    execution_output = {}
+                    runtime_snapshot = {}
+                    executor_output = ""
+                    target_backend = ""
+                    target_model = ""
+                    if latest_execution:
+                        try:
+                            execution_input = json.loads(latest_execution.input_packet or "{}")
+                        except Exception:
+                            execution_input = {}
+                        try:
+                            execution_output = json.loads(latest_execution.output_packet or "{}")
+                        except Exception:
+                            execution_output = {}
+                        runtime_snapshot = (
+                            execution_input.get("runtime_snapshot")
+                            or execution_output.get("runtime_snapshot")
+                            or {}
+                        )
+                        executor_output = (
+                            execution_output.get("output")
+                            or execution_output.get("error")
+                            or ""
+                        )
+                        target_backend = latest_execution.route_backend or execution_output.get("backend_id") or ""
+                        target_model = latest_execution.selected_model or execution_input.get("model") or execution_output.get("model") or ""
+                    correction_packet = build_correction_packet(
+                        validation_record={
+                            "id": validation_record_id,
+                            "workflow_id": run.workflow_id,
+                            "run_id": run_id,
+                            "step_id": step_id,
+                            "ticket_id": getattr(run, "ticket_id", None),
+                            "validation_type": validation_snapshot.get("validation_type"),
+                            "expected": validation_snapshot.get("expected"),
+                            "observed": validation_snapshot.get("observed"),
+                            "verdict": validation_snapshot.get("verdict"),
+                            "correction_hint": validation_snapshot.get("correction_hint"),
+                            "payload": {"snapshot": validation_snapshot},
+                        },
+                        ticket_title=getattr(ticket, "title", None) or run_data.get("ticket_title") or "",
+                        step_name=step.name or f"Step {step_id}",
+                        runtime_snapshot=runtime_snapshot,
+                        executor_output=executor_output,
+                    )
+                    correction_attempt_id = create_correction_attempt(
+                        validation_record_id=validation_record_id,
+                        target_backend=target_backend,
+                        target_model=target_model,
+                        correction_packet=correction_packet,
+                        status="queued",
+                    )
+                    if correction_attempt_id:
+                        validation_snapshot["correction_attempt_id"] = correction_attempt_id
+            except Exception:
+                logger.debug("Could not record Hermes validation record", exc_info=True)
 
             if getattr(run, "ticket_id", None):
                 append_ticket_audit_entry(
@@ -125,12 +241,57 @@ class StepRouter:
                     run_id=run_id,
                     step_id=step_id,
                     step_result_id=getattr(step_result_row, "id", None),
-                    execution_lane="cursor",
+                    execution_lane="workflow",
                     status=status,
                     final_verdict=((packet.get("audit") or {}).get("final_verdict")),
                     summary=f"{step.name or f'Step {step_id}'}: {status}",
                     details=(result or "")[:3000],
                 )
+            try:
+                from distr.core.hermes import emit_event
+
+                emit_event(
+                    source="workflow",
+                    event_type="workflow_step_completed",
+                    status=status,
+                    workflow_id=run.workflow_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    ticket_id=getattr(run, "ticket_id", None),
+                    board_id=getattr(run, "board_id", None),
+                    summary=f"{step.name or f'Step {step_id}'}: {status}",
+                    payload={
+                        "step_name": step.name or f"Step {step_id}",
+                        "action_type": step.action_type,
+                        "validation_type": step.validation_type,
+                        "decision": decision,
+                        "validation_record_id": validation_record_id,
+                        "correction_attempt_id": correction_attempt_id,
+                    },
+                    evidence={
+                        "result_preview": (result or "")[:3000],
+                        "validation": validation_snapshot,
+                    },
+                )
+            except Exception:
+                logger.debug("Could not emit Hermes workflow_step_completed event", exc_info=True)
+
+            correction_decision = self._maybe_auto_dispatch_correction(
+                db,
+                run=run,
+                step=step,
+                run_id=run_id,
+                verified_passed=verified_passed,
+                correction_attempt_id=correction_attempt_id,
+                correction_packet=correction_packet,
+                run_data=run_data,
+            )
+            if correction_decision:
+                run.run_data = json.dumps(run_data)
+                db.commit()
+                increment_workflow_updated()
+                return correction_decision
+
             run.run_data = json.dumps(run_data)
             db.commit()
 
@@ -172,10 +333,32 @@ class StepRouter:
                 # Persist feedback in run_data for downstream steps
                 run_data["feedback"] = feedback.strip()
                 run.run_data = json.dumps(run_data)
+                try:
+                    from distr.core.workflow.standards_memory import capture_feedback_as_standard
+                    capture_feedback_as_standard(run.workflow_id, feedback)
+                except Exception as exc:
+                    logger.debug("Could not capture workflow feedback as standard: %s", exc)
 
             # Transition back to running
             run.status = "running"
             step.status = "running"
+            try:
+                from distr.core.hermes import emit_event
+
+                emit_event(
+                    source="workflow",
+                    event_type="workflow_step_feedback_received",
+                    status="running",
+                    workflow_id=run.workflow_id,
+                    run_id=run_id,
+                    step_id=step_id,
+                    ticket_id=getattr(run, "ticket_id", None),
+                    board_id=getattr(run, "board_id", None),
+                    summary=f"{step.name or f'Step {step_id}'} received feedback.",
+                    payload={"feedback": feedback.strip()},
+                )
+            except Exception:
+                logger.debug("Could not emit Hermes feedback event", exc_info=True)
             if getattr(run, "ticket_id", None):
                 append_ticket_audit_entry(
                     db,
@@ -183,7 +366,7 @@ class StepRouter:
                     run_id=run_id,
                     step_id=step_id,
                     step_result_id=None,
-                    execution_lane="cursor",
+                    execution_lane="workflow",
                     status="running",
                     final_verdict="cannot_determine",
                     summary=f"{step.name or f'Step {step_id}'} resumed",
@@ -205,7 +388,77 @@ class StepRouter:
 
         # Re-route with the enriched result, skipping the wait gate
         # since the step has already waited for and received feedback.
-        return self.route(step_id, stored_result, stored_passed, run_id, skip_wait=True)
+        return self.route(
+            step_id,
+            stored_result,
+            stored_passed,
+            run_id,
+            skip_wait=True,
+            skip_approval=True,
+        )
+
+    def _maybe_auto_dispatch_correction(
+        self,
+        db,
+        *,
+        run: AutoWorkflowRun,
+        step: AutoWorkflowStep,
+        run_id: int,
+        verified_passed: bool,
+        correction_attempt_id: int | None,
+        correction_packet: dict[str, Any],
+        run_data: dict[str, Any],
+    ) -> Dict[str, Any] | None:
+        """Re-run the failed step when auto-dispatch corrections is enabled."""
+        if verified_passed or not correction_attempt_id:
+            return None
+        try:
+            from distr.core.workflow.dispatcher import _workflow_run_settings
+            from distr.core.hermes import (
+                count_correction_attempts,
+                get_hermes_role_model,
+                mark_correction_dispatched,
+            )
+
+            settings = _workflow_run_settings(run.workflow)
+            if not settings.get("auto_dispatch_corrections"):
+                return None
+            max_attempts = int(settings.get("max_correction_attempts") or 1)
+            attempt_count = count_correction_attempts(run_id=run_id, step_id=step.id)
+            if attempt_count > max_attempts:
+                return None
+
+            correction_provider, correction_model = get_hermes_role_model("correction")
+            target_backend = correction_provider or correction_packet.get("target_backend") or ""
+            target_model = correction_model or correction_packet.get("target_model") or ""
+            mark_correction_dispatched(
+                correction_attempt_id,
+                dispatch_result={
+                    "auto_dispatch": True,
+                    "attempt_count": attempt_count,
+                    "max_attempts": max_attempts,
+                    "target_backend": target_backend,
+                    "target_model": target_model,
+                },
+            )
+            run_data["pending_correction"] = {
+                "step_id": step.id,
+                "correction_attempt_id": correction_attempt_id,
+                "packet": correction_packet,
+                "target_backend": target_backend,
+                "target_model": target_model,
+            }
+            step.status = "pending"
+            step.result = (step.result or "") + "\n\n[Auto-correction dispatched]"
+            run.status = "running"
+            return {
+                "action": "correction_retry",
+                "step_id": step.id,
+                "correction_attempt_id": correction_attempt_id,
+            }
+        except Exception:
+            logger.debug("Could not auto-dispatch correction", exc_info=True)
+            return None
 
     # ── Internal: determine next step ───────────────────────────────
 
@@ -413,7 +666,7 @@ class StepRouter:
                 run_id=run_id,
                 step_id=step_id,
                 step_result_id=None,
-                execution_lane="cursor",
+                execution_lane="workflow",
                 status="waiting",
                 final_verdict="cannot_determine",
                 summary=f"{step_name or f'Step {step_id}'} waiting for input",
@@ -444,6 +697,127 @@ class StepRouter:
         self._notify_main_agent(workflow_id, run_id, handoff)
 
         return {"action": "waiting", "notify_main_agent": True, "run_id": run_id}
+
+    def _enter_approval_state(
+        self,
+        db,
+        step: AutoWorkflowStep,
+        run_id: int,
+        result: str,
+        passed: bool,
+    ) -> Dict[str, Any]:
+        """Hold a verified step until a human approves it."""
+        step.status = "waiting"
+        step_id = step.id
+        step_name = step.name
+        workflow_id = step.workflow_id
+        handoff = self._build_approval_handoff_text(step_name=step_name, result_text=result, run_id=run_id)
+
+        run = db.query(AutoWorkflowRun).filter(
+            AutoWorkflowRun.id == run_id,
+        ).first()
+        if run:
+            run.status = "waiting"
+            run_data = json.loads(run.run_data or "{}")
+            run_data["waiting_result"] = result
+            run_data["waiting_passed"] = passed
+            run_data["waiting_prompt"] = handoff["prompt"]
+            run_data["waiting_kind"] = "approval"
+            run.run_data = json.dumps(run_data)
+        db.add(AutoWorkflowStepResult(
+            step_id=step_id,
+            run_id=run_id,
+            agent_response=handoff["history_entry"],
+            status="waiting",
+        ))
+        if run and getattr(run, "ticket_id", None):
+            append_ticket_audit_entry(
+                db,
+                ticket_id=int(run.ticket_id),
+                run_id=run_id,
+                step_id=step_id,
+                step_result_id=None,
+                execution_lane="workflow",
+                status="waiting",
+                final_verdict="cannot_determine",
+                summary=f"{step_name or f'Step {step_id}'} waiting for approval",
+                details=(result or "")[:3000],
+            )
+            increment_kanban_updated(
+                board_id=getattr(run, "board_id", None),
+                event_type="ticket_workflow_status",
+                payload={
+                    "ticket_id": int(run.ticket_id),
+                    "run_id": run_id,
+                    "status": "waiting",
+                    "step_id": step_id,
+                    "waiting_kind": "approval",
+                },
+            )
+        db.commit()
+
+        increment_workflow_updated()
+        record_workflow_chat_event(
+            run_id,
+            "waiting",
+            status="waiting",
+            step_id=step_id,
+            step_name=step_name,
+            summary=result or "Workflow step is waiting for approval.",
+        )
+        try:
+            from distr.core.hermes import emit_approval_event
+
+            emit_approval_event(
+                event_type="approval_requested",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=step_id,
+                ticket_id=getattr(run, "ticket_id", None) if run else None,
+                board_id=getattr(run, "board_id", None) if run else None,
+                summary=f"{step_name or f'Step {step_id}'} requires manual approval.",
+                payload={"step_name": step_name or "", "result_preview": (result or "")[:1500]},
+            )
+        except Exception:
+            logger.debug("Could not emit approval_requested event", exc_info=True)
+        self._emit_waiting_for_feedback(step_id, workflow_id, run_id, result)
+        self._notify_main_agent(workflow_id, run_id, handoff)
+
+        return {"action": "waiting", "notify_main_agent": True, "run_id": run_id, "waiting_kind": "approval"}
+
+    @staticmethod
+    def _build_approval_handoff_text(step_name: str, result_text: str, run_id: Optional[int]) -> Dict[str, str]:
+        clean_result = (result_text or "").strip() or "Step completed with no detailed output."
+        summary = clean_result[:280]
+        if len(clean_result) > 280:
+            summary += "..."
+        step_label = step_name or "workflow step"
+        prompt = (
+            f"{step_label} passed validation and is waiting for your approval. "
+            "Reply to approve and continue, or provide correction instructions."
+        )
+        tts = f"{summary}. {prompt}"
+        report = (
+            f"[WORKFLOW_APPROVAL_REQUIRED]\n"
+            f"step_name: {step_label}\n"
+            f"run_id: __RUN_ID__\n"
+            f"status: waiting_for_approval\n"
+            f"step_result_summary: {summary}\n"
+            f"step_result_full: {clean_result[:1500]}\n\n"
+            "Orchestrator instructions:\n"
+            "1) Summarize what the step accomplished.\n"
+            "2) Ask the user to approve or request changes.\n"
+            "3) After approval, call continue_workflow with that reply."
+        )
+        history_entry = f"{clean_result}\n\n[APPROVAL REQUIRED]\n{prompt}"
+        if run_id is not None:
+            history_entry = f"{history_entry}\nRun ID: {run_id}"
+        return {
+            "prompt": prompt,
+            "tts": tts,
+            "report": report,
+            "history_entry": history_entry,
+        }
 
     # ── Event emission ─────────────────────────────────────────────────
 

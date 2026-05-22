@@ -57,6 +57,40 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         """Return the provider name for chat persistence. Inferred from class name."""
         return self.__class__.__name__.replace("LLMService", "")
 
+    async def _surface_model_error(self, exc, operation: str = "generate a response") -> str:
+        """Show model/provider failures in chat/TTS instead of burying them in logs."""
+        from distr.core.agent.libs import ErrorFrame, TextFrame
+        from distr.core.llm_errors import format_model_error
+
+        msg = format_model_error(
+            exc,
+            provider=self._get_provider_name(),
+            model=getattr(self, "_model_name", ""),
+            operation=operation,
+        )
+        try:
+            await self.push_frame(TextFrame(text=msg), getattr(self, "_pipeline_direction", None))
+        except Exception:
+            pass
+        try:
+            await self.push_frame(ErrorFrame(error=msg), getattr(self, "_pipeline_direction", None))
+        except Exception:
+            pass
+        try:
+            self._messages.append({"role": "assistant", "content": msg})
+            if self.chat_manager:
+                current_chat = self.chat_manager.get_current_chat()
+                if current_chat:
+                    self.chat_manager.add_assistant_message(current_chat, msg)
+        except Exception:
+            pass
+        if getattr(self, "event_queue", None):
+            chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+            self.event_queue.put(("chat_stream_error", {"error": msg, "chat_id": chat_id}), block=False)
+        if getattr(self, "_is_telegram_request", False):
+            self._telegram_fallback_text = msg
+        return msg
+
     def _build_tool_index_async(self):
         """Build the semantic tool retriever index in a background thread."""
         from distr.core.agent.tool_retriever import build_index_async
@@ -1226,7 +1260,12 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             check_vision_model_support, analyze_image_with_vision_llm,
         )
 
-        user_message_content = text
+        from distr.core.agent.services.llm.bulk_instruction import augment_bulk_instruction
+
+        user_message_content = augment_bulk_instruction(
+            text,
+            source="telegram" if is_telegram else "chat",
+        )
         image_path = get_image_path_from_context(uploaded_image_path)
 
         if image_path and os.path.exists(image_path):
@@ -1236,17 +1275,26 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             if chat_model_vision:
                 try:
                     base64_image, mime_type = convert_image_to_base64(image_path)
-                    user_message_content = self._format_vision_message(text, base64_image, mime_type)
+                    user_message_content = self._format_vision_message(user_message_content, base64_image, mime_type)
                     logger.debug("✅ Image embedded in message (native vision)")
                 except Exception as e:
                     logger.error("Failed to embed image: %s", e, exc_info=True)
-                    user_message_content = text
+                    user_message_content = augment_bulk_instruction(
+                        text,
+                        source="telegram" if is_telegram else "chat",
+                    )
             else:
                 analysis = await analyze_image_with_vision_llm(image_path, text)
                 if analysis:
-                    user_message_content = f"[The user uploaded an image. Here's what's in the image: {analysis}]\n\nUser's question: {text}"
+                    user_message_content = (
+                        f"[The user uploaded an image. Here's what's in the image: {analysis}]\n\n"
+                        f"User's question: {user_message_content}"
+                    )
                 else:
-                    user_message_content = text
+                    user_message_content = augment_bulk_instruction(
+                        text,
+                        source="telegram" if is_telegram else "chat",
+                    )
         elif image_path:
             logger.warning("Image path provided but file doesn't exist: %s", image_path)
 
@@ -1685,17 +1733,22 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         except Exception as e:
             logger.error("Error building welcome sentences: %s", e, exc_info=True)
 
-            error_str = str(e)
-            if any(kw in error_str.lower() for kw in ['429', 'rate_limit', 'insufficient_quota', 'exceeded']):
-                if self.event_queue:
-                    try:
-                        current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
-                        self.event_queue.put(('chat_stream_error', {
-                            'error': "API Quota Exceeded — check your billing or switch providers in Settings > LLMs",
-                            'chat_id': current_chat_id,
-                        }), block=False)
-                    except Exception:
-                        pass
+            if self.event_queue:
+                try:
+                    from distr.core.llm_errors import format_model_error
+
+                    current_chat_id = self.chat_manager.get_current_chat() if self.chat_manager else None
+                    self.event_queue.put(('chat_stream_error', {
+                        'error': format_model_error(
+                            e,
+                            provider=self._get_provider_name(),
+                            model=getattr(self, "_model_name", ""),
+                            operation="generate the welcome response",
+                        ),
+                        'chat_id': current_chat_id,
+                    }), block=False)
+                except Exception:
+                    pass
 
             return _add_interaction([
                 f"Hello {self._username}! Welcome back!",

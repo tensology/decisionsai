@@ -185,7 +185,15 @@ def run_scheduled_workflow(
         session.commit()
 
     # Start the workflow run via the unified service
-    result = start_workflow_run(workflow_id, context="Scheduled Run")
+    result = start_workflow_run(
+        workflow_id,
+        context="Scheduled Run",
+        run_metadata={
+            "source_type": "scheduled",
+            "source_label": "Scheduled",
+            "phase": "planning",
+        },
+    )
     if "error" in result:
         logger.error(
             "Workflow scheduler: failed to start workflow %d: %s",

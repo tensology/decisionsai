@@ -22,11 +22,32 @@ from distr.core.kanban.result_packet import summarize_packet_for_step_context
 logger = logging.getLogger(__name__)
 
 
+def _agent_result_passed(result_text: str) -> bool:
+    """Fail closed for known orchestration/model failures returned as text."""
+    text = (result_text or "").strip().lower()
+    if not text:
+        return False
+    failure_markers = (
+        "model quota or billing failed",
+        "you exceeded your current quota",
+        "unsupported parameter",
+        "model does not support this request",
+        "llm call failed",
+        "agent dispatch failed",
+        "error code: 400",
+        "error code: 429",
+        "rate limit",
+        "insufficient_quota",
+    )
+    return not any(marker in text for marker in failure_markers)
+
+
 class StepExecutorMixin:
     """Provides step execution logic: code, command, HTTP, agent, recording."""
 
     def _execute(self, step_data: Dict[str, Any], run_id: Optional[int]) -> Dict[str, Any]:
         """Route to the correct step-type handler."""
+        step_data = self._apply_pending_correction_context(step_data, run_id)
         action_type = step_data["action_type"]
         config = self._build_config(step_data)
         handlers = {
@@ -35,6 +56,7 @@ class StepExecutorMixin:
             "run_command": lambda: self._run_command(config, run_id=run_id),
             "http_request": lambda: self._run_http(config),
             "play_recording": lambda: self._run_recording(step_data, config, run_id=run_id),
+            "decision_action": lambda: self._run_decisions_action(step_data, config, run_id=run_id),
             "send_to_project_cli": lambda: self._run_send_to_project_cli(step_data, config, run_id=run_id),
             "agent_instruction": lambda: self._run_agent(step_data, run_id),
             "computer_use": lambda: self._run_computer_use(step_data, config, run_id=run_id),
@@ -43,6 +65,40 @@ class StepExecutorMixin:
         if handler is None:
             return {"output": f"Unknown action type: {action_type}", "passed": False}
         return handler()
+
+    def _apply_pending_correction_context(
+        self,
+        step_data: Dict[str, Any],
+        run_id: Optional[int],
+    ) -> Dict[str, Any]:
+        """Prepend auto-dispatched correction instructions to the step when present."""
+        if run_id is None:
+            return step_data
+        try:
+            from distr.core.hermes import format_correction_instruction
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                if not run or not run.run_data:
+                    return step_data
+                run_data = json.loads(run.run_data or "{}")
+                pending = run_data.get("pending_correction") or {}
+                if int(pending.get("step_id") or 0) != int(step_data.get("id") or 0):
+                    return step_data
+                packet = pending.get("packet") or {}
+                correction_text = format_correction_instruction(packet)
+                if not correction_text:
+                    return step_data
+                existing = (step_data.get("instruction") or "").strip()
+                step_data = dict(step_data)
+                step_data["instruction"] = f"{correction_text}\n\n{existing}".strip()
+                run_data.pop("pending_correction", None)
+                run.run_data = json.dumps(run_data)
+                db.commit()
+                return step_data
+        except Exception:
+            logger.debug("Could not apply pending correction context", exc_info=True)
+        return step_data
 
     # ── Step type handlers ──────────────────────────────────────────
 
@@ -151,23 +207,39 @@ class StepExecutorMixin:
         """Send step instruction to a project's CLI session.
 
         Project resolution order:
-        1) step.linked_project_id
-        2) run.run_data.project_id (ticket-board context)
+        1) run/ticket project context
+        2) ticket linked project or board default project
+        3) step.linked_project_id fallback for advanced/debug workflows
         """
         instruction = (config.get("instruction") or step_data.get("instruction") or "").strip()
         if not instruction:
             return {"output": "No instruction provided for Send to Project CLI", "passed": False}
 
-        project_id = step_data.get("linked_project_id")
+        step_project_id = step_data.get("linked_project_id")
+        project_id = None
         project_folder = None
+        workflow_id = step_data.get("workflow_id")
         run_data: dict[str, Any] = {}
+
+        def _coerce_int(value: Any) -> Optional[int]:
+            if value is None:
+                return None
+            try:
+                text = str(value).strip()
+                if not text:
+                    return None
+                return int(text)
+            except (TypeError, ValueError):
+                return None
 
         try:
             from distr.core.db.projects import Project
             with get_session() as db:
                 step_obj = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_data["id"]).first()
                 if step_obj and step_obj.linked_project_id:
-                    project_id = step_obj.linked_project_id
+                    step_project_id = step_obj.linked_project_id
+                if step_obj and step_obj.workflow_id:
+                    workflow_id = step_obj.workflow_id
 
                 if run_id:
                     run_obj = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
@@ -179,15 +251,43 @@ class StepExecutorMixin:
                             )
                             if packet_context:
                                 instruction = f"{packet_context}\n\n{instruction}"
+                            workflow_brief = run_data.get("ticket_workflow_brief")
+                            if workflow_brief:
+                                try:
+                                    from distr.core.kanban.ticket_workflow_brief import render_ticket_workflow_brief
+
+                                    brief_text = render_ticket_workflow_brief(workflow_brief)
+                                except Exception:
+                                    brief_text = json.dumps(workflow_brief, indent=2, default=str)
+                                if brief_text:
+                                    instruction = f"{brief_text}\n\n{instruction}"
                             if run_data.get("ticket_id") is not None:
                                 instruction = instruction.replace("{{ticket_id}}", str(run_data.get("ticket_id")))
                             if run_data.get("project_id") is not None:
                                 instruction = instruction.replace("{{project_id}}", str(run_data.get("project_id")))
                             run_project_id = run_data.get("project_id")
-                            if not project_id and run_project_id is not None and str(run_project_id).strip():
-                                project_id = int(run_project_id)
+                            resolved_run_project_id = _coerce_int(run_project_id)
+                            if resolved_run_project_id:
+                                project_id = resolved_run_project_id
                         except (ValueError, TypeError, json.JSONDecodeError):
                             pass
+
+                if not project_id:
+                    ticket_id = _coerce_int(run_data.get("ticket_id"))
+                    if ticket_id:
+                        try:
+                            from distr.core.db.kanban import KanbanTicket
+
+                            ticket = db.query(KanbanTicket).filter(KanbanTicket.id == ticket_id).first()
+                            if ticket and ticket.linked_project_id:
+                                project_id = ticket.linked_project_id
+                            elif ticket and ticket.lane and ticket.lane.board and ticket.lane.board.default_project_id:
+                                project_id = ticket.lane.board.default_project_id
+                        except Exception:
+                            pass
+
+                if not project_id:
+                    project_id = _coerce_int(step_project_id)
 
                 if project_id:
                     project = db.query(Project).filter(Project.id == int(project_id)).first()
@@ -212,11 +312,32 @@ class StepExecutorMixin:
                     project = db.query(Project).filter(Project.id == int(project_id)).first()
                     if not project:
                         raise ValueError(f"Project #{project_id} not found")
+                    route = {}
+                    ticket_id = run_data.get("ticket_id")
+                    if ticket_id is not None:
+                        try:
+                            from distr.core.db.kanban import KanbanTicket
+                            from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+
+                            ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                            if ticket:
+                                route = resolve_ticket_cli_route(project, getattr(ticket, "complexity", "medium"))
+                        except Exception:
+                            route = {}
                     return await run_project_task(
                         project,
                         instruction,
                         audit_id=step_data.get("id"),
+                        run_id=run_id,
+                        workflow_id=workflow_id,
+                        step_id=step_data.get("id"),
                         origin="workflow",
+                        ticket_id=int(ticket_id) if ticket_id is not None else None,
+                        ticket_complexity=route.get("complexity", "medium"),
+                        backend_id_override=route.get("backend"),
+                        model_override=route.get("model"),
+                        codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
+                        codex_service_tier_override=route.get("codex_service_tier"),
                     )
 
             # asyncio.run() raises RuntimeError if called from within a running
@@ -234,6 +355,7 @@ class StepExecutorMixin:
             output = (getattr(result, "output", "") or "").strip()
             error = (getattr(result, "error", "") or "").strip()
             passed = bool(getattr(result, "success", False))
+            engine = (getattr(result, "engine", "") or "").strip()
             text = output or error or f"Sent to {backend_name}."
             return {
                 "output": (
@@ -243,7 +365,7 @@ class StepExecutorMixin:
                     f"{text}"
                 )[:6000],
                 "passed": passed,
-                "skip_wait": True,
+                "skip_wait": engine != "ide_ticket",
             }
         except Exception as e:
             return {"output": f"Failed sending to project CLI: {e}", "passed": False}
@@ -294,6 +416,20 @@ class StepExecutorMixin:
                     return
                 _done[0] = True
                 _cleanup()
+                action_id = config.get("action_id") or config.get("recording_id") or step_data.get("action_id")
+                if action_id:
+                    self._emit_decisions_action_event(
+                        step_data,
+                        _run_id,
+                        "decisions_action_completed",
+                        "completed" if passed else "failed",
+                        result_text,
+                        {
+                            "action_id": action_id,
+                            "mode": "recording",
+                            "recording_filename": recording_name,
+                        },
+                    )
                 self._record_result_and_route(step_id, run_id=_run_id,
                                                result_text=result_text, passed=passed)
 
@@ -352,6 +488,124 @@ class StepExecutorMixin:
         except Exception as e:
             return {"output": f"Recording playback error: {e}", "passed": False}
 
+    def _run_decisions_action(self, step_data: Dict[str, Any], config: dict, run_id: Optional[int] = None) -> Dict[str, Any]:
+        """Run a saved Decisions Action as a workflow step.
+
+        Recorded actions replay through the desktop playback service. Instruction
+        actions are executed through the workflow agent with the saved instruction
+        text, keeping both kinds reusable in Hermes-driven workflows.
+        """
+        action_id = config.get("action_id") or config.get("recording_id") or step_data.get("action_id")
+        if not action_id:
+            return {"output": "No Decisions Action selected for this step", "passed": False}
+        try:
+            from distr.core.db import Action
+            with get_session() as db:
+                action = db.query(Action).filter(Action.id == int(action_id)).first()
+                if not action:
+                    return {"output": f"Decisions Action #{action_id} was not found", "passed": False}
+                title = action.title or f"Action #{action.id}"
+                is_instruction = bool(action.is_instruction)
+                instruction_text = action.instruction_text or ""
+                recording_filename = action.recording_filename or ""
+
+            self._emit_decisions_action_event(
+                step_data,
+                run_id,
+                "decisions_action_started",
+                "running",
+                f"Started Decisions Action: {title}",
+                {
+                    "action_id": int(action_id),
+                    "title": title,
+                    "mode": "instruction" if is_instruction else "recording",
+                    "recording_filename": recording_filename,
+                },
+            )
+
+            if is_instruction:
+                if not instruction_text.strip():
+                    return {"output": f"Instruction action '{title}' has no instruction text", "passed": False}
+                agent_step = dict(step_data)
+                agent_step["instruction"] = (
+                    f"Run saved Decisions Action: {title}\n\n"
+                    f"{instruction_text.strip()}"
+                )
+                result = self._run_agent(agent_step, run_id)
+                passed = bool(result.get("passed"))
+                self._emit_decisions_action_event(
+                    step_data,
+                    run_id,
+                    "decisions_action_completed",
+                    "completed" if passed else "failed",
+                    f"Instruction action {'completed' if passed else 'failed'}: {title}",
+                    {"action_id": int(action_id), "title": title, "mode": "instruction", "result": result.get("output", "")[:2000]},
+                )
+                return result
+
+            if not recording_filename:
+                self._emit_decisions_action_event(
+                    step_data,
+                    run_id,
+                    "decisions_action_completed",
+                    "failed",
+                    f"Recording action has no recording file: {title}",
+                    {"action_id": int(action_id), "title": title, "mode": "recording"},
+                )
+                return {"output": f"Recorded action '{title}' has no recording file", "passed": False}
+
+            rec_config = dict(config)
+            rec_config["recording_id"] = int(action_id)
+            rec_config["recording_name"] = recording_filename
+            return self._run_recording(step_data, rec_config, run_id=run_id)
+        except Exception as exc:
+            self._emit_decisions_action_event(
+                step_data,
+                run_id,
+                "decisions_action_completed",
+                "failed",
+                f"Decisions Action failed: {exc}",
+                {"action_id": action_id},
+            )
+            return {"output": f"Decisions Action error: {exc}", "passed": False}
+
+    def _emit_decisions_action_event(
+        self,
+        step_data: Dict[str, Any],
+        run_id: Optional[int],
+        event_type: str,
+        status: str,
+        summary: str,
+        payload: Optional[dict] = None,
+    ) -> None:
+        try:
+            from distr.core.hermes import emit_event
+            workflow_id = step_data.get("workflow_id")
+            ticket_id = board_id = project_id = None
+            if run_id:
+                with get_session() as db:
+                    run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                    if run:
+                        workflow_id = run.workflow_id
+                        ticket_id = run.ticket_id
+                        board_id = run.board_id
+                        project_id = run.project_id
+            emit_event(
+                source="workflow",
+                event_type=event_type,
+                status=status,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=step_data.get("id"),
+                ticket_id=ticket_id,
+                board_id=board_id,
+                project_id=project_id,
+                summary=summary,
+                payload=payload or {},
+            )
+        except Exception:
+            logger.debug("Could not emit Decisions Action Hermes event", exc_info=True)
+
     # ── Keywords that signal a step wants computer/screen control ──────
     _CU_KEYWORDS = (
         "click", "type ", "type in", "press ", "scroll", "drag",
@@ -396,8 +650,9 @@ class StepExecutorMixin:
                         result_text = self._augment_agent_result_with_tool_evidence(
                             result_text, run_ctx.workflow_agent,
                         )
+                        passed = _agent_result_passed(result_text)
                         self._record_result_and_route(step_id, run_id=run_id,
-                                                      result_text=result_text, passed=True)
+                                                      result_text=result_text, passed=passed)
                     except asyncio.CancelledError:
                         # Agent was cancelled by timeout watchdog — already handled
                         pass
@@ -466,9 +721,10 @@ class StepExecutorMixin:
 
             if not result_text or not result_text.strip():
                 result_text = "Step completed with no output."
+            passed = _agent_result_passed(result_text)
             self._record_result_and_route(step_id, run_id=run_id,
-                                          result_text=result_text, passed=True)
-            return {"output": result_text, "passed": True}
+                                          result_text=result_text, passed=passed)
+            return {"output": result_text, "passed": passed}
         except Exception as e:
             logger.error("WorkflowAgent fallback failed for step %s: %s", step_id, e)
             # Last resort: record failure so the workflow doesn't stall forever
@@ -523,6 +779,11 @@ class StepExecutorMixin:
                         context_rules = build_combined_context_rules(workflow_id, context_rules)
                     except Exception as ce:
                         logger.debug("_build_agent_prompt: failed to combine context items: %s", ce)
+                    try:
+                        from distr.core.workflow.standards_memory import build_standards_context
+                        context_rules = build_standards_context(context_rules)
+                    except Exception as ce:
+                        logger.debug("_build_agent_prompt: failed to add standards memory: %s", ce)
                     all_steps = sorted(wf.steps, key=lambda s: s.position)
                     total_steps = len(all_steps)
                     for i, s in enumerate(all_steps):

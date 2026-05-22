@@ -59,6 +59,20 @@ _CURSOR_TICKET_RE = re.compile(
     r")\b",
     re.IGNORECASE,
 )
+_TICKET_FILE_DESTINATION_RE = re.compile(
+    r"\b(create|make|add|new|write|draft|open)\s+"
+    r"(?:a\s+|an\s+|this\s+|that\s+)?"
+    r"(?:ticket|task|work\s+item)(?:\s+file)?\b"
+    r".{0,80}?\b(?:in|into|to|inside|under|within)\s+"
+    r"(?:the\s+|my\s+)?(?:downloads?|desktop|documents?|folder|directory|/"
+    r"|~\/|[A-Za-z]:\\)",
+    re.IGNORECASE | re.DOTALL,
+)
+_TYPE_OUT_TICKET_RE = re.compile(
+    r"\b(type|type\s+out|write\s+out|enter|dictate)\b"
+    r".{0,80}?\b(?:ticket|task|work\s+item)\b",
+    re.IGNORECASE | re.DOTALL,
+)
 _EXTERNAL_TICKET_RE = re.compile(r"\b(jira|trello)\s+(?:ticket|card|issue)\b", re.IGNORECASE)
 _DECISIONS_PROJECT_TICKET_RE = re.compile(
     r"\b(create|make|add|new|write|draft|open)\s+"
@@ -111,6 +125,10 @@ def classify_ticket_intent(text: str) -> TicketIntent:
     if not raw:
         return TicketIntent("none", 0.0, "empty text")
 
+    if _TYPE_OUT_TICKET_RE.search(raw):
+        return TicketIntent("type_text", 0.94, "explicit request to type ticket text")
+    if _TICKET_FILE_DESTINATION_RE.search(raw):
+        return TicketIntent("ticket_file", 0.94, "ticket requested in a filesystem destination")
     if _CURSOR_TICKET_RE.search(raw):
         return TicketIntent("cursor_ticket", 0.97, "explicit Cursor/.tickets request")
     if _DECISIONS_PROJECT_TICKET_RE.search(raw) and is_debug_enabled():

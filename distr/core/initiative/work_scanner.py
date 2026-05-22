@@ -109,6 +109,7 @@ def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
                 "name": board.name or "",
                 "source": board.source or "database",
                 "agent_enabled": bool(board.agent_enabled),
+                "whatsapp_checkin_enabled": bool(getattr(board, "whatsapp_checkin_enabled", False)),
                 "source_lane": board.agent_source_lane or settings.get("kanban_agent_source_lane", "") or "Current",
                 "done_lane": board.agent_done_lane or settings.get("kanban_agent_done_lane", "") or "QA / Assess",
                 "default_workflow_id": board.default_workflow_id,
@@ -268,9 +269,12 @@ def _add_board_proposals(scan: dict[str, Any], board: dict[str, Any]) -> None:
 
 
 def _scan_whatsapp(scan: dict[str, Any]) -> None:
-    from distr.core.db import WhatsAppMessage, get_session
+    from distr.core.db import WhatsAppMessage, WhatsAppPhoneLink, get_session
+    from distr.core.db.kanban import KanbanBoard
 
-    cutoff = datetime.utcnow() - timedelta(days=7)
+    now = datetime.utcnow()
+    cutoff = now - timedelta(days=7)
+    fresh_cutoff = now - timedelta(minutes=3)
     with get_session() as session:
         rows = (
             session.query(WhatsAppMessage)
@@ -281,33 +285,127 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             .limit(20)
             .all()
         )
+
+        links = session.query(WhatsAppPhoneLink).all()
+        link_by_phone = {
+            (link.phone_number or "").strip(): link
+            for link in links
+            if (link.phone_number or "").strip()
+        }
+        board_meta: dict[int, dict[str, Any]] = {}
+        for link in links:
+            if not link.board_id or link.board_id in board_meta:
+                continue
+            board = session.query(KanbanBoard).filter(KanbanBoard.id == link.board_id).first()
+            if board:
+                board_meta[link.board_id] = {
+                    "name": board.name or f"Board {board.id}",
+                    "whatsapp_checkin_enabled": bool(getattr(board, "whatsapp_checkin_enabled", False)),
+                }
+
         work_like = []
+        grouped: dict[str, dict[str, Any]] = {}
         for row in rows:
             text = (row.text or row.caption or "").strip()
             if not text and row.media_type:
                 text = f"[{row.media_type} message]"
-            if not _looks_work_related(text):
-                continue
+            phone = row.jid_phone or (row.jid or "").split("@")[0] or "unknown"
+            link = link_by_phone.get(phone)
+            linked_board = board_meta.get(link.board_id) if link else None
+            linked_whatsapp_enabled = bool(linked_board and linked_board.get("whatsapp_checkin_enabled"))
+            is_work_related = _looks_work_related(text)
             item = {
                 "id": row.id,
                 "jid": row.jid or "",
+                "jid_phone": phone,
                 "sender": row.sender_push_name or row.sender_phone or row.sender_jid or "",
                 "media_type": row.media_type or "",
                 "text_preview": text[:240],
                 "created_date": row.created_date.isoformat() if row.created_date else "",
+                "work_related": is_work_related,
+                "linked_board_id": link.board_id if link else None,
+                "linked_board_name": linked_board.get("name") if linked_board else "",
+                "linked_board_whatsapp_checkin_enabled": linked_whatsapp_enabled,
+                "auto_snapshot": bool(link.auto_snapshot) if link else False,
             }
-            work_like.append(item)
+            if is_work_related or linked_whatsapp_enabled:
+                work_like.append(item)
+
+            group = grouped.setdefault(
+                phone,
+                {
+                    "jid_phone": phone,
+                    "jid": row.jid or "",
+                    "message_ids": [],
+                    "latest_sender": item["sender"],
+                    "latest_preview": text[:240],
+                    "latest_created_date": item["created_date"],
+                    "work_related_count": 0,
+                    "linked_board_id": item["linked_board_id"],
+                    "linked_board_name": item["linked_board_name"],
+                    "linked_board_whatsapp_checkin_enabled": linked_whatsapp_enabled,
+                    "auto_snapshot": item["auto_snapshot"],
+                    "fresh": bool(row.created_date and row.created_date >= fresh_cutoff),
+                },
+            )
+            group["message_ids"].append(row.id)
+            group["work_related_count"] += 1 if is_work_related else 0
+            group["fresh"] = bool(group["fresh"] or (row.created_date and row.created_date >= fresh_cutoff))
         scan["messages"]["whatsapp"] = work_like
-        if work_like:
+
+        grouped_candidates = [
+            g for g in grouped.values()
+            if g["fresh"] or g["work_related_count"] > 0 or g.get("linked_board_whatsapp_checkin_enabled")
+        ]
+        grouped_candidates.sort(
+            key=lambda g: (
+                bool(g.get("linked_board_id")),
+                int(g.get("work_related_count") or 0),
+                g.get("latest_created_date") or "",
+            ),
+            reverse=True,
+        )
+        if grouped_candidates:
+            chosen = grouped_candidates[0]
+            count = len(chosen["message_ids"])
+            board_name = chosen.get("linked_board_name") or ""
+            if board_name:
+                description = (
+                    f"{count} WhatsApp message(s) arrived from {chosen['latest_sender'] or chosen['jid_phone']} "
+                    f"and the chat is linked to board '{board_name}'. Ask whether to snapshot them into tickets."
+                )
+            elif chosen["work_related_count"] > 0:
+                description = (
+                    f"{count} recent WhatsApp message(s) from {chosen['latest_sender'] or chosen['jid_phone']} "
+                    "look work-related and may need ticketing or follow-up."
+                )
+            else:
+                description = (
+                    f"You just got a WhatsApp message from {chosen['latest_sender'] or chosen['jid_phone']}."
+                )
             scan["proposals"].append({
                 "action_type": "message_triage",
-                "description": f"{len(work_like)} recent WhatsApp message(s) look work-related and may need ticketing or follow-up.",
+                "description": description,
                 "payload": {
                     "source": "whatsapp",
-                    "message_ids": [m["id"] for m in work_like[:5]],
+                    "jid_phone": chosen["jid_phone"],
+                    "message_ids": chosen["message_ids"][:8],
+                    "message_count": count,
+                    "latest_sender": chosen["latest_sender"],
+                    "latest_preview": chosen["latest_preview"],
+                    "linked_board_id": chosen.get("linked_board_id"),
+                    "linked_board_name": board_name,
+                    "linked_board_whatsapp_checkin_enabled": bool(chosen.get("linked_board_whatsapp_checkin_enabled")),
+                    "auto_snapshot": bool(chosen.get("auto_snapshot")),
                     "confidence": 0.68,
                     "risk_level": "medium",
                 },
+                "draft": (
+                    f"{description}\n\nLatest: {chosen['latest_preview']}\n\n"
+                    "Suggested next step: ask whether to create a ticket snapshot, then use "
+                    "create_ticket action='whatsapp_snapshot_to_ticket' with the message_ids."
+                ),
+                "telegram_message": description,
             })
 
 

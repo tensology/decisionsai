@@ -67,3 +67,70 @@ def test_normal_dictation_text_is_unchanged():
     assert dummy._process_dictation_text("Can you type that out in Python tomorrow?") == (
         "Can you type that out in Python tomorrow?"
     )
+
+
+def test_ticket_rewrite_only_runs_for_one_shot_when_enabled(monkeypatch):
+    dummy = DummyDictation()
+    dummy._dictation_one_shot = True
+    dummy._dictation_output_mode = "ticket"
+
+    monkeypatch.setattr(
+        dummy,
+        "_load_dictation_settings",
+        lambda: {
+            "dictation_ticket_use_llm": False,
+        },
+    )
+
+    result = dummy._process_dictation_text(
+        "i need the shortcut preferences to let me hold control shift and make a clean ticket"
+    )
+
+    assert result.startswith("Title:")
+    assert "Summary:" in result
+    assert "Acceptance Criteria:" in result
+
+
+def test_ticket_rewrite_does_not_run_for_persistent_dictation(monkeypatch):
+    dummy = DummyDictation()
+    dummy._dictation_one_shot = False
+    dummy._dictation_output_mode = "ticket"
+
+    monkeypatch.setattr(
+        dummy,
+        "_load_dictation_settings",
+        lambda: {"dictation_ticket_use_llm": False},
+    )
+
+    text = "make this a ticket"
+    assert dummy._process_dictation_text(text) == text
+
+
+def test_ticket_rewrite_does_not_run_for_plain_one_shot(monkeypatch):
+    dummy = DummyDictation()
+    dummy._dictation_one_shot = True
+    dummy._dictation_output_mode = "plain"
+
+    monkeypatch.setattr(
+        dummy,
+        "_load_dictation_settings",
+        lambda: {"dictation_ticket_use_llm": False},
+    )
+
+    text = "make this a ticket"
+    assert dummy._process_dictation_text(text) == text
+
+
+def test_ticket_formatter_adds_section_breaks():
+    from distr.core.audio.ticket_dictation import normalize_ticket_format
+
+    result = normalize_ticket_format(
+        "Title: Fix shortcut Summary: Make ticket dictation purple Acceptance Criteria:\n- Works"
+    )
+
+    assert result == (
+        "Title: Fix shortcut\n\n"
+        "Summary: Make ticket dictation purple\n\n"
+        "Acceptance Criteria:\n\n"
+        "- Works"
+    )

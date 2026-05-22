@@ -12,7 +12,8 @@ from sqlalchemy import or_
 
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowVariable, AutoWorkflowRun, AutoWorkflowStepResult
-from distr.core.db.kanban import KanbanBoard, KanbanTicket
+from distr.core.db.kanban import KanbanBoard, KanbanTicket, KanbanTicketAuditEntry
+from distr.core.db.projects import Project
 from distr.gui.web.workflow_events import increment_workflow_updated
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,58 @@ def _safe_json_loads(text: Optional[str]) -> Any:
         return json.loads(text)
     except (json.JSONDecodeError, TypeError):
         return {}
+
+
+def _run_source_label(source_type: Optional[str], ticket: Optional[KanbanTicket] = None) -> str:
+    source = (source_type or "").strip().lower()
+    ticket_source = (getattr(ticket, "source_provider", None) or "").strip().lower() if ticket else ""
+    if ticket_source == "whatsapp" or "whatsapp" in source:
+        return "WhatsApp"
+    if ticket_source:
+        return ticket_source.replace("_", " ").title()
+    if source == "board_checkin":
+        return "Board check-in"
+    if source == "initiative":
+        return "Initiative"
+    if source == "scheduled":
+        return "Scheduled"
+    if source:
+        return source.replace("_", " ").title()
+    return "Manual"
+
+
+def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    run_data = run_data if isinstance(run_data, dict) else (_safe_json_loads(run.run_data) or {})
+    ticket = db.query(KanbanTicket).filter(KanbanTicket.id == run.ticket_id).first() if run.ticket_id else None
+    board_id = run.board_id
+    if board_id is None and ticket and ticket.lane:
+        board_id = ticket.lane.board_id
+    board = db.query(KanbanBoard).filter(KanbanBoard.id == board_id).first() if board_id is not None else None
+
+    project_id = run_data.get("project_id")
+    if not project_id and ticket:
+        project_id = ticket.linked_project_id or (board.default_project_id if board else None)
+    try:
+        project_id_int = int(project_id) if project_id not in (None, "") else None
+    except (TypeError, ValueError):
+        project_id_int = None
+    project = db.query(Project).filter(Project.id == project_id_int).first() if project_id_int is not None else None
+
+    source_type = run_data.get("source_type")
+    return {
+        "board_id": board_id,
+        "board_name": run_data.get("board_name") or (board.name if board else None),
+        "board_source": (board.source if board else None),
+        "ticket_id": run.ticket_id,
+        "ticket_title": run_data.get("ticket_title") or (ticket.title if ticket else None),
+        "project_id": project_id_int,
+        "project_name": run_data.get("project_name") or (project.name if project else None),
+        "source_type": source_type,
+        "source_label": run_data.get("source_label") or _run_source_label(source_type, ticket),
+        "source_provider": getattr(ticket, "source_provider", None) if ticket else None,
+        "source_contact": getattr(ticket, "source_contact", None) if ticket else None,
+        "source_url": getattr(ticket, "source_url", None) if ticket else None,
+    }
 
 
 def _compact_result_packet_for_api(packet: Any) -> Dict[str, Any]:
@@ -272,7 +325,7 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
         "name", "description", "schedule_enabled",
         "schedule_preset", "schedule_cron", "schedule_time",
         "schedule_days", "schedule_timezone", "next_run_at",
-        "start_step_position", "workflow_type", "context_rules",
+        "start_step_position", "workflow_type", "context_rules", "run_settings",
     }
     if "workflow_type" in kwargs and not validate_workflow_type(kwargs["workflow_type"]):
         raise ValueError(
@@ -291,6 +344,11 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
 
 def get_context_items(workflow_id: int) -> List[Dict[str, Any]]:
     """Return ordered context items for a workflow."""
+    try:
+        from distr.core.workflow.standards_memory import ensure_universal_standards_context_item
+        ensure_universal_standards_context_item(workflow_id)
+    except Exception as exc:
+        logger.debug("Could not ensure workflow standards context item: %s", exc)
     with get_session() as db:
         rows = (
             db.query(AutoWorkflowVariable)
@@ -298,7 +356,7 @@ def get_context_items(workflow_id: int) -> List[Dict[str, Any]]:
             .order_by(AutoWorkflowVariable.id.asc())
             .all()
         )
-        return [
+        items = [
             {
                 "id": r.id,
                 "title": r.name or "",
@@ -307,6 +365,11 @@ def get_context_items(workflow_id: int) -> List[Dict[str, Any]]:
             }
             for r in rows
         ]
+        rank = {
+            "Universal Quality Standards": 0,
+            "Adaptive Quality Memory": 1,
+        }
+        return sorted(items, key=lambda item: (rank.get(item.get("title") or "", 10), item.get("id") or 0))
 
 
 def add_context_item(workflow_id: int, title: str, content: str = "", notes: str = "") -> Optional[int]:
@@ -617,18 +680,14 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
             step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == run.current_step_id).first()
             if step:
                 step_name = step.name
+        enriched = _enrich_run_record(db, run, run_data)
         return {
             "id": run.id,
             "status": run.status,
             "current_step_id": run.current_step_id,
             "current_step_name": step_name,
             "started_at": run.started_at.isoformat() if run.started_at else None,
-            "board_id": run.board_id,
-            "board_name": run_data.get("board_name"),
-            "ticket_id": run.ticket_id,
-            "ticket_title": run_data.get("ticket_title"),
-            "project_id": run_data.get("project_id"),
-            "project_name": run_data.get("project_name"),
+            **enriched,
             "phase": run_data.get("phase"),
         }
 
@@ -641,23 +700,21 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
             .order_by(AutoWorkflowRun.started_at.desc())
             .limit(limit).all()
         )
-        return [
-            {
+        out = []
+        for r in rows:
+            run_data = _safe_json_loads(r.run_data) or {}
+            enriched = _enrich_run_record(db, r, run_data)
+            out.append({
                 "id": r.id,
                 "started_at": r.started_at.isoformat() if r.started_at else None,
                 "completed_at": r.completed_at.isoformat() if r.completed_at else None,
                 "status": r.status,
                 "current_step_id": r.current_step_id,
-                "board_id": r.board_id,
-                "ticket_id": r.ticket_id,
-                "phase": (run_data := (_safe_json_loads(r.run_data) or {})).get("phase"),
-                "source_type": run_data.get("source_type"),
-                "project_id": run_data.get("project_id"),
-                "project_name": run_data.get("project_name"),
+                **enriched,
+                "phase": run_data.get("phase"),
                 "result_packet": _compact_result_packet_for_api(run_data.get("result_packet")),
-            }
-            for r in rows
-        ]
+            })
+        return out
 
 
 def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -674,7 +731,6 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
 
         workflow_ids = {r.workflow_id for r in rows if r.workflow_id is not None}
         step_ids = {r.current_step_id for r in rows if r.current_step_id is not None}
-        board_ids = {r.board_id for r in rows if r.board_id is not None}
         ticket_ids = {r.ticket_id for r in rows if r.ticket_id is not None}
 
         workflow_name_by_id = {}
@@ -687,11 +743,6 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
             step_rows = db.query(AutoWorkflowStep.id, AutoWorkflowStep.name).filter(AutoWorkflowStep.id.in_(step_ids)).all()
             step_name_by_id = {sid: name for sid, name in step_rows}
 
-        board_name_by_id = {}
-        if board_ids:
-            board_rows = db.query(KanbanBoard.id, KanbanBoard.name).filter(KanbanBoard.id.in_(board_ids)).all()
-            board_name_by_id = {bid: name for bid, name in board_rows}
-
         ticket_title_by_id = {}
         if ticket_ids:
             ticket_rows = db.query(KanbanTicket.id, KanbanTicket.title).filter(KanbanTicket.id.in_(ticket_ids)).all()
@@ -701,6 +752,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
         results = []
         for r in rows:
             run_data = _safe_json_loads(r.run_data) or {}
+            enriched = _enrich_run_record(db, r, run_data)
             started_at_iso = r.started_at.isoformat() if r.started_at else None
             elapsed_seconds = int((now - r.started_at).total_seconds()) if r.started_at else 0
             results.append({
@@ -712,13 +764,8 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 "elapsed_seconds": elapsed_seconds,
                 "current_step_id": r.current_step_id,
                 "current_step_name": step_name_by_id.get(r.current_step_id),
-                "board_id": r.board_id,
-                "board_name": run_data.get("board_name") or board_name_by_id.get(r.board_id),
-                "ticket_id": r.ticket_id,
+                **enriched,
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
-                "project_id": run_data.get("project_id"),
-                "project_name": run_data.get("project_name"),
-                "source_type": run_data.get("source_type"),
                 "phase": run_data.get("phase"),
             })
         return results
@@ -849,36 +896,30 @@ def reset_workflow_steps(workflow_id: int) -> Dict[str, Any]:
 
 
 def clear_workflow_history(workflow_id: int) -> Dict[str, Any]:
-    """Delete all run history and step results for a workflow."""
+    """Delete completed run history for a workflow without touching live/executor logs."""
     with get_session() as db:
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
         if not wf:
             return {"error": "Workflow not found"}
-
-        # Cancel any active runs first
-        active_runs = (
-            db.query(AutoWorkflowRun)
+        active_statuses = ["running", "waiting"]
+        run_rows = (
+            db.query(AutoWorkflowRun.id, AutoWorkflowRun.ticket_id)
             .filter(
                 AutoWorkflowRun.workflow_id == workflow_id,
-                AutoWorkflowRun.status.in_(["running", "waiting"]),
+                ~AutoWorkflowRun.status.in_(active_statuses),
             )
             .all()
         )
-        for run in active_runs:
-            run.status = "cancelled"
-            run.completed_at = datetime.utcnow()
-        db.commit()
-
-    with get_session() as db:
-        # Delete all step results for this workflow's runs
-        run_ids = [
-            r.id for r in
-            db.query(AutoWorkflowRun)
-            .filter(AutoWorkflowRun.workflow_id == workflow_id)
-            .all()
-        ]
+        run_ids = [row[0] for row in run_rows]
+        ticket_ids = sorted({row[1] for row in run_rows if row[1] is not None})
         deleted_results = 0
+        deleted_ticket_audit_entries = 0
         if run_ids:
+            deleted_ticket_audit_entries = (
+                db.query(KanbanTicketAuditEntry)
+                .filter(KanbanTicketAuditEntry.run_id.in_(run_ids))
+                .delete(synchronize_session=False)
+            )
             deleted_results = (
                 db.query(AutoWorkflowStepResult)
                 .filter(AutoWorkflowStepResult.run_id.in_(run_ids))
@@ -887,15 +928,32 @@ def clear_workflow_history(workflow_id: int) -> Dict[str, Any]:
         # Delete all runs
         deleted_runs = (
             db.query(AutoWorkflowRun)
-            .filter(AutoWorkflowRun.workflow_id == workflow_id)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                ~AutoWorkflowRun.status.in_(active_statuses),
+            )
             .delete(synchronize_session=False)
         )
-        # Reset step statuses
+        active_remaining = (
+            db.query(AutoWorkflowRun.id)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                AutoWorkflowRun.status.in_(active_statuses),
+            )
+            .first()
+        )
         wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
-        if wf:
+        if wf and not active_remaining:
             for step in wf.steps:
                 step.status = "pending"
                 step.result = None
+            wf.last_run_at = None
+        if ticket_ids:
+            (
+                db.query(KanbanTicket)
+                .filter(KanbanTicket.id.in_(ticket_ids))
+                .update({KanbanTicket.workflow_status: None}, synchronize_session=False)
+            )
         db.commit()
 
     return {
@@ -903,6 +961,9 @@ def clear_workflow_history(workflow_id: int) -> Dict[str, Any]:
         "workflow_id": workflow_id,
         "deleted_runs": deleted_runs,
         "deleted_results": deleted_results,
+        "deleted_ticket_audit_entries": deleted_ticket_audit_entries,
+        "deleted_project_sessions": 0,
+        "reset_tickets": len(ticket_ids),
     }
 
 

@@ -48,6 +48,13 @@ SHORTCUT_SETTING_KEYS = (
     "dictation_hotkey_enabled",
     "dictation_hotkey_modifier",
     "dictation_hotkey_key",
+    "ticket_dictation_hotkey_enabled",
+    "ticket_dictation_hotkey_modifier",
+    "ticket_dictation_hotkey_key",
+    "dictation_ticket_use_llm",
+    "dictation_ticket_model",
+    "dictation_ticket_timeout",
+    "dictation_ticket_prompt",
 )
 
 
@@ -228,7 +235,8 @@ def save_general_settings(data) -> None:
         "qwen3_voice",
         "f5tts_voice",
         "voxcpm_voice",
-        "vibevoice_realtime_voice",
+        "supertonic_voice",
+        "chatterbox_voice",
     )
     should_reload_agent = any(
         previous_settings.get(field) != settings.get(field)
@@ -395,9 +403,17 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
     if dictation_modifier not in valid_chord_modifiers:
         dictation_modifier = HOTKEY_DEFAULTS["dictation_hotkey_modifier"]
     dictation_enabled = bool(getattr(data, "dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]))
+    raw_ticket_dictation_modifier = str(getattr(data, "ticket_dictation_hotkey_modifier", HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"]) or "").strip().lower()
+    raw_ticket_dictation_key = str(getattr(data, "ticket_dictation_hotkey_key", "") or "").strip().lower()
+    ticket_dictation_modifier = _norm_modifier(raw_ticket_dictation_modifier, HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"])
+    ticket_dictation_key = _norm_key(raw_ticket_dictation_key)
+    if ticket_dictation_modifier not in valid_chord_modifiers:
+        ticket_dictation_modifier = HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"]
+    ticket_dictation_enabled = bool(getattr(data, "ticket_dictation_hotkey_enabled", HOTKEY_DEFAULTS["ticket_dictation_hotkey_enabled"]))
     _validate_shortcut_collisions([
         {"name": "Push-to-Talk", "enabled": ptt_enabled, "modifier": ptt_combo, "key": "", "enabled_field": "global_ptt_hotkey_enabled", "modifier_field": "global_ptt_hotkey_combo"},
         {"name": "Dictation", "enabled": dictation_enabled, "modifier": dictation_modifier, "key": dictation_key, "enabled_field": "dictation_hotkey_enabled", "modifier_field": "dictation_hotkey_modifier", "key_field": "dictation_hotkey_key"},
+        {"name": "Ticket dictation", "enabled": ticket_dictation_enabled, "modifier": ticket_dictation_modifier, "key": ticket_dictation_key, "enabled_field": "ticket_dictation_hotkey_enabled", "modifier_field": "ticket_dictation_hotkey_modifier", "key_field": "ticket_dictation_hotkey_key"},
         {"name": "Recording", "enabled": bool(getattr(data, "recording_hotkey_enabled", True)), "modifier": record_modifier, "key": record_key, "enabled_field": "recording_hotkey_enabled", "modifier_field": "recording_hotkey_modifier", "key_field": "recording_hotkey_key"},
         {"name": "Oracle size decrease", "enabled": True, "modifier": down_modifier, "key": down_key, "modifier_field": "oracle_size_hotkey_decrease_modifier", "key_field": "oracle_size_hotkey_decrease_key"},
         {"name": "Oracle size increase", "enabled": True, "modifier": up_modifier, "key": up_key, "modifier_field": "oracle_size_hotkey_increase_modifier", "key_field": "oracle_size_hotkey_increase_key"},
@@ -414,6 +430,13 @@ def save_shortcut_settings(data) -> Dict[str, Any]:
     settings["dictation_hotkey_enabled"] = dictation_enabled
     settings["dictation_hotkey_modifier"] = dictation_modifier
     settings["dictation_hotkey_key"] = dictation_key
+    settings["ticket_dictation_hotkey_enabled"] = ticket_dictation_enabled
+    settings["ticket_dictation_hotkey_modifier"] = ticket_dictation_modifier
+    settings["ticket_dictation_hotkey_key"] = ticket_dictation_key
+    settings["dictation_ticket_use_llm"] = bool(getattr(data, "dictation_ticket_use_llm", True))
+    settings["dictation_ticket_model"] = str(getattr(data, "dictation_ticket_model", "qwen2.5:0.5b") or "qwen2.5:0.5b").strip()
+    settings["dictation_ticket_timeout"] = str(getattr(data, "dictation_ticket_timeout", "1.2") or "1.2").strip()
+    settings["dictation_ticket_prompt"] = str(getattr(data, "dictation_ticket_prompt", "") or "").strip()
     save_settings_to_db(settings)
 
     def _do():

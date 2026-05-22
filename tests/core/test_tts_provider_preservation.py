@@ -1,10 +1,10 @@
 """
 Property 2: Preservation — Existing Provider Behavior Unchanged
 
-These tests capture the baseline behavior of all existing TTS providers BEFORE
+These tests capture the baseline behavior of all existing TTS providers after
 any refactoring. They verify that normalize_voice_provider, _tts_provider_to_internal,
 _normalize_voice_for_provider, _resolve_display_name, valid_voice_providers, voice_keys,
-and _VOICE_SETTINGS all produce the expected results for the six existing providers.
+and _VOICE_SETTINGS all produce the expected results for the existing providers.
 
 **Validates: Requirements 3.1, 3.2, 3.3, 3.4, 3.5, 3.6, 3.7, 3.8, 3.9, 3.10, 3.11, 3.12**
 
@@ -20,7 +20,7 @@ from hypothesis import strategies as st
 # ---------------------------------------------------------------------------
 
 # Canonical provider IDs (must match TTSProviderRegistry / TTS_PROVIDER_BY_ID)
-ALL_PROVIDER_IDS = {"kokoro", "elevenlabs", "openai", "coqui", "f5tts", "voxcpm", "vibevoice_realtime"}
+ALL_PROVIDER_IDS = {"kokoro", "elevenlabs", "openai", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox"}
 
 # normalize_voice_provider: observed input -> expected output mappings
 NORMALIZE_PROVIDER_CASES = {
@@ -57,10 +57,16 @@ NORMALIZE_PROVIDER_CASES = {
     "VoxCPM": "voxcpm",
     "VoxCPM (Offline)": "voxcpm",
     "vox cpm": "voxcpm",
-    # VibeVoice Realtime
-    "vibevoice_realtime": "vibevoice_realtime",
-    "VibeVoice Realtime (Local)": "vibevoice_realtime",
-    "vibevoice realtime": "vibevoice_realtime",
+    # Supertonic variants
+    "supertonic": "supertonic",
+    "Supertonic": "supertonic",
+    "Supertonic (Offline)": "supertonic",
+    "supertone": "supertonic",
+    # Chatterbox variants
+    "chatterbox": "chatterbox",
+    "Chatterbox": "chatterbox",
+    "Chatterbox (Offline)": "chatterbox",
+    "chatter box": "chatterbox",
     # Edge cases
     "": "kokoro",
     "  ": "kokoro",
@@ -86,8 +92,12 @@ PROVIDER_TO_INTERNAL_CASES = {
     "voxcpm (offline)": "voxcpm",
     "vox cpm": "voxcpm",
     "vox cpm (offline)": "voxcpm",
-    "vibevoice_realtime": "vibevoice_realtime",
-    "vibevoice realtime (local)": "vibevoice_realtime",
+    "supertonic": "supertonic",
+    "supertonic (offline)": "supertonic",
+    "supertone": "supertonic",
+    "chatterbox": "chatterbox",
+    "chatterbox (offline)": "chatterbox",
+    "chatter box": "chatterbox",
     "": "kokoro",
 }
 
@@ -99,12 +109,8 @@ VOICE_SETTINGS_BASELINE = {
     "coqui":      ("coqui",      "coqui_voice",      "p225",     {"device": "coqui_device"}),
     "f5tts":      ("f5tts",      "f5tts_voice",      "default",  {}),
     "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
-    "vibevoice_realtime": (
-        "vibevoice_realtime",
-        "vibevoice_realtime_voice",
-        "en-carter_man",
-        {"device": "vibevoice_device"},
-    ),
+    "supertonic": ("supertonic", "supertonic_voice", "M1",       {}),
+    "chatterbox": ("chatterbox", "chatterbox_voice", "default",  {}),
 }
 
 # voice_keys: observed baseline mapping
@@ -115,15 +121,16 @@ VOICE_KEYS_BASELINE = {
     "coqui": "coqui_voice",
     "f5tts": "f5tts_voice",
     "voxcpm": "voxcpm_voice",
-    "vibevoice_realtime": "vibevoice_realtime_voice",
+    "supertonic": "supertonic_voice",
+    "chatterbox": "chatterbox_voice",
 }
 
 # valid_voice_providers: observed baseline (both create and update lists)
 VALID_PROVIDERS_CREATE = {
-    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", ""
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", ""
 }
 VALID_PROVIDERS_UPDATE = {
-    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", "", None
+    "kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "", None
 }
 
 # _display_map in chat.py: observed baseline
@@ -134,7 +141,8 @@ DISPLAY_MAP_CHAT = {
     "coqui": "Coqui TTS",
     "f5tts": "F5-TTS",
     "voxcpm": "VoxCPM",
-    "vibevoice_realtime": "VibeVoice Realtime",
+    "supertonic": "Supertonic",
+    "chatterbox": "Chatterbox",
 }
 
 # _display in main.py: observed baseline
@@ -145,7 +153,8 @@ DISPLAY_MAP_MAIN = {
     "coqui": "Coqui TTS",
     "f5tts": "F5-TTS",
     "voxcpm": "VoxCPM",
-    "vibevoice_realtime": "VibeVoice Realtime",
+    "supertonic": "Supertonic",
+    "chatterbox": "Chatterbox",
 }
 
 # SPEED_BOUNDS: observed baseline
@@ -154,8 +163,10 @@ SPEED_BOUNDS_BASELINE = {
     "elevenlabs": (0.7, 1.2),
     "openai": (0.25, 4.0),
     "coqui": (0.5, 2.0),
+    "f5tts": (0.5, 2.0),
     "voxcpm": (0.5, 2.0),
-    "vibevoice_realtime": (0.5, 2.0),
+    "supertonic": (0.5, 2.0),
+    "chatterbox": (0.5, 2.0),
 }
 
 # TTS_SAMPLE_RATES: observed baseline
@@ -164,8 +175,10 @@ SAMPLE_RATES_BASELINE = {
     "openai": 24000,
     "elevenlabs": 44100,
     "coqui": 22050,
+    "f5tts": 24000,
     "voxcpm": 48000,
-    "vibevoice_realtime": 24000,
+    "supertonic": 44100,
+    "chatterbox": 24000,
 }
 
 
@@ -270,8 +283,10 @@ class TestPreservationTtsProviderToInternal:
             result = "f5tts"
         elif p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
             result = "voxcpm"
-        elif p in ("vibevoice_realtime", "vibevoice realtime (local)", "vibevoice realtime"):
-            result = "vibevoice_realtime"
+        elif p in ("supertonic", "supertonic (offline)", "supertone"):
+            result = "supertonic"
+        elif p in ("chatterbox", "chatterbox (offline)", "chatter box"):
+            result = "chatterbox"
         else:
             result = p or "kokoro"
 
@@ -295,8 +310,10 @@ class TestPreservationTtsProviderToInternal:
             result = "f5tts"
         elif p in ("voxcpm", "voxcpm (offline)", "vox cpm", "vox cpm (offline)"):
             result = "voxcpm"
-        elif p in ("vibevoice_realtime", "vibevoice realtime (local)", "vibevoice realtime"):
-            result = "vibevoice_realtime"
+        elif p in ("supertonic", "supertonic (offline)", "supertone"):
+            result = "supertonic"
+        elif p in ("chatterbox", "chatterbox (offline)", "chatter box"):
+            result = "chatterbox"
         else:
             result = p or "kokoro"
 
@@ -465,14 +482,14 @@ class TestPreservationValidVoiceProviders:
     def test_valid_voice_providers_create_contains_all_providers(self):
         """The create-chat valid_voice_providers list contains all six providers."""
         # Observed from chat.py line 584
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", ""]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", ""]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (create)"
 
     def test_valid_voice_providers_update_contains_all_providers(self):
         """The update-chat valid_voice_providers list contains all six providers."""
         # Observed from chat.py line 842
-        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "vibevoice_realtime", "", None]
+        valid = ["kokoro", "openai", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox", "", None]
         for pid in ALL_PROVIDER_IDS:
             assert pid in valid, f"{pid} missing from valid_voice_providers (update)"
 
@@ -500,7 +517,8 @@ class TestPreservationVoiceKeys:
             "coqui": "coqui_voice",
             "f5tts": "f5tts_voice",
             "voxcpm": "voxcpm_voice",
-            "vibevoice_realtime": "vibevoice_realtime_voice",
+            "supertonic": "supertonic_voice",
+            "chatterbox": "chatterbox_voice",
         }
         assert voice_keys == VOICE_KEYS_BASELINE
 
@@ -523,7 +541,7 @@ class TestPreservationVoiceSettings:
     """
 
     def test_voice_settings_baseline_exact(self):
-        """_VOICE_SETTINGS matches the observed baseline for all six providers."""
+        """_VOICE_SETTINGS matches the observed baseline for all providers."""
         # Observed from session.py lines 427-433
         _VOICE_SETTINGS = {
             "kokoro":     ("kokoro",     "kokoro_voice",     "af_heart", {}),
@@ -532,12 +550,8 @@ class TestPreservationVoiceSettings:
             "coqui":      ("coqui",      "coqui_voice",      "p225",     {"device": "coqui_device"}),
             "f5tts":      ("f5tts",      "f5tts_voice",      "default",  {}),
             "voxcpm":     ("voxcpm",     "voxcpm_voice",     "default",  {}),
-            "vibevoice_realtime": (
-                "vibevoice_realtime",
-                "vibevoice_realtime_voice",
-                "en-carter_man",
-                {"device": "vibevoice_device"},
-            ),
+            "supertonic": ("supertonic", "supertonic_voice", "M1",       {}),
+            "chatterbox": ("chatterbox", "chatterbox_voice", "default",  {}),
         }
         for provider, expected in VOICE_SETTINGS_BASELINE.items():
             assert _VOICE_SETTINGS[provider] == expected, f"_VOICE_SETTINGS[{provider!r}] mismatch"
@@ -576,7 +590,8 @@ class TestPreservationDisplayMaps:
             "coqui": "Coqui TTS",
             "f5tts": "F5-TTS",
             "voxcpm": "VoxCPM",
-            "vibevoice_realtime": "VibeVoice Realtime",
+            "supertonic": "Supertonic",
+            "chatterbox": "Chatterbox",
         }
 
     def test_main_display_map_baseline(self):
@@ -588,7 +603,8 @@ class TestPreservationDisplayMaps:
             "coqui": "Coqui TTS",
             "f5tts": "F5-TTS",
             "voxcpm": "VoxCPM",
-            "vibevoice_realtime": "VibeVoice Realtime",
+            "supertonic": "Supertonic",
+            "chatterbox": "Chatterbox",
         }
 
     @given(provider=_canonical_provider_strategy())

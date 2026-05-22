@@ -29,7 +29,7 @@ Key Components:
 import sys
 import os
 
-# Before transformers/sentence_transformers (tool retriever, VibeVoice, etc.): fork-safe tokenizers.
+# Before transformers/sentence_transformers (tool retriever, etc.): fork-safe tokenizers.
 os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
 
 # Fix for Qt WebEngine rendering on macOS - must be set BEFORE Qt imports

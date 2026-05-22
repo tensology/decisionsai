@@ -54,7 +54,6 @@ def _tts_stack_spoken(settings: dict, voice_display: str) -> str:
         "elevenlabs": "ElevenLabs",
         "openai": "OpenAI TTS",
         "coqui": "Coqui",
-        "vibevoice": "VibeVoice",
     }.get(prov, prov or "your TTS provider")
     vn = voice_display if not _blank(voice_display) else "the default voice"
     return f"{label} with the {vn} voice"
@@ -319,25 +318,13 @@ class SystemInfoTool(BaseTool):
     def _get_voice_display_name(self, settings: dict) -> str:
         """Get the display name for the configured voice."""
         try:
-            voice_provider = settings.get('voice_provider', 'kokoro')
-            
-            if voice_provider == 'kokoro':
-                voice_id = settings.get('kokoro_voice', 'af_heart')
-                # Map voice ID to display name
-                try:
-                    from distr.core.agent.session import KOKORO_VOICES
-                    return KOKORO_VOICES.get(voice_id, voice_id.replace('af_', '').replace('am_', '').title())
-                except ImportError:
-                    # Fallback: extract name from ID
-                    return voice_id.replace('af_', '').replace('am_', '').title()
-            elif voice_provider == 'elevenlabs':
-                voice_id = settings.get('elevenlabs_voice', '')
-                return voice_id if voice_id else 'Not set'
-            elif voice_provider == 'openai':
-                voice_id = settings.get('openai_voice', '')
-                return voice_id if voice_id else 'Not set'
-            else:
-                return 'Not set'
+            from distr.core.agent.constants import normalize_voice_provider
+            from distr.core.agent.services.tts.registry import tts_registry
+
+            voice_provider = normalize_voice_provider(settings.get('voice_provider', 'kokoro'))
+            descriptor = tts_registry.get(voice_provider)
+            voice_id = settings.get(descriptor.settings_key, descriptor.default_voice)
+            return descriptor.resolve_display_name(voice_id, settings)
         except Exception as e:
             logger.error(f"Error getting voice display name: {e}")
             return 'Not set'
@@ -421,4 +408,3 @@ class SystemInfoTool(BaseTool):
         lines.append("")
 
         return "\n".join(lines)
-

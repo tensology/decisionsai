@@ -304,12 +304,6 @@ def _cmd_update_audio_devices(session, params):
         session.config['audio']['output_device'] = output_device
         output_idx = session._get_device_index(output_device, is_input=False)
         if hasattr(session, 'transport'):
-            # Force a clean output cutover so TTS doesn't continue draining on
-            # the old device while the new stream comes up.
-            try:
-                _cmd_interrupt_tts(session, {})
-            except Exception:
-                session.logger.debug("Audio update: interrupt_tts pre-cutover failed", exc_info=True)
             session.logger.debug(f"Hot-swapping output device to index {output_idx} (None=Default)")
             if target_loop and target_loop.is_running():
                 target_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx)
@@ -624,6 +618,15 @@ def _cmd_dictation_hotkey_pressed(session, params):
         session.llm_service._start_dictation(one_shot=True)
 
 
+def _cmd_ticket_dictation_hotkey_pressed(session, params):
+    """Hold-to-dictate ticket tool: capture audio, then type a cleaned ticket."""
+    session.logger.debug("Ticket dictation hotkey: pressed")
+    _cmd_push_to_talk_start(session, params)
+    _cmd_set_dictating(session, {"enabled": True})
+    if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_start_dictation'):
+        session.llm_service._start_dictation(one_shot=True, output_mode="ticket")
+
+
 def _cmd_dictation_hotkey_released(session, params):
     """End capture; LLM stops one-shot dictation after transcript is processed."""
     session.logger.debug("Dictation hotkey: released")
@@ -903,11 +906,18 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
     # Check if voice_model is a known OpenAI voice
     openai_voices = {'alloy', 'echo', 'fable', 'onyx', 'nova', 'shimmer'}
     is_openai = vm.lower() in openai_voices
+    try:
+        from distr.core.agent.services.tts.supertonic_descriptor import SUPERTONIC_VOICES
+        is_supertonic = vm.upper() in SUPERTONIC_VOICES
+    except Exception:
+        is_supertonic = False
 
     # If the voice matches the claimed provider, no correction needed
     if 'kokoro' in vp and is_kokoro:
         return vp
     if 'openai' in vp and is_openai:
+        return vp
+    if 'supertonic' in vp and is_supertonic:
         return vp
     if 'elevenlabs' in vp:
         return vp  # ElevenLabs voices are dynamic (API IDs or names), trust the provider
@@ -921,6 +931,8 @@ def _detect_correct_voice_provider(voice_provider: str, voice_model: str) -> str
         return 'kokoro'
     if is_openai:
         return 'openai'
+    if is_supertonic:
+        return 'supertonic'
 
     # Not a known built-in voice — likely ElevenLabs (custom name or API voice ID)
     if not is_kokoro and not is_openai:
@@ -1240,6 +1252,8 @@ _COMMAND_MAP = {
     'push_to_talk_stop': _cmd_push_to_talk_stop,
     'dictation_hotkey_pressed': _cmd_dictation_hotkey_pressed,
     'dictation_hotkey_released': _cmd_dictation_hotkey_released,
+    'ticket_dictation_hotkey_pressed': _cmd_ticket_dictation_hotkey_pressed,
+    'ticket_dictation_hotkey_released': _cmd_dictation_hotkey_released,
     'interrupt_tts': _cmd_interrupt_tts,
     'speak_text_directly': _cmd_speak_text_directly,
     # Chat

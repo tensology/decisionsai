@@ -63,6 +63,7 @@ def build_kanban_ticket_cli_instruction(
         f"Board: {board_name or '(unknown)'}",
         f"Lane: {lane_name or '(unknown)'}",
         f"Priority: {t.priority or 'medium'}",
+        f"Complexity: {getattr(t, 'complexity', None) or 'medium'}",
     ]
     if t.time_estimate:
         lines.append(f"Time estimate: {t.time_estimate}")
@@ -83,6 +84,19 @@ def build_kanban_ticket_cli_instruction(
             lines.append(f"  - External ID: {t.external_id}")
         if t.external_url:
             lines.append(f"  - URL: {t.external_url}")
+
+    if getattr(t, "source_provider", None):
+        lines.append("")
+        lines.append("Ticket source:")
+        lines.append(f"  - Provider: {t.source_provider}")
+        if getattr(t, "source_contact", None):
+            lines.append(f"  - Contact: {t.source_contact}")
+        if getattr(t, "source_external_id", None):
+            lines.append(f"  - Source ID: {t.source_external_id}")
+        if getattr(t, "source_thread_id", None):
+            lines.append(f"  - Thread/chat: {t.source_thread_id}")
+        if getattr(t, "source_url", None):
+            lines.append(f"  - URL: {t.source_url}")
 
     if t.whatsapp_message_id:
         wm = session.query(WhatsAppMessage).filter(

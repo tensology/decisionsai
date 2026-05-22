@@ -22,6 +22,7 @@ import dataclasses
 import threading
 import time
 import uuid
+import re
 from collections import deque
 from typing import Any, Dict, Optional
 from datetime import datetime, timezone, timedelta
@@ -39,6 +40,52 @@ from distr.core.initiative.proposed_action import (
 )
 
 logger = logging.getLogger("distr.core.initiative.service")
+
+
+def _hash_initiative_payload(action_type: str, payload: dict | None) -> str:
+    raw = json.dumps(payload or {}, sort_keys=True, ensure_ascii=False, default=str)
+    return hashlib.sha256(f"{action_type}:{raw}".encode("utf-8")).hexdigest()
+
+
+def _clean_telegram_line(text: str, max_len: int = 260) -> str:
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    clean = re.sub(r"\bPayload:\s*\{.*$", "", clean).strip()
+    clean = clean.replace("[Initiative]", "").replace("[APPROVE]", "").replace("[ESCALATE]", "").strip()
+    if len(clean) > max_len:
+        clean = clean[: max_len - 3].rstrip() + "..."
+    return clean
+
+
+def _initiative_approval_text(entry: DraftEntry, tier_name: str) -> str:
+    description = _clean_telegram_line(entry.description, 220)
+    if entry.action_type == "ticket_lane_move":
+        return (
+            f"I spotted a board change that needs your approval: {description}\n\n"
+            "I’ve put it in Initiative approvals. Reply approve or reject, or handle it in the app."
+        )
+    if entry.action_type == "workflow_start":
+        return (
+            f"A workflow is ready to run, but I need your approval first: {description}\n\n"
+            "Reply approve or reject, or handle it in the app."
+        )
+    if entry.action_type == "project_cli_task":
+        return (
+            f"A project execution is ready, but I need your approval first: {description}\n\n"
+            "Reply approve or reject, or handle it in the app."
+        )
+    return (
+        f"I need your approval before I do this: {description}\n\n"
+        "Reply approve or reject, or handle it in the app."
+    )
+
+
+def _initiative_update_text(text: str) -> str:
+    clean = _clean_telegram_line(text, 360)
+    if not clean:
+        return ""
+    if clean.lower().startswith(("i ", "i'", "i’ve", "i'll", "workflow", "ticket", "created", "started", "approved", "rejected")):
+        return clean
+    return f"Quick update: {clean}"
 
 
 def build_initiative_boundaries(settings: dict) -> dict:
@@ -121,7 +168,7 @@ class InitiativeService:
         # Proposal dedup: track (action_type, payload_hash, timestamp) so the
         # same action is not repeatedly proposed within cooldown_seconds.
         self._recent_proposals: deque = deque()
-        self._proposal_cooldown_s: float = 300.0  # 5 minutes
+        self._proposal_cooldown_s: float = 7_200.0  # 2 hours; approvals should not nag.
         # Run settings migration on init
         try:
             from distr.core.utils import load_settings_from_db
@@ -421,10 +468,7 @@ class InitiativeService:
             action_type=action_type,
             description=description,
             payload=payload,
-            draft=(
-                chosen.get("draft")
-                or f"{description}\n\nPayload: {json.dumps(payload, ensure_ascii=False)}"
-            ),
+            draft=chosen.get("draft") or description,
             telegram_message=chosen.get("telegram_message") or description,
         )
 
@@ -709,13 +753,14 @@ class InitiativeService:
         chat_body = f"{header}\n\n{markdown.strip()}"
         self._log_planner_to_chat(chat_body)
 
-        tg_body = chat_body
-        if len(tg_body) > 4000:
-            tg_body = tg_body[:3990] + "\n…(truncated)"
+        excerpt = tts_excerpt_from_markdown(markdown, max_len=700)
+        tg_body = (
+            f"I’ve prepared your {scope} planner in the app."
+            + (f"\n\n{excerpt}" if excerpt else "")
+        )
         self._send_telegram_if_allowed(tg_body, settings)
 
         if settings.get("chat_voice_enabled", True):
-            excerpt = tts_excerpt_from_markdown(markdown)
             if excerpt:
                 try:
                     signal_manager.speak_text_directly.emit(
@@ -1077,6 +1122,13 @@ class InitiativeService:
             if tn:
                 msg = f"{msg} (You can ask me to use the {tn} tool for this.)"
         self._log_to_chat(f"Suggestion: {msg}", settings)
+        if action.action_type in ("board_triage", "message_triage", "email_triage") and not settings.get("initiative_telegram_notify_suggestions", False):
+            logger.info(
+                "InitiativeService: suggestion kept in app, not Telegram (%s): %s",
+                action.action_type,
+                action.description,
+            )
+            return
         self._send_telegram_if_allowed(
             action.telegram_message or f"Suggestion: {msg}",
             settings,
@@ -1199,11 +1251,9 @@ class InitiativeService:
         for draft in drafts:
             tier_label = PermissionTier(draft.permission_tier).name
             msg = (
-                f"[Pending action — {draft.action_type}] [{tier_label}] {draft.description}\n\n"
-                f"Draft: {draft.draft}\n\n"
-                f"ID: `{draft.id}`\n"
-                "Say **approve** or **reject** to respond, "
-                "or manage pending actions in Settings → Initiative."
+                f"Pending approval: {_clean_telegram_line(draft.description, 260)}\n\n"
+                f"ID: `{draft.id[:8]}`\n"
+                "Say approve or reject, or manage it in Settings → Initiative."
             )
             self.chat_manager.add_assistant_message(current_chat, msg)
 
@@ -1214,6 +1264,29 @@ class InitiativeService:
         from distr.core.initiative.tiers import PermissionTier
 
         resolved_tier = tier if tier is not None else PermissionTier.APPROVE
+        action_hash = _hash_initiative_payload(action.action_type, action.payload)
+        for existing in self._draft_queue.get_all():
+            existing_payload = existing.execute_payload or {}
+            existing_action = (
+                existing_payload.get("action")
+                if isinstance(existing_payload, dict)
+                else None
+            )
+            existing_hash = ""
+            if isinstance(existing_action, dict):
+                existing_hash = _hash_initiative_payload(
+                    existing_action.get("action_type") or existing.action_type,
+                    existing_action.get("payload") or {},
+                )
+            elif existing.action_type == action.action_type and existing.description == action.description:
+                existing_hash = action_hash
+            if existing_hash == action_hash:
+                logger.info(
+                    "InitiativeService: duplicate pending draft suppressed (%s): %s",
+                    existing.id,
+                    action.description,
+                )
+                return
         now = datetime.now(tz=timezone.utc)
         reason = f"Confirmation required ({resolved_tier.name}) for {action.action_type}"
         if resolved_tier.value >= PermissionTier.ESCALATE.value:
@@ -1248,11 +1321,7 @@ class InitiativeService:
         allow_telegram = settings.get("initiative_allow_telegram", False)
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if allow_telegram and uid and uid > 0:
-            msg = (
-                f"[Initiative][{resolved_tier.name}] I'd like to: {action.description}\n\n"
-                f"Draft:\n{entry.draft}\n\n"
-                "Approve or reject this in the app."
-            )
+            msg = _initiative_approval_text(entry, resolved_tier.name)
             self.telegram_manager.send_to_telegram(text=msg)
 
         # Also log to chat
@@ -1272,7 +1341,7 @@ class InitiativeService:
             current_chat = self.chat_manager.get_current_chat()
             if current_chat:
                 self.chat_manager.add_assistant_message(
-                    current_chat, f"[Initiative] {message}"
+                    current_chat, _initiative_update_text(message)
                 )
         except Exception as e:
             logger.debug("InitiativeService: _log_to_chat failed: %s", e)
@@ -1284,8 +1353,9 @@ class InitiativeService:
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if not uid or uid <= 0:
             return
-        if not text.startswith("[Initiative]"):
-            text = f"[Initiative] {text}"
+        text = _initiative_update_text(text)
+        if not text:
+            return
         try:
             self.telegram_manager.send_to_telegram(text=text)
             logger.info("InitiativeService: sent Telegram: %s", text[:100])

@@ -2,16 +2,21 @@
 API routes for Ticket Board management.
 """
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
-from fastapi.responses import JSONResponse, Response
+from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
+from sqlalchemy import or_
 from typing import Optional, List, Tuple
 from urllib.parse import quote, urlparse, unquote
 from datetime import datetime
 import html
 import json
 import logging
+import mimetypes
 import re
 import os
+import shutil
+import subprocess
+import tempfile
 import threading
 import asyncio
 import secrets
@@ -23,6 +28,12 @@ from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
+from distr.core.kanban.ticket_policy import (
+    infer_ticket_complexity,
+    normalize_source_provider,
+    normalize_ticket_complexity,
+    resolve_ticket_cli_route,
+)
 from distr.core.db import get_session
 from distr.core.db.orm_compat import orm_get_by_id
 from distr.core.db import WhatsAppMessage
@@ -45,6 +56,532 @@ logger = logging.getLogger(__name__)
 
 KANBAN_UPLOADS_DIR = os.path.join(DB_DIR, "kanban_uploads")
 DEFAULT_LANES = ["Backlog", "Current", "QA / Assess", "Done"]
+
+
+def _whatsapp_message_sender(message) -> str:
+    if getattr(message, "from_me", False):
+        return "Me"
+    return (
+        getattr(message, "sender_push_name", None)
+        or getattr(message, "sender_phone", None)
+        or getattr(message, "jid_phone", None)
+        or "Unknown"
+    )
+
+
+def _whatsapp_message_timestamp(message) -> str:
+    value = getattr(message, "whatsapp_timestamp", None)
+    if value:
+        try:
+            return datetime.fromtimestamp(value).strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    created = getattr(message, "created_date", None)
+    if created:
+        try:
+            return created.strftime("%Y-%m-%d %H:%M")
+        except Exception:
+            pass
+    return ""
+
+
+_WHATSAPP_INTERNAL_MEDIA_BLOCK_RE = re.compile(
+    r"\[(?:OCR|Image analysis|Image Analysis|Visual analysis|Visual Analysis)\][\s\S]*?(?:\n\s*\n|$)",
+    re.S,
+)
+
+def _ticket_file_payload(ticket_id: int, file_record: KanbanTicketFile) -> dict:
+    """Browser-safe ticket attachment payload with a stable view URL."""
+    return {
+        "id": file_record.id,
+        "filename": file_record.filename,
+        "description": file_record.description or "",
+        "url": f"/api/kanban/tickets/{int(ticket_id)}/files/{int(file_record.id)}/content",
+    }
+
+
+def _whatsapp_snapshot_group_for_ticket(board_id: int, ticket_id: int) -> str:
+    """Durable WhatsApp message batch marker for a created ticket."""
+    return f"board_{int(board_id)}_ticket_{int(ticket_id)}"
+
+
+def _whatsapp_snapshot_group_filter(ticket_id: int):
+    """Match current and older WhatsApp ticket batch markers for cleanup."""
+    ticket_token = f"ticket_{int(ticket_id)}"
+    legacy_prefix = f"{int(ticket_id)}_%"
+    return or_(
+        WhatsAppMessage.snapshot_group == ticket_token,
+        WhatsAppMessage.snapshot_group.like(f"%_{ticket_token}"),
+        WhatsAppMessage.snapshot_group.like(legacy_prefix),
+    )
+
+
+def _clean_whatsapp_caption_for_ticket(caption: str, *, keep_transcription: bool = True) -> str:
+    """Return client-visible caption/transcript text, without internal extraction notes."""
+    cleaned = (caption or "").strip()
+    if not cleaned:
+        return ""
+    cleaned = _WHATSAPP_INTERNAL_MEDIA_BLOCK_RE.sub("", cleaned).strip()
+    if not keep_transcription:
+        cleaned = re.sub(r"\[Transcription\][\s\S]*?(?:\n\s*\n|$)", "", cleaned, flags=re.S).strip()
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned).strip()
+    return cleaned
+
+
+def _whatsapp_message_body(message) -> str:
+    parts = []
+    text = (getattr(message, "text", None) or "").strip()
+    media_type = (getattr(message, "media_type", None) or "").strip()
+    media_mime_type = (getattr(message, "media_mime_type", None) or "").strip()
+    is_audio_or_video = _is_whatsapp_voice_type(media_type, media_mime_type) or _is_whatsapp_video_type(media_type, media_mime_type)
+    caption = _clean_whatsapp_caption_for_ticket(
+        getattr(message, "caption", None) or "",
+        keep_transcription=is_audio_or_video,
+    )
+    if text:
+        parts.append(text)
+    if caption and caption != text:
+        parts.append(caption)
+    if media_type:
+        filename = (getattr(message, "media_filename", None) or "").strip()
+        label = f"[{media_type}"
+        if filename:
+            label += f": {filename}"
+        label += "]"
+        parts.append(label)
+    return "\n".join(parts).strip() or "[message]"
+
+
+def _is_whatsapp_voice_type(media_type: str, media_mime_type: str) -> bool:
+    t = str(media_type or "").lower()
+    m = str(media_mime_type or "").lower()
+    return t in ("voice", "audio", "ptt") or m.startswith("audio/")
+
+
+def _is_whatsapp_video_type(media_type: str, media_mime_type: str) -> bool:
+    t = str(media_type or "").lower()
+    m = str(media_mime_type or "").lower()
+    return t == "video" or m.startswith("video/")
+
+
+def _is_whatsapp_image_type(media_type: str, media_mime_type: str) -> bool:
+    t = str(media_type or "").lower()
+    m = str(media_mime_type or "").lower()
+    return t in ("photo", "image") or m.startswith("image/")
+
+
+def _upsert_whatsapp_extracted_block(existing_caption: str, label: str, extracted_text: str) -> str:
+    text = (extracted_text or "").strip()
+    if not text:
+        return existing_caption or ""
+    block = f"[{label}] {text}"
+    existing = (existing_caption or "").strip()
+    if not existing:
+        return block
+    pattern = re.compile(rf"\[{re.escape(label)}\]\s.*?(?=\n\n\[[A-Za-z ]+\]\s|\Z)", re.S)
+    if pattern.search(existing):
+        return pattern.sub(block, existing).strip()
+    return f"{block}\n\n{existing}".strip()
+
+
+def _ensure_whatsapp_media_text(message) -> dict:
+    """Ensure cached WhatsApp media has text extraction available for ticket drafting."""
+    media_type = (getattr(message, "media_type", None) or "").strip()
+    media_mime_type = (getattr(message, "media_mime_type", None) or "").strip()
+    if not media_type:
+        return {"status": "not_media", "analysis_type": "", "text": "", "error": ""}
+
+    caption = getattr(message, "caption", None) or ""
+    if "[Transcription]" in caption:
+        return {"status": "ready", "analysis_type": "transcription", "text": caption, "error": ""}
+
+    stored_path = (getattr(message, "media_local_path", None) or "").strip()
+    local_path = resolve_whatsapp_media_disk_path(stored_path)
+    if not local_path or not os.path.exists(local_path):
+        return {"status": "missing_media", "analysis_type": "", "text": "", "error": "Media file not cached"}
+
+    extracted = ""
+    label = ""
+    try:
+        if _is_whatsapp_voice_type(media_type, media_mime_type):
+            from distr.core.audio.voice_cloning import transcribe_audio_file
+
+            extracted = (transcribe_audio_file(local_path) or "").strip()
+            label = "Transcription"
+        elif _is_whatsapp_video_type(media_type, media_mime_type):
+            from distr.core.audio.voice_cloning import transcribe_audio_file
+
+            ffmpeg_path = shutil.which("ffmpeg")
+            if ffmpeg_path:
+                with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_wav:
+                    wav_path = tmp_wav.name
+                try:
+                    subprocess.run(
+                        [ffmpeg_path, "-y", "-i", local_path, "-ar", "16000", "-ac", "1", wav_path],
+                        capture_output=True,
+                        timeout=180,
+                        check=True,
+                    )
+                    extracted = (transcribe_audio_file(wav_path) or "").strip()
+                finally:
+                    try:
+                        os.unlink(wav_path)
+                    except Exception:
+                        pass
+            else:
+                extracted = (transcribe_audio_file(local_path) or "").strip()
+            label = "Transcription"
+        elif _is_whatsapp_image_type(media_type, media_mime_type):
+            return {"status": "attached", "analysis_type": "attachment", "text": "", "error": ""}
+        else:
+            return {"status": "unsupported", "analysis_type": "", "text": "", "error": "Unsupported media type for text extraction"}
+    except Exception as exc:
+        logger.warning("WhatsApp media text extraction failed for message %s: %s", getattr(message, "id", ""), exc)
+        return {"status": "failed", "analysis_type": label.lower() if label else "", "text": "", "error": str(exc)}
+
+    if not extracted:
+        return {"status": "empty", "analysis_type": label.lower() if label else "", "text": "", "error": "No text extracted from media"}
+
+    message.caption = _upsert_whatsapp_extracted_block(caption, label, extracted)
+    return {"status": "ready", "analysis_type": label.lower(), "text": extracted, "error": ""}
+
+
+def _ensure_whatsapp_messages_enriched(messages) -> dict:
+    media = []
+    counts = {"media": 0, "analyzed": 0, "missing": 0, "failed": 0, "unsupported": 0}
+    for msg in messages:
+        if not getattr(msg, "media_type", None):
+            continue
+        counts["media"] += 1
+        result = _ensure_whatsapp_media_text(msg)
+        status = result.get("status") or ""
+        if status == "ready":
+            counts["analyzed"] += 1
+        elif status == "missing_media":
+            counts["missing"] += 1
+        elif status == "failed":
+            counts["failed"] += 1
+        elif status in ("unsupported", "attached"):
+            counts["unsupported"] += 1
+        media.append({
+            "message_id": msg.id,
+            "media_type": msg.media_type or "",
+            "filename": msg.media_filename or "",
+            "analysis_status": status,
+            "analysis_type": result.get("analysis_type") or "",
+            "error": result.get("error") or "",
+        })
+    return {"counts": counts, "media": media}
+
+
+def _infer_whatsapp_ticket_priority(title: str, description: str) -> str:
+    text = f"{title}\n{description}".lower()
+    if re.search(r"\b(critical|blocker|blocked|production down|urgent|asap|immediately|emergency|cannot work)\b", text):
+        return "critical"
+    if re.search(r"\b(high priority|important|today|tomorrow|deadline|broken|failing|can't|cannot)\b", text):
+        return "high"
+    if re.search(r"\b(low priority|when you can|no rush|nice to have|minor)\b", text):
+        return "low"
+    return "medium"
+
+
+def _validate_whatsapp_ticket_quality(title: str, description: str, messages, enrichment: dict | None = None) -> dict:
+    title = (title or "").strip()
+    description = (description or "").strip()
+    enrichment = enrichment or {}
+    media_counts = (enrichment.get("counts") or {})
+    issues = []
+    warnings = []
+    score = 100
+
+    if len(title) < 12:
+        issues.append("Title is too vague.")
+        score -= 20
+    if len(title) > 90:
+        warnings.append("Title is long; keep it scannable.")
+        score -= 5
+    if len(description) < 180:
+        issues.append("Description is too thin for a client-ready ticket.")
+        score -= 25
+    if "Source chat:" not in description:
+        issues.append("Missing source chat context.")
+        score -= 10
+    if "Transcript:" not in description and "Client request:" not in description:
+        issues.append("Missing transcript or client request section.")
+        score -= 15
+    if "Acceptance criteria" not in description:
+        issues.append("Missing acceptance criteria.")
+        score -= 15
+    if "Questions / ambiguities" not in description:
+        warnings.append("Questions / ambiguities section is missing.")
+        score -= 5
+    if messages and f"Messages included: {len(messages)}" not in description:
+        warnings.append("Message count is not explicitly recorded.")
+        score -= 5
+    if int(media_counts.get("media") or 0) and "Attachments" not in description and "Media evidence" not in description:
+        issues.append("Media is attached but not described in the ticket.")
+        score -= 15
+    if int(media_counts.get("missing") or 0):
+        warnings.append(f"{media_counts.get('missing')} media file(s) were not cached locally.")
+        score -= 5
+    if int(media_counts.get("failed") or 0):
+        warnings.append(f"{media_counts.get('failed')} media analysis attempt(s) failed.")
+        score -= 5
+    passed = score >= 75 and not issues
+    return {
+        "passed": passed,
+        "score": max(0, min(100, score)),
+        "issues": issues,
+        "warnings": warnings,
+        "metrics": {
+            "title_chars": len(title),
+            "description_chars": len(description),
+            "message_count": len(messages or []),
+            "media_count": int(media_counts.get("media") or 0),
+            "media_analyzed_count": int(media_counts.get("analyzed") or 0),
+            "media_missing_count": int(media_counts.get("missing") or 0),
+            "media_failed_count": int(media_counts.get("failed") or 0),
+        },
+    }
+
+
+def _whatsapp_ticket_quality_instructions(message_count: int, media_count: int) -> str:
+    return f"""Quality bar before you answer:
+- The ticket must be written for someone who has not seen the WhatsApp thread.
+- Preserve the client's concrete request, names, dates, numbers, constraints, and expected outcome.
+- Include a short "Client request" section.
+- Include "Source chat:" and "Messages included: {message_count}" exactly once.
+- Include "Acceptance criteria" with measurable bullets.
+- Include "Questions / ambiguities" if anything is unclear; write "None identified" only if truly clear.
+- If media is present ({media_count} item(s)), include "Media evidence" as a clean attachment list. Use human captions and voice/video transcriptions when available; do not mention OCR, bounding boxes, extraction status, or internal processing.
+- Do not invent facts that are not in the messages."""
+
+
+def _build_whatsapp_ticket_draft(messages) -> dict:
+    count = len(messages)
+    first = messages[0] if messages else None
+    phone = (getattr(first, "jid_phone", None) or getattr(first, "sender_phone", None) or "WhatsApp").strip() if first else "WhatsApp"
+    contact = next(
+        (
+            _whatsapp_message_sender(m)
+            for m in messages
+            if not getattr(m, "from_me", False) and _whatsapp_message_sender(m) != "Unknown"
+        ),
+        phone,
+    )
+    first_body = next(
+        (
+            re.sub(r"\s+", " ", _whatsapp_message_body(m)).strip()
+            for m in messages
+            if _whatsapp_message_body(m) and _whatsapp_message_body(m) != "[message]"
+        ),
+        "",
+    )
+    if first_body:
+        title = f"WhatsApp: {first_body}"
+    else:
+        title = f"WhatsApp request from {contact}"
+    if len(title) > 80:
+        title = title[:77].rstrip() + "..."
+
+    raw_lines = []
+    transcript_lines = []
+    attachment_lines = []
+    media_count = 0
+    for m in messages:
+        sender = _whatsapp_message_sender(m)
+        ts = _whatsapp_message_timestamp(m)
+        body = _whatsapp_message_body(m)
+        prefix = f"[{ts}] {sender}" if ts else sender
+        raw_lines.append(f"{prefix}: {body}")
+        transcript_lines.append(f"- {prefix}: {body}")
+        if getattr(m, "media_type", None):
+            media_count += 1
+            filename = getattr(m, "media_filename", None) or getattr(m, "media_type", None) or "media"
+            caption = _clean_whatsapp_caption_for_ticket(
+                getattr(m, "caption", None) or "",
+                keep_transcription=_is_whatsapp_voice_type(getattr(m, "media_type", "") or "", getattr(m, "media_mime_type", "") or "")
+                or _is_whatsapp_video_type(getattr(m, "media_type", "") or "", getattr(m, "media_mime_type", "") or ""),
+            )
+            detail = f"- Message #{getattr(m, 'id', '')}: {filename}"
+            if caption:
+                detail += f" — {caption}"
+            attachment_lines.append(detail)
+
+    description_parts = [
+        "WhatsApp conversation snapshot",
+        "",
+        f"Source chat: {contact} ({phone})",
+        f"Messages included: {count}",
+        "",
+        "Client request:",
+        first_body or "Review the WhatsApp transcript and attached media, then complete the requested work.",
+        "",
+        "Transcript:",
+        *(transcript_lines or ["- No message text was available."]),
+    ]
+    if attachment_lines:
+        description_parts.extend(["", "Media evidence:", *attachment_lines])
+    description_parts.extend([
+        "",
+        "Acceptance criteria:",
+        "- Confirm the request has been understood from the full WhatsApp context.",
+        "- Use the transcript and media evidence when completing the work.",
+        "- Flag missing information before marking the ticket complete.",
+        "",
+        "Questions / ambiguities:",
+        "- Review required; no additional questions identified automatically.",
+    ])
+
+    description = "\n".join(description_parts).strip()
+    priority = _infer_whatsapp_ticket_priority(title, description)
+    complexity = infer_ticket_complexity(title, description, file_count=media_count)
+    return {
+        "title": title,
+        "description": description,
+        "priority": priority,
+        "complexity": complexity,
+        "raw_text": "\n".join(raw_lines).strip(),
+    }
+
+
+def _whatsapp_message_identifier_values(link) -> List[str]:
+    raw_identifiers = [
+        (getattr(link, "phone_jid", "") or "").strip(),
+        (getattr(link, "phone_number", "") or "").strip(),
+    ]
+    identifiers = []
+    for value in raw_identifiers:
+        if not value:
+            continue
+        identifiers.append(value)
+        bare_phone = value.split("@")[0].split(":")[0].strip()
+        if bare_phone:
+            identifiers.append(bare_phone)
+            identifiers.append(f"{bare_phone}@s.whatsapp.net")
+    return sorted({v for v in identifiers if v})
+
+
+def _whatsapp_media_items(messages, enrichment: dict | None = None) -> List[dict]:
+    enrichment_by_id = {
+        int(row.get("message_id")): row
+        for row in ((enrichment or {}).get("media") or [])
+        if row.get("message_id") is not None
+    }
+    media_items = []
+    for m in messages:
+        if getattr(m, "media_type", None):
+            enrich = enrichment_by_id.get(int(m.id)) or {}
+            wa_key = (getattr(m, "message_id", None) or "").strip()
+            preview_url = f"/api/kanban/whatsapp/relay-media/{int(m.id)}"
+            if wa_key:
+                preview_url += f"?wa_key={quote(wa_key, safe='')}"
+            local_url = ""
+            if getattr(m, "media_local_path", None):
+                local_url = f"/api/kanban/whatsapp/media?path={quote(os.path.basename(m.media_local_path or ''), safe='')}"
+            media_items.append({
+                "message_id": m.id,
+                "whatsapp_message_id": wa_key,
+                "media_type": m.media_type,
+                "media_mime_type": getattr(m, "media_mime_type", None) or "",
+                "media_filename": m.media_filename or f"{m.media_type}",
+                "media_path": preview_url,
+                "download_url": preview_url,
+                "local_preview_url": local_url,
+                "analysis_status": enrich.get("analysis_status") or "",
+                "analysis_type": enrich.get("analysis_type") or "",
+                "analysis_error": enrich.get("error") or "",
+                "preview_url": preview_url,
+                "caption": _clean_whatsapp_caption_for_ticket(
+                    getattr(m, "caption", None) or "",
+                    keep_transcription=_is_whatsapp_voice_type(m.media_type or "", getattr(m, "media_mime_type", "") or "")
+                    or _is_whatsapp_video_type(m.media_type or "", getattr(m, "media_mime_type", "") or ""),
+                ),
+                "sender": _whatsapp_message_sender(m),
+                "timestamp": _whatsapp_message_timestamp(m),
+            })
+    return media_items
+
+
+def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int = 500, message_ids: Optional[List[int]] = None) -> dict:
+    """Resolve a board's linked WhatsApp chat, unticketed messages, and target lane."""
+    from distr.core.db import WhatsAppPhoneLink
+
+    board = orm_get_by_id(s, KanbanBoard, board_id)
+    if not board:
+        raise HTTPException(404, "Board not found")
+
+    link_query = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id)
+    if link_id:
+        link_query = link_query.filter_by(id=link_id)
+    link = link_query.order_by(WhatsAppPhoneLink.auto_snapshot.desc(), WhatsAppPhoneLink.id.asc()).first()
+    if not link:
+        raise HTTPException(404, "No WhatsApp link is configured for this board")
+
+    identifiers = _whatsapp_message_identifier_values(link)
+    if not identifiers:
+        raise HTTPException(400, "The linked WhatsApp chat has no stored phone or JID")
+
+    message_query = s.query(WhatsAppMessage).filter(
+        or_(
+            WhatsAppMessage.jid.in_(identifiers),
+            WhatsAppMessage.jid_phone.in_(identifiers),
+            WhatsAppMessage.sender_jid.in_(identifiers),
+            WhatsAppMessage.sender_phone.in_(identifiers),
+        )
+    ).filter(
+        WhatsAppMessage.snapshot_group.is_(None),
+    )
+    clean_message_ids = []
+    for raw_id in message_ids or []:
+        try:
+            clean_message_ids.append(int(raw_id))
+        except Exception:
+            pass
+
+    if clean_message_ids:
+        messages = message_query.filter(WhatsAppMessage.id.in_(clean_message_ids)).order_by(
+            WhatsAppMessage.whatsapp_timestamp.asc(),
+            WhatsAppMessage.id.asc(),
+        ).all()
+        found_ids = {int(m.id) for m in messages}
+        missing_ids = [mid for mid in clean_message_ids if mid not in found_ids]
+        if missing_ids:
+            raise HTTPException(409, f"Some reviewed WhatsApp messages are no longer available for ticketing: {missing_ids}")
+    else:
+        existing_ticket_message_ids = {
+            row[0]
+            for row in s.query(KanbanTicket.whatsapp_message_id)
+            .filter(KanbanTicket.whatsapp_message_id.isnot(None))
+            .all()
+            if row[0]
+        }
+        if existing_ticket_message_ids:
+            message_query = message_query.filter(~WhatsAppMessage.id.in_(existing_ticket_message_ids))
+        messages_desc = message_query.order_by(
+            WhatsAppMessage.whatsapp_timestamp.desc(),
+            WhatsAppMessage.id.desc(),
+        ).limit(limit).all()
+        messages = list(reversed(messages_desc))
+
+    if not messages:
+        raise HTTPException(404, "No unticketed WhatsApp messages found for this board link")
+
+    source_lane_name = (board.agent_source_lane or "").strip()
+    lane = None
+    if source_lane_name:
+        lane = s.query(KanbanLane).filter_by(board_id=board_id, name=source_lane_name).first()
+    if not lane:
+        lane = s.query(KanbanLane).filter(
+            KanbanLane.board_id == board_id,
+            KanbanLane.name.ilike("%backlog%"),
+        ).first()
+    if not lane:
+        lane = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position.asc()).first()
+    if not lane:
+        raise HTTPException(400, "Board has no columns")
+
+    return {"board": board, "link": link, "messages": messages, "lane": lane}
 
 
 def _yaml_scalar(s: str) -> str:
@@ -580,6 +1117,68 @@ def _is_valid_time_tracking_value(value: Optional[str]) -> bool:
     return bool(_re.match(r"^\d+\s*[wdhm](\s+\d+\s*[wdhm])*$", v, _re.I))
 
 
+def _ticket_source_payload(t: KanbanTicket) -> dict:
+    return {
+        "source_provider": t.source_provider or "",
+        "source_external_id": t.source_external_id or "",
+        "source_thread_id": t.source_thread_id or "",
+        "source_contact": t.source_contact or "",
+        "source_url": t.source_url or "",
+        "source_label": t.source_label or "",
+    }
+
+
+def _apply_ticket_source_fields(t: KanbanTicket, payload: BaseModel) -> None:
+    fields_set = getattr(payload, "model_fields_set", set())
+    if "source_provider" in fields_set:
+        t.source_provider = normalize_source_provider(getattr(payload, "source_provider", None)) or None
+    for attr in ("source_external_id", "source_thread_id", "source_contact", "source_url", "source_label"):
+        if attr in fields_set:
+            value = getattr(payload, attr, None)
+            t.__setattr__(attr, (value or "").strip() or None)
+
+
+def _emit_ticket_channel_intake(
+    ticket: KanbanTicket,
+    *,
+    board: KanbanBoard | None = None,
+    channel: str = "",
+    extra_payload: dict | None = None,
+) -> None:
+    """Emit a Hermes channel intake event when a ticket enters from a channel."""
+    provider = normalize_source_provider(channel or ticket.source_provider or "")
+    if not provider:
+        return
+    if provider not in {"whatsapp", "telegram", "gmail"}:
+        return
+    try:
+        from distr.core.hermes import emit_channel_intake_event
+
+        board_id = board.id if board else None
+        if board_id is None and ticket.lane_id:
+            with get_session() as session:
+                lane = session.query(KanbanLane).filter(KanbanLane.id == ticket.lane_id).first()
+                board_id = lane.board_id if lane else None
+        emit_channel_intake_event(
+            channel=provider,
+            ticket_id=int(ticket.id),
+            board_id=board_id,
+            workflow_id=ticket.linked_workflow_id,
+            project_id=ticket.linked_project_id,
+            summary=f"Ticket '{ticket.title}' created from {provider} intake.",
+            payload={
+                "title": ticket.title or "",
+                "priority": ticket.priority or "",
+                "complexity": ticket.complexity or "",
+                "source_contact": ticket.source_contact or "",
+                "source_external_id": ticket.source_external_id or "",
+                **(extra_payload or {}),
+            },
+        )
+    except Exception:
+        logger.debug("Could not emit channel intake Hermes event", exc_info=True)
+
+
 class BoardCreate(BaseModel):
     name: str
     description: Optional[str] = ""
@@ -593,10 +1192,12 @@ class BoardUpdate(BaseModel):
     default_action_id: Optional[int] = None
     color: Optional[str] = None
     position: Optional[int] = None
+    whatsapp_checkin_enabled: Optional[bool] = None
 
 
 class BoardAgentEnabledUpdate(BaseModel):
     agent_enabled: bool
+    whatsapp_checkin_enabled: Optional[bool] = None
 
 
 class TicketCreate(BaseModel):
@@ -604,25 +1205,44 @@ class TicketCreate(BaseModel):
     title: str
     description: Optional[str] = ""
     priority: Optional[str] = "medium"
+    complexity: Optional[str] = None
     source_chat_id: Optional[int] = None
+    source_provider: Optional[str] = None
+    source_external_id: Optional[str] = None
+    source_thread_id: Optional[str] = None
+    source_contact: Optional[str] = None
+    source_url: Optional[str] = None
+    source_label: Optional[str] = None
 
 class TicketUpdate(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     priority: Optional[str] = None
+    complexity: Optional[str] = None
     lane_id: Optional[int] = None
     position: Optional[int] = None
     linked_workflow_id: Optional[int] = None
+    workflow_queue_position: Optional[int] = None
     linked_project_id: Optional[int] = None
     linked_snippet_id: Optional[int] = None
     linked_action_id: Optional[int] = None
     time_estimate: Optional[str] = None
     time_spent: Optional[str] = None
     source_chat_id: Optional[int] = None
+    source_provider: Optional[str] = None
+    source_external_id: Optional[str] = None
+    source_thread_id: Optional[str] = None
+    source_contact: Optional[str] = None
+    source_url: Optional[str] = None
+    source_label: Optional[str] = None
 
 class TicketMove(BaseModel):
     lane_id: int
     position: int
+
+
+class WorkflowTicketReorder(BaseModel):
+    ticket_ids: List[int]
 
 class LinkCreate(BaseModel):
     title: str
@@ -645,6 +1265,7 @@ class CopyToBoard(BaseModel):
     external_url: Optional[str] = None
     time_estimate: Optional[str] = None
     time_spent: Optional[str] = None
+    complexity: Optional[str] = None
 
 
 class ExternalBoardRegister(BaseModel):
@@ -653,6 +1274,7 @@ class ExternalBoardRegister(BaseModel):
     default_workflow_id: Optional[int] = None
     color: Optional[str] = None
     agent_enabled: Optional[bool] = False
+    whatsapp_checkin_enabled: Optional[bool] = False
 
 
 class CopyExternalTicket(BaseModel):
@@ -665,6 +1287,7 @@ class CopyExternalTicket(BaseModel):
     external_url: Optional[str] = None
     time_estimate: Optional[str] = None
     time_spent: Optional[str] = None
+    complexity: Optional[str] = None
     auto_send_to_project: Optional[bool] = False
     auto_send_to_cli: Optional[bool] = False
     auto_send_to_workflow: Optional[bool] = False
@@ -677,6 +1300,15 @@ class CopyExternalTicket(BaseModel):
 
 class SendToWorkflowRequest(BaseModel):
     workflow_id: Optional[int] = None
+
+
+class SendToCliRequest(BaseModel):
+    workflow_id: Optional[int] = None
+    backend_id: Optional[str] = None
+    model: Optional[str] = None
+    instruction: Optional[str] = None
+    codex_reasoning_effort: Optional[str] = None
+    codex_service_tier: Optional[str] = None
 
 
 class ExternalTicketCreate(BaseModel):
@@ -912,6 +1544,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                 "default_workflow_id": local_board.default_workflow_id,
                 "color": local_board.color,
                 "agent_enabled": local_board.agent_enabled or False,
+                "whatsapp_checkin_enabled": local_board.whatsapp_checkin_enabled or False,
                 "can_create_ticket": True,
             }
     try:
@@ -1401,6 +2034,7 @@ def create_routes():
                     "position": b.position or 0,
                     "archived": getattr(b, 'archived', False) or False,
                     "agent_enabled": getattr(b, 'agent_enabled', False) or False,
+                    "whatsapp_checkin_enabled": getattr(b, 'whatsapp_checkin_enabled', False) or False,
                     "in_use": getattr(b, 'in_use', False) or False,
                     "default_project_id": b.default_project_id,
                     "default_workflow_id": b.default_workflow_id,
@@ -1440,6 +2074,8 @@ def create_routes():
                 board.color = payload.color if payload.color else None
             if payload.position is not None:
                 board.position = payload.position
+            if payload.whatsapp_checkin_enabled is not None:
+                board.whatsapp_checkin_enabled = payload.whatsapp_checkin_enabled
             s.commit()
             
             # Sync Project's kanban_board_id reference if default_project_id changed
@@ -1460,6 +2096,8 @@ def create_routes():
             if not board:
                 raise HTTPException(404, "Board not found")
             board.agent_enabled = payload.agent_enabled
+            if payload.whatsapp_checkin_enabled is not None:
+                board.whatsapp_checkin_enabled = payload.whatsapp_checkin_enabled
             s.commit()
             return JSONResponse({"success": True})
 
@@ -1519,21 +2157,24 @@ def create_routes():
                     tickets.append({
                         "id": t.id, "title": t.title, "description": t.description or "",
                         "priority": t.priority or "medium", "position": t.position,
+                        "complexity": normalize_ticket_complexity(t.complexity),
                         "time_estimate": t.time_estimate or "",
                         "time_spent": t.time_spent or "",
                         "external_source": t.external_source, "external_id": t.external_id,
                         "external_url": t.external_url,
                         "linked_workflow_id": t.linked_workflow_id,
+                        "workflow_queue_position": t.workflow_queue_position or 0,
                         "linked_project_id": t.linked_project_id,
                         "workflow_status": t.workflow_status,
                         "linked_snippet_id": t.linked_snippet_id,
                         "linked_action_id": t.linked_action_id,
-                        "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
+                        "files": [_ticket_file_payload(t.id, f) for f in t.files],
                         "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                         "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
                         "whatsapp_message_id": t.whatsapp_message_id,
                         "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
                         "source_chat_id": t.source_chat_id,
+                        **_ticket_source_payload(t),
                     })
                 lanes.append({"id": lane.id, "name": lane.name, "position": lane.position, "tickets": tickets})
             return JSONResponse({
@@ -1560,9 +2201,14 @@ def create_routes():
             # Get board defaults for new tickets
             board = orm_get_by_id(s, KanbanBoard,lane.board_id)
             max_pos = max([t.position for t in lane.tickets], default=-1)
+            complexity = normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(
+                payload.title,
+                payload.description or "",
+            )
             ticket = KanbanTicket(
                 lane_id=payload.lane_id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
+                complexity=complexity,
                 position=max_pos + 1,
                 linked_workflow_id=board.default_workflow_id if board else None,
                 linked_project_id=board.default_project_id if board else None,
@@ -1570,9 +2216,11 @@ def create_routes():
                 linked_action_id=board.default_action_id if board else None,
                 source_chat_id=payload.source_chat_id,
             )
+            _apply_ticket_source_fields(ticket, payload)
             s.add(ticket)
             s.flush()
-            return JSONResponse({"success": True, "id": ticket.id})
+            _emit_ticket_channel_intake(ticket, board=board)
+            return JSONResponse({"success": True, "id": ticket.id, "lane_id": ticket.lane_id})
 
     @router.get("/kanban/tickets/{ticket_id}")
     async def get_ticket(ticket_id: int):
@@ -1590,19 +2238,22 @@ def create_routes():
             return JSONResponse({
                 "id": t.id, "lane_id": t.lane_id, "title": t.title,
                 "description": t.description or "", "priority": t.priority or "medium",
+                "complexity": normalize_ticket_complexity(t.complexity),
                 "position": t.position,
                 "time_estimate": t.time_estimate or "",
                 "time_spent": t.time_spent or "",
                 "external_source": t.external_source, "external_id": t.external_id,
                 "external_url": t.external_url,
                 "linked_workflow_id": t.linked_workflow_id,
+                "workflow_queue_position": t.workflow_queue_position or 0,
                 "linked_project_id": t.linked_project_id,
                 "workflow_status": t.workflow_status,
                 "linked_snippet_id": t.linked_snippet_id,
                 "linked_action_id": t.linked_action_id,
                 "whatsapp_message_id": t.whatsapp_message_id,
                 "whatsapp_message_wa_id": t.whatsapp_message_wa_id,
-                "files": [{"id": f.id, "filename": f.filename, "description": f.description or ""} for f in t.files],
+                **_ticket_source_payload(t),
+                "files": [_ticket_file_payload(t.id, f) for f in t.files],
                 "links": [{"id": l.id, "title": l.title, "url": l.url} for l in t.links],
                 "todos": [{"id": td.id, "text": td.text, "done": td.done, "position": td.position} for td in t.todos],
                 "audit_entries": [
@@ -1624,6 +2275,103 @@ def create_routes():
                 ],
                 "source_chat_id": t.source_chat_id,
             })
+
+    @router.get("/kanban/workflows/{workflow_id}/tickets")
+    async def get_workflow_tickets(workflow_id: int):
+        """Return local tickets allocated to a workflow without starting it."""
+        from distr.core.db.projects import Project
+
+        with get_session() as s:
+            rows = (
+                s.query(KanbanTicket, KanbanLane, KanbanBoard)
+                .join(KanbanLane, KanbanTicket.lane_id == KanbanLane.id)
+                .join(KanbanBoard, KanbanLane.board_id == KanbanBoard.id)
+                .filter(KanbanTicket.linked_workflow_id == workflow_id)
+                .order_by(KanbanTicket.workflow_queue_position.asc(), KanbanTicket.created_date.asc())
+                .all()
+            )
+            project_ids = {
+                int(pid)
+                for t, _lane, board in rows
+                for pid in [t.linked_project_id or board.default_project_id]
+                if pid
+            }
+            projects = {
+                p.id: p
+                for p in s.query(Project).filter(Project.id.in_(project_ids)).all()
+            } if project_ids else {}
+            return JSONResponse([
+                {
+                    "id": t.id,
+                    "title": t.title,
+                    "description": t.description or "",
+                    "priority": t.priority or "medium",
+                    "complexity": normalize_ticket_complexity(t.complexity),
+                    "position": t.position,
+                    "workflow_queue_position": t.workflow_queue_position or 0,
+                    "workflow_status": t.workflow_status,
+                    "linked_workflow_id": t.linked_workflow_id,
+                    "linked_project_id": t.linked_project_id or board.default_project_id,
+                    "linked_project_name": (
+                        projects.get(t.linked_project_id or board.default_project_id).name
+                        if projects.get(t.linked_project_id or board.default_project_id)
+                        else None
+                    ),
+                    "cli_route": (
+                        resolve_ticket_cli_route(
+                            projects.get(t.linked_project_id or board.default_project_id),
+                            normalize_ticket_complexity(t.complexity),
+                        )
+                        if projects.get(t.linked_project_id or board.default_project_id)
+                        else {}
+                    ),
+                    "lane_id": lane.id,
+                    "lane_name": lane.name,
+                    "board_id": board.id,
+                    "board_name": board.name,
+                    "source_provider": t.source_provider,
+                    "source_external_id": t.source_external_id,
+                    "external_source": t.external_source,
+                    "external_id": t.external_id,
+                    "source_label": t.source_label,
+                    "source_url": t.source_url,
+                }
+                for t, lane, board in rows
+            ])
+
+    @router.put("/kanban/workflows/{workflow_id}/tickets/reorder")
+    async def reorder_workflow_tickets(workflow_id: int, payload: WorkflowTicketReorder):
+        """Persist queue order for tickets already allocated to this workflow."""
+        with get_session() as s:
+            for pos, ticket_id in enumerate(payload.ticket_ids or []):
+                t = orm_get_by_id(s, KanbanTicket, ticket_id)
+                if t and t.linked_workflow_id == workflow_id:
+                    t.workflow_queue_position = pos
+            return JSONResponse({"success": True})
+
+    @router.delete("/kanban/workflows/{workflow_id}/tickets/{ticket_id}")
+    async def remove_workflow_ticket(workflow_id: int, ticket_id: int):
+        """Remove a queued ticket from a workflow when it has no active run."""
+        from distr.core.db.workflow import AutoWorkflowRun
+
+        with get_session() as s:
+            active = (
+                s.query(AutoWorkflowRun)
+                .filter(
+                    AutoWorkflowRun.workflow_id == workflow_id,
+                    AutoWorkflowRun.ticket_id == ticket_id,
+                    AutoWorkflowRun.status.in_(["running", "waiting"]),
+                )
+                .first()
+            )
+            if active:
+                raise HTTPException(409, "Ticket has an active workflow run")
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t or t.linked_workflow_id != workflow_id:
+                raise HTTPException(404, "Workflow ticket not found")
+            t.linked_workflow_id = None
+            t.workflow_queue_position = 0
+            return JSONResponse({"success": True})
 
     @router.get("/kanban/tickets/{ticket_id}/audit-entries")
     async def get_ticket_audit_entries(ticket_id: int):
@@ -1657,6 +2405,38 @@ def create_routes():
                     ],
                 }
             )
+
+    @router.get("/kanban/tickets/{ticket_id}/execution-sessions")
+    async def get_ticket_execution_sessions(ticket_id: int):
+        with get_session() as s:
+            t = orm_get_by_id(s, KanbanTicket, ticket_id)
+            if not t:
+                raise HTTPException(404, "Ticket not found")
+        from distr.core.kanban.project_execution import list_execution_sessions_for_ticket
+
+        return JSONResponse({
+            "ticket_id": ticket_id,
+            "sessions": list_execution_sessions_for_ticket(ticket_id),
+        })
+
+    @router.get("/kanban/workflows/{workflow_id}/execution-sessions")
+    async def get_workflow_execution_sessions(workflow_id: int, limit: int = 50, active_only: bool = False):
+        from distr.core.db.workflow import AutoWorkflow
+        with get_session() as s:
+            wf = orm_get_by_id(s, AutoWorkflow, workflow_id)
+            if not wf:
+                raise HTTPException(404, "Workflow not found")
+        from distr.core.kanban.project_execution import list_execution_sessions_for_workflow
+
+        return JSONResponse({
+            "workflow_id": workflow_id,
+            "sessions": list_execution_sessions_for_workflow(
+                workflow_id,
+                limit=limit,
+                active_only=active_only,
+            ),
+        })
+
 
     @router.get("/kanban/tickets/{ticket_id}/audit-report")
     async def get_ticket_audit_report(ticket_id: int):
@@ -1821,16 +2601,28 @@ def create_routes():
                 t.description = payload.description
             if payload.priority is not None:
                 t.priority = payload.priority
+            if payload.complexity is not None:
+                t.complexity = normalize_ticket_complexity(payload.complexity)
             if "linked_workflow_id" in fields_set or "linked_project_id" in fields_set:
                 lane = orm_get_by_id(s, KanbanLane,t.lane_id) if t.lane_id else None
                 board = orm_get_by_id(s, KanbanBoard,lane.board_id) if lane else None
                 if "linked_workflow_id" in fields_set:
+                    if payload.linked_workflow_id and t.linked_workflow_id and t.linked_workflow_id != payload.linked_workflow_id:
+                        raise HTTPException(409, "Ticket is already linked to a workflow")
                     # Empty selection in UI means "inherit from board default".
                     t.linked_workflow_id = (
                         payload.linked_workflow_id
                         if payload.linked_workflow_id is not None
                         else (board.default_workflow_id if board else None)
                     )
+                    if t.linked_workflow_id and not t.workflow_queue_position:
+                        max_pos = (
+                            s.query(KanbanTicket.workflow_queue_position)
+                            .filter(KanbanTicket.linked_workflow_id == t.linked_workflow_id)
+                            .order_by(KanbanTicket.workflow_queue_position.desc())
+                            .first()
+                        )
+                        t.workflow_queue_position = ((max_pos[0] if max_pos and max_pos[0] is not None else -1) + 1)
                 if "linked_project_id" in fields_set:
                     # Empty selection in UI means "inherit from board default".
                     t.linked_project_id = (
@@ -1850,8 +2642,11 @@ def create_routes():
                 t.lane_id = payload.lane_id
             if payload.position is not None:
                 t.position = payload.position
+            if payload.workflow_queue_position is not None:
+                t.workflow_queue_position = payload.workflow_queue_position
             if "source_chat_id" in fields_set:
                 t.source_chat_id = payload.source_chat_id
+            _apply_ticket_source_fields(t, payload)
             # For local tickets linked to external providers, keep external card/issue in sync immediately on save.
             _sync_local_ticket_to_external(
                 source=t.external_source,
@@ -1920,17 +2715,19 @@ def create_routes():
                 raise HTTPException(404, "Ticket not found")
 
             # Clear snapshot_group for ALL messages linked to this ticket
-            grouped = s.query(WhatsAppMessage).filter(
-                WhatsAppMessage.snapshot_group.like(f"{ticket_id}_%")
-            ).all()
+            grouped = s.query(WhatsAppMessage).filter(_whatsapp_snapshot_group_filter(ticket_id)).all()
             for msg in grouped:
                 msg.snapshot_group = None
+                msg.processed = False
+                msg.processed_date = None
 
             # Also clear the direct whatsapp_message_id link
             if t.whatsapp_message_id:
                 wa_msg = orm_get_by_id(s, WhatsAppMessage,t.whatsapp_message_id)
                 if wa_msg:
                     wa_msg.snapshot_group = None
+                    wa_msg.processed = False
+                    wa_msg.processed_date = None
 
             s.delete(t)
             return JSONResponse({"success": True})
@@ -1953,7 +2750,7 @@ def create_routes():
             rec = KanbanTicketFile(ticket_id=ticket_id, filename=safe_name, file_path=dest)
             s.add(rec)
             s.flush()
-            return JSONResponse({"success": True, "id": rec.id, "filename": safe_name})
+            return JSONResponse({"success": True, **_ticket_file_payload(ticket_id, rec)})
 
     @router.post("/kanban/tickets/{ticket_id}/attach-file")
     async def attach_existing_file(ticket_id: int, payload: dict):
@@ -1975,7 +2772,7 @@ def create_routes():
             )
             s.add(rec)
             s.flush()
-            return JSONResponse({"success": True, "id": rec.id, "filename": filename})
+            return JSONResponse({"success": True, **_ticket_file_payload(ticket_id, rec)})
 
     @router.post("/kanban/tickets/{ticket_id}/attach-whatsapp-media")
     async def attach_whatsapp_media(ticket_id: int, request: Request):
@@ -2022,8 +2819,28 @@ def create_routes():
             return JSONResponse({
                 "success": True,
                 "attached": True,
-                "filename": dest_name
+                **_ticket_file_payload(ticket_id, tf),
             })
+
+
+    @router.get("/kanban/tickets/{ticket_id}/files/{file_id}/content")
+    async def view_ticket_file(ticket_id: int, file_id: int):
+        """Serve a ticket attachment for inline preview or browser download."""
+        with get_session() as s:
+            rec = s.query(KanbanTicketFile).filter_by(id=file_id, ticket_id=ticket_id).first()
+            if not rec:
+                raise HTTPException(404, "File not found")
+            file_path = os.path.realpath(rec.file_path or "")
+            if not file_path or not os.path.exists(file_path):
+                raise HTTPException(404, "File missing on disk")
+            filename = os.path.basename(rec.filename or file_path) or "attachment"
+            media_type = mimetypes.guess_type(filename)[0] or mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+            return FileResponse(
+                file_path,
+                media_type=media_type,
+                filename=filename,
+                content_disposition_type="inline",
+            )
 
 
     @router.delete("/kanban/tickets/{ticket_id}/files/{file_id}")
@@ -2116,12 +2933,17 @@ def create_routes():
             ticket = KanbanTicket(
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
+                complexity=normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(payload.title, payload.description or ""),
                 time_estimate=(payload.time_estimate or ""),
                 time_spent=(payload.time_spent or ""),
                 position=max_pos + 1,
                 external_source=payload.external_source,
                 external_id=payload.external_id,
                 external_url=payload.external_url,
+                source_provider=normalize_source_provider(payload.external_source) or None,
+                source_external_id=payload.external_id,
+                source_url=payload.external_url,
+                source_label=payload.external_source,
                 linked_workflow_id=board.default_workflow_id,
                 linked_project_id=board.default_project_id,
             )
@@ -2142,10 +2964,40 @@ def create_routes():
             raise HTTPException(422, "Invalid time_estimate format. Use values like '30m', '2h', or '1d 3h'.")
         if not _is_valid_time_tracking_value(payload.time_spent):
             raise HTTPException(422, "Invalid time_spent format. Use values like '30m', '2h', or '1d 3h'.")
+        from distr.core.db.projects import Project
+
         with get_session() as s:
             board = s.query(KanbanBoard).filter_by(id=payload.board_id, source="database").first()
             if not board:
-                raise HTTPException(404, "Database board not found")
+                project_id = payload.linked_project_id
+                if project_id:
+                    board = (
+                        s.query(KanbanBoard)
+                        .filter(
+                            KanbanBoard.source == "database",
+                            KanbanBoard.default_project_id == project_id,
+                        )
+                        .order_by(KanbanBoard.position.asc(), KanbanBoard.id.asc())
+                        .first()
+                    )
+                    if not board:
+                        project = orm_get_by_id(s, Project, project_id)
+                        if not project:
+                            raise HTTPException(404, "Linked project not found")
+                        board = KanbanBoard(
+                            name=project.name or f"Project {project_id}",
+                            description=f"Workflow intake board for project: {project.name or project_id}",
+                            source="database",
+                            default_project_id=project_id,
+                        )
+                        s.add(board)
+                        s.flush()
+                        project.kanban_board_id = board.id
+                        for i, lane_name in enumerate(DEFAULT_LANES):
+                            s.add(KanbanLane(board_id=board.id, name=lane_name, position=i))
+                        s.flush()
+                if not board:
+                    raise HTTPException(404, "Database board not found")
             first_lane = s.query(KanbanLane).filter_by(board_id=board.id).order_by(KanbanLane.position).first()
             if not first_lane:
                 raise HTTPException(400, "Board has no lanes")
@@ -2156,15 +3008,57 @@ def create_routes():
             effective_workflow_id = (
                 payload.linked_workflow_id if payload.linked_workflow_id is not None else board.default_workflow_id
             )
+            existing_external_ticket = None
+            if payload.external_source and payload.external_id:
+                existing_external_ticket = (
+                    s.query(KanbanTicket)
+                    .filter(
+                        KanbanTicket.external_source == payload.external_source,
+                        KanbanTicket.external_id == payload.external_id,
+                    )
+                    .order_by(KanbanTicket.id.desc())
+                    .first()
+                )
+                if not existing_external_ticket:
+                    existing_external_ticket = (
+                        s.query(KanbanTicket)
+                        .filter(
+                            KanbanTicket.source_provider == normalize_source_provider(payload.external_source),
+                            KanbanTicket.source_external_id == payload.external_id,
+                        )
+                        .order_by(KanbanTicket.id.desc())
+                        .first()
+                    )
+            if existing_external_ticket:
+                if existing_external_ticket.linked_workflow_id:
+                    raise HTTPException(409, "Ticket is already linked to a workflow")
+                existing_external_ticket.linked_workflow_id = effective_workflow_id
+                existing_external_ticket.linked_project_id = effective_project_id or existing_external_ticket.linked_project_id
+                if not existing_external_ticket.workflow_queue_position:
+                    max_queue_pos = (
+                        s.query(KanbanTicket.workflow_queue_position)
+                        .filter(KanbanTicket.linked_workflow_id == effective_workflow_id)
+                        .order_by(KanbanTicket.workflow_queue_position.desc())
+                        .first()
+                    )
+                    existing_external_ticket.workflow_queue_position = (
+                        (max_queue_pos[0] if max_queue_pos and max_queue_pos[0] is not None else -1) + 1
+                    )
+                return JSONResponse({"success": True, "id": existing_external_ticket.id, "reused": True})
             ticket = KanbanTicket(
                 lane_id=first_lane.id, title=payload.title,
                 description=payload.description or "", priority=payload.priority or "medium",
+                complexity=normalize_ticket_complexity(payload.complexity) if payload.complexity else infer_ticket_complexity(payload.title, payload.description or ""),
                 time_estimate=(payload.time_estimate or ""),
                 time_spent=(payload.time_spent or ""),
                 position=max_pos + 1,
                 external_source=payload.external_source,
                 external_id=payload.external_id,
                 external_url=payload.external_url,
+                source_provider=normalize_source_provider(payload.external_source) or None,
+                source_external_id=payload.external_id,
+                source_url=payload.external_url,
+                source_label=payload.external_source,
                 linked_workflow_id=effective_workflow_id,
                 linked_project_id=effective_project_id,
                 source_chat_id=payload.source_chat_id,
@@ -2322,6 +3216,7 @@ def create_routes():
                     source=provider,
                     external_board_id=ext_board_id,
                     agent_enabled=payload.agent_enabled or False,
+                    whatsapp_checkin_enabled=payload.whatsapp_checkin_enabled or False,
                 )
                 s.add(board)
                 s.flush()
@@ -2339,6 +3234,8 @@ def create_routes():
                 board.color = payload.color if payload.color else None
             if payload.agent_enabled is not None:
                 board.agent_enabled = payload.agent_enabled
+            if payload.whatsapp_checkin_enabled is not None:
+                board.whatsapp_checkin_enabled = payload.whatsapp_checkin_enabled
             s.flush()
             return JSONResponse({
                 "success": True,
@@ -2350,6 +3247,7 @@ def create_routes():
                 "default_workflow_id": board.default_workflow_id,
                 "color": board.color,
                 "agent_enabled": board.agent_enabled,
+                "whatsapp_checkin_enabled": board.whatsapp_checkin_enabled,
             })
 
     # ── Create tickets on external boards (Trello / Jira) ──
@@ -2820,6 +3718,7 @@ def create_routes():
                         "default_workflow_id": b.default_workflow_id,
                         "color": b.color,
                         "agent_enabled": b.agent_enabled or False,
+                        "whatsapp_checkin_enabled": b.whatsapp_checkin_enabled or False,
                         "can_create_ticket": True,
                     }
             logger.info("External boards: found %d connected accounts", len(accounts))
@@ -2902,6 +3801,7 @@ def create_routes():
                         "default_workflow_id": None,
                         "color": None,
                         "agent_enabled": False,
+                        "whatsapp_checkin_enabled": False,
                     }
                 )
 
@@ -2915,6 +3815,7 @@ def create_routes():
                     "default_workflow_id": local_board.default_workflow_id,
                     "color": local_board.color,
                     "agent_enabled": local_board.agent_enabled or False,
+                    "whatsapp_checkin_enabled": local_board.whatsapp_checkin_enabled or False,
                 }
             )
 
@@ -2956,6 +3857,7 @@ def create_routes():
                         "default_workflow_id": lb.default_workflow_id,
                         "color": lb.color,
                         "agent_enabled": lb.agent_enabled or False,
+                        "whatsapp_checkin_enabled": lb.whatsapp_checkin_enabled or False,
                     }
             out.update(lc_only)
             age = now - ent["t"]
@@ -2983,6 +3885,7 @@ def create_routes():
                     "default_workflow_id": lb.default_workflow_id,
                     "color": lb.color,
                     "agent_enabled": lb.agent_enabled or False,
+                    "whatsapp_checkin_enabled": lb.whatsapp_checkin_enabled or False,
                 }
         loading = {"name": "", "url": "", "lanes": [], "can_create_ticket": True, "cache_ready": False}
         loading.update(lc_only)
@@ -3286,53 +4189,95 @@ source: kanban_ticket_{t.id}
                 "phase": run_data.get("phase"),
             })
 
-    @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
-    async def send_ticket_to_cli(ticket_id: int):
-        """Send a ticket's instruction to pi (coding agent) for the linked project."""
-        from distr.core.pi_rpc import get_or_create_rpc_session, PiRpcSession
+    def _resolve_ticket_cli_context(s, ticket_id: int):
+        t = orm_get_by_id(s, KanbanTicket,ticket_id)
+        if not t:
+            raise HTTPException(404, "Ticket not found")
 
+        title = t.title
+        description = t.description or ""
+        tid = t.id
+
+        project_id = t.linked_project_id
+        if not project_id:
+            lane = orm_get_by_id(s, KanbanLane,t.lane_id)
+            if lane:
+                board = orm_get_by_id(s, KanbanBoard,lane.board_id)
+                if board:
+                    project_id = board.default_project_id
+
+        if not project_id:
+            raise HTTPException(400, "No project linked to this ticket or its board")
+
+        from distr.core.db.projects import Project
+        project = orm_get_by_id(s, Project,project_id)
+        if not project or not project.folder_location:
+            raise HTTPException(400, "Project has no folder location set")
+
+        folder = project.folder_location
+        project_name = project.name
+        complexity = normalize_ticket_complexity(t.complexity)
+
+        from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
+
+        instruction = build_kanban_ticket_cli_instruction(
+            s,
+            tid,
+            project_name=project_name,
+            project_folder=folder or "",
+            project_id=project_id,
+        )
+        return {
+            "ticket": t,
+            "title": title,
+            "description": description,
+            "ticket_id": tid,
+            "project": project,
+            "project_id": project_id,
+            "project_name": project_name,
+            "folder": folder,
+            "complexity": complexity,
+            "instruction": instruction,
+        }
+
+    @router.get("/kanban/tickets/{ticket_id}/cli-context")
+    async def get_ticket_cli_context(ticket_id: int):
+        """Return the resolved project/backend context and generated CLI instruction for a ticket."""
         with get_session() as s:
-            t = orm_get_by_id(s, KanbanTicket,ticket_id)
-            if not t:
-                raise HTTPException(404, "Ticket not found")
+            ctx = _resolve_ticket_cli_context(s, ticket_id)
+            project = ctx["project"]
+            from distr.core.project_cli_backends import get_backend_statuses, get_project_backend_id
 
-            title = t.title
-            description = t.description or ""
-            tid = t.id
+            route = resolve_ticket_cli_route(project, ctx["complexity"])
+            active_backend = route.get("backend") or get_project_backend_id(project)
+            return JSONResponse({
+                "ticket_id": ctx["ticket_id"],
+                "title": ctx["title"],
+                "project_id": ctx["project_id"],
+                "project_name": ctx["project_name"],
+                "project_folder": ctx["folder"],
+                "complexity": ctx["complexity"],
+                "instruction": ctx["instruction"],
+                "backend_id": active_backend,
+                "model": route.get("model") or "auto",
+                "codex_reasoning_effort": route.get("codex_reasoning_effort") or "",
+                "codex_service_tier": route.get("codex_service_tier") or "",
+                **get_backend_statuses(active_backend),
+            })
 
-            project_id = t.linked_project_id
-            if not project_id:
-                lane = orm_get_by_id(s, KanbanLane,t.lane_id)
-                if lane:
-                    board = orm_get_by_id(s, KanbanBoard,lane.board_id)
-                    if board:
-                        project_id = board.default_project_id
+    @router.post("/kanban/tickets/{ticket_id}/send-to-cli")
+    async def send_ticket_to_cli(ticket_id: int, payload: Optional[SendToCliRequest] = None):
+        """Send a ticket's instruction to the selected project coding backend."""
 
-            if not project_id:
-                raise HTTPException(400, "No project linked to this ticket or its board")
-
-            from distr.core.db.projects import Project
-            project = orm_get_by_id(s, Project,project_id)
-            if not project or not project.folder_location:
-                raise HTTPException(400, "Project has no folder location set")
-
-            folder = project.folder_location
-            project_name = project.name
-
-            from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
-
-            instruction = build_kanban_ticket_cli_instruction(
-                s,
-                tid,
-                project_name=project_name,
-                project_folder=folder or "",
-                project_id=project_id,
-            )
-
-        # Check that pi is available
-        pi_path = PiRpcSession.find_pi()
-        if not pi_path:
-            raise HTTPException(400, "Pi coding agent is not installed. Run: npm install -g @mariozechner/pi-coding-agent")
+        payload = payload or SendToCliRequest()
+        with get_session() as s:
+            ctx = _resolve_ticket_cli_context(s, ticket_id)
+            title = ctx["title"]
+            tid = ctx["ticket_id"]
+            project_id = ctx["project_id"]
+            project_name = ctx["project_name"]
+            complexity = ctx["complexity"]
+            instruction = (payload.instruction or "").strip() or ctx["instruction"]
 
         # Create audit trail using AutoWorkflow models
         from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
@@ -3341,14 +4286,14 @@ source: kanban_ticket_{t.id}
             with get_session() as s:
                 audit = AutoWorkflow(
                     name=f"[Project: {project_name}] Ticket #{tid}: {title}",
-                    status="in_progress", workflow_type="pi_cli",
+                    status="in_progress", workflow_type="project_cli",
                 )
                 s.add(audit)
                 s.flush()
                 step = AutoWorkflowStep(
                     workflow_id=audit.id, position=0,
                     name=f"Ticket #{tid}", instruction=instruction[:500],
-                    status="running", tool_used="pi",
+                    status="running", tool_used="project_cli",
                 )
                 s.add(step)
                 s.commit()
@@ -3356,21 +4301,59 @@ source: kanban_ticket_{t.id}
         except Exception:
             pass
 
-        # Send the instruction to pi via RPC (async, non-blocking)
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends.registry import run_project_task
+
         try:
-            rpc = await get_or_create_rpc_session(project_id, folder)
-            # Use --append-system-prompt to provide ticket context
-            success = rpc.send_prompt(instruction, ticket_id_for_writeback=tid)
-            if not success:
-                raise Exception("Failed to send prompt to pi")
+            with get_session() as s:
+                project = orm_get_by_id(s, Project, project_id)
+                if not project:
+                    raise HTTPException(400, "Project no longer exists")
+                route = resolve_ticket_cli_route(project, complexity)
+            backend_override = (payload.backend_id or "").strip() or route.get("backend")
+            model_override = (payload.model or "").strip() or route.get("model", "")
+            if (model_override or "").lower() in ("", "auto"):
+                model_override = None
+            codex_reasoning_effort = (
+                (payload.codex_reasoning_effort or "").strip()
+                or route.get("codex_reasoning_effort")
+                or None
+            )
+            codex_service_tier = (
+                (payload.codex_service_tier or "").strip()
+                or route.get("codex_service_tier")
+                or None
+            )
+            with get_session() as s:
+                project = orm_get_by_id(s, Project, project_id)
+                if not project:
+                    raise HTTPException(400, "Project no longer exists")
+                result = await run_project_task(
+                    project,
+                    instruction,
+                    audit_id=audit_id,
+                    workflow_id=payload.workflow_id,
+                    step_id=step_id,
+                    ticket_id=tid,
+                    ticket_complexity=complexity,
+                    origin="kanban_ticket",
+                    backend_id_override=backend_override,
+                    model_override=model_override,
+                    codex_reasoning_effort_override=codex_reasoning_effort,
+                    codex_service_tier_override=codex_service_tier,
+                )
         except Exception as e:
-            logger.error(f"Failed to send ticket to pi: {e}")
+            logger.error(f"Failed to send ticket to project backend: {e}")
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
         return JSONResponse({
-            "success": True,
-            "message": f"Ticket #{tid} sent to pi for project '{project_name}'. Check the terminal tab for progress.",
+            "success": result.success,
+            "message": f"Ticket #{tid} sent to the project backend for '{project_name}'. Check the ticket execution trail for progress.",
             "audit_id": audit_id,
+            "execution_session_id": result.execution_session_id,
+            "backend_id": result.backend_id,
+            "engine": result.engine,
+            "error": result.error,
         })
 
     # ── Agent run / cancel / restart ──
@@ -3539,6 +4522,183 @@ source: kanban_ticket_{t.id}
                 "auto_snapshot": l.auto_snapshot or False,
             } for l in links])
 
+    @router.post("/kanban/boards/{board_id}/whatsapp-snapshot-ticket")
+    async def create_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
+        """Create a board ticket from the unticketed messages in its linked WhatsApp chat."""
+        link_id = payload.get("link_id")
+        message_ids = payload.get("message_ids") if isinstance(payload.get("message_ids"), list) else None
+        try:
+            limit = max(1, min(int(payload.get("limit") or 500), 500))
+        except Exception:
+            limit = 500
+
+        with get_session() as s:
+            snapshot = _resolve_board_whatsapp_snapshot(s, board_id, link_id=link_id, limit=limit, message_ids=message_ids)
+            board = snapshot["board"]
+            link = snapshot["link"]
+            messages = snapshot["messages"]
+            lane = snapshot["lane"]
+            requested_lane_id = payload.get("lane_id")
+            if requested_lane_id:
+                try:
+                    requested_lane_id = int(requested_lane_id)
+                except Exception:
+                    requested_lane_id = None
+                if requested_lane_id:
+                    requested_lane = s.query(KanbanLane).filter_by(id=requested_lane_id, board_id=board.id).first()
+                    if requested_lane:
+                        lane = requested_lane
+
+            enrichment = _ensure_whatsapp_messages_enriched(messages)
+            draft = _build_whatsapp_ticket_draft(messages)
+            media_count = len([m for m in messages if getattr(m, "media_type", None)])
+            title = (payload.get("title") or draft.get("title") or "WhatsApp request").strip()
+            description = (payload.get("description") or draft.get("description") or "").strip()
+            priority = (payload.get("priority") or draft.get("priority") or _infer_whatsapp_ticket_priority(title, description)).strip()
+            complexity = payload.get("complexity") or draft.get("complexity") or infer_ticket_complexity(title, description, file_count=media_count)
+            quality = _validate_whatsapp_ticket_quality(title, description, messages, enrichment)
+            if not quality["passed"]:
+                return JSONResponse({
+                    "success": False,
+                    "detail": "WhatsApp ticket draft does not meet intake quality standards.",
+                    "quality": quality,
+                }, status_code=422)
+            max_pos = max([t.position for t in lane.tickets], default=-1)
+            first_msg = messages[0]
+            last_msg = messages[-1]
+            source_contact = (
+                link.contact_name
+                or _whatsapp_message_sender(first_msg)
+                or link.phone_number
+                or link.phone_jid
+                or "WhatsApp"
+            )
+            ticket = KanbanTicket(
+                lane_id=lane.id,
+                title=title,
+                description=description,
+                priority=priority,
+                complexity=normalize_ticket_complexity(complexity),
+                position=max_pos + 1,
+                linked_workflow_id=board.default_workflow_id,
+                linked_project_id=board.default_project_id,
+                linked_snippet_id=board.default_snippet_id,
+                linked_action_id=board.default_action_id,
+                whatsapp_message_id=last_msg.id,
+                whatsapp_message_wa_id=last_msg.message_id,
+                source_provider="whatsapp",
+                source_external_id=last_msg.message_id,
+                source_thread_id=last_msg.jid or link.phone_jid or link.phone_number,
+                source_contact=source_contact,
+                source_label="WhatsApp",
+            )
+            s.add(ticket)
+            s.flush()
+
+            snapshot_group = _whatsapp_snapshot_group_for_ticket(board.id, ticket.id)
+            attached_count = 0
+            source_message_ids = []
+            for msg in messages:
+                source_message_ids.append(int(msg.id))
+                msg.processed = True
+                msg.processed_date = datetime.utcnow()
+                msg.snapshot_group = snapshot_group
+                wa_disk = resolve_whatsapp_media_disk_path(msg.media_local_path or "")
+                if wa_disk and os.path.exists(wa_disk):
+                    safe_name = os.path.basename(wa_disk)
+                    s.add(KanbanTicketFile(
+                        ticket_id=ticket.id,
+                        filename=msg.media_filename or safe_name,
+                        file_path=wa_disk,
+                        description=f"WhatsApp {msg.media_type}: {safe_name}" if msg.media_type else safe_name,
+                    ))
+                    attached_count += 1
+            s.add(KanbanTicketAuditEntry(
+                ticket_id=ticket.id,
+                execution_lane="whatsapp",
+                status="created",
+                final_verdict="passed" if quality["passed"] else "failed",
+                summary=f"WhatsApp intake ticket created from {len(messages)} message(s).",
+                details=json.dumps({
+                    "source": "whatsapp",
+                    "board_id": board.id,
+                    "board_name": board.name,
+                    "link_id": link.id,
+                    "source_message_ids": source_message_ids,
+                    "snapshot_group": snapshot_group,
+                    "quality": quality,
+                    "media_enrichment": enrichment,
+                }, ensure_ascii=False),
+            ))
+            s.flush()
+            _emit_ticket_channel_intake(
+                ticket,
+                board=board,
+                channel="whatsapp",
+                extra_payload={
+                    "link_id": link.id,
+                    "message_count": len(messages),
+                    "source_message_ids": source_message_ids,
+                },
+            )
+            return JSONResponse({
+                "success": True,
+                "id": ticket.id,
+                "lane_id": lane.id,
+                "lane_name": lane.name,
+                "board_id": board.id,
+                "message_count": len(messages),
+                "message_ids": source_message_ids,
+                "file_count": attached_count,
+                "contact_name": source_contact,
+                "quality": quality,
+            })
+
+    @router.post("/kanban/boards/{board_id}/whatsapp-snapshot-preview")
+    async def preview_board_whatsapp_snapshot_ticket(board_id: int, payload: dict):
+        """Preview the unticketed WhatsApp messages that would become a board ticket."""
+        link_id = payload.get("link_id")
+        message_ids = payload.get("message_ids") if isinstance(payload.get("message_ids"), list) else None
+        try:
+            limit = max(1, min(int(payload.get("limit") or 500), 500))
+        except Exception:
+            limit = 500
+
+        with get_session() as s:
+            snapshot = _resolve_board_whatsapp_snapshot(s, board_id, link_id=link_id, limit=limit, message_ids=message_ids)
+            board = snapshot["board"]
+            link = snapshot["link"]
+            messages = snapshot["messages"]
+            lane = snapshot["lane"]
+            enrichment = _ensure_whatsapp_messages_enriched(messages)
+            draft = _build_whatsapp_ticket_draft(messages)
+            quality = _validate_whatsapp_ticket_quality(
+                draft.get("title") or "WhatsApp request",
+                draft.get("description") or "",
+                messages,
+                enrichment,
+            )
+            s.flush()
+            return JSONResponse({
+                "success": True,
+                "board_id": board.id,
+                "board_name": board.name,
+                "lane_id": lane.id,
+                "lane_name": lane.name,
+                "link_id": link.id,
+                "contact_name": link.contact_name or link.phone_number or link.phone_jid or "WhatsApp",
+                "message_count": len(messages),
+                "message_ids": [m.id for m in messages],
+                "title": draft.get("title") or "WhatsApp request",
+                "description": draft.get("description") or "",
+                "priority": draft.get("priority") or "medium",
+                "complexity": normalize_ticket_complexity(draft.get("complexity") or "medium"),
+                "media": _whatsapp_media_items(messages, enrichment),
+                "media_enrichment": enrichment,
+                "quality": quality,
+                "raw_text": draft.get("raw_text") or "",
+            })
+
     @router.post("/kanban/boards/{board_id}/whatsapp-links")
     async def add_whatsapp_link(board_id: int, payload: dict):
         """Link a WhatsApp phone number to this board."""
@@ -3588,7 +4748,7 @@ source: kanban_ticket_{t.id}
             return JSONResponse({"success": True})
 
     @router.get("/kanban/whatsapp/messages")
-    async def get_whatsapp_messages(jid_phone: str = "", limit: int = 50, offset: int = 0, unprocessed_only: bool = False):
+    async def get_whatsapp_messages(jid_phone: str = "", limit: int = 50, offset: int = 0, unprocessed_only: bool = False, sort: str = "asc"):
         """Get WhatsApp messages stored in the local database."""
         try:
             from PyQt6.QtWidgets import QApplication
@@ -3601,6 +4761,7 @@ source: kanban_ticket_{t.id}
                 limit=limit,
                 offset=offset,
                 unprocessed_only=unprocessed_only,
+                sort=sort,
             )
             return JSONResponse(result)
         except Exception as e:
@@ -3652,47 +4813,21 @@ source: kanban_ticket_{t.id}
             if not messages:
                 return JSONResponse({"error": "No messages found"}, status_code=404)
 
-            # Build the raw message text for the LLM
-            raw_text = ""
-            for m in messages:
-                sender = m.sender_push_name or m.sender_phone or "Unknown"
-                ts = ""
-                try:
-                    from datetime import datetime
-                    ts = datetime.fromtimestamp(m.whatsapp_timestamp).strftime("%H:%M") if m.whatsapp_timestamp else ""
-                except Exception:
-                    pass
-                prefix = f"[{ts}] {sender}"
-                if m.from_me:
-                    prefix = f"[{ts}] Me"
-                if m.text:
-                    raw_text += f"{prefix}: {m.text}\n"
-                if m.caption:
-                    raw_text += f"{prefix} [caption]: {m.caption}\n"
-                if m.media_type:
-                    raw_text += f"{prefix} [{m.media_type}"
-                    if m.media_filename:
-                        raw_text += f": {m.media_filename}"
-                    raw_text += "]\n"
+            enrichment = _ensure_whatsapp_messages_enriched(messages)
+            draft = _build_whatsapp_ticket_draft(messages)
+            raw_text = draft["raw_text"]
+            media_items = _whatsapp_media_items(messages, enrichment)
+            s.flush()
 
-            # Collect media info for the response
-            media_items = []
-            for m in messages:
-                if m.media_type and m.media_local_path:
-                    media_items.append({
-                        "message_id": m.id,
-                        "media_type": m.media_type,
-                        "media_filename": m.media_filename or f"{m.media_type}",
-                        "media_path": f"/api/kanban/whatsapp/media/{os.path.basename(m.media_local_path)}",
-                    })
-
-        # Call the LLM to distill the messages
+        # Call the LLM to polish the deterministic draft. If this fails, the
+        # modal still gets the draft immediately instead of blocking creation.
         try:
             from distr.core.utils import load_settings_from_db
             from distr.core.llm_factory import resolve_settings_keys, create_stream, normalize_provider
 
             settings = load_settings_from_db()
             provider, model = resolve_settings_keys(settings)
+            quality_instructions = _whatsapp_ticket_quality_instructions(len(messages), len(media_items))
 
             prompt = f"""You are a project manager writing a detailed, actionable ticket from WhatsApp messages, voice notes, and media.
 
@@ -3701,6 +4836,8 @@ Here are the messages and transcriptions:
 {raw_text}
 ---
 
+{quality_instructions}
+
 Write a thorough ticket with:
 1. TITLE: A clear, specific title (max 80 chars) that captures exactly what needs to happen
 2. DESCRIPTION: A comprehensive, detailed description that:
@@ -3708,11 +4845,12 @@ Write a thorough ticket with:
    - Weaves in every detail from voice transcriptions ([Transcription] sections) as if the user said it directly
    - Includes all names, dates, numbers, places, and specifics mentioned
    - Breaks down complex requests into numbered steps or bullet points
-   - Notes any media attachments and what they show (photos, documents, voice notes)
+   - Notes media attachments as evidence linked to the relevant message or caption
    - Flags any ambiguity or missing info that should be clarified
    - Is written so someone who has NEVER seen these messages can pick up the work immediately
    - Do NOT just paraphrase — write full, complete sentences that explain the what, why, and how
    - Include context: who sent it, what they were responding to, what outcome they expect
+   - Do NOT mention OCR, bounding boxes, extraction status, image processing, or internal analysis. Images are attachments; voice/video transcriptions are usable message text.
 
 The description should be long enough that a developer or team member can start working without needing to read the original messages.
 
@@ -3746,38 +4884,49 @@ DESCRIPTION: [your full description here]"""
                 # Fallback: use first line as title
                 title = lines[0].strip() if lines else "WhatsApp Ticket"
                 description = "\n".join(lines[1:]) if len(lines) > 1 else full_response
+            priority = _infer_whatsapp_ticket_priority(title, description)
+            complexity = infer_ticket_complexity(title, description, file_count=len(media_items))
+            quality = _validate_whatsapp_ticket_quality(title, description, messages, enrichment)
 
             return JSONResponse({
                 "title": title,
                 "description": description,
+                "priority": priority,
+                "complexity": complexity,
                 "media": media_items,
+                "media_enrichment": enrichment,
+                "quality": quality,
                 "raw_text": raw_text,
                 "success": True
             })
         except Exception as e:
-            logger.error(f"LLM distill error: {e}", exc_info=True)
-            # Fallback: return raw messages as description
-            from datetime import datetime
-            title = f"WhatsApp - {len(messages)} message{'s' if len(messages) != 1 else ''}"
-            fallback_desc = ""
-            for m in messages:
-                sender = m.sender_push_name or m.sender_phone or "Unknown"
-                if m.from_me:
-                    sender = "Me"
-                content = m.text or ""
-                if m.caption:
-                    content += (" " if content else "") + m.caption
-                if not content and m.media_type:
-                    content = f"[{m.media_type}]"
-                fallback_desc += f"{sender}: {content}\n"
+            from distr.core.llm_errors import format_model_error
+
+            compose_error = format_model_error(
+                e,
+                provider=provider if "provider" in locals() else "",
+                model=model if "model" in locals() else "",
+                operation="compose a WhatsApp ticket",
+            )
+            logger.error(f"LLM distill error: {compose_error}", exc_info=True)
             return JSONResponse({
-                "title": title,
-                "description": fallback_desc.strip(),
+                "title": draft["title"],
+                "description": draft["description"],
+                "priority": draft["priority"],
+                "complexity": draft["complexity"],
                 "media": media_items,
+                "media_enrichment": enrichment if "enrichment" in locals() else {},
+                "quality": _validate_whatsapp_ticket_quality(
+                    draft["title"],
+                    draft["description"],
+                    messages if "messages" in locals() else [],
+                    enrichment if "enrichment" in locals() else {},
+                ),
                 "raw_text": raw_text,
                 "success": True,
                 "fallback": True,
-                "error": str(e)
+                "error": compose_error,
+                "compose_error": compose_error,
             })
 
 

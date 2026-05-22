@@ -59,6 +59,78 @@ function populateSttOptions(settings) {
     }
 }
 
+async function populateProjectCliBackends() {
+    try {
+        const response = await fetch('/api/projects/cli-backends');
+        const data = response.ok ? await response.json() : { backends: [] };
+        const backends = data.backends || [];
+        ['low', 'medium', 'high'].forEach(level => {
+            const sel = document.getElementById(`project_cli_${level}_backend`);
+            if (!sel || !backends.length) return;
+            sel.innerHTML = backends.map(b => `<option value="${escapeHtml(b.id)}">${escapeHtml(b.name)}</option>`).join('');
+        });
+    } catch (e) {
+        console.error('Error loading project CLI backends:', e);
+    }
+}
+
+async function loadProjectCliRouteModels(level, backend, selectedModel) {
+    const sel = document.getElementById(`project_cli_${level}_model`);
+    if (!sel) return;
+    backend = (backend || 'pi').trim();
+    selectedModel = (selectedModel || '').trim();
+    try {
+        sel.innerHTML = '<option value="">Loading models...</option>';
+        const response = await fetch(`/api/projects/cli-models?backend_id=${encodeURIComponent(backend)}`);
+        const data = response.ok ? await response.json() : { models: [] };
+        const models = data.models || [];
+        sel.innerHTML = '';
+        const auto = document.createElement('option');
+        auto.value = 'auto';
+        auto.textContent = 'Auto';
+        sel.appendChild(auto);
+        models.forEach(m => {
+            const opt = document.createElement('option');
+            opt.value = (m && typeof m === 'object') ? (m.id || '') : m;
+            opt.textContent = (m && typeof m === 'object') ? (m.name || m.id || '') : (m || '');
+            sel.appendChild(opt);
+        });
+        if (selectedModel && !Array.prototype.some.call(sel.options, o => o.value === selectedModel)) {
+            const opt = document.createElement('option');
+            opt.value = selectedModel;
+            opt.textContent = selectedModel;
+            sel.appendChild(opt);
+        }
+        sel.value = selectedModel || 'auto';
+    } catch (e) {
+        console.error(`Error loading project CLI route models for ${level}:`, e);
+        sel.innerHTML = '<option value="auto">Auto</option>';
+        sel.value = selectedModel || 'auto';
+    }
+}
+
+async function populateProjectCliRoutes(settings) {
+    await populateProjectCliBackends();
+    for (const level of ['low', 'medium', 'high']) {
+        const backend = settings[`project_cli_${level}_backend`] || (level === 'low' ? 'cursor' : 'codex');
+        const model = settings[`project_cli_${level}_model`] || (level === 'high' ? 'gpt-5.3-codex' : 'auto');
+        const backendSel = document.getElementById(`project_cli_${level}_backend`);
+        if (backendSel) backendSel.value = backend;
+        await loadProjectCliRouteModels(level, backend, model);
+    }
+}
+
+function bindProjectCliRouteControls() {
+    ['low', 'medium', 'high'].forEach(level => {
+        const backendSel = document.getElementById(`project_cli_${level}_backend`);
+        if (!backendSel || backendSel.dataset.bound === '1') return;
+        backendSel.dataset.bound = '1';
+        backendSel.addEventListener('change', function() {
+            loadProjectCliRouteModels(level, this.value, 'auto');
+        });
+    });
+}
+
 // Load LLMs settings from backend
 async function loadLLMsSettings() {
     try {
@@ -121,6 +193,7 @@ async function loadLLMsSettings() {
             }
         }
 
+        await populateProjectCliRoutes(settings);
         updateDownloadButtonVisibility();
         console.log('LLMs settings loaded');
     } catch (error) {
@@ -148,6 +221,12 @@ async function saveLLMsSettings() {
             computer_use_model: document.getElementById('computer_use_model').value,
             kanban_provider: document.getElementById('kanban_provider').value,
             kanban_model: document.getElementById('kanban_model').value,
+            project_cli_low_backend: document.getElementById('project_cli_low_backend')?.value || 'cursor',
+            project_cli_low_model: document.getElementById('project_cli_low_model')?.value || 'auto',
+            project_cli_medium_backend: document.getElementById('project_cli_medium_backend')?.value || 'codex',
+            project_cli_medium_model: document.getElementById('project_cli_medium_model')?.value || 'auto',
+            project_cli_high_backend: document.getElementById('project_cli_high_backend')?.value || 'codex',
+            project_cli_high_model: document.getElementById('project_cli_high_model')?.value || 'gpt-5.3-codex',
             instant_dictation: document.getElementById('instant_dictation') ? document.getElementById('instant_dictation').checked : true
         };
 
@@ -479,6 +558,7 @@ if (document.readyState === 'loading') {
                     });
                 }
             });
+            bindProjectCliRouteControls();
         }
     });
 } else {
@@ -509,6 +589,7 @@ if (document.readyState === 'loading') {
                 });
             }
         });
+        bindProjectCliRouteControls();
     }
 }
 

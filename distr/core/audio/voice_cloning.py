@@ -32,7 +32,7 @@ def process_custom_voice(voice_id: int) -> None:
             audio_files = [
                 os.path.join(voice.audio_dir, f)
                 for f in os.listdir(voice.audio_dir)
-                if f.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm'))
+                if f.lower().endswith(('.wav', '.mp3', '.m4a', '.ogg', '.flac', '.webm', '.json'))
             ]
 
         if not audio_files:

@@ -123,11 +123,6 @@ class TTSProviderRegistry:
             "__init__",
             "registry",
             "provider_descriptor",
-            # Helpers / service modules (no DESCRIPTOR; avoid import side effects)
-            "vibevoice_streaming_inference",
-            "vibevoice_runtime",
-            "vibevoice_realtime",
-            "vibevoice_asr_inference",
         })
         for module_info in pkgutil.iter_modules([package_dir]):
             module_name = module_info.name

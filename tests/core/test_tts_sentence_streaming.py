@@ -108,10 +108,7 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
         pushed.append(frame)
 
     async def run_tts(text):
-        audio = AudioRawFrame()
-        audio.audio = b"\x00" * 320
-        audio.sample_rate = 16000
-        audio.num_channels = 1
+        audio = AudioRawFrame(audio=b"\x00" * 320, sample_rate=16000, num_channels=1)
         yield TTSStartedFrame()
         yield audio
         yield TTSStoppedFrame()
@@ -120,8 +117,7 @@ def test_coqui_forwards_tts_lifecycle_frames_for_transport_state():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame()
-    text.text = "Coqui should preserve playback lifecycle."
+    text = TextFrame("Coqui should preserve playback lifecycle.")
 
     asyncio.run(service.process_frame(start, None))
     asyncio.run(service.process_frame(text, None))

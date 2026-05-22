@@ -52,6 +52,8 @@ KEY_LABELS: Dict[str, str] = {
 
 for _digit in "0123456789":
     KEY_LABELS[_digit] = _digit
+for _fn in range(1, 13):
+    KEY_LABELS[f"f{_fn}"] = f"F{_fn}"
 for _letter in "abcdefghijklmnopqrstuvwxyz":
     KEY_LABELS[_letter] = _letter.upper()
 
@@ -62,6 +64,9 @@ DEFAULTS = {
     "dictation_hotkey_enabled": True,
     "dictation_hotkey_modifier": "control_command",
     "dictation_hotkey_key": "",
+    "ticket_dictation_hotkey_enabled": True,
+    "ticket_dictation_hotkey_modifier": "control_shift",
+    "ticket_dictation_hotkey_key": "",
     "global_ptt_hotkey_combo": "option_command",
     "oracle_size_hotkey_decrease_modifier": "control_command",
     "oracle_size_hotkey_decrease_key": "down_arrow",

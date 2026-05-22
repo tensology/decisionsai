@@ -492,7 +492,6 @@ if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
     mkdir -p installer
     touch "$REQUIREMENTS_MARKER"
     echo -e "${GREEN}✓${NC} Dependencies installed"
-    echo -e "${GREEN}Note:${NC} VibeVoice Realtime TTS .pt voices — ${YELLOW}./scripts/install_vibevoice.sh${NC} or ${YELLOW}DECISIONSAI_VIBEVOICE_ROOT${NC} if needed."
 else
     # Check if PyObjC-Cocoa is installed on macOS (might have been missed)
     if [[ "$OSTYPE" == "darwin"* ]]; then
@@ -529,4 +528,3 @@ echo ""
 echo -e "${GREEN}Starting DecisionsAI...${NC}"
 echo "================================"
 $PYTHON_CMD tests/test_telegram_limit.py
-

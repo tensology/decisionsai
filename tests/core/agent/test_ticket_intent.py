@@ -31,6 +31,20 @@ def test_remote_ticket_requests_are_classified_separately():
     assert trello.kind == "external_ticket"
 
 
+def test_ticket_requested_in_downloads_routes_to_file_creation():
+    intent = classify_ticket_intent("create a ticket in Downloads for the onboarding bug")
+
+    assert intent.kind == "ticket_file"
+    assert intent.confidence >= 0.9
+
+
+def test_type_out_ticket_routes_to_typing_not_board_creation():
+    intent = classify_ticket_intent("type out a ticket for the login bug in the focused editor")
+
+    assert intent.kind == "type_text"
+    assert intent.confidence >= 0.9
+
+
 def test_decisions_ticket_routes_to_debug_project_tickets_when_debug_enabled(monkeypatch):
     monkeypatch.setenv("DEBUG", "True")
 

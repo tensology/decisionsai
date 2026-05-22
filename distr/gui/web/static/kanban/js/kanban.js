@@ -396,12 +396,131 @@
         modalHelpers.hideAllModals(exceptId);
     }
 
+    function hideKanbanFloatingUi() {
+        var ids = [
+            "kb-board-ctx-menu",
+            "kb-ext-board-ctx-menu",
+            "kb-wa-ctx-menu",
+            "kb-wa-msg-ctx-menu",
+            "kb-wa-sync-ctx-menu",
+            "kb-wa-msg-actions-menu",
+            "kb-wa-media-lightbox",
+            "kb-wa-media-lightbox-inner",
+        ];
+        ids.forEach(function(id) {
+            var el = document.getElementById(id);
+            if (!el) return;
+            if (id === "kb-wa-media-lightbox-inner") el.innerHTML = "";
+            else {
+                el.classList.add("hidden");
+                el.classList.remove("flex");
+            }
+        });
+        try { if (currentBoard && boardSettings) boardSettings.hideBoardContextMenu(); } catch (e) {}
+        try { if (waManagement) waManagement.hideWaChatContextMenu(); } catch (e) {}
+        try { if (waManagement) waManagement.hideWaMsgContextMenuLocal(); } catch (e) {}
+        try { if (waManagement) waManagement.hideWaSyncContextMenu(); } catch (e) {}
+        try { if (waRuntime && typeof waRuntime.hideWaMsgActionsMenu === "function") waRuntime.hideWaMsgActionsMenu(); } catch (e) {}
+    }
+
+    function resetMessagesSurfaceForBoardMode() {
+        hideKanbanFloatingUi();
+        clearWaPendingAttachment();
+        if (waVoiceRecorder && waVoiceRecording) {
+            try { waVoiceRecorder.stop(); } catch (e) {}
+        }
+        try { if (waRuntime) waRuntime.resetWhatsAppVoiceRecordingUi(); } catch (e) {}
+        waSelectionMode = false;
+        waSelectedMessageIds = {};
+        waSidebarChatListMode = false;
+        waSelectedChatPhones = {};
+        waPendingAttachment = null;
+        updateWaThreadSelectToggleUi();
+        updateWaSidebarFooterUi();
+        var msgView = document.getElementById("kb-wa-thread-view");
+        if (msgView) msgView.classList.add("hidden");
+        waShowThreadGlobalEmpty(false);
+    }
+
+    function resetBoardSurfaceForMessagesMode() {
+        hideKanbanFloatingUi();
+        hideAllKanbanModals();
+        var loading = document.getElementById("kb-loading");
+        var boardView = document.getElementById("kb-board-view");
+        var emptyView = document.getElementById("kb-empty");
+        if (loading) loading.classList.add("hidden");
+        if (boardView) boardView.classList.add("hidden");
+        if (emptyView) emptyView.classList.add("hidden");
+    }
+
     function showKanbanConfirm(opts) {
         modalHelpers.showConfirm(opts);
     }
     function hideKanbanConfirm() {
         modalHelpers.hideConfirm();
     }
+
+    function isKeyboardEditingTarget(target) {
+        if (!target) return false;
+        var tag = (target.tagName || "").toLowerCase();
+        return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
+    }
+
+    function findLocalBoardById(boardId) {
+        return (dbBoards || []).find(function(board) { return String(board.id) === String(boardId); }) || null;
+    }
+
+    function clearSelectedBoardSurface() {
+        currentBoard = null;
+        currentBoardData = null;
+        var boardView = document.getElementById("kb-board-view");
+        var loading = document.getElementById("kb-loading");
+        var empty = document.getElementById("kb-empty");
+        if (boardView) boardView.classList.add("hidden");
+        if (loading) loading.classList.add("hidden");
+        if (empty) empty.classList.remove("hidden");
+    }
+
+    function deleteLocalBoardById(boardId) {
+        return apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
+            showSnackbar("Board deleted");
+            if (currentBoard && String(currentBoard.id) === String(boardId)) {
+                clearSelectedBoardSurface();
+            }
+            return loadBoards(true);
+        }).catch(function(e) {
+            showSnackbar("Delete failed: " + e.message, "error");
+        });
+    }
+
+    function confirmDeleteCurrentLocalBoard() {
+        if (!currentBoard || currentBoard.source !== "database" || !currentBoard.id) return;
+        var boardId = currentBoard.id;
+        var board = findLocalBoardById(boardId);
+        var name = (board && board.name) || (currentBoardData && currentBoardData.name) || "this board";
+        showKanbanConfirm({
+            title: "Delete board",
+            message: 'Delete board "' + name + '" and all its tickets? This cannot be undone.',
+            confirmLabel: "Delete",
+            danger: true,
+            onConfirm: function() {
+                hideKanbanConfirm();
+                deleteLocalBoardById(boardId);
+            },
+        });
+    }
+
+    function shouldOpenSelectedBoardDeleteConfirm(e) {
+        if (!e || e.key !== "Delete") return false;
+        if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
+        if (isKeyboardEditingTarget(e.target)) return false;
+        if (isAnyKanbanModalOpen()) return false;
+        if (isMessagesPanelVisible()) return false;
+        var boardView = document.getElementById("kb-board-view");
+        if (!boardView || boardView.classList.contains("hidden")) return false;
+        return !!(currentBoard && currentBoard.source === "database" && currentBoard.id);
+    }
+
     /** External ticket modal reuses the same DOM as local tickets — clear DB ticket id so actions hit the Jira path. */
     function prepareExternalTicketModal() {
         modalTicketId = null;
@@ -413,6 +532,7 @@
         stripHtml: stripHtml,
         truncate: truncate,
         setPriorityButtons: setPriorityButtons,
+        setTicketComplexity: setTicketComplexity,
         renderModalLinks: renderModalLinks,
         switchTicketTab: switchTicketTab,
         showSnackbar: showSnackbar,
@@ -458,7 +578,11 @@
         getDbBoards: function() { return dbBoards; },
         getCtxMenuBoardId: function() { return ctxMenuBoardId; },
         setCtxMenuBoardId: function(v) { ctxMenuBoardId = v; },
+        showKanbanConfirm: showKanbanConfirm,
+        hideKanbanConfirm: hideKanbanConfirm,
         closeWhatsAppThread: closeWhatsAppThread,
+        resetMessagesSurfaceForBoardMode: resetMessagesSurfaceForBoardMode,
+        resetBoardSurfaceForMessagesMode: resetBoardSurfaceForMessagesMode,
         switchSourceTab: switchSourceTab,
         getExternalBoards: getExternalBoards,
         renderExternalBoards: renderExternalBoards,
@@ -736,6 +860,75 @@
         document.getElementById("kb-jira-boards-container").classList.toggle("hidden", src !== "jira");
     }
 
+    function focusFirstBoardInActiveSource() {
+        var containerId = activeSourceTab === "trello" ? "kb-trello-boards" : (activeSourceTab === "jira" ? "kb-jira-boards" : "kb-db-boards");
+        var first = document.querySelector("#" + containerId + " .kb-board-item");
+        if (first) first.focus();
+    }
+
+    function getActiveBoardRows() {
+        var containerId = activeSourceTab === "trello" ? "kb-trello-boards" : (activeSourceTab === "jira" ? "kb-jira-boards" : "kb-db-boards");
+        return Array.prototype.slice.call(document.querySelectorAll("#" + containerId + " .kb-board-item"));
+    }
+
+    function focusBoardRowByOffset(offset) {
+        var rows = getActiveBoardRows();
+        if (!rows.length) return;
+        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".kb-board-item") : null;
+        var idx = rows.indexOf(active);
+        if (idx < 0 && currentBoard) {
+            idx = rows.findIndex(function(row) {
+                return String(row.dataset.boardId) === String(currentBoard.id) && String(row.dataset.boardSource || "database") === String(currentBoard.source || "database");
+            });
+        }
+        if (idx < 0) idx = offset > 0 ? -1 : 0;
+        var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
+        if (next) next.focus();
+    }
+
+    function bindBoardSidebarKeyboard() {
+        var sidebar = document.getElementById("kb-sidebar") || document.getElementById("kb-panel-tickets");
+        if (!sidebar || sidebar.dataset.boardKeyboardBound === "1") return;
+        sidebar.dataset.boardKeyboardBound = "1";
+        sidebar.addEventListener("keydown", function(e) {
+            if (isKeyboardEditingTarget(e.target)) return;
+            var sourceTab = e.target && e.target.closest ? e.target.closest(".kb-src-tab") : null;
+            if (sourceTab && (e.key === "Enter" || e.key === " ")) {
+                e.preventDefault();
+                switchSourceTab(sourceTab.dataset.src || "local");
+                focusFirstBoardInActiveSource();
+                return;
+            }
+            if (sourceTab && (e.key === "ArrowDown" || e.key === "ArrowUp")) {
+                e.preventDefault();
+                var tabs = Array.prototype.slice.call(document.querySelectorAll(".kb-src-tab:not(.hidden)"));
+                var idx = tabs.indexOf(sourceTab);
+                var next = tabs[Math.max(0, Math.min(tabs.length - 1, idx + (e.key === "ArrowDown" ? 1 : -1)))];
+                if (next) next.focus();
+                return;
+            }
+            if (e.target && e.target.closest && e.target.closest(".kb-board-item")) {
+                if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                    e.preventDefault();
+                    focusBoardRowByOffset(e.key === "ArrowDown" ? 1 : -1);
+                } else if (e.key === "Enter") {
+                    var row = e.target.closest(".kb-board-item");
+                    if (row) {
+                        e.preventDefault();
+                        selectBoard(row.dataset.boardSource || "database", row.dataset.boardId, row.dataset.boardUrl || "");
+                    }
+                } else if (e.key === "Delete") {
+                    var delRow = e.target.closest(".kb-board-item");
+                    if (delRow && (delRow.dataset.boardSource || "database") === "database") {
+                        e.preventDefault();
+                        selectBoard("database", delRow.dataset.boardId);
+                        setTimeout(confirmDeleteCurrentLocalBoard, 0);
+                    }
+                }
+            }
+        });
+    }
+
     function renderSidebarBoards(boards) {
         var container = document.getElementById("kb-db-boards");
         var search = (document.getElementById("kb-search").value || "").toLowerCase();
@@ -747,9 +940,14 @@
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? " active" : "");
             div.draggable = true;
             div.dataset.boardId = b.id;
+            div.dataset.boardSource = "database";
+            div.tabIndex = 0;
+            div.setAttribute("role", "option");
+            div.setAttribute("aria-selected", currentBoard && currentBoard.id === b.id && currentBoard.source === "database" ? "true" : "false");
             var inUseTag = b.in_use ? '<span style="font-size:9px;padding:1px 5px;border-radius:3px;background:#f97316;color:#fff;margin-left:4px;flex-shrink:0">IN USE</span>' : '';
             div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(b.color || '#f97316') + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + inUseTag + (b.agent_enabled ? '<svg class="kb-agent-indicator" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#f97316" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" style="flex-shrink:0" title="Agent check-in enabled"><rect x="3" y="11" width="18" height="10" rx="2"/><circle cx="12" cy="5" r="3"/><line x1="12" y1="8" x2="12" y2="11"/></svg>' : '');
             div.onclick = function() { selectBoard("database", b.id); };
+            div.onfocus = function() { if (!currentBoard || currentBoard.id !== b.id || currentBoard.source !== "database") selectBoard("database", b.id); };
             div.ondblclick = function() { boardSettings.openBoardModal(b.id); };
             div.ondragstart = function(e) { e.dataTransfer.setData("text/plain", "board:" + b.id); div.classList.add("dragging"); };
             div.ondragend = function() { div.classList.remove("dragging"); };
@@ -802,6 +1000,12 @@
         filtered.forEach(function(b) {
             var div = document.createElement("div");
             div.className = "kb-board-item text-gray-300" + (currentBoard && currentBoard.id === b.id && currentBoard.source === source ? " active" : "");
+            div.dataset.boardId = b.id;
+            div.dataset.boardSource = source;
+            div.dataset.boardUrl = b.url || "";
+            div.tabIndex = 0;
+            div.setAttribute("role", "option");
+            div.setAttribute("aria-selected", currentBoard && currentBoard.id === b.id && currentBoard.source === source ? "true" : "false");
             var defaultColor = source === "trello" ? "#0079bf" : "#0052cc";
             var iconColor = b.color || defaultColor;
             var agentTag = b.agent_enabled
@@ -809,6 +1013,7 @@
                 : "";
             div.innerHTML = '<span class="kb-src-icon" style="background:' + esc(iconColor) + '"></span><span class="flex-1 truncate">' + esc(b.name) + '</span>' + agentTag;
             div.onclick = function() { selectBoard(source, b.id, b.url); };
+            div.onfocus = function() { if (!currentBoard || currentBoard.id !== b.id || currentBoard.source !== source) selectBoard(source, b.id, b.url); };
             div.oncontextmenu = function(e) { e.preventDefault(); showExtBoardContextMenu(e, source, b.id, b.url); };
             container.appendChild(div);
         });
@@ -989,17 +1194,20 @@
             addTicketBtn.title = canCreateExternal
                 ? ("Create a ticket on this " + (currentBoard.source === 'trello' ? 'Trello' : 'Jira') + " board")
                 : "You do not have permission to create tickets on this board";
+            addTicketBtn.setAttribute("aria-label", addTicketBtn.textContent);
         } else {
             addTicketBtn.style.display = "";
             addTicketBtn.textContent = "+ Add Ticket";
-            addTicketBtn.title = "";
+            addTicketBtn.title = "Add ticket";
+            addTicketBtn.setAttribute("aria-label", "Add ticket");
         }
-        // Configure button — always shows gear icon + "Configure" label
+        // Configure button stays icon-only in the header; title/aria-label carry the text.
         var editBtn = document.getElementById("kb-edit-board");
         var editLabel = document.getElementById("kb-edit-board-label");
         editBtn.style.display = "";
         if (editLabel) editLabel.textContent = "Configure";
-        editBtn.title = isLocal ? "Configure board settings" : "Configure this external board (link project, workflow, etc.)";
+        editBtn.title = isLocal ? "Configure board settings" : "Configure this external board";
+        editBtn.setAttribute("aria-label", editBtn.title);
         // Delete button — hidden from header (available in right-click context menu)
         document.getElementById("kb-delete-board").style.display = "none";
 
@@ -1660,6 +1868,8 @@
             document.getElementById("kb-modal-ticket-desc").value = t.description || "";
             document.getElementById("kb-modal-ticket-estimate").value = t.time_estimate || "";
             document.getElementById("kb-modal-ticket-duration").value = t.time_spent || "";
+            setTicketComplexity(t.complexity || "medium");
+            renderTicketSourceMeta(t);
             setPriorityButtons(t.priority || "medium");
             renderModalLinks(t.links || []);
             renderModalFiles(t.files || []);
@@ -1826,6 +2036,7 @@
         var descArea = document.getElementById("kb-modal-ticket-desc");
         var estimateInput = document.getElementById("kb-modal-ticket-estimate");
         var durationInput = document.getElementById("kb-modal-ticket-duration");
+        var complexitySelect = document.getElementById("kb-modal-ticket-complexity");
         if (titleEl) {
             titleEl.readOnly = false;
             titleEl.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
@@ -1841,6 +2052,12 @@
             durationInput.readOnly = false;
             durationInput.classList.remove("bg-[#152054]/50", "cursor-not-allowed");
         }
+        if (complexitySelect) {
+            complexitySelect.value = "medium";
+            complexitySelect.disabled = false;
+            complexitySelect.classList.remove("opacity-50", "cursor-not-allowed");
+        }
+        renderTicketSourceMeta(null);
         var richDiv = descArea.parentElement.querySelector(".kb-ext-rich-desc");
         if (richDiv) richDiv.remove();
         document.querySelectorAll("#kb-modal-priority-btns button").forEach(function(btn) {
@@ -1859,21 +2076,20 @@
 
     function setModalProjectActionState(enabled) {
         var canPush = !!enabled;
-        var disabledTip = "link ticket/board to project.";
         var cliBtn = document.getElementById("kb-modal-act-cli");
         var projectBtn = document.getElementById("kb-modal-act-project");
         if (cliBtn) {
-            cliBtn.disabled = !canPush;
-            cliBtn.classList.toggle("opacity-40", !canPush);
-            cliBtn.classList.toggle("cursor-not-allowed", !canPush);
-            cliBtn.title = canPush ? "Push to CLI" : disabledTip;
+            cliBtn.classList.toggle("hidden", !canPush);
+            cliBtn.disabled = false;
+            cliBtn.classList.remove("opacity-40", "cursor-not-allowed");
+            cliBtn.title = "Push to CLI";
             cliBtn.setAttribute("aria-label", cliBtn.title);
         }
         if (projectBtn) {
-            projectBtn.disabled = !canPush;
-            projectBtn.classList.toggle("opacity-40", !canPush);
-            projectBtn.classList.toggle("cursor-not-allowed", !canPush);
-            projectBtn.title = canPush ? "Send to Project (.tickets)" : disabledTip;
+            projectBtn.classList.toggle("hidden", !canPush);
+            projectBtn.disabled = false;
+            projectBtn.classList.remove("opacity-40", "cursor-not-allowed");
+            projectBtn.title = "Send to Project (.tickets)";
             projectBtn.setAttribute("aria-label", projectBtn.title);
         }
     }
@@ -1889,6 +2105,41 @@
     function getSelectedPriority() {
         var active = document.querySelector("#kb-modal-priority-btns button.bg-\\[\\#f97316\\]");
         return active ? active.dataset.pri : "medium";
+    }
+
+    function setTicketComplexity(value) {
+        var select = document.getElementById("kb-modal-ticket-complexity");
+        if (!select) return;
+        var normalized = ["low", "medium", "high"].indexOf((value || "").toLowerCase()) >= 0 ? value.toLowerCase() : "medium";
+        select.value = normalized;
+    }
+
+    function getTicketComplexity() {
+        var select = document.getElementById("kb-modal-ticket-complexity");
+        return select && select.value ? select.value : "medium";
+    }
+
+    function renderTicketSourceMeta(ticket) {
+        var box = document.getElementById("kb-modal-source-meta");
+        var body = document.getElementById("kb-modal-source-meta-body");
+        if (!box || !body) return;
+        var source = ticket && (ticket.source_provider || ticket.external_source || (ticket.whatsapp_message_id ? "whatsapp" : ""));
+        if (!source) {
+            box.classList.add("hidden");
+            body.innerHTML = "";
+            return;
+        }
+        var rows = [];
+        rows.push("<div><span class=\"text-gray-500\">Provider:</span> " + esc(source) + "</div>");
+        if (ticket.source_contact) rows.push("<div><span class=\"text-gray-500\">Contact:</span> " + esc(ticket.source_contact) + "</div>");
+        if (ticket.source_external_id || ticket.external_id || ticket.whatsapp_message_wa_id) {
+            rows.push("<div><span class=\"text-gray-500\">ID:</span> " + esc(ticket.source_external_id || ticket.external_id || ticket.whatsapp_message_wa_id) + "</div>");
+        }
+        if (ticket.source_thread_id) rows.push("<div><span class=\"text-gray-500\">Thread:</span> " + esc(ticket.source_thread_id) + "</div>");
+        var url = ticket.source_url || ticket.external_url || "";
+        if (url) rows.push('<div><a href="' + esc(url) + '" target="_blank" class="text-[#f97316] hover:underline">Open source</a></div>');
+        body.innerHTML = rows.join("");
+        box.classList.remove("hidden");
     }
 
     var isValidTimeTrackingValue = commonUtils.isValidTimeTrackingValue;
@@ -1909,6 +2160,7 @@
             title: document.getElementById("kb-modal-ticket-title").value.trim(),
             description: document.getElementById("kb-modal-ticket-desc").value.trim(),
             priority: getSelectedPriority(),
+            complexity: getTicketComplexity(),
             time_estimate: estimate,
             time_spent: duration,
             linked_workflow_id: parseInt(document.getElementById("kb-modal-link-workflow").value) || null,
@@ -2823,6 +3075,7 @@
         boardSettings.bindTopLevel();
         boardSettings.bindGlobalSettings();
         boardSettings.bindBoardActions();
+        bindBoardSidebarKeyboard();
 
         // Ticket modal tabs
         document.querySelectorAll(".kb-tm-tab").forEach(function(btn) {
@@ -2987,6 +3240,12 @@
                 e.stopPropagation();
                 modalHelpers.invokeConfirmAction();
             }
+        }, true);
+        document.addEventListener("keydown", function(e) {
+            if (!shouldOpenSelectedBoardDeleteConfirm(e)) return;
+            e.preventDefault();
+            e.stopPropagation();
+            confirmDeleteCurrentLocalBoard();
         }, true);
 
         // Copy modal

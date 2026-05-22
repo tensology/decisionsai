@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-STT / VibeVoice diagnostic — compares Decisions DB settings to runtime readiness
+STT diagnostic — compares Decisions DB settings to runtime readiness
 and optionally runs a file transcription. Scans recent decisions.log for STT errors.
 
 Usage (from repo root, app venv active):
@@ -14,12 +14,6 @@ Usage (from repo root, app venv active):
   python bin/diagnose_stt.py --transcribe-mic [--mic-seconds 5]
       # Record from the default system microphone, then transcribe that WAV
       # (same file STT path the app uses after capture). Speak while it records.
-  python bin/diagnose_stt.py --transcribe-mic --stt-engine vibevoice_asr
-      # Same mic test but force VibeVoice ASR (use DECISIONSAI_VIBEVOICE_ASR_DEVICE=cpu on Mac if MPS fails)
-  # First ASR run can pull TWO huge Hugging Face dirs: microsoft/VibeVoice-ASR and (by default)
-  # Qwen/Qwen2.5-7B for the processor — many GB total, several minutes, looks like "more downloading".
-  # Prefetch: huggingface-cli download microsoft/VibeVoice-ASR && huggingface-cli download Qwen/Qwen2.5-7B
-  # Offline-only loads: DECISIONSAI_VIBEVOICE_ASR_HF_LOCAL_ONLY=1 (cache must already be complete).
 """
 
 from __future__ import annotations
@@ -38,7 +32,7 @@ sys.path.insert(0, str(PROJECT_ROOT))
 
 # Log / DB discovery (aligned with bin/diagnose.py)
 def _maybe_prefetch_local_models_for_stt_cli(args: argparse.Namespace) -> None:
-    """Warm Vosk / Whisper / VibeVoice HF caches before mic or file transcribe (opt-out via env)."""
+    """Warm Vosk / Whisper caches before mic or file transcribe (opt-out via env)."""
     if (os.environ.get("DECISIONS_AI_SKIP_MODEL_PREFETCH") or "").strip() == "1":
         return
     if not (
@@ -52,7 +46,7 @@ def _maybe_prefetch_local_models_for_stt_cli(args: argparse.Namespace) -> None:
     if not script.is_file():
         print(f"\n  WARNING: missing {script} — skip prefetch.\n")
         return
-    print("\n=== Prefetch local STT/TTS caches (Vosk, Whisper, VibeVoice HF if installed) ===")
+    print("\n=== Prefetch local STT/TTS caches (Vosk, Whisper) ===")
     r = subprocess.run(
         [sys.executable, str(script), "--only", "all"],
         cwd=str(PROJECT_ROOT),
@@ -63,26 +57,9 @@ def _maybe_prefetch_local_models_for_stt_cli(args: argparse.Namespace) -> None:
         print("  Prefetch done.\n")
 
 
-def _print_vibevoice_asr_preflight() -> None:
-    """One-time console hints so HF multi-repo loads are not mistaken for a runaway downloader."""
-    lm = (os.environ.get("DECISIONSAI_VIBEVOICE_ASR_LM") or "Qwen/Qwen2.5-7B").strip()
-    mid = (os.environ.get("DECISIONSAI_VIBEVOICE_ASR_MODEL") or "microsoft/VibeVoice-ASR").strip()
-    dev = (os.environ.get("DECISIONSAI_VIBEVOICE_ASR_DEVICE") or "(auto)").strip() or "(auto)"
-    print(
-        "\n  --- VibeVoice ASR (local) ---\n"
-        f"  HF repos: {mid!r} + LM {lm!r} (processor ties them together — expect large downloads on first run).\n"
-        f"  Device: {dev}  |  cache: ~/.cache/huggingface/hub (or HF_HOME)\n"
-        "  If a load crashes mid-way, re-running mostly resumes from cache; the app now keeps the\n"
-        "  processor in memory on retry so it should not re-hit the LM download path in the same process.\n"
-        "  CPU + 7B LM is RAM-heavy — OOM can look like an instant crash.\n"
-        "  Prefetch without this script: huggingface-cli download "
-        f"{mid} && huggingface-cli download {lm}\n"
-    )
-
-
 STT_LOG_PATTERNS = re.compile(
-    r"vibevoice|VibeVoice|vibevoice_asr|VibeVoiceAsr|ASR|resolve_stt|transcription_model|"
-    r"Falling back.*STT|run_stt|get_asr_batch|transcription error|STT:.*[Ee]rror|ImportError.*vibevoice",
+    r"ASR|resolve_stt|transcription_model|Falling back.*STT|run_stt|"
+    r"transcription error|STT:.*[Ee]rror",
     re.IGNORECASE,
 )
 
@@ -135,13 +112,6 @@ def transcribe_wav_for_configured_engine(
 ) -> tuple[str, str]:
     """Return (label, text_or_error) using file-based STT only (no mic)."""
     engine = (stt_cfg or {}).get("engine")
-
-    if engine == "vibevoice_asr":
-        from distr.core.agent.services.tts.vibevoice_asr_inference import transcribe_audio_file
-
-        _print_vibevoice_asr_preflight()
-        text = transcribe_audio_file(os.path.abspath(wav_path), max_new_tokens=1024)
-        return "VibeVoice ASR (file)", (text or "").strip()
 
     if engine == "whisper":
         from distr.core.agent.libs import WHISPER_AVAILABLE
@@ -276,9 +246,6 @@ def run_mic_record_then_stt(settings: dict, stt_cfg: dict, seconds: float) -> in
             wf.writeframes(audio.astype("int16").tobytes())
 
         print("  Transcribing with your configured STT (same file API as after PTT capture)…")
-        if (stt_cfg or {}).get("engine") == "vibevoice_asr":
-            if not (os.environ.get("DECISIONSAI_VIBEVOICE_ASR_DEVICE") or "").strip():
-                print("  Hint: export DECISIONSAI_VIBEVOICE_ASR_DEVICE=cpu if MPS crashes or hangs.")
 
         label, result = transcribe_wav_for_configured_engine(settings, stt_cfg, wav_path)
         print(f"  Engine: {label}")
@@ -295,22 +262,7 @@ def run_mic_record_then_stt(settings: dict, stt_cfg: dict, seconds: float) -> in
 
 def _engine_readiness(settings: dict, engine: str | None) -> dict[str, object]:
     out: dict[str, object] = {"engine": engine}
-    if engine == "vibevoice_asr":
-        try:
-            from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-
-            out["vibevoice_package"] = bool(vibevoice_asr_runtime_ready())
-        except Exception as e:
-            out["vibevoice_package"] = False
-            out["vibevoice_error"] = str(e)
-        try:
-            from distr.core.agent.services import VibeVoiceAsrSTTService
-
-            out["VibeVoiceAsrSTTService"] = VibeVoiceAsrSTTService is not None
-        except Exception as e:
-            out["VibeVoiceAsrSTTService"] = False
-            out["service_import_error"] = str(e)
-    elif engine == "whisper":
+    if engine == "whisper":
         try:
             from distr.core.agent.libs import WHISPER_AVAILABLE
 
@@ -333,13 +285,13 @@ def _engine_readiness(settings: dict, engine: str | None) -> dict[str, object]:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="Diagnose Decisions STT vs settings")
-    parser.add_argument("--grep-logs", action="store_true", help="Print recent log lines matching STT/VibeVoice")
+    parser.add_argument("--grep-logs", action="store_true", help="Print recent log lines matching STT")
     parser.add_argument("--log-lines", type=int, default=6000, help="Tail N lines of log before grep")
     parser.add_argument("--doctor", action="store_true", help="Run transcription_doctor tool (slower)")
     parser.add_argument(
         "--transcribe-wav",
         metavar="PATH",
-        help="Run VibeVoice transcribe_audio_file on this wav (loads HF models — slow)",
+        help="Transcribe this wav with the configured or overridden STT engine",
     )
     parser.add_argument(
         "--tts-roundtrip",
@@ -360,7 +312,7 @@ def main() -> int:
     parser.add_argument(
         "--stt-engine",
         metavar="ENGINE",
-        help="Override STT engine for --transcribe-mic / --tts-roundtrip (e.g. vibevoice_asr, whisper, vosk)",
+        help="Override STT engine for --transcribe-mic / --tts-roundtrip / --transcribe-wav (e.g. whisper, vosk)",
     )
     args = parser.parse_args()
 
@@ -394,7 +346,6 @@ def main() -> int:
         print(f"  resolve_stt_config -> {stt_cfg}")
     if engine is None:
         print("  WARNING: engine is None — string did not match known STT labels.")
-        print("  For VibeVoice ASR use exactly e.g. 'VibeVoice ASR (Local)' in Settings → LLMs.")
 
     print("\n=== Readiness for resolved engine ===")
     ready = _engine_readiness(settings, engine)
@@ -403,21 +354,11 @@ def main() -> int:
 
     if args.grep_logs:
         hits = _grep_stt_logs(log_path, args.log_lines)
-        print(f"\n=== Log grep (last {args.log_lines} lines, STT/VibeVoice related) — {len(hits)} hits ===")
+        print(f"\n=== Log grep (last {args.log_lines} lines, STT related) — {len(hits)} hits ===")
         if not hits:
             print("  (no matches — try increasing --log-lines or confirm log path)")
         for line in hits[-80:]:
             print(line)
-        joined = "\n".join(hits)
-        if "VibeVoice ASR: loading" in joined and "VibeVoice ASR: loaded" not in joined:
-            print(
-                "\n  NOTE: Logs show ASR load started but never logged 'VibeVoice ASR: loaded'. "
-                "Usually that means the process is still downloading HF weights, is blocked inside "
-                "the large model load on MPS, or exited before finishing. Try:\n"
-                "    export DECISIONSAI_VIBEVOICE_ASR_DEVICE=cpu\n"
-                "    # prefetch: huggingface-cli download microsoft/VibeVoice-ASR Qwen/Qwen2.5-7B\n"
-                "  preprocessor_config.json warnings from upstream are often benign (defaults apply)."
-            )
 
     if args.doctor:
         print("\n=== transcription_doctor ===")
@@ -443,13 +384,13 @@ def main() -> int:
         if not wav.is_file():
             print(f"\nERROR: --transcribe-wav file not found: {wav}")
             return 1
-        print(f"\n=== transcribe_audio_file({wav}) — may download weights ===")
-        _print_vibevoice_asr_preflight()
+        print(f"\n=== transcribe configured STT from file: {wav} ===")
         try:
-            from distr.core.agent.services.tts.vibevoice_asr_inference import transcribe_audio_file
-
-            out = transcribe_audio_file(str(wav.resolve()), max_new_tokens=512)
+            label, out = transcribe_wav_for_configured_engine(settings, stt_cfg, str(wav.resolve()))
+            print(f"  Engine: {label}")
             print(f"  result: {out!r}")
+            if out.startswith("ERROR:"):
+                return 1
         except Exception as e:
             print(f"  FAILED: {type(e).__name__}: {e}")
             import traceback
@@ -464,11 +405,6 @@ def main() -> int:
         mic_rc = run_mic_record_then_stt(settings, stt_cfg, args.mic_seconds)
         rc = mic_rc if mic_rc != 0 else rc
 
-    print("\n=== Session fallback reminder ===")
-    print(
-        "  If vibevoice package is missing, session.py falls back to Whisper then Vosk "
-        "without changing your DB label — UI may still say VibeVoice while mic uses Whisper."
-    )
     return rc
 
 

@@ -94,21 +94,18 @@ def register_routes(router, templates):
                 voices = [{"id": "default", "name": "Default (F5-TTS Base)"}]
             elif provider_id == "voxcpm":
                 voices = [{"id": "default", "name": "Default (VoxCPM2)"}]
-            elif provider_id == "vibevoice_realtime":
-                try:
-                    from distr.core.agent.services.tts.registry import tts_registry
-
-                    voices = list(tts_registry.get("vibevoice_realtime").get_voices())
-                except Exception as e:
-                    logger.warning("Could not load VibeVoice Realtime voices: %s", e)
-                    voices = []
+            elif provider_id == "supertonic":
+                from distr.core.agent.services.tts.supertonic_descriptor import SUPERTONIC_VOICES
+                voices = [{"id": vid, "name": name} for vid, name in SUPERTONIC_VOICES.items()]
+            elif provider_id == "chatterbox":
+                voices = [{"id": "default", "name": "Default (Chatterbox)"}]
         except Exception as e:
             logger.warning("Could not load voices for %s: %s", provider_id, e)
 
         # Append custom voices from DB (status=ready)
         # For ElevenLabs: API cloned voices are already marked custom above.
         # DB entries take precedence — replace API-cloned entries that match DB records.
-        if provider_id in ("kokoro", "elevenlabs", "coqui", "f5tts", "voxcpm"):
+        if provider_id in ("kokoro", "elevenlabs", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox"):
             try:
                 from distr.core.db import get_session
                 from sqlalchemy import text
@@ -312,6 +309,29 @@ def register_routes(router, templates):
             logger.debug("Could not load VoxCPM custom voices: %s", e)
         return voices
 
+    @router.get("/voices/chatterbox")
+    async def get_chatterbox_voices():
+        """Return Chatterbox voice list (default + reference-audio custom voices)."""
+        voices = [{"id": "default", "name": "Default (Chatterbox)"}]
+        try:
+            from distr.core.db import get_session, CustomVoice
+            session = get_session()
+            try:
+                customs = session.query(CustomVoice).filter(
+                    CustomVoice.provider == 'chatterbox', CustomVoice.status == 'ready'
+                ).all()
+                for cv in customs:
+                    voices.append({
+                        "id": cv.provider_voice_id or f"custom_{cv.id}",
+                        "name": f"⭐ {cv.name}",
+                        "custom": True,
+                    })
+            finally:
+                session.close()
+        except Exception as e:
+            logger.debug("Could not load Chatterbox custom voices: %s", e)
+        return voices
+
     # ── Custom Voices CRUD ──────────────────────────────────────────────
 
     @router.get("/custom-voices")
@@ -355,8 +375,8 @@ def register_routes(router, templates):
 
         if not name:
             return JSONResponse({"error": "Name is required"}, status_code=400)
-        if provider not in ("elevenlabs", "kokoro", "coqui", "f5tts", "voxcpm"):
-            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, f5tts, or voxcpm"}, status_code=400)
+        if provider not in ("elevenlabs", "kokoro", "coqui", "f5tts", "voxcpm", "supertonic", "chatterbox"):
+            return JSONResponse({"error": "Provider must be elevenlabs, kokoro, coqui, f5tts, voxcpm, supertonic, or chatterbox"}, status_code=400)
 
         # Check ElevenLabs limit (max 5 custom voices)
         session = get_session()
@@ -391,6 +411,12 @@ def register_routes(router, templates):
                     with open(dest, 'wb') as f:
                         f.write(content)
                     saved_files.append(dest)
+
+            if provider == "supertonic" and not any(p.lower().endswith(".json") for p in saved_files):
+                voice.status = "failed"
+                voice.error_message = "Supertonic custom voices require a Voice Builder .json file"
+                session.commit()
+                return JSONResponse({"error": "Supertonic custom voices require a Voice Builder .json file"}, status_code=400)
 
             if not saved_files:
                 voice.status = "failed"

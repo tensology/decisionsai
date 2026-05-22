@@ -52,7 +52,7 @@
         el.innerHTML = filtered.map(function(a) {
             var label = a.is_instruction ? " <span class=\"text-xs text-gray-500\">(instruction)</span>" : "";
             var active = currentActionId === a.id ? " bg-white/10 border-[#f97316]" : " border-transparent hover:bg-white/5";
-            return "<div class=\"action-item-wrapper flex items-center gap-1 rounded border" + active + " group\" data-id=\"" + a.id + "\">" +
+            return "<div class=\"action-item-wrapper flex items-center gap-1 rounded border" + active + " group focus:outline-none focus:ring-2 focus:ring-[#f97316]/60\" data-id=\"" + a.id + "\" tabindex=\"0\" role=\"option\" aria-selected=\"" + (currentActionId === a.id ? "true" : "false") + "\">" +
                 "<button type=\"button\" class=\"action-item flex-1 min-w-0 text-left px-3 py-2 text-white text-sm\" data-id=\"" + a.id + "\">" + escapeAttr(a.title || "Untitled") + label + "</button>" +
                 "<button type=\"button\" class=\"action-item-delete p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/20 flex-shrink-0\" data-id=\"" + a.id + "\" aria-label=\"Delete\">" + deleteSvg + "</button>" +
                 "</div>";
@@ -75,6 +75,55 @@
                 e.preventDefault();
                 showActionContextMenu(parseInt(wrap.getAttribute("data-id"), 10), e.clientX, e.clientY);
             });
+            wrap.addEventListener("focus", function() {
+                var id = parseInt(wrap.getAttribute("data-id"), 10);
+                if (id && currentActionId !== id) selectAction(id);
+            });
+        });
+    }
+
+    function isTypingTarget(target) {
+        if (!target) return false;
+        var tag = (target.tagName || "").toLowerCase();
+        return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
+    }
+
+    function focusActionRowByOffset(offset) {
+        var rows = Array.prototype.slice.call(document.querySelectorAll("#actions-list .action-item-wrapper"));
+        if (!rows.length) return;
+        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".action-item-wrapper") : null;
+        var idx = rows.indexOf(active);
+        if (idx < 0 && currentActionId != null) {
+            idx = rows.findIndex(function(row) { return String(row.getAttribute("data-id")) === String(currentActionId); });
+        }
+        if (idx < 0) idx = offset > 0 ? -1 : 0;
+        var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
+        if (next) next.focus();
+    }
+
+    function bindActionListKeyboard() {
+        var listEl = document.getElementById("actions-list");
+        if (!listEl || listEl.dataset.keyboardBound === "1") return;
+        listEl.dataset.keyboardBound = "1";
+        listEl.addEventListener("keydown", function(e) {
+            if (isTypingTarget(e.target)) return;
+            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+                e.preventDefault();
+                focusActionRowByOffset(e.key === "ArrowDown" ? 1 : -1);
+            } else if (e.key === "Enter") {
+                var row = e.target && e.target.closest ? e.target.closest(".action-item-wrapper") : null;
+                if (row) {
+                    e.preventDefault();
+                    selectAction(parseInt(row.getAttribute("data-id"), 10));
+                }
+            } else if (e.key === "Delete") {
+                var delRow = e.target && e.target.closest ? e.target.closest(".action-item-wrapper") : null;
+                var id = delRow ? parseInt(delRow.getAttribute("data-id"), 10) : currentActionId;
+                if (id) {
+                    e.preventDefault();
+                    deleteActionFromList(id);
+                }
+            }
         });
     }
 
@@ -438,5 +487,8 @@
         });
     }
 
-    if (document.getElementById("actions-list")) loadActions();
+    if (document.getElementById("actions-list")) {
+        bindActionListKeyboard();
+        loadActions();
+    }
 })();

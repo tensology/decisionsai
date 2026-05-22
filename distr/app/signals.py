@@ -24,6 +24,8 @@ class SignalBridgeMixin:
             signal_manager.push_to_talk_stop.disconnect()
             signal_manager.dictation_hotkey_pressed.disconnect()
             signal_manager.dictation_hotkey_released.disconnect()
+            signal_manager.ticket_dictation_hotkey_pressed.disconnect()
+            signal_manager.ticket_dictation_hotkey_released.disconnect()
             signal_manager.voice_set_is_listening.disconnect()
             signal_manager.hands_free_mode_changed.disconnect()
             signal_manager.playback_speed_changed.disconnect()
@@ -45,7 +47,13 @@ class SignalBridgeMixin:
         signal_manager.dictation_hotkey_released.connect(
             lambda: self._send_command_to_agent('dictation_hotkey_released', {})
         )
-        logger.info("Connected dictation_hotkey_pressed/released to agent command queue")
+        signal_manager.ticket_dictation_hotkey_pressed.connect(
+            lambda: self._send_command_to_agent('ticket_dictation_hotkey_pressed', {})
+        )
+        signal_manager.ticket_dictation_hotkey_released.connect(
+            lambda: self._send_command_to_agent('ticket_dictation_hotkey_released', {})
+        )
+        logger.info("Connected dictation and ticket dictation hotkeys to agent command queue")
 
         # Interrupt TTS signal - when agent is dead, hide player locally (command won't reach agent)
         signal_manager.interrupt_tts.connect(self._on_interrupt_tts)
@@ -477,8 +485,46 @@ class SignalBridgeMixin:
                     'text': f"[Workflow Report]\n{report_text}",
                     'speak': False,
                 })
+                self._send_workflow_report_to_telegram(session_id, report_text)
                 logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
             except Exception as e:
                 logger.error("Workflow finished handler failed for session %d: %s", session_id, e, exc_info=True)
         signal_manager.workflow_finished.connect(on_workflow_finished)
         logger.info("Connected workflow_finished signal to agent report forwarding")
+
+    def _send_workflow_report_to_telegram(self, session_id, report_text):
+        """Send a concise workflow completion report to Telegram when connected."""
+        manager = getattr(self, "telegram_manager", None)
+        if manager is None:
+            return
+        try:
+            if hasattr(manager, "is_connected") and not manager.is_connected():
+                return
+        except Exception:
+            return
+
+        clean = (report_text or "").strip()
+        if not clean:
+            return
+        # Keep Telegram completion readable; full step details remain in workflow history.
+        lines = [line.strip() for line in clean.splitlines() if line.strip()]
+        head = lines[0] if lines else "Workflow finished."
+        step_lines = [line for line in lines if line[:2].strip(" .").isdigit()][:3]
+        body = "\n".join(step_lines)
+        if body:
+            msg = f"{head}\n\n{body}"
+        else:
+            msg = head
+        if len(msg) > 900:
+            msg = msg[:897].rstrip() + "..."
+        try:
+            manager.send_to_telegram(text=msg)
+        except TypeError:
+            manager.send_to_telegram(msg)
+        except Exception as exc:
+            logger.debug(
+                "Workflow finished: failed to send Telegram report for session %s: %s",
+                session_id,
+                exc,
+                exc_info=True,
+            )

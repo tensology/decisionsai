@@ -29,6 +29,8 @@ class AutoWorkflow(Base):
     context_rules = Column(Text, nullable=True)
     # Workflow input (replaces StepRunnerSession.workflow_input)
     workflow_input = Column(Text, nullable=True)
+    # JSON settings for queued ticket execution: sequencing, branching, concurrency.
+    run_settings = Column(Text, nullable=True)
 
     # Safety mode — auto-activated when workflow starts
     safety_mode = Column(String, nullable=True)  # null (off), careful, freeze, guard

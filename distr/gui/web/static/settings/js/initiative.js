@@ -37,19 +37,28 @@
                 setLevel(btn.dataset.level);
             });
         });
+        var rejectAllBtn = document.getElementById('initiative-reject-all-drafts');
+        if (rejectAllBtn) {
+            rejectAllBtn.addEventListener('click', function() {
+                window.rejectAllDrafts();
+            });
+        }
         loadInitiativeSettings();
         startInitiativeStatusPoll();
     }
 
     function updateDraftNavBadge(count) {
         var badge = document.getElementById('initiative-nav-badge');
+        var rejectAllBtn = document.getElementById('initiative-reject-all-drafts');
         if (!badge) return;
         var n = typeof count === 'number' ? count : 0;
         if (n > 0) {
             badge.textContent = n > 99 ? '99+' : String(n);
             badge.classList.remove('hidden');
+            if (rejectAllBtn) rejectAllBtn.classList.remove('hidden');
         } else {
             badge.classList.add('hidden');
+            if (rejectAllBtn) rejectAllBtn.classList.add('hidden');
         }
     }
 
@@ -239,6 +248,29 @@
                 showNotification('Failed to reject', 'error');
             }
         }).catch(function() { showNotification('Failed to reject', 'error'); });
+    };
+
+    window.rejectAllDrafts = function() {
+        var btn = document.getElementById('initiative-reject-all-drafts');
+        if (btn && btn.disabled) return;
+        if (btn) btn.disabled = true;
+
+        fetch('/api/initiative/drafts/reject-all', { method: 'POST' })
+        .then(function(r) {
+            return r.json().catch(function() { return {}; }).then(function(data) {
+                if (r.ok) {
+                    var removed = typeof data.removed === 'number' ? data.removed : 0;
+                    showNotification(removed > 0 ? ('Rejected ' + removed + ' pending action' + (removed === 1 ? '' : 's')) : 'No pending actions to reject', 'success');
+                    loadDrafts();
+                } else {
+                    showNotification('Failed to reject pending actions', 'error');
+                }
+            });
+        }).catch(function() {
+            showNotification('Failed to reject pending actions', 'error');
+        }).finally(function() {
+            if (btn) btn.disabled = false;
+        });
     };
 
     if (document.readyState === 'loading') {

@@ -52,6 +52,48 @@ except Exception:  # pragma: no cover - tests may stub distr.gui.web
 
 logger = logging.getLogger(__name__)
 
+DEFAULT_RUN_SETTINGS = {
+    "execution_mode": "sequential",
+    "concurrency_scope": "project",
+    "max_parallel_tickets": 3,
+    "branch_per_ticket": True,
+    "max_correction_attempts": 1,
+    "auto_dispatch_corrections": False,
+}
+
+
+def _workflow_run_settings(wf: AutoWorkflow) -> Dict[str, Any]:
+    try:
+        raw = json.loads(getattr(wf, "run_settings", None) or "{}")
+    except Exception:
+        raw = {}
+    if not isinstance(raw, dict):
+        raw = {}
+    settings = dict(DEFAULT_RUN_SETTINGS)
+    settings.update({k: v for k, v in raw.items() if k in settings})
+    settings["execution_mode"] = "parallel" if settings.get("execution_mode") == "parallel" else "sequential"
+    settings["concurrency_scope"] = "workflow" if settings.get("concurrency_scope") == "workflow" else "project"
+    try:
+        settings["max_parallel_tickets"] = max(1, min(12, int(settings.get("max_parallel_tickets") or 3)))
+    except Exception:
+        settings["max_parallel_tickets"] = 3
+    settings["branch_per_ticket"] = bool(settings.get("branch_per_ticket"))
+    try:
+        settings["max_correction_attempts"] = max(0, min(5, int(settings.get("max_correction_attempts") or 1)))
+    except Exception:
+        settings["max_correction_attempts"] = 1
+    settings["auto_dispatch_corrections"] = bool(settings.get("auto_dispatch_corrections"))
+    return settings
+
+
+def _run_project_id(run: AutoWorkflowRun) -> Optional[str]:
+    try:
+        data = json.loads(run.run_data or "{}")
+    except Exception:
+        data = {}
+    value = data.get("project_id") if isinstance(data, dict) else None
+    return str(value) if value not in (None, "") else None
+
 from distr.core.workflow.step_validator import build_step_config, validate_before_dispatch as _validate_step  # noqa: E402
 from distr.core.workflow.step_executor import StepExecutorMixin
 from distr.core.workflow.post_execution import PostExecutionMixin
@@ -116,7 +158,7 @@ def _append_workflow_summary_to_ticket(ticket, run_id: int, status: str, steps_s
             project_id=str(getattr(ticket, "linked_project_id", "") or "")
             if getattr(ticket, "linked_project_id", None) is not None
             else None,
-            execution_lane="cursor",
+            execution_lane="workflow",
             status=status_label,
             summary=f"Workflow run {run_id} finished with {len(steps_summary)} recorded step result(s).",
             files_changed=[],
@@ -331,7 +373,7 @@ def _finalize_terminal_run(run_id: int, workflow_id: int, status: str) -> None:
                         run_id=run_id,
                         step_id=run_rec.current_step_id,
                         step_result_id=None,
-                        execution_lane="cursor",
+                        execution_lane="workflow",
                         status=(status or "completed").strip().lower(),
                         final_verdict="pass" if (status or "").strip().lower() == "completed" else "needs_changes",
                         summary=f"Run finished: {(status or 'completed').strip().lower()}",
@@ -388,6 +430,27 @@ def start_workflow_run(
             return {"error": "Workflow not found"}
         if not wf.steps:
             return {"error": "Workflow has no steps"}
+
+        run_settings = _workflow_run_settings(wf)
+        normalized_metadata = dict(run_metadata or {})
+        requested_project_id = str(normalized_metadata.get("project_id") or "") or None
+        active_workflow_runs = (
+            db.query(AutoWorkflowRun)
+            .filter(
+                AutoWorkflowRun.workflow_id == workflow_id,
+                AutoWorkflowRun.status.in_(["running", "waiting"]),
+            )
+            .all()
+        )
+        if run_settings["execution_mode"] == "parallel":
+            if len(active_workflow_runs) >= run_settings["max_parallel_tickets"]:
+                return {"error": f"Workflow is already running {len(active_workflow_runs)} ticket(s); async limit is {run_settings['max_parallel_tickets']}"}
+        elif run_settings["concurrency_scope"] == "workflow" and active_workflow_runs:
+            return {"error": "This workflow is set to run one ticket at a time"}
+        if run_settings["concurrency_scope"] == "project" and requested_project_id:
+            for existing_run in active_workflow_runs:
+                if _run_project_id(existing_run) == requested_project_id:
+                    return {"error": "This workflow is already running a ticket for this project"}
 
         active_run = db.query(AutoWorkflowRun).filter(
             AutoWorkflowRun.workflow_id == workflow_id,
@@ -452,7 +515,7 @@ def start_workflow_run(
                 step.status = "pending"
                 step.result = None
 
-        normalized_metadata = dict(run_metadata or {})
+        normalized_metadata.setdefault("run_settings", run_settings)
         if (board_id is not None or ticket_id is not None) and not normalized_metadata.get("developer_context"):
             try:
                 from distr.core.developer_context import build_developer_context
@@ -477,7 +540,7 @@ def start_workflow_run(
                 board_name=normalized_metadata.get("board_name"),
                 project_id=normalized_metadata.get("project_id"),
                 project_name=normalized_metadata.get("project_name"),
-                execution_lane="cursor",
+                execution_lane="workflow",
             ),
         )
         packet = normalized_metadata.get("result_packet") or {}
@@ -507,7 +570,7 @@ def start_workflow_run(
                 run_id=run_id,
                 step_id=first_step.id if first_step else None,
                 step_result_id=None,
-                execution_lane="cursor",
+                execution_lane="workflow",
                 status="running",
                 final_verdict="cannot_determine",
                 summary=f"Run started (workflow {workflow_id})",
@@ -557,6 +620,30 @@ def start_workflow_run(
         summary=f"Started workflow {workflow_id}.",
         phase="planning",
     )
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="workflow",
+            event_type="workflow_run_started",
+            status="running",
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=first_step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            project_id=int(normalized_metadata["project_id"]) if str(normalized_metadata.get("project_id") or "").isdigit() else None,
+            summary=f"Started workflow {workflow_id}.",
+            payload={
+                "workflow_id": workflow_id,
+                "first_step_id": first_step_id,
+                "first_step_name": first_step_name,
+                "run_settings": run_settings,
+                "risk_profile": normalized_metadata.get("risk_profile"),
+            },
+        )
+    except Exception:
+        logger.debug("Could not emit Hermes workflow_run_started event", exc_info=True)
     _tid = threading.get_ident()
     _set_workflow_thread_env(_tid, run_id, first_step_id, workflow_id)
     # Also keep os.environ for backward compat with tools that read it directly.
@@ -618,6 +705,19 @@ def cancel_run(run_id: int) -> bool:
         status="cancelled",
         summary="Workflow run cancelled.",
     )
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="workflow",
+            event_type="workflow_run_cancelled",
+            status="cancelled",
+            workflow_id=_wf_id,
+            run_id=_run_id,
+            summary="Workflow run cancelled.",
+        )
+    except Exception:
+        logger.debug("Could not emit Hermes workflow_run_cancelled event", exc_info=True)
     _finalize_terminal_run(_run_id, _wf_id, "cancelled")
     return True
 
@@ -655,6 +755,15 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         step_id = step.id
 
     router = StepRouter()
+    waiting_kind = ""
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+        if run and run.run_data:
+            try:
+                waiting_kind = (json.loads(run.run_data or "{}") or {}).get("waiting_kind") or ""
+            except Exception:
+                waiting_kind = ""
+
     decision = router.resume_from_feedback(step_id, run_id, optional_input)
     record_workflow_chat_event(
         run_id,
@@ -663,6 +772,39 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         step_id=step_id,
         summary="Workflow resumed with user input." if optional_input else "Workflow resumed.",
     )
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="workflow",
+            event_type="workflow_run_resumed",
+            status="running",
+            run_id=run_id,
+            step_id=step_id,
+            summary="Workflow resumed with user input." if optional_input else "Workflow resumed.",
+            payload={"feedback": optional_input or ""},
+        )
+    except Exception:
+        logger.debug("Could not emit Hermes workflow_run_resumed event", exc_info=True)
+
+    if waiting_kind == "approval":
+        try:
+            from distr.core.hermes import emit_approval_event
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            emit_approval_event(
+                event_type="approval_granted",
+                run_id=run_id,
+                step_id=step_id,
+                workflow_id=getattr(run, "workflow_id", None) if run else None,
+                ticket_id=getattr(run, "ticket_id", None) if run else None,
+                board_id=getattr(run, "board_id", None) if run else None,
+                summary=f"Step #{step_id} approved; workflow resumed.",
+                payload={"feedback": optional_input or ""},
+            )
+        except Exception:
+            logger.debug("Could not emit approval_granted event", exc_info=True)
 
     # Resume must continue execution, not only update run state.
     action = (decision or {}).get("action")
@@ -745,6 +887,21 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         status=status,
         summary=f"Workflow run finished with status: {status}.",
     )
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="workflow",
+            event_type="workflow_run_completed",
+            status=status,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            summary=f"Workflow run finished with status: {status}.",
+        )
+    except Exception:
+        logger.debug("Could not emit Hermes workflow_run_completed event", exc_info=True)
     try:
         if board_id is not None:
             from distr.gui.web.kanban_events import increment_kanban_updated
@@ -893,7 +1050,7 @@ class StepDispatcher(PostExecutionMixin, StepExecutorMixin):
                         run_id=run_id,
                         step_id=step_id,
                         step_result_id=None,
-                        execution_lane="cursor",
+                        execution_lane="workflow",
                         status="running",
                         final_verdict="cannot_determine",
                         summary=f"{step_data.get('name') or f'Step {step_id}'} started",

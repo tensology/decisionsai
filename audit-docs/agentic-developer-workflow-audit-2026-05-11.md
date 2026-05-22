@@ -307,7 +307,7 @@ Next implementation should tighten workflow generation and validation: generated
 Implemented a regression pass for live TTS gaps:
 
 - Added a shared streaming sentence splitter for TTS providers.
-- Replaced provider-specific sentence extraction in Kokoro, OpenAI, ElevenLabs, Coqui, VibeVoice Realtime, F5-TTS, and VoxCPM with the shared splitter.
+- Replaced provider-specific sentence extraction in Kokoro, OpenAI, ElevenLabs, Coqui, F5-TTS, and VoxCPM with the shared splitter.
 - Fixed a live-streaming cleaner bug where chunks starting with decimals or versions such as `2.3` were treated as markdown numbered-list markers and partially stripped.
 - Added stress tests for awkward chunk boundaries, abbreviations, version numbers, decimals, punctuation without spaces, and final-buffer flush behavior.
 
@@ -317,7 +317,7 @@ This targets the reported gap where generated/web-playback TTS is solid, but rea
 
 Followed up on the Coqui-specific live playback path:
 
-- Removed fuzzy word-overlap duplicate suppression from Coqui, Kokoro, OpenAI, ElevenLabs, and VibeVoice Realtime. Exact duplicates and strict redundant subsets are still filtered, but similar legitimate sentences are no longer silently dropped.
+- Removed fuzzy word-overlap duplicate suppression from Coqui, Kokoro, OpenAI, and ElevenLabs. Exact duplicates and strict redundant subsets are still filtered, but similar legitimate sentences are no longer silently dropped.
 - Reset Coqui's text buffer at the start of every new LLM response so stale fragments cannot leak into the next spoken response.
 - Forwarded Coqui `TTSStartedFrame` and `TTSStoppedFrame` lifecycle frames to the audio transport, matching the state contract used by the streaming audio pipeline.
 - Added regression coverage proving similar sentences survive duplicate filtering and Coqui forwards lifecycle frames around live audio.

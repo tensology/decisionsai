@@ -256,7 +256,7 @@ def normalize_voice_provider(raw: str) -> str:
 
     Handles display names like 'Kokoro (Offline)', DB values like 'kokoro',
     and partial matches. Returns lowercase id: kokoro, elevenlabs, openai, coqui, f5tts,
-    voxcpm, vibevoice_realtime, etc. (all registered descriptor ids).
+    voxcpm, etc. (all registered descriptor ids).
 
     Delegates to each registered descriptor's ``normalize_provider_name()`` method.
     Falls back to the raw value (lowered/stripped) or 'kokoro' for empty input.

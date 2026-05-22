@@ -99,7 +99,38 @@ class VoiceDictationMixin:
             )
             return ""
 
+        if self._should_rewrite_dictation_as_ticket():
+            try:
+                from distr.core.audio.ticket_dictation import rewrite_dictation_as_ticket
+
+                settings = self._load_dictation_settings()
+                rewritten = rewrite_dictation_as_ticket(text, settings)
+                if rewritten:
+                    logger.info(
+                        "Dictation: Rewrote transcript as ticket (%d -> %d characters)",
+                        len(text),
+                        len(rewritten),
+                    )
+                    return rewritten
+            except Exception as e:
+                logger.debug("Dictation: Ticket rewrite failed; typing raw transcript: %s", e)
+
         return text
+
+    def _should_rewrite_dictation_as_ticket(self) -> bool:
+        return (
+            getattr(self, "_dictation_one_shot", False)
+            and getattr(self, "_dictation_output_mode", "plain") == "ticket"
+        )
+
+    def _load_dictation_settings(self) -> dict:
+        try:
+            from distr.core.settings import load_settings_from_db
+
+            return load_settings_from_db() or {}
+        except Exception as e:
+            logger.debug("Dictation: Could not load settings: %s", e)
+            return {}
 
     def _is_contextual_typeout_command(self, text: str) -> bool:
         """Return True when dictation text asks to type the prior assistant response."""
@@ -175,9 +206,14 @@ class VoiceDictationMixin:
         if not text or not text.strip():
             return
         try:
-            from distr.core.audio.dictation import type_text
+            from distr.core.audio.dictation import insert_text
             logger.info("Dictation: Typing text (%d characters): '%s...'", len(text), text[:50])
-            success = type_text(text)
+            newline_mode = (
+                "shift_enter"
+                if getattr(self, "_dictation_output_mode", "plain") == "ticket"
+                else "literal"
+            )
+            success = insert_text(text, newline_mode=newline_mode)
             if success:
                 logger.info("Dictation: Successfully typed text")
             else:
@@ -185,7 +221,7 @@ class VoiceDictationMixin:
         except Exception as e:
             logger.error("Dictation: Error typing text: %s", e, exc_info=True)
 
-    def _start_dictation(self, one_shot: bool = False):
+    def _start_dictation(self, one_shot: bool = False, output_mode: str = "plain"):
         """Start dictation mode.
 
         Args:
@@ -208,7 +244,12 @@ class VoiceDictationMixin:
 
         self._is_dictating = True
         self._dictation_one_shot = bool(one_shot)
-        logger.info("Dictation: Dictation mode started (one_shot=%s)", self._dictation_one_shot)
+        self._dictation_output_mode = "ticket" if output_mode == "ticket" else "plain"
+        logger.info(
+            "Dictation: Dictation mode started (one_shot=%s, output_mode=%s)",
+            self._dictation_one_shot,
+            self._dictation_output_mode,
+        )
 
         if self.event_queue:
             try:
@@ -227,6 +268,7 @@ class VoiceDictationMixin:
 
         self._is_dictating = False
         self._dictation_one_shot = False
+        self._dictation_output_mode = "plain"
         logger.info("Dictation: Dictation mode stopped")
 
         if self.event_queue:

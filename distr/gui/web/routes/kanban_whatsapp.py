@@ -21,6 +21,7 @@ from distr.core.integrations.whatsapp.paths import (
     media_path_for_database,
     resolve_whatsapp_media_disk_path,
 )
+from distr.core.kanban.ticket_policy import infer_ticket_complexity
 from distr.core.db import get_session, WhatsAppMessage
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket, KanbanTicketFile
 from distr.gui.web.security import is_allowed_local_origin
@@ -825,9 +826,15 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
                 title=title,
                 description=description,
                 priority="medium",
+                complexity=infer_ticket_complexity(title, description),
                 position=max_pos + 1,
                 whatsapp_message_id=message_id,
                 whatsapp_message_wa_id=msg.message_id,
+                source_provider="whatsapp",
+                source_external_id=msg.message_id,
+                source_thread_id=msg.jid or msg.jid_phone,
+                source_contact=sender,
+                source_label="WhatsApp",
             )
             s.add(ticket)
             msg.processed = True

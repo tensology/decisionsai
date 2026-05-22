@@ -45,6 +45,50 @@
             </div>
         </div>
 
+        <!-- Workflow Orchestration Engine -->
+        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
+            <div class="flex flex-col gap-1 mb-4">
+                <h3 class="text-lg font-semibold text-white">Workflow Orchestration Engine</h3>
+                <p class="text-sm text-gray-400">Controls the internal engine that routes ticket runs, validates outcomes, and records correction evidence.</p>
+            </div>
+
+            <div class="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
+                <label class="flex items-center gap-3 rounded-md border border-white/10 bg-[#11172f] px-4 py-3 text-sm text-[#ececf1]">
+                    <input type="checkbox" id="hermes_enabled" class="w-4 h-4 rounded border-[#565869] bg-[#1a1f3a] text-[#10a37f] focus:ring-[#10a37f]">
+                    <span>Enable workflow orchestration</span>
+                </label>
+                <label class="flex items-center gap-3 rounded-md border border-white/10 bg-[#11172f] px-4 py-3 text-sm text-[#ececf1]">
+                    <input type="checkbox" id="hermes_memory_export_enabled" class="w-4 h-4 rounded border-[#565869] bg-[#1a1f3a] text-[#10a37f] focus:ring-[#10a37f]">
+                    <span>Allow portable run memory export</span>
+                </label>
+            </div>
+
+            <div class="overflow-hidden rounded-md border border-white/10">
+                <div class="grid grid-cols-[150px_1fr_1fr] gap-0 bg-[#10183f] text-xs uppercase tracking-wide text-gray-400">
+                    <div class="px-3 py-2">Role</div>
+                    <div class="px-3 py-2">Provider</div>
+                    <div class="px-3 py-2">Model</div>
+                </div>
+                <div class="divide-y divide-white/10">
+                    <div class="grid grid-cols-[150px_1fr_1fr] gap-0 items-center">
+                        <div class="px-3 py-2 text-sm text-[#ececf1]">Orchestrator</div>
+                        <input type="text" id="hermes_orchestrator_provider" placeholder="Default route" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                        <input type="text" id="hermes_orchestrator_model" placeholder="Default model" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                    </div>
+                    <div class="grid grid-cols-[150px_1fr_1fr] gap-0 items-center">
+                        <div class="px-3 py-2 text-sm text-[#ececf1]">Validator</div>
+                        <input type="text" id="hermes_validator_provider" placeholder="Default route" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                        <input type="text" id="hermes_validator_model" placeholder="Default model" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                    </div>
+                    <div class="grid grid-cols-[150px_1fr_1fr] gap-0 items-center">
+                        <div class="px-3 py-2 text-sm text-[#ececf1]">Correction</div>
+                        <input type="text" id="hermes_correction_provider" placeholder="Default route" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                        <input type="text" id="hermes_correction_model" placeholder="Default model" class="bg-[#11172f] border-0 border-l border-white/10 px-3 py-2 text-sm text-white focus:outline-none focus:bg-[#172050]">
+                    </div>
+                </div>
+            </div>
+        </div>
+
         <!-- Directory Management (tree like native: QTreeView from ~/, expand to see subfolders, checkboxes = indexed_folders) -->
         <div class="border border-[#565869] rounded-lg p-6 bg-[#1a1f3a]">
             <h3 class="text-lg font-semibold text-white mb-4">Directory Management</h3>

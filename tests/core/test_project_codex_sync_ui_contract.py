@@ -1,4 +1,4 @@
-"""Static UI/API contract checks for project Codex sync controls."""
+"""Static UI/API contract checks for project implementation routing controls."""
 
 from pathlib import Path
 
@@ -6,24 +6,22 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_project_details_exposes_codex_sync_controls():
+def test_project_details_points_to_global_complexity_routing():
     html = (ROOT / "distr/gui/web/templates/projects/tabs/details.html").read_text(encoding="utf-8")
 
-    assert 'id="detail-coding-backend"' in html
-    assert 'id="codex-sync-panel"' in html
-    assert 'id="codex-sync-status"' in html
-    assert 'id="codex-sync-btn"' in html
-    assert "Codex integration" in html
+    assert 'id="detail-coding-backend"' not in html
+    assert 'id="codex-sync-panel"' not in html
+    assert "Implementation routing" in html
+    assert "Settings → LLMs" in html
+    assert 'href="/settings/#llms"' in html
 
 
-def test_project_js_wires_codex_sync_endpoint_and_hides_active_button():
+def test_project_js_does_not_save_project_coding_backend_from_details():
     js = (ROOT / "distr/gui/web/static/projects/js/projects.js").read_text(encoding="utf-8")
 
-    assert '"/api/projects/" + projectId + "/codex-sync"' in js
-    assert '"/api/projects/" + currentProjectId + "/codex-sync"' in js
-    assert 'btn.className = active' in js
-    assert '? "hidden"' in js
-    assert 'loadCodexSync(project.id)' in js
+    assert 'loadCodexSync(project.id)' not in js
+    assert 'coding_backend: (document.getElementById("detail-coding-backend")' not in js
+    assert 'terminal-backend-select' in js
 
 
 def test_project_routes_expose_codex_sync_api():

@@ -65,6 +65,15 @@ class DraftQueue:
                     return True
             return False
 
+    def clear(self) -> int:
+        """Remove all pending draft entries and return how many were removed."""
+        with self._lock:
+            count = len(self._entries)
+            if count:
+                self._entries = []
+                self._save()
+            return count
+
     def get_by_id(self, entry_id: str) -> DraftEntry | None:
         """Return the pending entry with this id, or ``None``."""
         with self._lock:

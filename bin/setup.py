@@ -161,7 +161,7 @@ def _prefetch_decisions_local_stt_caches() -> None:
         return
     print("")
     print("=" * 60)
-    print("Local STT / TTS model prefetch (Vosk, Whisper, VibeVoice HF)")
+    print("Local STT / TTS model prefetch (Vosk, Whisper)")
     print("=" * 60)
     try:
         r = subprocess.run(
@@ -634,7 +634,7 @@ def setup(skip_model_pull=False, install_optional=False):
     # Pre-download Kanade voice cloning models (avoids long wait on first custom voice play)
     setup_kanade_models()
 
-    # Local STT/TTS (Vosk tree, Whisper gguf warm, VibeVoice HF if vibevoice is installed)
+    # Local STT/TTS (Vosk tree, Whisper gguf warm)
     _prefetch_decisions_local_stt_caches()
 
     # --- pi CLI Setup ---

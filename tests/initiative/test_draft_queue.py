@@ -49,6 +49,20 @@ class TestDraftQueueRemove:
         result = tmp_queue.remove("nonexistent")
         assert result is False
 
+    def test_clear_removes_all_entries(self, tmp_path):
+        path = str(tmp_path / "drafts.json")
+        q = DraftQueue(path=path)
+        q.add(make_entry("e1"))
+        q.add(make_entry("e2"))
+
+        assert q.clear() == 2
+        assert q.get_all() == []
+        assert DraftQueue(path=path).get_all() == []
+
+    def test_clear_empty_queue(self, tmp_queue):
+        assert tmp_queue.clear() == 0
+        assert tmp_queue.get_all() == []
+
 
 class TestDraftQueueExpiry:
     def test_expire_old_removes_expired(self, tmp_path):

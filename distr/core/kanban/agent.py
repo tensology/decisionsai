@@ -116,6 +116,7 @@ class _BoardInfo:
     id: int
     name: str
     agent_enabled: bool
+    whatsapp_checkin_enabled: bool
     agent_source_lane: str
     agent_done_lane: str
     default_workflow_id: Optional[int]
@@ -185,6 +186,7 @@ class KanbanAgentCheckIn:
             default_project_id = board.default_project_id
             board_id = board.id
             board_name = board.name
+            whatsapp_checkin_enabled = bool(getattr(board, "whatsapp_checkin_enabled", False))
 
         if not agent_source_lane:
             logger.error("Agent check-in: no source lane configured for board %s", self.board_id)
@@ -214,6 +216,7 @@ class KanbanAgentCheckIn:
             id=board_id,
             name=board_name,
             agent_enabled=True,
+            whatsapp_checkin_enabled=whatsapp_checkin_enabled,
             agent_source_lane=agent_source_lane,
             agent_done_lane=agent_done_lane,
             default_workflow_id=default_workflow_id,
@@ -752,6 +755,7 @@ def analyze_board_checkin(board_id: int) -> Dict[str, Any]:
         "board_name": None,
         "source_type": "database",
         "agent_enabled_resolved": False,
+        "whatsapp_checkin_enabled": False,
         "blockers": [],
         "runnable": False,
         "already_running": False,
@@ -784,6 +788,7 @@ def analyze_board_checkin(board_id: int) -> Dict[str, Any]:
 
         out["board_name"] = board.name
         out["source_type"] = (board.source or "database").strip() or "database"
+        out["whatsapp_checkin_enabled"] = bool(getattr(board, "whatsapp_checkin_enabled", False))
 
         agent_enabled = board.agent_enabled
         if agent_enabled is None:

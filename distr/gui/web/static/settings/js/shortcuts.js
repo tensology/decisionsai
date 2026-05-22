@@ -611,6 +611,9 @@ function _applyShortcutSettings(s) {
     _setMK('shortcuts_dictation_hotkey_modifier', 'shortcuts_dictation_hotkey_key',
            _valueOrDefault(s.dictation_hotkey_modifier, 'control_command'), _valueOrDefault(s.dictation_hotkey_key, ''));
 
+    _setMK('shortcuts_ticket_dictation_hotkey_modifier', 'shortcuts_ticket_dictation_hotkey_key',
+           _valueOrDefault(s.ticket_dictation_hotkey_modifier, 'control_shift'), _valueOrDefault(s.ticket_dictation_hotkey_key, ''));
+
     // Recording
     _setMK('shortcuts_recording_hotkey_modifier', 'shortcuts_recording_hotkey_key',
            _valueOrDefault(s.recording_hotkey_modifier, 'option_command'), _valueOrDefault(s.recording_hotkey_key, 's'));
@@ -646,12 +649,25 @@ function _applyShortcutSettings(s) {
     const pttCb  = document.getElementById('shortcuts_global_ptt_hotkey_enabled');
     const recCb  = document.getElementById('shortcuts_recording_hotkey_enabled');
     const dictCb = document.getElementById('shortcuts_dictation_hotkey_enabled');
+    const ticketDictCb = document.getElementById('shortcuts_ticket_dictation_hotkey_enabled');
     const pttEnabled = s.global_ptt_hotkey_enabled !== undefined ? s.global_ptt_hotkey_enabled : true;
     const recEnabled = s.recording_hotkey_enabled !== undefined ? s.recording_hotkey_enabled : true;
     const dictEnabled = s.dictation_hotkey_enabled !== undefined ? s.dictation_hotkey_enabled : false;
+    const ticketDictEnabled = s.ticket_dictation_hotkey_enabled !== undefined ? s.ticket_dictation_hotkey_enabled : true;
     if (pttCb)  { pttCb.checked = pttEnabled; _recordSaved('shortcuts_global_ptt_hotkey_enabled', String(pttEnabled)); }
     if (recCb)  { recCb.checked = recEnabled; _recordSaved('shortcuts_recording_hotkey_enabled', String(recEnabled)); }
     if (dictCb) { dictCb.checked = dictEnabled; _recordSaved('shortcuts_dictation_hotkey_enabled', String(dictEnabled)); }
+    if (ticketDictCb) { ticketDictCb.checked = ticketDictEnabled; _recordSaved('shortcuts_ticket_dictation_hotkey_enabled', String(ticketDictEnabled)); }
+
+    const ticketLlmCb = document.getElementById('shortcuts_dictation_ticket_use_llm');
+    const ticketModel = document.getElementById('shortcuts_dictation_ticket_model');
+    const ticketTimeout = document.getElementById('shortcuts_dictation_ticket_timeout');
+    const ticketPrompt = document.getElementById('shortcuts_dictation_ticket_prompt');
+    const ticketUseLlm = s.dictation_ticket_use_llm !== undefined ? s.dictation_ticket_use_llm : true;
+    if (ticketLlmCb) { ticketLlmCb.checked = ticketUseLlm; _recordSaved('shortcuts_dictation_ticket_use_llm', String(ticketUseLlm)); }
+    if (ticketModel) { ticketModel.value = s.dictation_ticket_model || 'qwen2.5:0.5b'; _recordSaved('shortcuts_dictation_ticket_model', ticketModel.value); }
+    if (ticketTimeout) { ticketTimeout.value = s.dictation_ticket_timeout || '1.2'; _recordSaved('shortcuts_dictation_ticket_timeout', ticketTimeout.value); }
+    if (ticketPrompt) { ticketPrompt.value = s.dictation_ticket_prompt || ''; _recordSaved('shortcuts_dictation_ticket_prompt', ticketPrompt.value); }
 }
 
 async function loadShortcutSettings() {
@@ -687,6 +703,13 @@ async function saveShortcutSettings() {
             dictation_hotkey_enabled:  _cb('shortcuts_dictation_hotkey_enabled', false),
             dictation_hotkey_modifier: _v('shortcuts_dictation_hotkey_modifier'),
             dictation_hotkey_key:      _v('shortcuts_dictation_hotkey_key'),
+            ticket_dictation_hotkey_enabled: _cb('shortcuts_ticket_dictation_hotkey_enabled', true),
+            ticket_dictation_hotkey_modifier: _v('shortcuts_ticket_dictation_hotkey_modifier'),
+            ticket_dictation_hotkey_key: _v('shortcuts_ticket_dictation_hotkey_key'),
+            dictation_ticket_use_llm: _cb('shortcuts_dictation_ticket_use_llm', true),
+            dictation_ticket_model: _v('shortcuts_dictation_ticket_model'),
+            dictation_ticket_timeout: _v('shortcuts_dictation_ticket_timeout'),
+            dictation_ticket_prompt: _v('shortcuts_dictation_ticket_prompt'),
 
             oracle_size_hotkey_decrease_modifier: _v('shortcuts_oracle_size_hotkey_decrease_modifier'),
             oracle_size_hotkey_decrease_key:      _v('shortcuts_oracle_size_hotkey_decrease_key'),
@@ -716,6 +739,7 @@ async function saveShortcutSettings() {
         const collisionMessage = _validateShortcutCollisions([
             { name: 'Push-to-Talk', enabled: settings.global_ptt_hotkey_enabled, modifier: settings.global_ptt_hotkey_combo, key: '', enabledField: 'shortcuts_global_ptt_hotkey_enabled', modifierField: 'shortcuts_global_ptt_hotkey_combo' },
             { name: 'Dictation', enabled: settings.dictation_hotkey_enabled, modifier: settings.dictation_hotkey_modifier, key: settings.dictation_hotkey_key, enabledField: 'shortcuts_dictation_hotkey_enabled', modifierField: 'shortcuts_dictation_hotkey_modifier', keyField: 'shortcuts_dictation_hotkey_key' },
+            { name: 'Ticket dictation', enabled: settings.ticket_dictation_hotkey_enabled, modifier: settings.ticket_dictation_hotkey_modifier, key: settings.ticket_dictation_hotkey_key, enabledField: 'shortcuts_ticket_dictation_hotkey_enabled', modifierField: 'shortcuts_ticket_dictation_hotkey_modifier', keyField: 'shortcuts_ticket_dictation_hotkey_key' },
             { name: 'Recording', enabled: settings.recording_hotkey_enabled, modifier: settings.recording_hotkey_modifier, key: settings.recording_hotkey_key, enabledField: 'shortcuts_recording_hotkey_enabled', modifierField: 'shortcuts_recording_hotkey_modifier', keyField: 'shortcuts_recording_hotkey_key' },
             { name: 'Oracle size decrease', enabled: true, modifier: settings.oracle_size_hotkey_decrease_modifier, key: settings.oracle_size_hotkey_decrease_key, modifierField: 'shortcuts_oracle_size_hotkey_decrease_modifier', keyField: 'shortcuts_oracle_size_hotkey_decrease_key' },
             { name: 'Oracle size increase', enabled: true, modifier: settings.oracle_size_hotkey_increase_modifier, key: settings.oracle_size_hotkey_increase_key, modifierField: 'shortcuts_oracle_size_hotkey_increase_modifier', keyField: 'shortcuts_oracle_size_hotkey_increase_key' },

@@ -51,6 +51,13 @@ def register_routes(router, templates):
             "dictation_hotkey_enabled": settings.get("dictation_hotkey_enabled", HOTKEY_DEFAULTS["dictation_hotkey_enabled"]),
             "dictation_hotkey_modifier": settings.get("dictation_hotkey_modifier", HOTKEY_DEFAULTS["dictation_hotkey_modifier"]),
             "dictation_hotkey_key": settings.get("dictation_hotkey_key", HOTKEY_DEFAULTS["dictation_hotkey_key"]),
+            "ticket_dictation_hotkey_enabled": settings.get("ticket_dictation_hotkey_enabled", HOTKEY_DEFAULTS["ticket_dictation_hotkey_enabled"]),
+            "ticket_dictation_hotkey_modifier": settings.get("ticket_dictation_hotkey_modifier", HOTKEY_DEFAULTS["ticket_dictation_hotkey_modifier"]),
+            "ticket_dictation_hotkey_key": settings.get("ticket_dictation_hotkey_key", HOTKEY_DEFAULTS["ticket_dictation_hotkey_key"]),
+            "dictation_ticket_use_llm": settings.get("dictation_ticket_use_llm", True),
+            "dictation_ticket_model": settings.get("dictation_ticket_model", "qwen2.5:0.5b"),
+            "dictation_ticket_timeout": settings.get("dictation_ticket_timeout", "1.2"),
+            "dictation_ticket_prompt": settings.get("dictation_ticket_prompt", ""),
             "shortcut_options": {
                 "ptt_modifiers": ptt_modifier_options(),
                 "modifiers": modifier_options(),

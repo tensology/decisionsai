@@ -446,25 +446,6 @@ check_dependencies_installed() {
     return 0
 }
 
-# VibeVoice is not in requirements.txt: its pins downgrade transformers vs coqui-tts / litellm.
-# Same idea as pywhispercpp @ git — install after the main resolver succeeds (see scripts/install_vibevoice.sh).
-# Opt out: DECISIONS_AI_SKIP_VIBEVOICE=1 ./bin/decisions.sh
-bootstrap_vibevoice() {
-    if [ "${DECISIONS_AI_SKIP_VIBEVOICE:-}" = "1" ]; then
-        echo -e "${YELLOW}Skipping VibeVoice bootstrap (DECISIONS_AI_SKIP_VIBEVOICE=1).${NC}"
-        return 0
-    fi
-    if "$VENV_DIR/bin/python" -c "import vibevoice" 2>/dev/null; then
-        return 0
-    fi
-    echo -e "${YELLOW}Bootstrapping VibeVoice (clone + editable install; pip may warn about coqui-tts / litellm pins)...${NC}"
-    if bash "$SCRIPT_DIR/scripts/install_vibevoice.sh"; then
-        echo -e "${GREEN}✓${NC} VibeVoice bootstrap finished"
-    else
-        echo -e "${YELLOW}⚠ VibeVoice bootstrap failed (network or disk). Retry: ./scripts/install_vibevoice.sh${NC}"
-    fi
-}
-
 if [ ! -f "$REQUIREMENTS_MARKER" ] || ! check_dependencies_installed; then
     if [ ! -f "$REQUIREMENTS_MARKER" ]; then
         echo -e "${YELLOW}Installing dependencies...${NC}"
@@ -601,17 +582,14 @@ else
     echo -e "${GREEN}✓${NC} Dependencies already installed"
 fi
 
-# VibeVoice: same launcher step as main deps (cannot live in requirements.txt — resolver conflict).
-bootstrap_vibevoice
-
-# Local STT/TTS caches (Vosk dir, Whisper gguf warm, VibeVoice HF if installed) — same idea as Whisper’s lazy download, but up front.
+# Local STT/TTS caches (Vosk dir, Whisper gguf warm) — same idea as Whisper’s lazy download, but up front.
 # Opt out: DECISIONS_AI_SKIP_MODEL_PREFETCH=1 ./bin/decisions.sh
 prefetch_local_models_bootstrap() {
     if [ "${DECISIONS_AI_SKIP_MODEL_PREFETCH:-}" = "1" ]; then
         echo -e "${YELLOW}Skipping local model prefetch (DECISIONS_AI_SKIP_MODEL_PREFETCH=1).${NC}"
         return 0
     fi
-    echo -e "${YELLOW}Prefetching local STT/TTS model caches (Vosk, Whisper, VibeVoice HF if available)...${NC}"
+    echo -e "${YELLOW}Prefetching local STT/TTS model caches (Vosk, Whisper)...${NC}"
     if ! "$VENV_DIR/bin/python" "$SCRIPT_DIR/scripts/prefetch_local_models.py" --only all \
         2> >(grep -vE '^objc\[[0-9]+\]: Class AVF(Frame|Audio)Receiver is implemented in both ' >&2); then
         echo -e "${YELLOW}⚠ Local model prefetch had errors — app will still start; first STT/TTS use may download.${NC}"
@@ -710,13 +688,6 @@ check_ollama() {
 }
 
 check_ollama
-
-# VibeVoice status after bootstrap (above)
-if ! "$VENV_DIR/bin/python" -c "import vibevoice" 2>/dev/null; then
-    echo -e "${YELLOW}VibeVoice is not importable yet (skipped, failed, or offline). Manual:${NC} ${YELLOW}./scripts/install_vibevoice.sh${NC} or unset DECISIONS_AI_SKIP_VIBEVOICE and re-run."
-else
-    echo -e "${GREEN}✓${NC} VibeVoice importable (set DECISIONSAI_VIBEVOICE_ROOT if Realtime TTS cannot find speaker presets)"
-fi
 
 # Check for NumPy/PyTorch compatibility issues
 check_numpy_torch_compatibility() {
@@ -1066,4 +1037,3 @@ echo -e "${GREEN}booting up now. Please wait for the agent to speak to you...${N
 echo -e "${GREEN}YOU CAN NOW CLOSE THIS TERMINAL${NC}"
 # Filter macOS dylib duplicate class warnings from stderr (harmless noise from cv2/av FFmpeg conflict)
 "$VENV_DIR/bin/python" bin/start.py 2> >(grep -v "^objc\[" >&2)
-

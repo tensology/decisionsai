@@ -3,6 +3,152 @@
 {% block title %}Snippets{% endblock %}
 
 {% block content %}
+<style>
+  #snippets-list {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+    align-content: start;
+    padding: 14px 18px;
+  }
+  @media (max-width: 1100px) {
+    #snippets-list {
+      grid-template-columns: minmax(0, 1fr);
+      padding: 14px;
+    }
+  }
+  .snippet-row {
+    min-width: 0;
+    display: grid;
+    grid-template-columns: 42px minmax(120px, 1fr) 154px 66px 38px;
+    align-items: center;
+    gap: 8px;
+    background: rgba(15, 23, 42, 0.52);
+    border: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 8px;
+    padding: 10px 12px;
+    transition: border-color 0.15s ease, background 0.15s ease;
+  }
+  .snippet-row:focus,
+  .snippet-row:focus-within {
+    outline: none;
+    border-color: rgba(249, 115, 22, 0.72);
+    background: rgba(15, 23, 42, 0.74);
+  }
+  @media (max-width: 860px) {
+    .snippet-row {
+      grid-template-columns: 46px minmax(0, 1fr) 150px 66px 38px;
+      gap: 8px;
+      padding: 10px;
+    }
+  }
+  .snippet-num {
+    color: #d1d5db;
+    font-size: 0.84rem;
+    font-weight: 700;
+    white-space: nowrap;
+  }
+  .snippet-text,
+  .snippet-hotkey {
+    width: 100%;
+    min-width: 0;
+    height: 36px;
+    box-sizing: border-box;
+    padding: 0 10px;
+    border-radius: 6px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: #152054;
+    color: #f8fafc;
+    font-size: 0.9rem;
+    font-family: inherit;
+    line-height: 34px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .snippet-hotkey {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    flex-wrap: nowrap;
+    line-height: 1;
+    cursor: pointer;
+    user-select: none;
+  }
+  .snippet-text:focus,
+  .snippet-hotkey:focus {
+    outline: none;
+    border-color: rgba(249, 115, 22, 0.9);
+    box-shadow: 0 0 0 2px rgba(249, 115, 22, 0.2);
+  }
+  .snippet-hotkey {
+    text-align: left;
+  }
+  .snippet-hotkey.is-empty {
+    color: #8b95a7;
+  }
+  .snippet-hotkey.capturing {
+    border-color: #10a37f;
+    box-shadow: 0 0 0 2px rgba(16, 163, 127, 0.3);
+  }
+  .hotkey-placeholder {
+    color: #8b95a7;
+    font-size: 0.78rem;
+  }
+  .hotkey-capturing-text {
+    color: #10a37f;
+    font-size: 0.78rem;
+    font-style: italic;
+  }
+  .key-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 24px;
+    padding: 2px 7px;
+    background: #1e2430;
+    border: 1px solid #565869;
+    border-radius: 4px;
+    color: #ececf1;
+    font-size: 12px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    line-height: 1.45;
+    white-space: nowrap;
+  }
+  .snippet-save {
+    height: 36px;
+    border: 0;
+    border-radius: 6px;
+    padding: 0 12px;
+    background: rgba(249, 115, 22, 0.95);
+    color: #fff;
+    font-size: 0.84rem;
+    font-weight: 700;
+  }
+  .snippet-save:hover {
+    background: #ea580c;
+  }
+  .snippet-delete {
+    width: 36px;
+    height: 36px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid rgba(248, 113, 113, 0.24);
+    border-radius: 6px;
+    background: rgba(127, 29, 29, 0.18);
+    color: #fca5a5;
+  }
+  .snippet-delete:hover {
+    border-color: rgba(248, 113, 113, 0.5);
+    background: rgba(127, 29, 29, 0.32);
+    color: #fecaca;
+  }
+  .snippet-delete svg {
+    width: 16px;
+    height: 16px;
+  }
+</style>
 <div class="w-full px-6 py-8 h-[calc(100vh-4rem)]">
   <div class="h-full bg-[#1a1f3a] border border-white/20 rounded-lg overflow-hidden flex flex-col">
     <div class="px-6 py-4 border-b border-white/10 flex items-center justify-between gap-4">
@@ -10,13 +156,6 @@
         <h2 class="text-xl font-semibold text-white">Snippets</h2>
       </div>
       <button type="button" id="snippet-add" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Snippet</button>
-    </div>
-
-    <div class="grid gap-3 px-6 py-3 border-b border-white/10 text-xs font-semibold uppercase tracking-wide text-gray-500" style="grid-template-columns: 56px minmax(0, 1fr) 220px 96px;">
-      <div>#</div>
-      <div>Snippet</div>
-      <div>Hotkey</div>
-      <div></div>
     </div>
 
     <div id="snippets-list" class="flex-1 overflow-y-auto">

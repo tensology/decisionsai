@@ -30,6 +30,35 @@ def _snippet_response(snippet):
     }
 
 
+def _next_default_remote_hotkey(session, Snippet) -> str:
+    used = {
+        str(value or "").strip().lower()
+        for (value,) in session.query(Snippet.remote_hotkey).all()
+        if str(value or "").strip()
+    }
+    for idx in range(1, 10):
+        candidate = f"ctrl+shift+{idx}"
+        if candidate not in used:
+            return candidate
+    return ""
+
+
+def _notify_snippet_hotkeys_changed() -> None:
+    try:
+        from distr.core.services.settings_service import _run_on_qt_main_thread, _safe_emit
+        from distr.core.signals import signal_manager
+
+        def _do():
+            _safe_emit(
+                signal_manager.shortcut_settings_changed,
+                label="snippet_hotkeys_changed",
+            )
+
+        _run_on_qt_main_thread(_do, label="snippet_hotkeys_changed")
+    except Exception as exc:
+        logger.debug("Could not notify live hotkey listener about snippet change: %s", exc)
+
+
 def register_routes(router, templates):
 
     @router.post("/snippets")
@@ -39,14 +68,16 @@ def register_routes(router, templates):
         from distr.core.db import get_session, Snippet
         text = _snippet_text(payload)
         with get_session() as session:
+            remote_hotkey = (payload.remote_hotkey or "").strip() or _next_default_remote_hotkey(session, Snippet)
             snippet = Snippet(
                 title=payload.title or _snippet_title(text),
                 description=text,
                 additional_trigger_words=payload.additional_trigger_words or "[]",
-                remote_hotkey=payload.remote_hotkey or "",
+                remote_hotkey=remote_hotkey,
             )
             session.add(snippet)
             session.commit()
+            _notify_snippet_hotkeys_changed()
             return JSONResponse(_snippet_response(snippet))
 
     @router.get("/snippets")
@@ -79,6 +110,7 @@ def register_routes(router, templates):
             if payload.remote_hotkey is not None:
                 snippet.remote_hotkey = payload.remote_hotkey or ""
             session.commit()
+            _notify_snippet_hotkeys_changed()
             return JSONResponse(_snippet_response(snippet))
 
     @router.delete("/snippets/{snippet_id}")
@@ -92,4 +124,5 @@ def register_routes(router, templates):
                 raise HTTPException(status_code=404, detail="Snippet not found")
             session.delete(snippet)
             session.commit()
+            _notify_snippet_hotkeys_changed()
             return JSONResponse({"success": True})

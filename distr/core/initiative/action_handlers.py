@@ -135,6 +135,7 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
     from distr.core.db.projects import Project
     from distr.core.kanban.ticket_audit import append_ticket_audit_entry
     from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
+    from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
     from distr.core.project_cli_backends import run_project_task
 
     ticket_ids = _ticket_ids(payload)
@@ -160,7 +161,19 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
                 project_folder=project.folder_location or "",
                 project_id=project.id,
             )
-            result = _run_async(run_project_task(project, instruction, audit_id=None, origin="initiative"))
+            route = resolve_ticket_cli_route(project, getattr(ticket, "complexity", "medium"))
+            result = _run_async(run_project_task(
+                project,
+                instruction,
+                audit_id=None,
+                origin="initiative",
+                ticket_id=ticket_id,
+                ticket_complexity=route["complexity"],
+                backend_id_override=route["backend"],
+                model_override=route["model"],
+                codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
+                codex_service_tier_override=route.get("codex_service_tier"),
+            ))
             result_dict = result.to_dict() if hasattr(result, "to_dict") else dict(result)
             append_ticket_audit_entry(
                 session,

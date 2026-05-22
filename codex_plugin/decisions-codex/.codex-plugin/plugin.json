@@ -1,7 +1,7 @@
 {
   "name": "decisions-codex",
-  "version": "0.1.0",
-  "description": "Codex wrapper for DecisionsAI project, workflow, and ticket orchestration.",
+  "version": "0.1.2",
+  "description": "Codex bridge for DecisionsAI agentic workflow execution.",
   "author": {
     "name": "Tensology",
     "email": "support@decisions.ai",
@@ -15,13 +15,15 @@
     "codex",
     "workflow",
     "ticket-board",
-    "project-cli"
+    "project-cli",
+    "orchestration",
+    "developer-tools"
   ],
   "skills": "./skills/",
   "interface": {
     "displayName": "DecisionsAI Codex",
-    "shortDescription": "Let Codex operate as a DecisionsAI project and workflow worker.",
-    "longDescription": "Provides the Codex-side instructions for receiving DecisionsAI tickets, executing implementation work, and reporting structured results back to DecisionsAI workflows.",
+    "shortDescription": "Run DecisionsAI workflow tickets through Codex with evidence, steering, and validation callbacks.",
+    "longDescription": "Connects Codex to the DecisionsAI agentic workflow loop. Codex receives bounded ticket packets, works inside the linked project folder, reports status, changed files, tests, evidence, blockers, steering, waiting, and completion events back to DecisionsAI, and lets the Hermes-backed run ledger retain execution memory.",
     "developerName": "Tensology",
     "category": "Developer Tools",
     "capabilities": [
@@ -33,10 +35,15 @@
     "privacyPolicyURL": "https://www.decisionsai.net/privacy",
     "termsOfServiceURL": "https://www.decisionsai.net/terms",
     "defaultPrompt": [
-      "Run the DecisionsAI ticket assigned to this project and report the result.",
-      "Continue the current DecisionsAI workflow step and return a concise completion packet.",
-      "Inspect this project and tell DecisionsAI whether it matches the active project record."
+      "Run this DecisionsAI ticket and report evidence.",
+      "Continue this workflow step and return status.",
+      "Validate this project against the ticket outcome."
     ],
-    "brandColor": "#f97316"
+    "brandColor": "#f97316",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png",
+    "screenshots": [
+      "./assets/voice.gif"
+    ]
   }
 }

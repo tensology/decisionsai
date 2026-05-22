@@ -104,6 +104,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK voices — 100+ speakers with accents) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
+| **Hermes** | Internal workflow orchestration ledger for ticket routing, validation, correction loops, and run memory |
 | **Sidecar (Go)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
 
 **Optional cloud services:**
@@ -115,6 +116,27 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Anthropic](https://www.anthropic.com/) | Claude 3.7 Sonnet, Claude 3.5 Opus, Claude 3 Haiku |
 | [ElevenLabs](https://elevenlabs.io/) | Cloud TTS with voice cloning (up to 5 custom voices) |
 | [AssemblyAI](https://www.assemblyai.com/) | Advanced transcription and speech recognition |
+
+---
+
+## Legal References
+
+Public policy links:
+
+| Document | URL | Policy check date |
+|---|---|---|
+| Privacy Policy | <https://www.decisionsai.net/privacy> | 2026-05-22 |
+| Terms and Conditions | <https://www.decisionsai.net/terms> | 2026-05-22 |
+
+The public pages should show their own last-updated dates. During the
+2026-05-22 check, no visible last-updated date was found in the fetched page
+content.
+
+The legal pages should explicitly cover connected accounts and external streams
+such as WhatsApp, Telegram, Gmail, Jira, Trello, IRC/shared chat rooms, uploaded
+files, voice notes/transcriptions, images, project folders, CLI/IDE execution
+logs, model-provider requests, workflow audit trails, and the internal
+orchestration ledger used for validation and correction memory.
 
 ---
 
@@ -211,7 +233,6 @@ python bin/start.py
 | Component | Install | Notes |
 |---|---|---|
 | **Vosk** (alt STT) | `python bin/setup_vosk.py` | ~1.8 GB English model |
-| **Microsoft VibeVoice** (Realtime TTS + local ASR) | `./scripts/install_vibevoice.sh` (venv active) | Not in `requirements.txt` (upstream pins `transformers==4.51.3` for streaming extras, which conflicts with **coqui-tts**’s `transformers>=4.57` in the same file). Default STT stays **Whisper.cpp** unless you pick VibeVoice ASR. Same venv as the app; optional `DECISIONSAI_VIBEVOICE_ROOT` or auto-detect under `$VIRTUAL_ENV/src/VibeVoice`. **ASR weights:** Hugging Face repos `microsoft/VibeVoice-ASR` (override with `DECISIONSAI_VIBEVOICE_ASR_MODEL`) and `Qwen/Qwen2.5-7B` (language model for the ASR processor). **`./bin/decisions.sh`**, **`python bin/setup.py`**, **`python bin/diagnose_stt.py`** (mic/file transcribe paths), and **`pytest tests/audio/`** run **`scripts/prefetch_local_models.py`** so Vosk, Whisper, and VibeVoice HF files land in cache before tests or first STT — same spirit as Whisper’s first `Model()` download. Set `DECISIONSAI_SKIP_VIBEVOICE_HF_PREFETCH=1` to skip only the VibeVoice HF snapshot step in the install script; set `DECISIONS_AI_SKIP_MODEL_PREFETCH=1` to skip the full prefetch everywhere. Set `DECISIONSAI_PREFETCH_VIBEVOICE_REALTIME=0` to skip prefetching `microsoft/VibeVoice-Realtime-0.5B`. |
 | **Voice cloning** | Built-in for Kokoro and ElevenLabs | Click **+ Custom** next to voice dropdown in Preferences |
 
 ---

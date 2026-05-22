@@ -556,7 +556,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "AudioTranscriberTool": "Transcribe audio files like MP3, M4A, or WAV to text using AssemblyAI or Whisper.",
     "VideoTranscriberTool": "Extract audio from a video file and transcribe it to text with speaker diarization support.",
     "TranscriptionDoctorTool": (
-        "Check speech-to-text setup: saved Settings choice, VibeVoice install status, ffmpeg, file backends. "
+        "Check speech-to-text setup: saved Settings choice, ffmpeg, file backends. "
         "Returns a short voice-safe summary then REFERENCE: technical lines — speak only the part above REFERENCE."
     ),
     "FileConverterTool": "Convert files between formats including audio, video-to-audio, image format conversion, and audio-to-text transcription.",
@@ -646,7 +646,14 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
     "CreateCursorTicketTool": "Create a legacy Cursor/.tickets work item only when the user explicitly asks for Cursor or .tickets. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes to DecisionsAI/.tickets; ordinary ticket requests use create_ticket.",
-    "KanbanTicketTool": "Create, update, list, move, or manage tickets, tasks, or cards on project ticket boards, including external Jira and Trello boards/tickets.",
+    "KanbanTicketTool": (
+        "Create, update, list, move, or manage tickets, tasks, or cards on project ticket boards, including external "
+        "Jira and Trello boards/tickets. Also handles WhatsApp work intake in order: sync relay messages, list latest "
+        "activity, preview a project or board's linked WhatsApp feed, list contacts/senders, list chats, read messages, "
+        "find likely work-related WhatsApp messages, mark messages handled/unhandled, snapshot WhatsApp messages into "
+        "tickets after confirmation, and send WhatsApp replies to a contact/chat "
+        "after confirmation."
+    ),
     "PlaywrightTool": "Run browser automation scripts using Playwright to interact with web pages, fill forms, and scrape data.",
     "PiAgentTool": "Delegate coding and query tasks to the pi AI coding agent. Sends the instruction to pi, waits for the result, and returns it. Use for any project-level code, query, or terminal task. Can also send screenshot file paths for pi to read and analyze — include the full file path in the instruction. Use when the user says: send screenshot to pi, push to CLI, screenshot and send to pi, analyze this screenshot in context of my project.",
     "TerminalOverviewTool": "Get the current state of a project's terminal session — last command and output. Use when the user asks about terminal activity.",

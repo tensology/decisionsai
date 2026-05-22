@@ -853,11 +853,12 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
             logger.error(f"WhatsApp: get_contacts failed: {e}")
             return {"contacts": [], "total": 0, "error": str(e)}
 
-    def get_stored_messages(self, jid_phone: str = None, limit=100, offset=0, unprocessed_only=False) -> dict:
+    def get_stored_messages(self, jid_phone: str = None, limit=100, offset=0, unprocessed_only=False, sort: str = "asc") -> dict:
         """Fetch stored WhatsApp messages from the local database."""
         try:
             from distr.core.db import get_session, WhatsAppMessage
             from distr.core.db.kanban import KanbanTicket
+            from sqlalchemy import func
 
             with get_session() as session:
                 query = session.query(WhatsAppMessage)
@@ -865,7 +866,12 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
                     query = query.filter(WhatsAppMessage.jid_phone == jid_phone)
                 if unprocessed_only:
                     query = query.filter(WhatsAppMessage.processed == False)
-                query = query.order_by(WhatsAppMessage.whatsapp_timestamp.asc())
+                sort_direction = str(sort or "asc").lower()
+                received_at = func.coalesce(WhatsAppMessage.whatsapp_timestamp, func.strftime("%s", WhatsAppMessage.created_date), 0)
+                if sort_direction == "desc":
+                    query = query.order_by(received_at.desc(), WhatsAppMessage.id.desc())
+                else:
+                    query = query.order_by(received_at.asc(), WhatsAppMessage.id.asc())
                 total = query.count()
                 rows = query.offset(offset).limit(limit).all()
 

@@ -88,6 +88,7 @@ class PiRpcSession:
 
         # FIFO: one ticket write-back per completed agent turn (paired with send_prompt)
         self._ticket_writeback_queue: deque = deque()
+        self._last_preflight_error: str = ""
 
     @staticmethod
     def find_pi() -> Optional[str]:
@@ -108,36 +109,48 @@ class PiRpcSession:
                 return common
         return None
 
+    def _run_preflight(self, probe_model: bool = True) -> bool:
+        """Validate Pi + model before spawn. Sets _last_preflight_error on failure."""
+        from distr.core.pi_preflight import preflight_pi_coding_cli
+
+        pf = preflight_pi_coding_cli(
+            project_id=self.project_id,
+            provider=self._provider or None,
+            model=self._model or None,
+            cwd=self.cwd,
+            probe_model=probe_model,
+        )
+        self._provider = pf.provider
+        self._model = pf.model
+        if not pf.ok:
+            self._last_preflight_error = pf.user_message
+            logger.warning(
+                "PiRpcSession preflight failed: project=%s model=%s/%s — %s",
+                self.project_id,
+                pf.provider,
+                pf.model,
+                pf.user_message,
+            )
+            return False
+        self._last_preflight_error = ""
+        return True
+
     def start(self) -> bool:
         """Start the pi RPC subprocess. Returns True on success."""
         if self._running and self._process and self._process.poll() is None:
             return True  # Already running
 
-        self._pi_bin = self.find_pi()
-        if not self._pi_bin:
-            logger.error("PiRpcSession: pi binary not found in PATH")
+        from distr.core.pi_preflight import resolve_coding_cli_config
+
+        self._provider, self._model, _ = resolve_coding_cli_config(self.project_id)
+        if not self._run_preflight(probe_model=True):
             return False
 
-        # Read the current model from settings so pi uses the selected model
-        try:
-            from distr.core.db import get_session as db_session
-            from sqlalchemy import text
-            with db_session() as session:
-                row = session.execute(text(
-                    "SELECT coding_llm_provider, coding_llm_model FROM settings LIMIT 1"
-                )).first()
-                self._provider = (row[0] or "ollama") if row else "ollama"
-                self._model = (row[1] or "") if row else ""
-                project_row = session.execute(
-                    text("SELECT coding_backend_model FROM projects WHERE id = :project_id LIMIT 1"),
-                    {"project_id": self.project_id},
-                ).first()
-                project_model = (project_row[0] or "").strip() if project_row else ""
-                if project_model:
-                    self._model = project_model
-        except Exception:
-            self._provider = "ollama"
-            self._model = ""
+        self._pi_bin = self.find_pi()
+        if not self._pi_bin:
+            self._last_preflight_error = "Pi coding agent is not installed."
+            logger.error("PiRpcSession: pi binary not found in PATH")
+            return False
 
         try:
             cmd = [self._pi_bin, "--mode", "rpc", "--no-session"]
@@ -299,6 +312,14 @@ class PiRpcSession:
             self.status = "completed"
             all_msgs = event.get("messages", [])
             self._add_output("[Agent finished]")
+            for msg in reversed(all_msgs or []):
+                if not isinstance(msg, dict) or msg.get("role") != "assistant":
+                    continue
+                if msg.get("stopReason") == "error" or msg.get("errorMessage"):
+                    err = (msg.get("errorMessage") or "Model error").strip()
+                    self._last_preflight_error = err
+                    self._add_output(f"[Error] {err}")
+                    break
             # Auto-read out overview when agent finishes
             self._auto_overview()
             self._maybe_ticket_pi_writeback()
@@ -433,6 +454,10 @@ class PiRpcSession:
         """Send a prompt to pi via RPC. Returns True if sent successfully."""
         if not self._process or not self._running:
             if not self.start():
+                logger.error(
+                    "PiRpcSession: cannot send prompt — start failed: %s",
+                    self._last_preflight_error or "unknown",
+                )
                 return False
 
         # Track origin for auto-overview on completion

@@ -94,7 +94,7 @@ class EventHookDispatcher(QObject):
         return self._config.transitions.get(key)
 
     # Hooks that should not be overridden by background signals
-    _USER_PRIORITY_HOOKS = {"ptt_active", "hands_free_listening", "dictation"}
+    _USER_PRIORITY_HOOKS = {"ptt_active", "hands_free_listening", "dictation", "ticket_dictation"}
 
     def fire_hook(self, hook: str, *, trigger: str | None = None) -> None:
         """Fire an event hook.

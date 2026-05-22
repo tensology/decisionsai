@@ -237,6 +237,52 @@ class WorkflowOrchestrationMixin:
             "Workflow: step %d (workflow %d, run %d) is waiting for feedback",
             step_id, workflow_id, run_id,
         )
+        self._send_workflow_waiting_to_telegram(
+            step_id=step_id,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            result_text=result_text,
+        )
+
+    def _send_workflow_waiting_to_telegram(
+        self,
+        *,
+        step_id: int,
+        workflow_id: int,
+        run_id: int,
+        result_text: str,
+    ) -> None:
+        """Notify Telegram when a workflow pauses for user input."""
+        manager = getattr(self, "telegram_manager", None)
+        if manager is None:
+            return
+        try:
+            if hasattr(manager, "is_connected") and not manager.is_connected():
+                return
+        except Exception:
+            return
+
+        summary = (result_text or "The workflow step finished and needs input.").strip()
+        if len(summary) > 700:
+            summary = summary[:697].rstrip() + "..."
+        message = (
+            f"Workflow paused and is waiting for you.\n\n"
+            f"Run: {run_id}\n"
+            f"Step: {step_id}\n\n"
+            f"{summary}\n\n"
+            "Reply with what should happen next, for example: continue, retry, skip, or add extra instructions."
+        )
+        try:
+            manager.send_to_telegram(text=message)
+        except TypeError:
+            manager.send_to_telegram(message)
+        except Exception as exc:
+            logger.debug(
+                "Workflow: failed to notify Telegram for waiting run %s: %s",
+                run_id,
+                exc,
+                exc_info=True,
+            )
 
     def _provide_workflow_feedback(
         self, run_id: int, feedback: str,

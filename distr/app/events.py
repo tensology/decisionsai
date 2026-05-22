@@ -215,6 +215,8 @@ class EventHandlerMixin:
             self._tts_non_interrupt_fallback_timer = QTimer(self)
             self._tts_non_interrupt_fallback_timer.setSingleShot(True)
             self._tts_non_interrupt_fallback_timer.timeout.connect(self._on_tts_non_interrupt_fallback_timeout)
+        if not hasattr(self, '_tts_player_generation'):
+            self._tts_player_generation = 0
 
         if event == 'tts_started':
             source = data.get("source") if isinstance(data, dict) else None
@@ -256,13 +258,15 @@ class EventHandlerMixin:
                 self._player_safety_timer.setSingleShot(True)
                 self._player_safety_timer.timeout.connect(self._on_player_safety_timeout)
             self._player_safety_timer.start(300000)
+            self._tts_player_generation += 1
+            player_generation = self._tts_player_generation
             if hasattr(self, 'oracle_window') and self.oracle_window:
                 if hasattr(self.oracle_window, 'position_player_window'):
                     QtWidgets.QApplication.processEvents()
                     self.oracle_window.position_player_window()
                     QtWidgets.QApplication.processEvents()
-            QTimer.singleShot(20, signal_manager.show_player_window.emit)
-            QTimer.singleShot(350, signal_manager.player_play.emit)
+            QTimer.singleShot(20, lambda gen=player_generation: self._emit_player_signal_if_tts_active(gen, "show"))
+            QTimer.singleShot(350, lambda gen=player_generation: self._emit_player_signal_if_tts_active(gen, "play"))
 
         elif event == 'playback_finished':
             logger.info("[EVENT QUEUE] Playback finished event received - closing player immediately")
@@ -277,6 +281,8 @@ class EventHandlerMixin:
             )
             if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                 self._player_safety_timer.stop()
+            if self._tts_active_sessions <= 0:
+                self._tts_player_generation += 1
             # Important: do NOT cancel fallback if there are still pending non-interrupt
             # closes (multi-utterance/subagent bursts may emit fewer playback_finished events).
             if self._tts_pending_non_interrupt_closes <= 0:
@@ -325,6 +331,7 @@ class EventHandlerMixin:
                 logger.info("[EVENT QUEUE] TTS interrupted (duration <= 0), closing player immediately")
                 self._tts_active_sessions = 0
                 self._tts_pending_non_interrupt_closes = 0
+                self._tts_player_generation += 1
                 if hasattr(self, '_player_safety_timer') and self._player_safety_timer.isActive():
                     self._player_safety_timer.stop()
                 if hasattr(self, '_tts_non_interrupt_fallback_timer') and self._tts_non_interrupt_fallback_timer.isActive():
@@ -391,6 +398,8 @@ class EventHandlerMixin:
     def _on_player_safety_timeout(self):
         """Fallback: hide player if playback_finished was never received (e.g. agent crash)."""
         self._tts_active_sessions = 0
+        if hasattr(self, '_tts_player_generation'):
+            self._tts_player_generation += 1
         if hasattr(self, 'player_window') and self.player_window and self.player_window.isVisible():
             logger.warning("[EVENT QUEUE] Player safety timeout (5 min) - hiding player (playback_finished never received)")
             signal_manager.player_stop.emit()
@@ -404,6 +413,8 @@ class EventHandlerMixin:
         self._tts_pending_non_interrupt_closes = max(0, self._tts_pending_non_interrupt_closes - 1)
         if self._tts_active_sessions > 0:
             self._tts_active_sessions = max(0, self._tts_active_sessions - 1)
+        if self._tts_active_sessions <= 0 and hasattr(self, '_tts_player_generation'):
+            self._tts_player_generation += 1
         logger.warning(
             "[EVENT QUEUE] Missing playback_finished after non-interrupt tts_stopped - fallback closing one session (active=%d pending=%d)",
             self._tts_active_sessions,
@@ -413,6 +424,22 @@ class EventHandlerMixin:
         if self._tts_pending_non_interrupt_closes > 0 and hasattr(self, '_tts_non_interrupt_fallback_timer'):
             # Drain additional missing completions conservatively.
             self._tts_non_interrupt_fallback_timer.start(2500)
+
+    def _emit_player_signal_if_tts_active(self, generation: int, action: str):
+        """Drop delayed player callbacks once playback has already ended."""
+        if generation != getattr(self, '_tts_player_generation', 0) or getattr(self, '_tts_active_sessions', 0) <= 0:
+            logger.debug(
+                "[EVENT QUEUE] Dropped stale player_%s callback (generation=%s current=%s active=%s)",
+                action,
+                generation,
+                getattr(self, '_tts_player_generation', 0),
+                getattr(self, '_tts_active_sessions', 0),
+            )
+            return
+        if action == "show":
+            signal_manager.show_player_window.emit()
+        elif action == "play":
+            signal_manager.player_play.emit()
 
     def _close_player_if_tts_complete(self, reason: str):
         """Close player when no active TTS sessions remain."""

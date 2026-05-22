@@ -207,6 +207,7 @@
             document.getElementById("kb-board-modal-name").value = data.name || "";
             document.getElementById("kb-board-modal-desc").value = data.description || "";
             document.getElementById("kb-board-modal-agent-enabled").checked = !!data.agent_enabled;
+            document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = !!data.whatsapp_checkin_enabled;
             var colorInput = document.getElementById("kb-board-modal-color");
             var colorHex = document.getElementById("kb-board-modal-color-hex");
             var c = data.color || "#f97316";
@@ -235,12 +236,16 @@
                     if (row && typeof row.agent_enabled !== "undefined") {
                         data.agent_enabled = row.agent_enabled;
                     }
+                    if (row && typeof row.whatsapp_checkin_enabled !== "undefined") {
+                        data.whatsapp_checkin_enabled = row.whatsapp_checkin_enabled;
+                    }
                     populateBoardModal(data);
                 }).catch(function() {});
             } else {
                 document.getElementById("kb-board-modal-name").value = "";
                 document.getElementById("kb-board-modal-desc").value = "";
                 document.getElementById("kb-board-modal-agent-enabled").checked = false;
+                document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = false;
                 var colorInput = document.getElementById("kb-board-modal-color");
                 var colorHex = document.getElementById("kb-board-modal-color-hex");
                 colorInput.value = "#f97316";
@@ -274,6 +279,7 @@
                 document.getElementById("kb-board-modal-name").readOnly = false;
                 document.getElementById("kb-board-modal-desc").value = "";
                 document.getElementById("kb-board-modal-agent-enabled").checked = !!localCfg.agent_enabled;
+                document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = !!localCfg.whatsapp_checkin_enabled;
                 var colorInput = document.getElementById("kb-board-modal-color");
                 var colorHex = document.getElementById("kb-board-modal-color-hex");
                 var c = localCfg.color || boardMeta.color || (provider === "trello" ? "#0079bf" : "#0052cc");
@@ -324,6 +330,7 @@
                     default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value, 10) || 0,
                     color: document.getElementById("kb-board-modal-color").value || "",
                     agent_enabled: document.getElementById("kb-board-modal-agent-enabled").checked,
+                    whatsapp_checkin_enabled: document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked,
                 };
                 deps.apiFetch("/api/kanban/external-boards/" + extCfg.provider + "/" + encodeURIComponent(extCfg.extBoardId) + "/register", {
                     method: "POST", headers: { "Content-Type": "application/json" },
@@ -349,6 +356,7 @@
                 color: document.getElementById("kb-board-modal-color").value || "",
             };
             var agentChecked = document.getElementById("kb-board-modal-agent-enabled").checked;
+            var whatsappCheckinChecked = document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked;
 
             if (deps.getEditingBoardId()) {
                 var boardId = deps.getEditingBoardId();
@@ -358,7 +366,7 @@
                 }).then(function() {
                     return deps.apiFetch("/api/kanban/boards/" + boardId + "/agent-enabled", {
                         method: "PUT", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ agent_enabled: agentChecked }),
+                        body: JSON.stringify({ agent_enabled: agentChecked, whatsapp_checkin_enabled: whatsappCheckinChecked }),
                     });
                 }).then(function() {
                     deps.showSnackbar("Board updated");
@@ -383,7 +391,7 @@
                 }).then(function(data) {
                     return deps.apiFetch("/api/kanban/boards/" + data.id + "/agent-enabled", {
                         method: "PUT", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ agent_enabled: agentChecked }),
+                        body: JSON.stringify({ agent_enabled: agentChecked, whatsapp_checkin_enabled: whatsappCheckinChecked }),
                     }).then(function() { return data; });
                 }).then(function(data) {
                     deps.showSnackbar("Board created");
@@ -397,38 +405,142 @@
         function deleteBoard() {
             var currentBoard = deps.getCurrentBoard();
             if (!currentBoard || currentBoard.source !== "database") return;
-            if (!confirm("Delete this board and all its tickets? This cannot be undone.")) return;
-            deps.apiFetch("/api/kanban/boards/" + currentBoard.id, { method: "DELETE" }).then(function() {
+            var currentBoardData = deps.getCurrentBoardData();
+            var boardName = (currentBoardData && currentBoardData.name) || "this board";
+            runDeleteBoardConfirm(currentBoard.id, boardName, "Failed");
+        }
+
+        function deleteBoardById(boardId, errorPrefix) {
+            return deps.apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
                 deps.showSnackbar("Board deleted");
-                deps.clearCurrentBoard();
-                document.getElementById("kb-board-view").classList.add("hidden");
-                document.getElementById("kb-loading").classList.add("hidden");
-                document.getElementById("kb-empty").classList.remove("hidden");
+                var currentBoard = deps.getCurrentBoard();
+                if (currentBoard && String(currentBoard.id) === String(boardId)) {
+                    deps.clearCurrentBoard();
+                    document.getElementById("kb-board-view").classList.add("hidden");
+                    document.getElementById("kb-loading").classList.add("hidden");
+                    document.getElementById("kb-empty").classList.remove("hidden");
+                }
                 deps.loadBoards(true);
-            }).catch(function(e) { deps.showSnackbar("Failed: " + e.message, "error"); });
+            }).catch(function(e) { deps.showSnackbar((errorPrefix || "Delete failed") + ": " + e.message, "error"); });
+        }
+
+        function runDeleteBoardConfirm(boardId, boardName, errorPrefix) {
+            var name = boardName || "this board";
+            if (deps.showKanbanConfirm) {
+                deps.showKanbanConfirm({
+                    title: "Delete board",
+                    message: 'Delete board "' + name + '" and all its tickets? This cannot be undone.',
+                    confirmLabel: "Delete",
+                    danger: true,
+                    onConfirm: function() {
+                        if (deps.hideKanbanConfirm) deps.hideKanbanConfirm();
+                        deleteBoardById(boardId, errorPrefix);
+                    },
+                });
+                return;
+            }
+            if (confirm('Delete board "' + name + '" and all its tickets? This cannot be undone.')) {
+                deleteBoardById(boardId, errorPrefix);
+            }
+        }
+
+        function populateProjectCliBackends() {
+            return deps.apiFetch("/api/projects/cli-backends").then(function(data) {
+                var backends = data.backends || [];
+                ["low", "medium", "high"].forEach(function(level) {
+                    var sel = document.getElementById("kb-gs-cli-" + level + "-backend");
+                    if (!sel || !backends.length) return;
+                    var selected = sel.value;
+                    sel.innerHTML = "";
+                    backends.forEach(function(backend) {
+                        var opt = document.createElement("option");
+                        opt.value = backend.id || "";
+                        opt.textContent = backend.name || backend.id || "";
+                        sel.appendChild(opt);
+                    });
+                    if (selected) sel.value = selected;
+                });
+            }).catch(function(e) {
+                deps.showSnackbar("Failed to load project agent backends: " + e.message, "error");
+            });
+        }
+
+        function loadProjectCliRouteModels(level, backend, selectedModel) {
+            var sel = document.getElementById("kb-gs-cli-" + level + "-model");
+            if (!sel) return Promise.resolve();
+            backend = (backend || "pi").trim();
+            selectedModel = (selectedModel || "auto").trim();
+            sel.innerHTML = '<option value="auto">Loading models...</option>';
+            sel.disabled = true;
+            return deps.apiFetch("/api/projects/cli-models?backend_id=" + encodeURIComponent(backend)).then(function(data) {
+                var models = data.models || [];
+                sel.innerHTML = "";
+                var auto = document.createElement("option");
+                auto.value = "auto";
+                auto.textContent = "Auto";
+                sel.appendChild(auto);
+                models.forEach(function(model) {
+                    var opt = document.createElement("option");
+                    opt.value = (model && typeof model === "object") ? (model.id || "") : (model || "");
+                    opt.textContent = (model && typeof model === "object") ? (model.name || model.id || "") : (model || "");
+                    sel.appendChild(opt);
+                });
+                if (selectedModel && !Array.prototype.some.call(sel.options, function(opt) { return opt.value === selectedModel; })) {
+                    var extra = document.createElement("option");
+                    extra.value = selectedModel;
+                    extra.textContent = selectedModel;
+                    sel.appendChild(extra);
+                }
+                sel.value = selectedModel || "auto";
+            }).catch(function() {
+                sel.innerHTML = '<option value="auto">Auto</option>';
+                sel.value = selectedModel || "auto";
+            }).then(function() {
+                sel.disabled = false;
+            });
+        }
+
+        function updateCodexRouteCog(level) {
+            var backendSel = document.getElementById("kb-gs-cli-" + level + "-backend");
+            var cog = document.getElementById("kb-gs-cli-" + level + "-codex-cog");
+            var panel = document.getElementById("kb-gs-cli-" + level + "-codex-panel");
+            var isCodex = backendSel && backendSel.value === "codex";
+            if (cog) cog.classList.toggle("hidden", !isCodex);
+            if (!isCodex && panel) panel.classList.add("hidden");
+        }
+
+        function updateAllCodexRouteCogs() {
+            ["low", "medium", "high"].forEach(updateCodexRouteCog);
+        }
+
+        function populateProjectCliRoutes(settings) {
+            return populateProjectCliBackends().then(function() {
+                var defaults = {
+                    low: { backend: "cursor", model: "auto" },
+                    medium: { backend: "codex", model: "auto" },
+                    high: { backend: "codex", model: "gpt-5.3-codex" },
+                };
+                return Promise.all(["low", "medium", "high"].map(function(level) {
+                    var backend = settings["project_cli_" + level + "_backend"] || defaults[level].backend;
+                    var model = settings["project_cli_" + level + "_model"] || defaults[level].model;
+                    var backendSel = document.getElementById("kb-gs-cli-" + level + "-backend");
+                    if (backendSel) backendSel.value = backend;
+                    var intelSel = document.getElementById("kb-gs-cli-" + level + "-codex-intelligence");
+                    if (intelSel) intelSel.value = settings["project_cli_" + level + "_codex_intelligence"] || "";
+                    var speedSel = document.getElementById("kb-gs-cli-" + level + "-codex-speed");
+                    if (speedSel) speedSel.value = settings["project_cli_" + level + "_codex_speed"] || "";
+                    updateCodexRouteCog(level);
+                    return loadProjectCliRouteModels(level, backend, model);
+                }));
+            });
         }
 
         function loadGlobalKanbanSettings() {
-            return loadAgentProviders().then(function() {
-                return Promise.all([
+            return Promise.all([
                 deps.apiFetch("/api/kanban/settings"),
                 deps.apiFetch("/api/llms"),
-                ]);
-            }).then(function(results) {
+            ]).then(function(results) {
                 var s = results[0] || {};
-                var llm = results[1] || {};
-                // Orchestrator is intentionally hidden here; it follows Conversational LLM globally.
-                // Sub-agent and coder are synced with global LLM settings, but editable via dropdowns.
-                populateProviderDropdowns(["kb-gs-sub-provider", "kb-gs-coder-provider"]);
-                var subProv = (llm.kanban_provider || "").toLowerCase();
-                var subModel = llm.kanban_model || "";
-                var coderProv = (llm.coding_provider || "").toLowerCase();
-                var coderModel = llm.coding_model || "";
-                document.getElementById("kb-gs-sub-provider").value = subProv;
-                document.getElementById("kb-gs-coder-provider").value = coderProv;
-                loadAgentModels("kb-gs-sub", subProv, subModel, "kanban");
-                loadAgentModels("kb-gs-coder", coderProv, coderModel, "coding");
-                updateKanbanLlmDownloadButtons();
                 document.getElementById("kb-gs-agent-enabled").checked = !!s.kanban_agent_enabled;
                 document.getElementById("kb-gs-frequency").value = s.kanban_agent_frequency || "daily";
                 updateGsFrequencyUI(s.kanban_agent_frequency || "daily");
@@ -449,26 +561,6 @@
 
                 document.getElementById("kb-gs-monthly-day-input").value = String(s.kanban_agent_monthly_day || 1);
                 document.getElementById("kb-gs-time-input").value = s.kanban_agent_time || "09:00";
-
-                var laneNames = [];
-                var currentBoardData = deps.getCurrentBoardData();
-                if (currentBoardData && currentBoardData.lanes) {
-                    laneNames = currentBoardData.lanes.map(function(l) { return l.name || l.title || ""; }).filter(Boolean);
-                }
-                var srcSel = document.getElementById("kb-gs-source-lane");
-                var doneSel = document.getElementById("kb-gs-done-lane");
-                var srcVal = s.kanban_agent_source_lane || "";
-                var doneVal = s.kanban_agent_done_lane || "";
-                [srcSel, doneSel].forEach(function(sel) {
-                    sel.innerHTML = '<option value="">Select lane…</option>';
-                    laneNames.forEach(function(name) {
-                        var opt = document.createElement("option");
-                        opt.value = name; opt.textContent = name;
-                        sel.appendChild(opt);
-                    });
-                });
-                srcSel.value = srcVal;
-                doneSel.value = doneVal;
             }).catch(function(e) { deps.showSnackbar("Failed to load settings: " + e.message, "error"); });
         }
 
@@ -501,33 +593,14 @@
                 kanban_agent_time: document.getElementById("kb-gs-time-input").value || "09:00",
                 kanban_agent_hours: hours,
                 kanban_agent_days: days,
-                kanban_agent_monthly_day: parseInt(document.getElementById("kb-gs-monthly-day-input").value, 10) || 1,
-                kanban_agent_source_lane: document.getElementById("kb-gs-source-lane").value,
-                kanban_agent_done_lane: document.getElementById("kb-gs-done-lane").value
+                kanban_agent_monthly_day: parseInt(document.getElementById("kb-gs-monthly-day-input").value, 10) || 1
             };
-            var llmSyncPromise = deps.apiFetch("/api/llms").then(function(current) {
-                var llmPayload = Object.assign({}, current, {
-                    coding_provider: document.getElementById("kb-gs-coder-provider").value || "",
-                    coding_model: document.getElementById("kb-gs-coder-model").value || "",
-                    kanban_provider: document.getElementById("kb-gs-sub-provider").value || "",
-                    kanban_model: document.getElementById("kb-gs-sub-model").value || "",
-                });
-                return deps.apiFetch("/api/llms", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(llmPayload),
-                });
-            });
-            Promise.all([
-                deps.apiFetch("/api/kanban/settings", {
+            deps.apiFetch("/api/kanban/settings", {
                     method: "PUT",
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
-                }),
-                llmSyncPromise
-            ]).then(function() {
+                }).then(function() {
                 deps.showSnackbar("Settings saved");
-                notifyLlmsSettingsSynced();
                 closeGlobalSettingsModal();
             }).catch(function(e) { deps.showSnackbar("Save failed: " + e.message, "error"); });
         }
@@ -584,6 +657,9 @@
             var tabMessages = document.getElementById("kb-tab-messages");
             if (tab === "messages") {
                 setSidebarTabInUrl("messages");
+                if (typeof deps.resetBoardSurfaceForMessagesMode === "function") {
+                    deps.resetBoardSurfaceForMessagesMode();
+                }
                 ticketsPanel.classList.add("hidden");
                 messagesPanel.classList.remove("hidden");
                 tabTickets.classList.remove("active");
@@ -594,6 +670,9 @@
                 deps.onEnterMessagesTab();
             } else {
                 setSidebarTabInUrl("tickets");
+                if (typeof deps.resetMessagesSurfaceForBoardMode === "function") {
+                    deps.resetMessagesSurfaceForBoardMode();
+                }
                 ticketsPanel.classList.remove("hidden");
                 messagesPanel.classList.add("hidden");
                 tabTickets.classList.add("active");
@@ -678,19 +757,8 @@
             if (!boardId) return;
             var board = deps.getDbBoards().find(function(b) { return b.id === boardId; });
             var name = board ? board.name : "this board";
-            if (!confirm('Delete board "' + name + '" and all its tickets? This cannot be undone.')) { hideBoardContextMenu(); return; }
             hideBoardContextMenu();
-            deps.apiFetch("/api/kanban/boards/" + boardId, { method: "DELETE" }).then(function() {
-                deps.showSnackbar("Board deleted");
-                var currentBoard = deps.getCurrentBoard();
-                if (currentBoard && currentBoard.id === boardId) {
-                    deps.clearCurrentBoard();
-                    document.getElementById("kb-board-view").classList.add("hidden");
-                    document.getElementById("kb-loading").classList.add("hidden");
-                    document.getElementById("kb-empty").classList.remove("hidden");
-                }
-                deps.loadBoards(true);
-            }).catch(function(e) { deps.showSnackbar("Delete failed: " + e.message, "error"); });
+            runDeleteBoardConfirm(boardId, name, "Delete failed");
         }
 
         function ctxActivateBoard() {
@@ -723,6 +791,7 @@
                 if (icon) icon.classList.add("animate-spin");
                 btn.disabled = true;
                 btn.setAttribute("title", "Re-syncing external boards...");
+                btn.setAttribute("aria-label", "Re-syncing external boards");
                 deps.showSnackbar("Re-syncing external boards... this can take a bit on Jira.", "info");
                 deps.resetExternalCache();
                 deps.loadBoards(true);
@@ -744,6 +813,7 @@
                     if (icon) icon.classList.remove("animate-spin");
                     btn.disabled = false;
                     btn.setAttribute("title", prevTitle || "Re-sync external boards");
+                    btn.setAttribute("aria-label", prevTitle || "Re-sync external boards");
                 });
             });
         }
@@ -776,55 +846,27 @@
                     btn.setAttribute("data-selected", cur ? "0" : "1");
                 });
             });
-            document.getElementById("kb-gs-sub-provider").addEventListener("change", function() {
-                loadAgentModels("kb-gs-sub", this.value, "", "kanban");
-                updateKanbanLlmDownloadButtons();
+            document.querySelectorAll(".kb-gs-cli-backend").forEach(function(sel) {
+                sel.addEventListener("change", function() {
+                    loadProjectCliRouteModels(this.dataset.level, this.value, "auto");
+                    updateCodexRouteCog(this.dataset.level);
+                });
             });
-            document.getElementById("kb-gs-coder-provider").addEventListener("change", function() {
-                loadAgentModels("kb-gs-coder", this.value, "", "coding");
-                updateKanbanLlmDownloadButtons();
+            document.querySelectorAll(".kb-gs-cli-codex-cog").forEach(function(btn) {
+                btn.addEventListener("click", function(e) {
+                    e.stopPropagation();
+                    var level = btn.dataset.level;
+                    var panel = document.getElementById("kb-gs-cli-" + level + "-codex-panel");
+                    if (!panel) return;
+                    var open = !panel.classList.contains("hidden");
+                    document.querySelectorAll(".kb-gs-cli-codex-panel").forEach(function(p) { p.classList.add("hidden"); });
+                    if (!open) panel.classList.remove("hidden");
+                });
             });
-
-            var subDownload = document.getElementById("kb-gs-sub-download");
-            if (subDownload) {
-                subDownload.addEventListener("click", function() {
-                    if (typeof window.openOllamaModelBrowser === "function") {
-                        window.openOllamaModelBrowser("kanban");
-                    } else {
-                        deps.showSnackbar("Ollama browser is not available on this page.", "error");
-                    }
-                });
-            }
-            var coderDownload = document.getElementById("kb-gs-coder-download");
-            if (coderDownload) {
-                coderDownload.addEventListener("click", function() {
-                    if (typeof window.openOllamaModelBrowser === "function") {
-                        window.openOllamaModelBrowser("coding");
-                    } else {
-                        deps.showSnackbar("Ollama browser is not available on this page.", "error");
-                    }
-                });
-            }
-
-            // When the Ollama browser closes, refresh current model lists.
-            var browserClose = document.getElementById("ollama_browser_modal_close");
-            if (browserClose) {
-                browserClose.addEventListener("click", function() {
-                    var subProv = document.getElementById("kb-gs-sub-provider").value || "";
-                    var coderProv = document.getElementById("kb-gs-coder-provider").value || "";
-                    loadAgentModels("kb-gs-sub", subProv, document.getElementById("kb-gs-sub-model").value || "", "kanban");
-                    loadAgentModels("kb-gs-coder", coderProv, document.getElementById("kb-gs-coder-model").value || "", "coding");
-                });
-            }
-        }
-
-        function updateKanbanLlmDownloadButtons() {
-            var subProv = ((document.getElementById("kb-gs-sub-provider") || {}).value || "").toLowerCase();
-            var coderProv = ((document.getElementById("kb-gs-coder-provider") || {}).value || "").toLowerCase();
-            var subBtn = document.getElementById("kb-gs-sub-download");
-            var coderBtn = document.getElementById("kb-gs-coder-download");
-            if (subBtn) subBtn.classList.toggle("hidden", subProv !== "ollama");
-            if (coderBtn) coderBtn.classList.toggle("hidden", coderProv !== "ollama");
+            document.addEventListener("click", function(e) {
+                if (e.target.closest(".kb-gs-cli-codex-cog") || e.target.closest(".kb-gs-cli-codex-panel")) return;
+                document.querySelectorAll(".kb-gs-cli-codex-panel").forEach(function(p) { p.classList.add("hidden"); });
+            });
         }
 
         function bindBoardActions() {

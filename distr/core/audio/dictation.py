@@ -105,6 +105,32 @@ def _instant_type_text_macos(text: str, press_enter: bool = False) -> bool:
     return True
 
 
+def _instant_type_text_macos_shift_enter(text: str) -> bool:
+    """Insert multi-line text, using Shift+Enter for line breaks."""
+    lines = text.split("\n")
+    script = (
+        'on run argv\n'
+        '  tell application "System Events"\n'
+        '    repeat with i from 1 to count of argv\n'
+        '      set segment to item i of argv\n'
+        '      if segment is not "" then keystroke segment\n'
+        '      if i is less than count of argv then key code 36 using shift down\n'
+        '    end repeat\n'
+        '  end tell\n'
+        'end run\n'
+    )
+    result = subprocess.run(
+        ["osascript", "-e", script, *lines],
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    if result.returncode != 0:
+        logger.warning("Dictation: Shift+Enter macOS insert failed: %s", (result.stderr or "").strip())
+        return False
+    return True
+
+
 def instant_type_text(text: str, press_enter: bool = False) -> bool:
     """Fast text insertion that avoids clipboard mutation."""
     if not text:
@@ -127,7 +153,33 @@ def instant_type_text(text: str, press_enter: bool = False) -> bool:
         return False
 
 
-def insert_text(text: str, *, instant: Optional[bool] = None, press_enter: bool = False, settings: Optional[dict] = None) -> bool:
+def _type_text_with_shift_enter(text: str) -> bool:
+    controller = _get_keyboard_controller()
+    if not controller:
+        return False
+    try:
+        lines = text.split("\n")
+        for idx, line in enumerate(lines):
+            if line:
+                controller.type(line)
+            if idx < len(lines) - 1:
+                with controller.pressed(Key.shift):
+                    controller.press(Key.enter)
+                    controller.release(Key.enter)
+        return True
+    except Exception as e:
+        logger.error("Dictation: Shift+Enter typing failed: %s", e, exc_info=True)
+        return False
+
+
+def insert_text(
+    text: str,
+    *,
+    instant: Optional[bool] = None,
+    press_enter: bool = False,
+    settings: Optional[dict] = None,
+    newline_mode: str = "literal",
+) -> bool:
     """Shared text insertion path for dictation and remote dictation.
 
     Default mode preserves the existing character-by-character keyboard behavior.
@@ -135,6 +187,13 @@ def insert_text(text: str, *, instant: Optional[bool] = None, press_enter: bool 
     """
     if not text:
         return True
+    if newline_mode == "shift_enter":
+        if platform.system() == "Darwin":
+            success = _instant_type_text_macos_shift_enter(text)
+            if success:
+                return True
+            logger.warning("Dictation: Falling back to pynput Shift+Enter typing")
+        return _type_text_with_shift_enter(text)
     use_instant = is_instant_dictation_enabled(settings) if instant is None else bool(instant)
     if use_instant:
         success = instant_type_text(text, press_enter=press_enter)

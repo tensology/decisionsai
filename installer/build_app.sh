@@ -75,7 +75,6 @@ pyinstaller --name="${APP_NAME}" \
     --hidden-import=soundfile \
     --hidden-import=kokoro_onnx \
     --hidden-import=pywhispercpp \
-    --hidden-import=vibevoice \
     --hidden-import=pynput \
     --hidden-import=pyautogui \
     --hidden-import=sqlalchemy \

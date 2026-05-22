@@ -37,6 +37,7 @@ class StepValidator:
             StepType.PLAYWRIGHT.value: self.validate_playwright,
             StepType.SEND_TO_PROJECT_CLI.value: self.validate_send_to_project_cli,
             StepType.COMPUTER_USE.value: self.validate_computer_use,
+            StepType.DECISIONS_ACTION.value: self.validate_decisions_action,
         }
 
         validator = validators.get(step_type)
@@ -72,6 +73,17 @@ class StepValidator:
             errors.append(ValidationError(
                 field="recording",
                 message="Either a recording ID or recording name is required",
+            ))
+        return errors
+
+    def validate_decisions_action(self, config: dict) -> List[ValidationError]:
+        """Require a linked saved Decisions Action."""
+        errors: List[ValidationError] = []
+        action_id = config.get("action_id") or config.get("recording_id")
+        if action_id in (None, ""):
+            errors.append(ValidationError(
+                field="action_id",
+                message="A saved Decisions Action is required",
             ))
         return errors
 

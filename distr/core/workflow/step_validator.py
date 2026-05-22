@@ -32,6 +32,9 @@ def build_step_config(step_data: dict) -> dict:
             config["recording_name"] = step_data["recording_filename"]
         if not config.get("recording_id") and step_data.get("action_id"):
             config["recording_id"] = step_data["action_id"]
+    elif action_type == "decision_action":
+        if not config.get("action_id") and step_data.get("action_id"):
+            config["action_id"] = step_data["action_id"]
     return config
 
 

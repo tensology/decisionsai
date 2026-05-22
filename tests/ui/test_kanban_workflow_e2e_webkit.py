@@ -11,7 +11,8 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from distr.core.db import get_session
-from distr.core.db.kanban import KanbanTicket
+from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
 
 pytestmark = [pytest.mark.e2e_playwright, pytest.mark.only_browser("webkit")]
 
@@ -43,39 +44,60 @@ def _api_request(path: str, *, method: str = "GET", data: dict | None = None):
         return exc.code, payload
 
 
-def _seed_kanban_workflow_flow() -> tuple[int, str]:
+def _seed_kanban_workflow_flow() -> tuple[int, str, str]:
     stamp = int(time.time())
+    board_name = f"E2E TEST PROJECT {stamp}"
     ticket_title = f"E2E ticket {stamp}"
-    code, boards = _api_request("/api/kanban/boards")
-    assert code == 200, (code, boards)
-    target_board = next((b for b in boards if (b.get("name") or "").strip() == "TEST PROJECT"), None)
-    if not target_board:
-        pytest.skip("No 'TEST PROJECT' board available for e2e flow.")
-    board_id = int(target_board["id"])
-    code, board_data = _api_request(f"/api/kanban/boards/{board_id}")
-    assert code == 200, (code, board_data)
-    if not board_data.get("default_workflow_id"):
-        pytest.skip("'TEST PROJECT' board has no default workflow configured.")
-
-    todo_lane_id = next(
-        lane["id"] for lane in board_data["lanes"] if lane["name"].lower() in {"to do", "todo"}
-    )
 
     # POST /api/kanban/tickets is auth-gated in this environment; seed ticket via DB with retry.
     for _ in range(8):
         try:
             with get_session() as s:
+                workflow = AutoWorkflow(
+                    name=f"E2E default workflow {stamp}",
+                    description="Self-contained E2E default workflow for Kanban send-to-workflow.",
+                    status="active",
+                    workflow_type="manual",
+                )
+                s.add(workflow)
+                s.flush()
+                s.add(
+                    AutoWorkflowStep(
+                        workflow_id=workflow.id,
+                        position=0,
+                        name="Review ticket",
+                        action_type="agent_instruction",
+                        step_type="agent_instruction",
+                        instruction="Review the ticket and summarize the next development step.",
+                        validation_type="none",
+                    )
+                )
+                board = KanbanBoard(
+                    name=board_name,
+                    description="Self-contained E2E board for Kanban workflow testing.",
+                    source="database",
+                    default_workflow_id=workflow.id,
+                    archived=False,
+                    position=0,
+                )
+                s.add(board)
+                s.flush()
+                todo_lane = KanbanLane(board_id=board.id, name="To Do", position=0)
+                s.add(todo_lane)
+                s.add(KanbanLane(board_id=board.id, name="Doing", position=1))
+                s.add(KanbanLane(board_id=board.id, name="Done", position=2))
+                s.flush()
                 ticket = KanbanTicket(
-                    lane_id=todo_lane_id,
+                    lane_id=todo_lane.id,
                     title=ticket_title,
                     description="E2E send-to-workflow ticket",
                     priority="medium",
                     position=0,
-                    linked_workflow_id=board_data.get("default_workflow_id"),
+                    linked_workflow_id=workflow.id,
                 )
                 s.add(ticket)
                 s.flush()
-                return board_id, ticket_title
+                return int(board.id), board_name, ticket_title
         except OperationalError as exc:
             if "database is locked" not in str(exc).lower():
                 raise
@@ -89,7 +111,7 @@ def test_kanban_send_to_workflow_modal_and_status(page):
     except Exception as exc:
         pytest.skip(f"Web server not reachable at {BASE_URL}: {exc}")
 
-    board_id, ticket_title = _seed_kanban_workflow_flow()
+    board_id, board_name, ticket_title = _seed_kanban_workflow_flow()
 
     page.goto(f"{BASE_URL}/kanban/", wait_until="domcontentloaded", timeout=30000)
     page.wait_for_timeout(2500)
@@ -99,7 +121,7 @@ def test_kanban_send_to_workflow_modal_and_status(page):
         page.wait_for_timeout(600)
 
     # Open the seeded board from sidebar.
-    board_item = page.locator("#kb-db-boards .kb-board-item", has_text="TEST PROJECT").first
+    board_item = page.locator("#kb-db-boards .kb-board-item", has_text=board_name).first
     for _ in range(12):
         if board_item.count() > 0:
             break

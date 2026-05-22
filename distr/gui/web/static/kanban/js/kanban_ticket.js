@@ -3,7 +3,16 @@
 
     function createTicketUi(deps) {
         function buildSourceBadge(source) {
-            return "";
+            if (!source || source === "database") return "";
+            return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 font-medium">' + deps.esc(source) + "</span>";
+        }
+
+        function buildComplexityBadge(complexity) {
+            var level = (complexity || "medium").toLowerCase();
+            var numeral = "II";
+            if (level === "low") numeral = "I";
+            if (level === "high") numeral = "III";
+            return '<span class="kb-complexity-numeral" title="Complexity: ' + deps.esc(level) + '" aria-label="Complexity ' + deps.esc(level) + '">' + numeral + "</span>";
         }
 
         function buildExternalLink(ticketUrl, source) {
@@ -14,6 +23,7 @@
         }
 
         function actionButtonHtml(config) {
+            if (config.hidden) return "";
             var disabled = !!config.disabled;
             var stateClass = disabled ? "text-gray-700 cursor-not-allowed" : "text-white";
             var tooltip = config.tooltip || "";
@@ -38,20 +48,16 @@
                 }),
                 actionButtonHtml({
                     keyClass: "kb-act-cli",
-                    tooltip: opts.hasProject
-                        ? "Push to CLI"
-                        : "link ticket/board to project.",
-                    disabled: !opts.hasProject,
+                    tooltip: "Push to CLI",
+                    hidden: !opts.hasProject,
                     nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
                 }),
             ];
             leftActions.push(actionButtonHtml({
                 keyClass: "kb-act-project",
-                tooltip: opts.hasProject
-                    ? "Send to Project (.tickets)"
-                    : "link ticket/board to project.",
-                disabled: !opts.hasProject,
+                tooltip: "Send to Project (.tickets)",
+                hidden: !opts.hasProject,
                 nativeTooltip: true,
                 iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
             }));
@@ -84,6 +90,7 @@
 
         function buildCardMarkup(opts) {
             var sourceBadge = buildSourceBadge(opts.source);
+            var complexityBadge = buildComplexityBadge(opts.complexity);
             var extLinkHtml = opts.isLocal ? "" : buildExternalLink(opts.ticketUrl, opts.source);
             var actionRowHtml = buildActionRow({
                 hasProject: opts.hasProject,
@@ -92,7 +99,7 @@
             });
             return '<div class="flex items-start justify-between gap-2">' +
                 '<span class="text-[14px] font-medium text-white leading-snug flex-1">' + deps.esc(opts.title) + "</span>" +
-                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + '<span class="' + opts.priorityClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + deps.esc(opts.priority) + "</span>" + (opts.workflowStatusBadgeHtml || "") + extLinkHtml + "</div>" +
+                '<div class="flex items-center gap-1.5 flex-shrink-0">' + sourceBadge + complexityBadge + '<span class="' + opts.priorityClass + ' text-[10px] px-1.5 py-0.5 rounded text-white font-medium">' + deps.esc(opts.priority) + "</span>" + (opts.workflowStatusBadgeHtml || "") + extLinkHtml + "</div>" +
                 "</div>" +
                 (opts.description ? '<p class="text-xs text-gray-400 mt-2 mb-1 leading-relaxed line-clamp-2">' + deps.esc(opts.description) + "</p>" : "") +
                 (opts.labelsHtml || "") + (opts.membersHtml || "") + (opts.timeHtml || "") + (opts.mediaHtml || "") +
@@ -190,6 +197,14 @@
                 btn.disabled = true;
             });
             deps.setPriorityButtons(ticket.priority || "medium");
+            if (typeof deps.setTicketComplexity === "function") {
+                deps.setTicketComplexity(ticket.complexity || "medium");
+            }
+            var complexitySelect = document.getElementById("kb-modal-ticket-complexity");
+            if (complexitySelect) {
+                complexitySelect.disabled = true;
+                complexitySelect.classList.add("opacity-50", "cursor-not-allowed");
+            }
             deps.renderModalLinks([]);
             renderExternalMedia(ticket.media || [], source);
             renderExternalTodos(ticket.todos || []);
@@ -240,17 +255,16 @@
             if (projectActionBtn) {
                 var currentBoardData = deps.getCurrentBoardData() || {};
                 var canPush = !!currentBoardData.default_project_id;
-                var disabledTip = "link ticket/board to project.";
-                projectActionBtn.disabled = !canPush;
-                projectActionBtn.classList.toggle("opacity-40", !canPush);
-                projectActionBtn.classList.toggle("cursor-not-allowed", !canPush);
-                projectActionBtn.title = canPush ? "Send to Project (.tickets)" : disabledTip;
+                projectActionBtn.classList.toggle("hidden", !canPush);
+                projectActionBtn.disabled = false;
+                projectActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
+                projectActionBtn.title = "Send to Project (.tickets)";
                 projectActionBtn.setAttribute("aria-label", projectActionBtn.title);
                 if (cliActionBtn) {
-                    cliActionBtn.disabled = !canPush;
-                    cliActionBtn.classList.toggle("opacity-40", !canPush);
-                    cliActionBtn.classList.toggle("cursor-not-allowed", !canPush);
-                    cliActionBtn.title = canPush ? "Push to CLI" : disabledTip;
+                    cliActionBtn.classList.toggle("hidden", !canPush);
+                    cliActionBtn.disabled = false;
+                    cliActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
+                    cliActionBtn.title = "Push to CLI";
                     cliActionBtn.setAttribute("aria-label", cliActionBtn.title);
                 }
             }
@@ -347,6 +361,7 @@
                 esc: deps.esc,
                 title: ticket.title || "",
                 priority: pri,
+                complexity: ticket.complexity || "medium",
                 priorityClass: priClass,
                 description: truncatedDesc,
                 labelsHtml: labelsHtml,
@@ -355,7 +370,7 @@
                 mediaHtml: mediaHtml,
                 todoHtml: todoHtml,
                 ticketUrl: ticket.url || "",
-                source: currentBoard && currentBoard.source ? currentBoard.source : "database",
+                source: ticket.source_provider || (currentBoard && currentBoard.source ? currentBoard.source : "database"),
                 isLocal: isLocal,
                 hasProject: hasProject,
                 workflowStatusBadgeHtml: workflowStatusBadgeHtml,
@@ -488,7 +503,11 @@
             files.forEach(function(f) {
                 var row = document.createElement("div");
                 row.className = "flex items-center gap-2 text-xs";
-                row.innerHTML = '<span class="text-gray-300 flex-1 truncate">📎 ' + deps.esc(f.filename) + '</span>' +
+                var url = f.url || (f.id && deps.getModalTicketId() ? "/api/kanban/tickets/" + encodeURIComponent(deps.getModalTicketId()) + "/files/" + encodeURIComponent(f.id) + "/content" : "");
+                var label = deps.esc(f.filename || f.name || "Attachment");
+                row.innerHTML = (url
+                    ? '<a class="text-blue-300 hover:text-blue-200 flex-1 truncate" href="' + deps.esc(url) + '" target="_blank" rel="noopener noreferrer">📎 ' + label + '</a>'
+                    : '<span class="text-gray-300 flex-1 truncate">📎 ' + label + '</span>') +
                     '<button type="button" class="text-red-400 hover:text-red-300">&times;</button>';
                 row.querySelector("button").onclick = function() { deleteFile(f.id); };
                 container.appendChild(row);
@@ -615,28 +634,11 @@
             var currentBoard = deps.getCurrentBoard();
             var currentBoardData = deps.getCurrentBoardData();
             if (!currentBoard) return;
-            if (currentBoard.source !== "database") {
-                if (currentBoardData && currentBoardData.can_create_ticket === false) {
-                    deps.showSnackbar("You do not have permission to create tickets on this board", "error");
-                    return;
-                }
-                deps.openCreateExternalTicketModal();
+            if (currentBoardData && currentBoardData.can_create_ticket === false) {
+                deps.showSnackbar("You do not have permission to create tickets on this board", "error");
                 return;
             }
-            if (!currentBoardData) return;
-            var firstLane = (currentBoardData.lanes || [])[0];
-            if (!firstLane) { deps.showSnackbar("Board has no lanes", "error"); return; }
-            var newTicketBody = { lane_id: firstLane.id, title: "New Ticket", priority: "medium" };
-            if (typeof deps.mergeSourceChatIntoPayload === "function") {
-                deps.mergeSourceChatIntoPayload(newTicketBody);
-            }
-            deps.apiFetch("/api/kanban/tickets", {
-                method: "POST", headers: { "Content-Type": "application/json" },
-                body: JSON.stringify(newTicketBody)
-            }).then(function(data) {
-                deps.selectBoard("database", currentBoard.id);
-                setTimeout(function() { deps.openTicketModal(data.id); }, 300);
-            }).catch(function(e) { deps.showSnackbar("Failed: " + e.message, "error"); });
+            deps.openCreateExternalTicketModal();
         }
 
         function openCopyModal(ticket) {
@@ -717,11 +719,83 @@
     }
 
     function createExternalTicketModal(deps) {
-        function setCetLoadingOverlay(isLoading) {
+        var cetProgressTimer = null;
+        var cetProgressValue = 8;
+
+        function stopCetProgress(finalValue) {
+            if (cetProgressTimer) {
+                clearInterval(cetProgressTimer);
+                cetProgressTimer = null;
+            }
+            if (typeof finalValue === "number") {
+                cetProgressValue = finalValue;
+                var bar = document.getElementById("kb-cet-loading-bar");
+                if (bar) bar.style.width = Math.max(0, Math.min(100, finalValue)) + "%";
+            }
+        }
+
+        function updateCetProgress(step, detail, value) {
+            var titleEl = document.getElementById("kb-cet-loading-title");
+            var detailEl = document.getElementById("kb-cet-loading-detail");
+            var stepEl = document.getElementById("kb-cet-loading-step");
+            var bar = document.getElementById("kb-cet-loading-bar");
+            if (titleEl) titleEl.textContent = step || "Preparing WhatsApp Ticket...";
+            if (detailEl && detail) detailEl.textContent = detail;
+            if (stepEl) stepEl.textContent = step || "Working";
+            if (typeof value === "number") cetProgressValue = value;
+            if (bar) bar.style.width = Math.max(4, Math.min(96, cetProgressValue)) + "%";
+        }
+
+        function startCetProgress(step, detail, value) {
+            stopCetProgress();
+            cetProgressValue = typeof value === "number" ? value : 8;
+            updateCetProgress(step, detail, cetProgressValue);
+            cetProgressTimer = setInterval(function() {
+                var cap = cetProgressValue < 40 ? 68 : 92;
+                if (cetProgressValue < cap) {
+                    cetProgressValue += cetProgressValue < 40 ? 3 : 1;
+                    updateCetProgress(step, detail, cetProgressValue);
+                }
+            }, 900);
+        }
+
+        function setCetLoadingOverlay(isLoading, detail, step, progress) {
             var overlay = document.getElementById("kb-cet-loading-overlay");
             if (!overlay) return;
             if (isLoading) overlay.classList.remove("hidden");
             else overlay.classList.add("hidden");
+            if (isLoading) {
+                if (!cetProgressTimer) startCetProgress(step || "Preparing WhatsApp Ticket...", detail || "Working through WhatsApp context.", progress);
+                else updateCetProgress(step || "Preparing WhatsApp Ticket...", detail || "Working through WhatsApp context.", progress);
+            } else {
+                stopCetProgress(100);
+            }
+        }
+
+        function setCetPriority(priority) {
+            var pri = priority || "medium";
+            var input = document.getElementById("kb-cet-priority");
+            if (input) input.value = pri;
+            document.querySelectorAll("#kb-cet-priority-btns button").forEach(function(btn) {
+                if (btn.dataset.cetPri === pri) btn.click();
+            });
+        }
+
+        function resetCetComposeStatus(statusEl, text, colorClass) {
+            if (!statusEl) return;
+            statusEl.classList.remove("text-gray-500", "text-green-400", "text-yellow-500", "text-red-400", "text-[#f97316]");
+            statusEl.classList.add(colorClass || "text-gray-500");
+            statusEl.textContent = text || "";
+        }
+
+        function summarizeComposeError(errorText) {
+            var raw = String(errorText || "").trim();
+            if (!raw) return "AI compose failed";
+            var modelMatch = raw.match(/'message':\s*'([^']+)'/);
+            if (modelMatch && modelMatch[1]) return modelMatch[1];
+            var jsonMatch = raw.match(/"message"\s*:\s*"([^"]+)"/);
+            if (jsonMatch && jsonMatch[1]) return jsonMatch[1];
+            return raw.length > 220 ? raw.slice(0, 217) + "..." : raw;
         }
 
         function composeWaTicket(messageIds, titleEl, descEl, statusEl) {
@@ -729,6 +803,8 @@
             descEl = descEl || document.getElementById("kb-cet-desc");
             statusEl = statusEl || document.getElementById("kb-cet-distill-status");
             if (!messageIds || !messageIds.length) return;
+            resetCetComposeStatus(statusEl, "Draft ready; improving from WhatsApp context...", "text-[#f97316]");
+            setCetLoadingOverlay(true, "Transcribing voice notes, extracting image text, reading attachments, and composing one clean ticket.", "Composing WhatsApp ticket", 26);
             deps.apiFetch("/api/kanban/whatsapp/compose-ticket", {
                 method: "POST",
                 headers: {"Content-Type": "application/json"},
@@ -736,15 +812,20 @@
             }).then(function(r) {
                 deps.setWaTicketComposeInFlight(false);
                 setCetLoadingOverlay(false);
-                titleEl.disabled = false;
-                descEl.disabled = false;
                 titleEl.placeholder = "Ticket title";
                 descEl.placeholder = "Describe the ticket...";
                 var submitBtn = document.getElementById("kb-cet-submit");
-                submitBtn.disabled = false;
-                submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
-                if (r.title) titleEl.value = r.title;
-                if (r.description) descEl.value = r.description;
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                }
+                var baseTitle = titleEl.dataset.composeBaseTitle || "";
+                var baseDesc = descEl.dataset.composeBaseDesc || "";
+                if (r.title && (!titleEl.value.trim() || titleEl.value === baseTitle)) titleEl.value = r.title;
+                if (r.description && (!descEl.value.trim() || descEl.value === baseDesc)) descEl.value = r.description;
+                if (r.priority) setCetPriority(r.priority);
+                var complexityEl = document.getElementById("kb-cet-complexity");
+                if (complexityEl) complexityEl.value = r.complexity || "";
                 var mediaContainer = document.getElementById("kb-cet-wa-media");
                 mediaContainer.innerHTML = "";
                 var media = r.media || [];
@@ -770,27 +851,80 @@
                     countEl.classList.add("hidden");
                 }
                 if (r.fallback) {
-                    statusEl.textContent = "✏️ Ticket composed from messages (AI unavailable — you can edit)";
-                    statusEl.classList.remove("text-[#f97316]");
-                    statusEl.classList.add("text-yellow-500");
+                    var err = summarizeComposeError(r.compose_error || r.error);
+                    resetCetComposeStatus(statusEl, "Ticket drafted locally. AI compose failed: " + err, "text-yellow-500");
                 } else {
-                    statusEl.textContent = "✏️ You can edit the title and description";
-                    statusEl.classList.remove("text-[#f97316]");
-                    statusEl.classList.add("text-green-400");
+                    var complexityText = r.complexity ? " · complexity: " + r.complexity : "";
+                    resetCetComposeStatus(statusEl, "Draft updated; you can edit before creating" + complexityText, "text-green-400");
                 }
-            }).catch(function() {
+            }).catch(function(e) {
                 deps.setWaTicketComposeInFlight(false);
                 setCetLoadingOverlay(false);
-                titleEl.disabled = false;
-                descEl.disabled = false;
                 titleEl.placeholder = "Ticket title";
                 descEl.placeholder = "Describe the ticket...";
                 var submitBtn = document.getElementById("kb-cet-submit");
-                submitBtn.disabled = false;
-                submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
-                statusEl.textContent = "Could not compose ticket — enter a title manually";
-                statusEl.classList.remove("text-[#f97316]");
-                statusEl.classList.add("text-red-400");
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
+                }
+                resetCetComposeStatus(statusEl, "Using quick draft. AI compose request failed: " + summarizeComposeError(e && e.message ? e.message : e), "text-yellow-500");
+            });
+        }
+
+        function setCreateTicketBoardValue(source, boardId, label) {
+            var boardSelect = document.getElementById("kb-cet-board");
+            if (!boardSelect) return;
+            source = source || "database";
+            boardSelect.innerHTML = "";
+            var opt = document.createElement("option");
+            opt.value = source + ":" + boardId;
+            opt.textContent = label || "Current board";
+            opt.selected = true;
+            boardSelect.appendChild(opt);
+        }
+
+        function populateCreateTicketLanes(lanes, selectedValue, preferredName) {
+            var laneSelect = document.getElementById("kb-cet-lane");
+            if (!laneSelect) return;
+            laneSelect.innerHTML = '<option value="">Select a lane...</option>';
+            lanes = Array.isArray(lanes) ? lanes : [];
+            lanes.forEach(function(lane) {
+                var opt = document.createElement("option");
+                opt.value = lane.id != null ? String(lane.id) : (lane.name || "");
+                opt.textContent = lane.name || String(lane.id || "");
+                laneSelect.appendChild(opt);
+            });
+            var preferred = "";
+            if (selectedValue != null && selectedValue !== "") {
+                preferred = String(selectedValue);
+            } else if (preferredName) {
+                var match = lanes.find(function(lane) {
+                    return String(lane.name || "").toLowerCase() === String(preferredName).toLowerCase();
+                });
+                if (match) preferred = match.id != null ? String(match.id) : (match.name || "");
+            }
+            if (!preferred) {
+                var backlog = lanes.find(function(lane) { return String(lane.name || "").toLowerCase() === "backlog"; });
+                var first = backlog || lanes[0];
+                if (first) preferred = first.id != null ? String(first.id) : (first.name || "");
+            }
+            laneSelect.value = preferred;
+        }
+
+        function loadCreateTicketLanes(source, boardId, selectedValue, preferredName) {
+            source = source || "database";
+            if (!boardId) {
+                populateCreateTicketLanes([], "", "");
+                return Promise.resolve();
+            }
+            if (source === "database") {
+                return deps.apiFetch("/api/kanban/boards/" + encodeURIComponent(boardId)).then(function(boardData) {
+                    populateCreateTicketLanes(boardData.lanes || [], selectedValue, preferredName);
+                });
+            }
+            return deps.apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(boardId)).then(function(extBoard) {
+                var lanes = extBoard.lanes || extBoard.columns || extBoard.lists || [];
+                populateCreateTicketLanes(lanes, selectedValue, preferredName);
             });
         }
 
@@ -800,22 +934,29 @@
             var modal = document.getElementById("kb-create-ext-ticket-modal");
             if (!modal) { deps.setWaTicketComposeInFlight(false); deps.showSnackbar("Ticket form not found"); return; }
             document.getElementById("kb-cet-board-row").style.display = "";
-            setCetLoadingOverlay(true);
-            document.getElementById("kb-cet-title").value = "";
-            document.getElementById("kb-cet-desc").value = "";
             document.getElementById("kb-cet-heading").textContent = "Create Ticket from WhatsApp";
             var titleEl = document.getElementById("kb-cet-title");
             var descEl = document.getElementById("kb-cet-desc");
             var submitBtn = document.getElementById("kb-cet-submit");
-            titleEl.disabled = true;
-            descEl.disabled = true;
-            submitBtn.disabled = true;
-            submitBtn.classList.add("opacity-50", "cursor-not-allowed");
-            titleEl.placeholder = "AI is composing...";
-            descEl.placeholder = "Analyzing messages and composing ticket description...";
+            var quickTitle = (title || "").trim() || "WhatsApp ticket";
+            var quickDesc = (description || "").trim();
+            titleEl.value = quickTitle;
+            descEl.value = quickDesc;
+            titleEl.dataset.composeBaseTitle = quickTitle;
+            descEl.dataset.composeBaseDesc = quickDesc;
+            titleEl.disabled = false;
+            descEl.disabled = false;
+            if (submitBtn) {
+                submitBtn.disabled = false;
+                submitBtn.classList.remove("opacity-50", "cursor-not-allowed");
+            }
+            titleEl.placeholder = "Ticket title";
+            descEl.placeholder = "Describe the ticket...";
+            setCetPriority("medium");
+            var complexityEl = document.getElementById("kb-cet-complexity");
+            if (complexityEl) complexityEl.value = "";
             var statusEl = document.getElementById("kb-cet-distill-status");
-            statusEl.textContent = "";
-            statusEl.classList.remove("text-gray-500", "text-green-400", "text-yellow-500", "text-red-400", "text-[#f97316]");
+            resetCetComposeStatus(statusEl, "Draft ready; loading WhatsApp context...", "text-[#f97316]");
             modal.dataset.whatsappPhone = phone;
             modal.dataset.whatsappMsgIds = JSON.stringify(msgs.map(function(m) { return m.id; }));
             modal.dataset.whatsappBoardId = boardId;
@@ -824,6 +965,7 @@
             modal.classList.remove("hidden");
             cetSwitchTab("details");
             var msgIds = msgs.map(function(m) { return m.id; });
+            setCetLoadingOverlay(true, "Opening the ticket form now. The transcript, image text, media context, and draft will fill in as they are ready.", "Collecting WhatsApp context", 8);
             composeWaTicket(msgIds, titleEl, descEl, statusEl);
             Promise.all([
                 deps.apiFetch("/api/kanban/boards"),
@@ -874,20 +1016,7 @@
                 }
                 document.getElementById("kb-cet-board-row").style.display = "";
                 function loadLanes(source, bid) {
-                    if (source === "database") {
-                        deps.apiFetch("/api/kanban/boards/" + bid).then(function(boardData) {
-                            var laneInput = document.getElementById("kb-cet-lane");
-                            var lanes = boardData.lanes || [];
-                            var target = lanes.find(function(l) { return l.name === "Backlog"; }) || lanes[0];
-                            if (target) laneInput.value = target.id;
-                        });
-                    } else {
-                        deps.apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(bid)).then(function(extBoard) {
-                            var laneInput = document.getElementById("kb-cet-lane");
-                            var cols = extBoard.columns || extBoard.lists || [];
-                            if (cols.length) laneInput.value = cols[0].name || cols[0].id || "";
-                        }).catch(function() {});
-                    }
+                    return loadCreateTicketLanes(source, bid, "", "Backlog").catch(function() {});
                 }
                 var firstOpt = boardSelect.options[boardSelect.selectedIndex];
                 if (!firstOpt && boardSelect.options.length > 0) {
@@ -896,12 +1025,12 @@
                 }
                 if (firstOpt) {
                     var firstVal = firstOpt.value.split(":");
-                    loadLanes(firstVal[0], parseInt(firstVal[1], 10));
+                    loadLanes(firstVal[0], firstVal[1]);
                 }
-                boardSelect.addEventListener("change", function() {
+                boardSelect.onchange = function() {
                     var selVal = boardSelect.value.split(":");
-                    loadLanes(selVal[0], parseInt(selVal[1], 10));
-                });
+                    loadLanes(selVal[0], selVal[1]);
+                };
                 document.getElementById("kb-cet-files-list").innerHTML = "";
                 document.getElementById("kb-cet-file-input").value = "";
             });
@@ -910,8 +1039,8 @@
         function openCreateExternalTicketModal() {
             var currentBoard = deps.getCurrentBoard();
             var currentBoardData = deps.getCurrentBoardData();
-            if (!currentBoard || !currentBoard.source || currentBoard.source === "database") {
-                deps.showSnackbar("Select a Trello or Jira board first", "error");
+            if (!currentBoard || !currentBoard.source) {
+                deps.showSnackbar("Select a board first", "error");
                 return;
             }
             if (currentBoardData && currentBoardData.can_create_ticket === false) {
@@ -921,20 +1050,26 @@
             var modal = document.getElementById("kb-create-ext-ticket-modal");
             document.getElementById("kb-cet-title").value = "";
             document.getElementById("kb-cet-desc").value = "";
-            document.getElementById("kb-cet-lane").innerHTML = '<option value="">Select a list/column...</option>';
+            setCreateTicketBoardValue(currentBoard.source, currentBoard.id, currentBoard.name);
             if (currentBoardData && currentBoardData.lanes) {
-                currentBoardData.lanes.forEach(function(lane) {
-                    var opt = document.createElement("option");
-                    opt.value = lane.id;
-                    opt.textContent = lane.name;
-                    document.getElementById("kb-cet-lane").appendChild(opt);
+                populateCreateTicketLanes(currentBoardData.lanes, "", "Backlog");
+            } else {
+                loadCreateTicketLanes(currentBoard.source, currentBoard.id, "", "Backlog").catch(function() {
+                    populateCreateTicketLanes([], "", "");
                 });
             }
-            document.getElementById("kb-cet-priority").value = "medium";
+            setCetPriority("medium");
+            var complexityEl = document.getElementById("kb-cet-complexity");
+            if (complexityEl) complexityEl.value = "";
             document.getElementById("kb-cet-files-list").innerHTML = "";
             document.getElementById("kb-cet-file-input").value = "";
-            document.getElementById("kb-cet-heading").textContent = "Create " + (currentBoard.source === "trello" ? "Trello" : "Jira") + " Ticket";
+            document.getElementById("kb-cet-heading").textContent = currentBoard.source === "database"
+                ? "Create Ticket"
+                : "Create " + (currentBoard.source === "trello" ? "Trello" : "Jira") + " Ticket";
+            var boardRow = document.getElementById("kb-cet-board-row");
+            if (boardRow) boardRow.style.display = "none";
             setCetLoadingOverlay(false);
+            cetSwitchTab("details");
             modal.classList.remove("hidden");
         }
 
@@ -980,8 +1115,10 @@
             var titleEl = document.getElementById("kb-cet-title");
             var descEl = document.getElementById("kb-cet-desc");
             var submitBtn = document.getElementById("kb-cet-submit");
-            if (titleEl) { titleEl.disabled = false; titleEl.placeholder = "Ticket title"; }
-            if (descEl) { descEl.disabled = false; descEl.placeholder = "Describe the ticket..."; }
+            var complexityEl = document.getElementById("kb-cet-complexity");
+            if (titleEl) { titleEl.disabled = false; titleEl.placeholder = "Ticket title"; delete titleEl.dataset.composeBaseTitle; }
+            if (descEl) { descEl.disabled = false; descEl.placeholder = "Describe the ticket..."; delete descEl.dataset.composeBaseDesc; }
+            if (complexityEl) complexityEl.value = "";
             if (submitBtn) { submitBtn.disabled = false; submitBtn.classList.remove("opacity-50", "cursor-not-allowed"); }
         }
 
@@ -1003,6 +1140,8 @@
             var desc = document.getElementById("kb-cet-desc").value.trim();
             var laneId = document.getElementById("kb-cet-lane").value;
             var priority = document.getElementById("kb-cet-priority").value;
+            var complexityEl = document.getElementById("kb-cet-complexity");
+            var complexity = complexityEl ? complexityEl.value : "";
             var boardSelect = document.getElementById("kb-cet-board");
             var selectedValue = boardSelect ? boardSelect.value : "";
             var parts = selectedValue.split(":");
@@ -1015,7 +1154,35 @@
 
             if (boardSource === "database") {
                 if (!laneId) { deps.showSnackbar("Select a lane", "error"); return; }
+                if (waPhone) {
+                    var sourceMsgIds = JSON.parse(waMsgIds);
+                    deps.apiFetch("/api/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-ticket", {
+                        method: "POST",
+                        headers: {"Content-Type": "application/json"},
+                        body: JSON.stringify({
+                            lane_id: parseInt(laneId, 10),
+                            message_ids: sourceMsgIds,
+                            title: title,
+                            description: desc,
+                            priority: priority || "medium",
+                            complexity: complexity || undefined
+                        })
+                    }).then(function(r) {
+                        if (!r || !r.success) { deps.showSnackbar("Failed to create WhatsApp ticket", "error"); return; }
+                        deps.showSnackbar("Ticket created");
+                        closeCreateExtTicketModal();
+                        deps.selectBoard("database", boardId);
+                        deps.refreshWaThreadIfOpen();
+                    }).catch(function(e) {
+                        var detail = e && e.detail ? e.detail : null;
+                        var quality = detail && detail.quality ? detail.quality : null;
+                        var problems = quality ? (quality.issues || []).concat(quality.warnings || []) : [];
+                        deps.showSnackbar("Failed: " + (e.message || "Could not create WhatsApp ticket") + (problems.length ? ": " + problems.slice(0, 2).join("; ") : ""), "error");
+                    });
+                    return;
+                }
                 var cetPayload = { title: title, description: desc, lane_id: parseInt(laneId, 10), priority: priority || "medium", board_id: boardId };
+                if (complexity) cetPayload.complexity = complexity;
                 if (typeof deps.mergeSourceChatIntoPayload === "function") {
                     deps.mergeSourceChatIntoPayload(cetPayload);
                 }
@@ -1034,8 +1201,13 @@
                             body: JSON.stringify({ jid_phone: waPhone, snapshot_group: r.id + "_" + r.lane_id, message_ids: msgIdList })
                         }).catch(function() {});
                         var mediaEls = document.querySelectorAll("#kb-cet-wa-media input[name=wa-media]");
+                        var attachMsgIds = [];
                         mediaEls.forEach(function(el) {
-                            var msgId = parseInt(el.value, 10);
+                            var mediaMsgId = parseInt(el.value, 10);
+                            if (mediaMsgId) attachMsgIds.push(mediaMsgId);
+                        });
+                        if (!attachMsgIds.length) attachMsgIds = msgIdList;
+                        attachMsgIds.forEach(function(msgId) {
                             deps.apiFetch("/api/kanban/tickets/" + r.id + "/attach-whatsapp-media", {
                                 method: "POST",
                                 headers: {"Content-Type": "application/json"},

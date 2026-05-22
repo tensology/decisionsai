@@ -66,12 +66,6 @@ try:
 except ImportError:
     ASSEMBLYAI_STT_AVAILABLE = False
     AssemblyAISTTService = None
-try:
-    from .services import VibeVoiceAsrSTTService
-    VIBEVOICE_ASR_STT_AVAILABLE = VibeVoiceAsrSTTService is not None
-except ImportError:
-    VIBEVOICE_ASR_STT_AVAILABLE = False
-    VibeVoiceAsrSTTService = None
 
 from distr.core.chat_manager import ChatManagerCore
 from distr.core.signals import signal_manager
@@ -528,32 +522,6 @@ class AgentSession:
         # Create STT service
         stt_config = self.config['stt']
 
-        # VibeVoice ASR is optional (separate install). If selected but unavailable, fall back
-        # so the agent session does not exit on startup (same idea as Whisper → Vosk).
-        if stt_config.get('engine') == 'vibevoice_asr':
-            from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-
-            _vv_ok = (
-                VIBEVOICE_ASR_STT_AVAILABLE
-                and VibeVoiceAsrSTTService is not None
-                and vibevoice_asr_runtime_ready()
-            )
-            if not _vv_ok:
-                self.logger.warning(
-                    "VibeVoice ASR is selected but the `vibevoice` package is not installed or not "
-                    "importable (see ./scripts/install_vibevoice.sh). Falling back to local STT."
-                )
-                from distr.core.agent.libs import WHISPER_AVAILABLE
-
-                if WHISPER_AVAILABLE:
-                    self.config['stt'] = {
-                        'engine': 'whisper',
-                        'model_path': self.DEFAULT_CONFIG['stt']['model_path'],
-                    }
-                else:
-                    self.config['stt'] = {'engine': 'vosk'}
-                stt_config = self.config['stt']
-
         if stt_config['engine'] == 'whisper':
             # Check if pywhispercpp is available (may fail to compile on Windows)
             from distr.core.agent.libs import WHISPER_AVAILABLE
@@ -612,30 +580,11 @@ class AgentSession:
                 is_hands_free=self.is_hands_free
             )
             self.logger.info(f"✅ AssemblyAI STT service created successfully (type: {type(self.stt_service).__name__})")
-        if stt_config['engine'] == 'vibevoice_asr':
-            if not VIBEVOICE_ASR_STT_AVAILABLE or VibeVoiceAsrSTTService is None:
-                raise ImportError(
-                    "VibeVoiceAsrSTTService is not available. Install the vibevoice package from "
-                    "https://github.com/microsoft/VibeVoice — see scripts/install_vibevoice.sh"
-                )
-            from distr.core.agent.services.tts.vibevoice_runtime import vibevoice_asr_runtime_ready
-
-            if not vibevoice_asr_runtime_ready():
-                raise ImportError(
-                    "VibeVoice ASR requires the `vibevoice` Python package. Run: ./scripts/install_vibevoice.sh"
-                )
-            self.logger.info("Creating VibeVoice ASR STT service (lazy model load on first use)")
-            self.stt_service = VibeVoiceAsrSTTService(
-                event_queue=self.event_queue,
-                is_hands_free=self.is_hands_free,
-            )
-            self.logger.info("✅ VibeVoice ASR STT service created")
         if stt_config['engine'] not in (
             'whisper',
             'vosk',
             'openai_whisper',
             'assemblyai',
-            'vibevoice_asr',
         ):
             raise ValueError(f"Unsupported STT engine: {stt_config['engine']}")
         
@@ -850,6 +799,8 @@ class AgentSession:
             # Dictation hotkey signals — hold-to-dictate keyboard shortcut
             signal_manager.dictation_hotkey_pressed.connect(self._on_dictation_hotkey_pressed)
             signal_manager.dictation_hotkey_released.connect(self._on_dictation_hotkey_released)
+            signal_manager.ticket_dictation_hotkey_pressed.connect(self._on_ticket_dictation_hotkey_pressed)
+            signal_manager.ticket_dictation_hotkey_released.connect(self._on_dictation_hotkey_released)
             self.logger.debug("Signal bridging setup complete")
         except RuntimeError as e:
             # signal_manager QObject has been deleted (happens in spawned child processes
@@ -894,6 +845,13 @@ class AgentSession:
                 self.llm_service._start_dictation(one_shot=True)
         except Exception as e:
             self.logger.debug("Dictation hotkey press failed: %s", e)
+
+    def _on_ticket_dictation_hotkey_pressed(self):
+        try:
+            if self.llm_service and hasattr(self.llm_service, '_start_dictation'):
+                self.llm_service._start_dictation(one_shot=True, output_mode="ticket")
+        except Exception as e:
+            self.logger.debug("Ticket dictation hotkey press failed: %s", e)
 
     def _on_dictation_hotkey_released(self):
         try:
@@ -1177,18 +1135,6 @@ class AgentSession:
                     old_service.set_reference_voice(ref_path, ref_text)
                     self._apply_agent_name(new_agent_name)
                     self.logger.debug("HOT-SWAP TTS: VoxCPM in-place voice swap complete (voice=%s)", voice_model)
-                    return
-
-            elif vp == 'vibevoice_realtime':
-                from .services.tts.vibevoice_realtime import VibeVoiceRealtimeTTSService
-                if isinstance(old_service, VibeVoiceRealtimeTTSService):
-                    vid = hot_swap_cfg.get('voice_id') or voice_model
-                    old_service.set_voice(vid or '')
-                    self._apply_agent_name(new_agent_name)
-                    self.logger.debug(
-                        "HOT-SWAP TTS: VibeVoice Realtime in-place voice swap complete (voice=%s)",
-                        voice_model,
-                    )
                     return
 
         # --- Full service replacement (non-in-place path) ---

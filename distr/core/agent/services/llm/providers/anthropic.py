@@ -390,7 +390,7 @@ class AnthropicLLMService(BaseLLMService):
         except Exception as e:
             logger.error("Error in AnthropicLLMService._generate_response (%.3fs): %s",
                          _time.time() - _t0, e, exc_info=True)
-            await self.push_frame(ErrorFrame(error=str(e)), self._pipeline_direction)
+            final_text = await self._surface_model_error(e, operation="generate an Anthropic response")
         finally:
             logger.info("Anthropic: total generation: %.3fs", _time.time() - _t0)
             self._emit_telegram_response(full_content, final_text)

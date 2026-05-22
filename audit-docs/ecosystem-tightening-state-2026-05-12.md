@@ -436,7 +436,7 @@ Known gaps:
 
 Next actions:
 
-- Build provider stress tests for Coqui, Kokoro, OpenAI, ElevenLabs, F5-TTS, VibeVoice, and VoxCPM.
+- Build provider stress tests for Coqui, Kokoro, OpenAI, ElevenLabs, F5-TTS, and VoxCPM.
 - Compare live-stream transcript chunks against final replay text/audio events.
 - Add output-device switching tests during playback and between turns.
 - Add player/oracle lifecycle tests for start, confirmed audio, interrupt, stop, silent provider start, and provider failure.

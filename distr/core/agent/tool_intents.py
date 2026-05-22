@@ -31,6 +31,10 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:ticket|card|issue)\b",
             r"\b(create|make|add|new|draft)\s+(?:a\s+|an\s+)?(?:jira|trello)\s+(?:ticket|card|issue)\b",
+            r"\b(move|transfer|relocate)\b.+\b(ticket|card|issue)\b.+\bboard\b",
+            r"\b(ticket|card|issue)\b.+\b(move|transfer|relocate)\b.+\bboard\b",
+            r"\bwhats\s*app\b.+\b(sync|latest|activity|overview|contacts?|chats?|messages?|thread|context|snapshot|ticket|reply|send)\b",
+            r"\b(sync|latest|activity|overview|list|show|read|open|snapshot|create|make|draft|reply|send)\b.+\bwhats\s*app\b",
         ),
     ),
     (
@@ -79,9 +83,13 @@ def forced_tool_names_for_text(text: str) -> list[str]:
 
     if ticket_intent_kind == "debug_decisions_ticket":
         forced.append("create_cursor_ticket")
+    elif ticket_intent_kind == "ticket_file":
+        forced.append("file_operations")
+    elif ticket_intent_kind == "type_text":
+        forced.append("type_text")
 
     for tool_name, patterns in _RULES:
-        if ticket_intent_kind == "debug_decisions_ticket" and tool_name == "create_ticket":
+        if ticket_intent_kind in {"debug_decisions_ticket", "ticket_file", "type_text"} and tool_name == "create_ticket":
             continue
         if any(re.search(pattern, raw, re.IGNORECASE) for pattern in patterns):
             forced.append(tool_name)

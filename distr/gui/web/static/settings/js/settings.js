@@ -63,6 +63,7 @@ function initSettingsPage() {
     
     document.querySelectorAll('.tab-button').forEach(function(btn) {
         console.log('Attaching handler to:', btn.getAttribute('data-tab'));
+        btn.setAttribute('tabindex', '0');
         btn.addEventListener('click', function(e) {
             e.preventDefault();
             var tab = btn.getAttribute('data-tab');
@@ -70,6 +71,28 @@ function initSettingsPage() {
             switchTab(tab);
         });
     });
+    var settingsNav = document.getElementById('settings-nav') || document.querySelector('.settings-sidebar') || document.querySelector('#settings-sidebar');
+    if (settingsNav && settingsNav.dataset.keyboardBound !== '1') {
+        settingsNav.dataset.keyboardBound = '1';
+        settingsNav.addEventListener('keydown', function(e) {
+            var target = e.target && e.target.closest ? e.target.closest('.tab-button') : null;
+            if (!target) return;
+            if (e.key !== 'ArrowDown' && e.key !== 'ArrowUp' && e.key !== 'Enter' && e.key !== ' ') return;
+            e.preventDefault();
+            var buttons = Array.prototype.slice.call(settingsNav.querySelectorAll('.tab-button'));
+            if (!buttons.length) return;
+            if (e.key === 'Enter' || e.key === ' ') {
+                target.click();
+                return;
+            }
+            var idx = buttons.indexOf(target);
+            var next = buttons[Math.max(0, Math.min(buttons.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
+            if (next) {
+                next.focus();
+                switchTab(next.getAttribute('data-tab'));
+            }
+        });
+    }
     
     window._settingsUiReady = false;
     switchTab(getTabFromHash());

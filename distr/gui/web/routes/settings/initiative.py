@@ -153,6 +153,23 @@ def register_routes(router, templates):
             logger.error(f"Failed to reject draft: {e}", exc_info=True)
             return JSONResponse({"success": False, "error": str(e)}, status_code=500)
 
+    @router.post("/initiative/drafts/reject-all")
+    async def reject_all_drafts():
+        """Reject and remove every pending draft action."""
+        try:
+            from distr.core.initiative.draft_queue import DraftQueue
+            queue = DraftQueue()
+            queue.expire_old()
+            removed = queue.clear()
+            return JSONResponse({
+                "success": True,
+                "message": f"Rejected {removed} pending draft(s)",
+                "removed": removed,
+            })
+        except Exception as e:
+            logger.error(f"Failed to reject all drafts: {e}", exc_info=True)
+            return JSONResponse({"success": False, "error": str(e)}, status_code=500)
+
     @router.get("/initiative/status")
     async def get_initiative_status():
         """Return current initiative service cycle status (for debugging)."""

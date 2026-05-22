@@ -22,6 +22,7 @@ EVENT_HOOKS: List[str] = [
     "hands_free_listening",
     "ptt_active",
     "dictation",
+    "ticket_dictation",
     "recording_action",
     "file_drop_success",
     "tts_response",

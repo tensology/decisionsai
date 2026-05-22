@@ -16,8 +16,24 @@
 .kb-pri-high { background: #ea580c; }
 .kb-pri-medium { background: #ca8a04; }
 .kb-pri-low { background: #16a34a; }
+.kb-complexity-numeral {
+    min-width: 1.7rem;
+    height: 1.25rem;
+    padding: 0 0.35rem;
+    border: 1px solid rgba(255,255,255,0.18);
+    border-radius: 0.25rem;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: #d7dcff;
+    background: rgba(255,255,255,0.06);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    line-height: 1;
+}
 /* Modal overlay */
-.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 100; align-items: center; justify-content: center; }
+.kb-modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.6); z-index: 10000; align-items: center; justify-content: center; }
 .kb-modal-overlay:not(.hidden) { display: flex; }
 .kb-modal { background: #1a1f3a; border: 1px solid rgba(255,255,255,0.2); border-radius: 0.75rem; width: 700px; max-width: 95vw; max-height: 90vh; overflow-y: auto; }
 /* Source icons in sidebar */
@@ -124,7 +140,7 @@
 .kb-tm-tab { cursor: pointer; }
 .kb-tm-tab.active { color: #fff; border-color: #f97316; }
 /* Confirm dialog above ticket / board modals */
-.kb-confirm-overlay { z-index: 120; }
+.kb-confirm-overlay { z-index: 10020; }
 /* Sidebar tabs */
 .kb-sidebar-tab { cursor: pointer; padding: 6px 16px; border-radius: 6px 6px 0 0; font-size: 0.8rem; font-weight: 600; color: #9ca3af; border-bottom: 2px solid transparent; transition: color 0.15s, border-color 0.15s; user-select: none; }
 .kb-sidebar-tab:hover { color: #d1d5db; }
@@ -296,14 +312,13 @@
                     </div>
                     <div class="flex items-center gap-2" id="kb-board-actions">
                         <a id="kb-board-ext-link" href="#" target="_blank" class="hidden px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Open in browser</a>
-                        <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
-                        <button type="button" id="kb-edit-board" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 flex items-center gap-1"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span id="kb-edit-board-label">Configure</span></button>
-                        <button type="button" id="kb-refresh-boards" class="px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 flex items-center gap-1" title="Re-sync external boards">
-                            <svg class="kb-refresh-icon" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <button type="button" id="kb-refresh-boards" class="inline-flex h-9 w-9 items-center justify-center rounded text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Re-sync external boards" aria-label="Re-sync external boards">
+                            <svg class="kb-refresh-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582M20 20v-5h-.581M5 9a7 7 0 0111.95-2.05L20 9M19 15a7 7 0 01-11.95 2.05L4 15" />
                             </svg>
-                            <span>Re-sync</span>
                         </button>
+                        <button type="button" id="kb-edit-board" class="inline-flex h-9 w-9 items-center justify-center rounded text-gray-300 hover:bg-white/10 hover:text-white transition-colors" title="Configure board" aria-label="Configure board"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg><span id="kb-edit-board-label" class="sr-only">Configure</span></button>
+                        <button type="button" id="kb-add-ticket" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">+ Add Ticket</button>
                         <button type="button" id="kb-delete-board" class="hidden"></button>
                     </div>
                 </div>
@@ -485,6 +500,10 @@
                     </div>
                 </div>
                 <p class="text-xs text-gray-500">Format: Jira-style duration values like <code>30m</code>, <code>2h</code>, <code>1d 3h</code>, or <code>1w 2d 4h 30m</code>.</p>
+                <div id="kb-modal-source-meta" class="hidden p-3 bg-[#152054] border border-white/10 rounded">
+                    <div class="text-xs text-gray-500 mb-1">Source</div>
+                    <div id="kb-modal-source-meta-body" class="text-xs text-gray-300 space-y-1"></div>
+                </div>
             </div>
             <!-- Links tab -->
             <div id="kb-tm-tab-links" class="kb-tm-pane hidden p-6 space-y-4">
@@ -530,13 +549,24 @@
             </div>
             <!-- Advanced tab -->
             <div id="kb-tm-tab-advanced" class="kb-tm-pane hidden p-6 space-y-4">
-                <div>
-                    <label class="block text-sm text-gray-400 mb-1">Priority</label>
-                    <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
-                        <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
-                        <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
-                        <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
-                        <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                <div class="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Priority</label>
+                        <div class="flex flex-wrap gap-2" id="kb-modal-priority-btns">
+                            <button type="button" data-pri="low" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-green-500">Low</button>
+                            <button type="button" data-pri="medium" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-yellow-500">Medium</button>
+                            <button type="button" data-pri="high" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-orange-500">High</button>
+                            <button type="button" data-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
+                        </div>
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Complexity</label>
+                        <select id="kb-modal-ticket-complexity" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="low">I - Low</option>
+                            <option value="medium">II - Medium</option>
+                            <option value="high">III - High</option>
+                        </select>
+                        <p class="text-xs text-gray-500 mt-1">Used by workflow and CLI routing.</p>
                     </div>
                 </div>
                 <div>
@@ -662,7 +692,12 @@
                     <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
                     <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                 </svg>
-                <div class="text-sm text-white font-medium">Collecting Messages and Creating a Ticket...</div>
+                <div id="kb-cet-loading-title" class="text-sm text-white font-medium">Preparing WhatsApp Ticket...</div>
+                <div id="kb-cet-loading-detail" class="text-xs text-gray-400">Collecting unread WhatsApp messages.</div>
+                <div class="w-full max-w-[360px] h-1.5 rounded-full bg-white/10 overflow-hidden">
+                    <div id="kb-cet-loading-bar" class="h-full rounded-full bg-[#f97316] transition-all duration-500" style="width: 8%;"></div>
+                </div>
+                <div id="kb-cet-loading-step" class="text-[11px] text-gray-500">Starting intake</div>
             </div>
         </div>
         <div class="flex items-center justify-between mb-4">
@@ -690,7 +725,12 @@
                 <label class="block text-sm text-gray-400 mb-1">Description</label>
                 <textarea id="kb-cet-desc" rows="5" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm resize-y" placeholder="Describe the ticket..."></textarea>
             </div>
-            <input type="hidden" id="kb-cet-lane" value="">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Lane</label>
+                <select id="kb-cet-lane" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm">
+                    <option value="">Select a lane...</option>
+                </select>
+            </div>
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Priority</label>
                 <div class="flex gap-2" id="kb-cet-priority-btns">
@@ -700,6 +740,7 @@
                     <button type="button" data-cet-pri="critical" class="px-3 py-1.5 rounded text-xs font-medium border border-white/20 text-gray-400 hover:border-red-500">Critical</button>
                 </div>
                 <input type="hidden" id="kb-cet-priority" value="medium">
+                <input type="hidden" id="kb-cet-complexity" value="">
             </div>
         </div>
         <!-- Attachments Tab (hidden by default) -->
@@ -730,13 +771,11 @@
             <h3 id="kb-board-modal-title" class="text-lg font-semibold text-white">New Board</h3>
             <button type="button" id="kb-board-modal-x" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>
         </div>
-        <!-- Tabs -->
-        <div class="flex gap-1 border-b border-white/20 px-6 mt-3">
-            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-white border-b-2 border-[#f97316] -mb-px" data-tab="details">Details</button>
-            <button type="button" class="kb-bm-tab px-4 py-2 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="advanced">Advanced</button>
+        <div class="flex gap-6 px-6 pt-4 border-b border-white/10">
+            <button type="button" class="kb-bm-tab active pb-2 text-sm text-white border-b-2 border-[#f97316]" data-tab="details">Details</button>
+            <button type="button" class="kb-bm-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="advanced">Advanced</button>
         </div>
-        <!-- Details tab -->
-        <div id="kb-bm-tab-details" class="kb-bm-pane p-6 space-y-3">
+        <div id="kb-bm-tab-details" class="kb-bm-pane p-6 space-y-4">
             <div>
                 <label class="block text-sm text-gray-400 mb-1">Name</label>
                 <input type="text" id="kb-board-modal-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none text-sm" placeholder="My Board">
@@ -753,29 +792,37 @@
                     <button type="button" id="kb-board-modal-color-reset" class="text-xs text-gray-500 hover:text-white underline">Reset</button>
                 </div>
             </div>
-            <div class="flex items-center justify-between pt-2">
+        </div>
+        <div id="kb-bm-tab-advanced" class="kb-bm-pane hidden p-6 space-y-4">
+            <div class="flex items-center justify-between rounded border border-white/10 bg-[#152054]/50 px-3 py-3">
                 <div>
-                    <label class="text-sm text-gray-300">Agent check-in</label>
-                    <p class="text-xs text-gray-500">Allow the agent to check in and work tickets on this board</p>
+                    <label class="text-sm text-gray-300">Enable agent check-in</label>
+                    <p class="text-xs text-gray-500">Allow the agent to check in and work tickets on this board.</p>
                 </div>
                 <input type="checkbox" id="kb-board-modal-agent-enabled" class="accent-[#f97316] w-5 h-5">
             </div>
-        </div>
-        <!-- Advanced tab (board defaults for new tickets) -->
-        <div id="kb-bm-tab-advanced" class="kb-bm-pane hidden p-6 space-y-4">
-            <p class="text-xs text-gray-500">New tickets created on this board will inherit these defaults.</p>
-            <div class="grid grid-cols-2 gap-3">
+            <div class="flex items-center justify-between rounded border border-white/10 bg-[#152054]/30 px-3 py-3">
                 <div>
-                    <label class="text-xs text-gray-500">Default Workflow</label>
-                    <select id="kb-board-def-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">None</option>
-                    </select>
+                    <label class="text-sm text-gray-300">Include WhatsApp check-in</label>
+                    <p class="text-xs text-gray-500">When this board checks in, also inspect WhatsApp chats linked to this board.</p>
                 </div>
-                <div>
-                    <label class="text-xs text-gray-500">Default Project</label>
-                    <select id="kb-board-def-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                        <option value="">None</option>
-                    </select>
+                <input type="checkbox" id="kb-board-modal-whatsapp-checkin-enabled" class="accent-[#25D366] w-5 h-5">
+            </div>
+            <div class="border-t border-white/10 pt-4">
+                <p class="text-xs text-gray-500 mb-3">New tickets created on this board will inherit these defaults.</p>
+                <div class="grid grid-cols-2 gap-3">
+                    <div>
+                        <label class="text-xs text-gray-500">Default Workflow</label>
+                        <select id="kb-board-def-workflow" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">None</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label class="text-xs text-gray-500">Default Project</label>
+                        <select id="kb-board-def-project" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
+                            <option value="">None</option>
+                        </select>
+                    </div>
                 </div>
             </div>
             <div class="border-t border-white/10 pt-4">
@@ -822,41 +869,14 @@
         <!-- Sections -->
         <div class="p-6 space-y-6">
 
-            <!-- LLM Configuration Section -->
             <div>
-                <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">LLM Configuration</h4>
-                <p class="text-xs text-gray-500 mb-3">Orchestrator uses Conversational automatically. Sub-agent and Coder sync with Settings → LLMs.</p>
-                <div class="space-y-3">
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Sub-agent</label>
-                        <select id="kb-gs-sub-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <select id="kb-gs-sub-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <button type="button" id="kb-gs-sub-download" class="hidden w-7 h-7 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-sm font-bold transition-colors" title="Download Ollama models">+</button>
-                    </div>
-                    <div class="flex items-center gap-2">
-                        <label class="text-xs text-gray-500 w-24 text-right flex-shrink-0">Coder</label>
-                        <select id="kb-gs-coder-provider" class="w-32 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <select id="kb-gs-coder-model" class="flex-1 px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                            <option value="">(chat default)</option>
-                        </select>
-                        <button type="button" id="kb-gs-coder-download" class="hidden w-7 h-7 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-sm font-bold transition-colors" title="Download Ollama models">+</button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Advanced Section -->
-            <div class="border-t border-white/10 pt-4">
-                <h4 class="text-sm font-semibold text-gray-300 uppercase tracking-wider mb-3">Advanced</h4>
                 <div class="space-y-4">
                     <!-- Agent enabled toggle -->
-                    <div class="flex items-center gap-3">
-                        <label class="text-sm text-gray-300">Enable agent check-in</label>
+                    <div class="flex items-center justify-between rounded border border-white/10 bg-[#152054]/50 px-3 py-3">
+                        <div>
+                            <label class="text-sm text-gray-300">Enable agent check-in</label>
+                            <p class="text-xs text-gray-500">Run scheduled board check-ins for enabled boards.</p>
+                        </div>
                         <input type="checkbox" id="kb-gs-agent-enabled" class="accent-[#f97316]">
                     </div>
 
@@ -936,25 +956,6 @@
                         <input type="time" id="kb-gs-time-input" value="09:00" class="px-3 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" style="color-scheme:dark;">
                     </div>
 
-                    <!-- Lane routing -->
-                    <div class="border-t border-white/10 pt-4">
-                        <label class="block text-sm text-gray-400 mb-2">Ticket lane routing</label>
-                        <p class="text-xs text-gray-500 mb-3">The agent picks tickets from the source lane and moves them to the done lane when complete.</p>
-                        <div class="grid grid-cols-2 gap-3">
-                            <div>
-                                <label class="text-xs text-gray-500">Source lane (work from)</label>
-                                <select id="kb-gs-source-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                    <option value="">Select lane…</option>
-                                </select>
-                            </div>
-                            <div>
-                                <label class="text-xs text-gray-500">Done lane (move to)</label>
-                                <select id="kb-gs-done-lane" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none">
-                                    <option value="">Select lane…</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
                 </div>
             </div>
 

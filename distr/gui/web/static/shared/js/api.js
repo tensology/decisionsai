@@ -25,7 +25,9 @@
                     if (typeof msg !== "string") {
                         msg = msg != null ? JSON.stringify(msg) : r.statusText;
                     }
-                    throw new Error(msg || r.statusText);
+                    var err = new Error(msg || r.statusText);
+                    err.detail = e;
+                    throw err;
                 });
             }
             // Handle 204 No Content

@@ -165,7 +165,7 @@ class TestWorkflowsBasicLoad:
         cl, nl = attach_loggers(page)
 
         start = time.time()
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
         load_time = time.time() - start
         print(f"\n⏱ Page load time: {load_time:.2f}s")
 
@@ -188,7 +188,7 @@ class TestWorkflowsBasicLoad:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Wait for the workflow list to have items
         list_items = page.locator("#wf-list [data-id]")
@@ -223,7 +223,7 @@ class TestWorkflowsDetailPanel:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Select first workflow
         list_items = page.locator("#wf-list [data-id]")
@@ -251,7 +251,7 @@ class TestWorkflowsDetailPanel:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -288,7 +288,7 @@ class TestWorkflowsDetailPanel:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -332,7 +332,7 @@ class TestWorkflowsDetailPanel:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -394,7 +394,7 @@ class TestWorkflowsDetailPanel:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -453,7 +453,7 @@ class TestWorkflowsCreateAndDelete:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Enter a name
         name_input = page.locator("#wf-new-name")
@@ -482,7 +482,7 @@ class TestWorkflowsCreateAndDelete:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # First create one to delete
         name_input = page.locator("#wf-new-name")
@@ -520,7 +520,7 @@ class TestWorkflowsSearch:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Wait for list to populate
         list_items = page.locator("#wf-list [data-id]")
@@ -559,7 +559,7 @@ class TestWorkflowsContextMenu:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -596,7 +596,7 @@ class TestWorkflowsWebSocket:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Wait for WS to attempt connection or polling to start
         page.wait_for_timeout(4000)
@@ -634,7 +634,7 @@ class TestWorkflowsPerformance:
         cl, nl = attach_loggers(page)
 
         start = time.time()
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
         initial_load = time.time() - start
 
         # Wait for first data to render
@@ -670,7 +670,7 @@ class TestWorkflowsPerformance:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -698,7 +698,7 @@ class TestWorkflowsPerformance:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
         page.wait_for_timeout(10000)  # Wait 10 seconds to observe request patterns
 
         # Count API calls
@@ -737,7 +737,7 @@ class TestWorkflowsKeyboardInteraction:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -767,7 +767,7 @@ class TestWorkflowsHeaderActions:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -797,7 +797,7 @@ class TestWorkflowsHeaderActions:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -836,7 +836,7 @@ class TestWorkflowsContextMenuActions:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         list_items = page.locator("#wf-list [data-id]")
         try:
@@ -867,7 +867,7 @@ class TestWorkflowsAddStep:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Create a new workflow first
         name_input = page.locator("#wf-new-name")
@@ -916,7 +916,7 @@ class TestWorkflowsNetworkErrors:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Interact to trigger more API calls
         list_items = page.locator("#wf-list [data-id]")
@@ -970,7 +970,7 @@ class TestWorkflowsConsoleErrors:
         page = browser_context.new_page()
         cl, nl = attach_loggers(page)
 
-        page.goto(WORKFLOWS_URL, wait_until="networkidle", timeout=15000)
+        page.goto(WORKFLOWS_URL, wait_until="domcontentloaded", timeout=15000)
 
         # Interact to trigger JS execution
         list_items = page.locator("#wf-list [data-id]")
