@@ -805,6 +805,34 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
             )
         except Exception:
             logger.debug("Could not emit approval_granted event", exc_info=True)
+    elif waiting_kind == "ide_handoff" and optional_input:
+        try:
+            from distr.core.hermes import emit_event, record_learning_signal
+
+            with get_session() as db:
+                run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+            board_id = getattr(run, "board_id", None) if run else None
+            emit_event(
+                source="ide",
+                event_type="ide_iteration_completed",
+                status="completed",
+                run_id=run_id,
+                step_id=step_id,
+                workflow_id=getattr(run, "workflow_id", None) if run else None,
+                ticket_id=getattr(run, "ticket_id", None) if run else None,
+                board_id=board_id,
+                summary=(optional_input or "")[:500] or "IDE iteration reported back.",
+                payload={"feedback": optional_input or ""},
+            )
+            record_learning_signal(
+                scope="board" if board_id else "global",
+                scope_id=board_id,
+                rule_type="ide_iteration",
+                summary=(optional_input or "")[:500],
+                payload={"run_id": run_id, "step_id": step_id},
+            )
+        except Exception:
+            logger.debug("Could not emit ide_iteration_completed event", exc_info=True)
 
     # Resume must continue execution, not only update run state.
     action = (decision or {}).get("action")
@@ -881,6 +909,34 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         ticket_id = run.ticket_id
         db.commit()
     increment_workflow_updated()
+    try:
+        if workflow_id and isinstance(run_data, dict):
+            from distr.core.db.projects import Project
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.workflow.skill_provision import provision_workflow_skills
+
+            project_id = run_data.get("project_id")
+            route = run_data.get("execution_route") or {}
+            backend_id = route.get("backend") or route.get("backend_id") or "pi"
+            with get_session() as db:
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first()
+                project = None
+                if project_id:
+                    project = db.query(Project).filter(Project.id == int(project_id)).first()
+                if wf and project and getattr(project, "folder_location", None):
+                    provision_workflow_skills(
+                        workflow=wf,
+                        project_folder=project.folder_location,
+                        backend_id=str(backend_id),
+                        chain_type="post_chain",
+                        run_id=run_id,
+                        workflow_id=workflow_id,
+                        ticket_id=ticket_id,
+                        board_id=board_id,
+                        project_id=getattr(project, "id", None),
+                    )
+    except Exception:
+        logger.debug("Could not provision post_chain skills for run %s", run_id, exc_info=True)
     record_workflow_chat_event(
         run_id,
         "completed",

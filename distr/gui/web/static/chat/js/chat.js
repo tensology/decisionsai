@@ -135,14 +135,25 @@ function populateChatVoiceProviderSelect(selectEl) {
 }
 
 /** Voice rows from cached provider payload (avoids extra /api/voices fetch when registry has voices). */
+function chatVoiceOptionHtml(voice) {
+    const id = voice && typeof voice === 'object' ? (voice.id || '') : voice;
+    const name = voice && typeof voice === 'object' ? (voice.name || voice.id || '') : voice;
+    const attrs = [`value="${escapeHtml(id || '')}"`];
+    if (voice && typeof voice === 'object') {
+        if (voice.custom) attrs.push('data-custom="1"');
+        if (voice.custom_voice_id) attrs.push(`data-custom-voice-id="${escapeHtml(String(voice.custom_voice_id))}"`);
+        if (voice.provider_voice_id) attrs.push(`data-provider-voice-id="${escapeHtml(voice.provider_voice_id)}"`);
+        if (voice.custom_source) attrs.push(`data-custom-source="${escapeHtml(voice.custom_source)}"`);
+    }
+    return `<option ${attrs.join(' ')}>${escapeHtml(name || id || '')}</option>`;
+}
+
 function populateChatVoiceModelSelectForEl(modelSelectEl, providerId) {
     if (!modelSelectEl) return;
     const provider = _ttsProviders && _ttsProviders.find(p => p.id === providerId);
     const voices = provider && Array.isArray(provider.voices) ? provider.voices : [];
     if (voices.length) {
-        modelSelectEl.innerHTML = voices.map(v =>
-            `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`
-        ).join('');
+        modelSelectEl.innerHTML = voices.map(chatVoiceOptionHtml).join('');
     } else {
         modelSelectEl.innerHTML = '<option value="">No voices available</option>';
     }
@@ -1735,7 +1746,7 @@ async function loadEmptyStateVoiceModels(provider) {
         const response = await fetch(`/api/voices/${encodeURIComponent(provider)}`);
         const data = await response.json();
         const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
-        el.innerHTML = voices.length ? voices.map(v => `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`).join('') : '<option value="">No voices</option>';
+        el.innerHTML = voices.length ? voices.map(chatVoiceOptionHtml).join('') : '<option value="">No voices</option>';
     } catch (e) {
         el.innerHTML = '<option value="">Error loading</option>';
     }
@@ -3148,7 +3159,7 @@ async function loadVoiceModels(provider) {
         const data = await response.json();
         const voices = Array.isArray(data) ? data : (data.voices || data.chats || []);
         if (voices.length) {
-            voiceModelSelect.innerHTML = voices.map(v => `<option value="${escapeHtml(v.id || v)}">${escapeHtml(v.name || v.id || v)}</option>`).join('');
+            voiceModelSelect.innerHTML = voices.map(chatVoiceOptionHtml).join('');
         } else {
             voiceModelSelect.innerHTML = '<option value="">No voices available</option>';
         }
@@ -3409,7 +3420,7 @@ function updateChatSettingsDisplay(settings) {
 
 // ── Custom Voice Management for Chat UI ──────────────────────────────────
 
-const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'supertonic', 'chatterbox']);
+const _CHAT_CV_PROVIDERS = new Set(['kokoro', 'elevenlabs', 'coqui', 'f5tts', 'voxcpm', 'supertonic']);
 let _chatCvAudioMode = 'upload';
 let _chatCvRecordedBlob = null;
 let _chatCvMediaRecorder = null;
@@ -3432,9 +3443,10 @@ function updateChatVoiceButtons(prefix) {
     if (!providerEl || !voiceEl) return;
 
     const provider = providerEl.value;
+    const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
     const voiceId = voiceEl.value;
     const supportsCustom = _CHAT_CV_PROVIDERS.has(provider);
-    const isCustomVoice = voiceId && voiceId.startsWith('custom_');
+    const isCustomVoice = selected && selected.dataset.custom === '1';
 
     if (customBtn) customBtn.style.display = supportsCustom ? '' : 'none';
     if (deleteBtn) deleteBtn.style.display = isCustomVoice ? '' : 'none';
@@ -3639,6 +3651,7 @@ function _pollChatCv(voiceId, context, provider) {
             if (data.status === 'ready') {
                 clearInterval(interval);
                 closeChatCustomVoiceModal();
+                invalidateTTSProvidersCache();
                 const voiceSelect = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceModel' : 'voiceModel');
                 if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
                 else await loadVoiceModels(provider);
@@ -3667,15 +3680,21 @@ async function deleteChatCustomVoice(context) {
     const providerEl = document.getElementById(context === 'emptyState' ? 'emptyStateVoiceProvider' : 'voiceProvider');
     if (!voiceEl || !providerEl) return;
     const voiceId = voiceEl.value;
-    if (!voiceId || !voiceId.startsWith('custom_')) return;
-    const dbId = voiceId.split('_')[1];
+    const selected = voiceEl.selectedOptions && voiceEl.selectedOptions[0];
+    if (!selected || selected.dataset.custom !== '1') return;
+    const dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
+    const providerVoiceId = selected.dataset.providerVoiceId || voiceId;
     const voiceName = voiceEl.options[voiceEl.selectedIndex]?.text || voiceId;
     if (!confirm('Delete custom voice "' + voiceName + '"?')) return;
 
     try {
-        const r = await fetch('/api/custom-voices/' + dbId, { method: 'DELETE' });
+        const url = dbId
+            ? '/api/custom-voices/' + encodeURIComponent(dbId)
+            : '/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId);
+        const r = await fetch(url, { method: 'DELETE' });
         if (r.ok) {
             const provider = providerEl.value;
+            invalidateTTSProvidersCache();
             if (context === 'emptyState') await loadEmptyStateVoiceModels(provider);
             else await loadVoiceModels(provider);
             updateChatVoiceButtons(context === 'emptyState' ? 'emptyState' : 'modal');

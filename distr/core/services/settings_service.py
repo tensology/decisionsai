@@ -661,9 +661,13 @@ def save_thirdparty_settings(data, resolve_secret_fn) -> None:
     ]:
         enabled_field, key_field = field_pair
         settings[enabled_field] = getattr(data, enabled_field)
-        settings[key_field] = resolve_secret_fn(
-            settings.get(key_field, ""), getattr(data, key_field)
-        )
+        incoming_key = getattr(data, key_field)
+        if not settings[enabled_field] and not (incoming_key or "").strip():
+            settings[key_field] = ""
+        else:
+            settings[key_field] = resolve_secret_fn(
+                settings.get(key_field, ""), incoming_key
+            )
 
     save_settings_to_db(settings)
     _safe_emit(signal_manager.reload_agent, label="reload_agent (third-party save)")

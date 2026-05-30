@@ -24,7 +24,7 @@ def test_redacted_thirdparty_does_not_expose_plaintext():
         "assemblyai_key": "",
     }
     redacted = redact_thirdparty_settings(data)
-    assert redacted["openai_key"] != "sk-abcdef123456"
+    assert redacted["openai_key"] == ""
     assert redacted["openai_key_set"] is True
     assert redacted["assemblyai_key_set"] is False
 

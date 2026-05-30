@@ -2,7 +2,7 @@
   "name": "decisionsai",
   "displayName": "DecisionsAI",
   "description": "Cursor Ticket Connector into DecisionsAI",
-  "version": "0.0.1",
+  "version": "0.0.2",
   "publisher": "decisionsai",
   "repository": {
     "type": "git",
@@ -22,6 +22,9 @@
     "commands": [{
       "command": "decisionsai.activateTicketWatcher",
       "title": "Activate DecisionsAI Tickets Watcher"
+    }, {
+      "command": "decisionsai.reportWorkflowComplete",
+      "title": "DecisionsAI: Report Workflow Complete"
     }],
     "configuration": {
       "title": "DecisionsAI",

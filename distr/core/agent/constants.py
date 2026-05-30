@@ -52,14 +52,17 @@ TTS_SYSTEM = "System Default"
 
 def _build_tts_providers() -> list[dict]:
     """Build the TTS_PROVIDERS list from the registry for backward compatibility."""
-    from distr.core.agent.services.tts.registry import tts_registry
+    from distr.core.agent.services.tts.registry import (
+        DISABLED_TTS_PROVIDER_IDS,
+        tts_registry,
+    )
     result = []
     for d in tts_registry.all_providers():
         entry = {
             "id": d.id,
             "name": d.name,
             "type": d.type,
-            "enabled": d.enabled,
+            "enabled": d.enabled and d.id not in DISABLED_TTS_PROVIDER_IDS,
             "default_voice": d.default_voice,
             "settings_key": d.settings_key,
             "supports_custom_voices": d.supports_custom_voices,

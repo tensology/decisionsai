@@ -304,7 +304,7 @@ class StepExecutorMixin:
             }
 
         try:
-            from distr.core.project_cli_backends import run_project_task
+            from distr.core.project_cli_backends.harness import HarnessContext
             import concurrent.futures
 
             async def _run_task():
@@ -313,32 +313,140 @@ class StepExecutorMixin:
                     if not project:
                         raise ValueError(f"Project #{project_id} not found")
                     route = {}
+                    ticket = None
+                    board = None
                     ticket_id = run_data.get("ticket_id")
                     if ticket_id is not None:
                         try:
-                            from distr.core.db.kanban import KanbanTicket
-                            from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
+                            from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+                            from distr.core.hermes_orchestrator import resolve_execution_route
 
                             ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(ticket_id)).first()
+                            if ticket and getattr(ticket, "lane_id", None):
+                                lane = db.query(KanbanLane).filter(KanbanLane.id == int(ticket.lane_id)).first()
+                                if lane and getattr(lane, "board_id", None):
+                                    board = db.query(KanbanBoard).filter(KanbanBoard.id == int(lane.board_id)).first()
                             if ticket:
-                                route = resolve_ticket_cli_route(project, getattr(ticket, "complexity", "medium"))
+                                run_row = (
+                                    db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                                    if run_id
+                                    else None
+                                )
+                                run_data_local = json.loads(run_row.run_data or "{}") or {} if run_row else {}
+                                approved_override = run_data_local.get("approved_route_override")
+                                if approved_override and isinstance(approved_override, dict):
+                                    from distr.core.project_cli_backends import normalize_backend_id
+
+                                    route = {
+                                        "backend": normalize_backend_id(
+                                            str(approved_override.get("backend") or "").strip() or "pi"
+                                        ),
+                                        "model": str(approved_override.get("model") or "auto").strip(),
+                                        "complexity": str(
+                                            approved_override.get("complexity")
+                                            or run_data_local.get("execution_route", {}).get("complexity")
+                                            or "medium"
+                                        ),
+                                        "source": "hermes_override",
+                                        "rationale": str(approved_override.get("rationale") or "").strip(),
+                                        "requires_approval": False,
+                                    }
+                                    decision = None
+                                else:
+                                    decision = resolve_execution_route(
+                                        project=project,
+                                        ticket=ticket,
+                                        board=board,
+                                        run_id=run_id,
+                                        step_id=step_data.get("id"),
+                                        workflow_id=workflow_id,
+                                        allow_hermes_override=not bool(
+                                            run_data_local.get("suppress_hermes_override")
+                                        ),
+                                    )
+                                    route = decision.to_route_dict()
+                                if run_row:
+                                    run_data_local["execution_route"] = route
+                                    if decision and decision.requires_approval:
+                                        run_data_local["pending_route_approval"] = decision.override_route or {}
+                                        run_data_local["route_approval_pending"] = True
+                                        run_row.run_data = json.dumps(run_data_local)
+                                        db.commit()
+                                        override = decision.override_route or {}
+                                        backend_hint = override.get("backend") or route.get("backend") or "auto"
+                                        return {
+                                            "output": (
+                                                f"Hermes suggested route override to {backend_hint}. "
+                                                "Waiting for human approval before dispatching."
+                                            ),
+                                            "passed": True,
+                                            "skip_wait": False,
+                                            "route_approval_pending": True,
+                                        }
+                                    run_row.run_data = json.dumps(run_data_local)
+                                    db.commit()
+                                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == int(workflow_id)).first() if workflow_id else None
+                                backend_for_skills = route.get("backend") or "pi"
+                                if wf and project.folder_location:
+                                    from distr.core.workflow.skill_provision import provision_workflow_skills
+
+                                    provision_workflow_skills(
+                                        workflow=wf,
+                                        project_folder=project.folder_location,
+                                        backend_id=backend_for_skills,
+                                        chain_type="pre_chain",
+                                        run_id=run_id,
+                                        workflow_id=workflow_id,
+                                        ticket_id=int(ticket_id),
+                                        board_id=getattr(board, "id", None) if board else None,
+                                        project_id=int(project_id),
+                                    )
+                                    extra_skills = list(decision.skills or []) if decision else []
+                                    if extra_skills:
+                                        from distr.core.workflow.skill_provision import push_skill_to_project
+
+                                        for skill_id in extra_skills:
+                                            push_skill_to_project(
+                                                skill_id=skill_id,
+                                                project_folder=project.folder_location,
+                                                backend_id=backend_for_skills,
+                                            )
                         except Exception:
                             route = {}
-                    return await run_project_task(
-                        project,
-                        instruction,
-                        audit_id=step_data.get("id"),
-                        run_id=run_id,
-                        workflow_id=workflow_id,
-                        step_id=step_data.get("id"),
-                        origin="workflow",
-                        ticket_id=int(ticket_id) if ticket_id is not None else None,
-                        ticket_complexity=route.get("complexity", "medium"),
-                        backend_id_override=route.get("backend"),
-                        model_override=route.get("model"),
-                        codex_reasoning_effort_override=route.get("codex_reasoning_effort"),
-                        codex_service_tier_override=route.get("codex_service_tier"),
+                    handle = await dispatch_harness_async(
+                        HarnessContext(
+                            project=project,
+                            instruction=instruction,
+                            backend_id=route.get("backend") or "pi",
+                            model=route.get("model") or "",
+                            ticket_id=int(ticket_id) if ticket_id is not None else None,
+                            board_id=getattr(board, "id", None) if board else None,
+                            run_id=run_id,
+                            workflow_id=workflow_id,
+                            step_id=step_data.get("id"),
+                            ticket_complexity=route.get("complexity", "medium"),
+                            codex_reasoning_effort=route.get("codex_reasoning_effort") or "",
+                            codex_service_tier=route.get("codex_service_tier") or "",
+                            origin="workflow",
+                        )
                     )
+                    if run_id and handle.execution_session_id:
+                        run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                        if run_row:
+                            run_data_local = json.loads(run_row.run_data or "{}") or {}
+                            run_data_local["execution_session_id"] = handle.execution_session_id
+                            run_data_local.pop("approved_route_override", None)
+                            run_data_local.pop("suppress_hermes_override", None)
+                            run_row.run_data = json.dumps(run_data_local)
+                            db.commit()
+                    if handle.result is None:
+                        raise ValueError("Harness dispatch returned no result")
+                    return handle.result
+
+            async def dispatch_harness_async(context):
+                from distr.core.project_cli_backends.harness import dispatch_harness
+                handle = await dispatch_harness(context)
+                return handle
 
             # asyncio.run() raises RuntimeError if called from within a running
             # event loop (e.g. inside FastAPI). Fall back to a thread-bound loop
@@ -351,12 +459,42 @@ class StepExecutorMixin:
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
                     result = pool.submit(_thread_runner).result(timeout=int(config.get("timeout_seconds", 900) or 900))
 
+            if isinstance(result, dict) and result.get("route_approval_pending"):
+                if run_id:
+                    try:
+                        with get_session() as db:
+                            run_row = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                            if run_row:
+                                payload = json.loads(run_row.run_data or "{}") or {}
+                                payload["route_approval_pending"] = True
+                                run_row.run_data = json.dumps(payload)
+                                db.commit()
+                    except Exception:
+                        pass
+                return {
+                    "output": result.get("output", "Route override pending approval."),
+                    "passed": bool(result.get("passed", True)),
+                    "skip_wait": False,
+                }
+
             backend_name = getattr(result, "backend_id", "") or "project_cli"
             output = (getattr(result, "output", "") or "").strip()
             error = (getattr(result, "error", "") or "").strip()
             passed = bool(getattr(result, "success", False))
             engine = (getattr(result, "engine", "") or "").strip()
             text = output or error or f"Sent to {backend_name}."
+            if engine == "ide_ticket" and passed and run_id:
+                try:
+                    with get_session() as db:
+                        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+                        if run:
+                            payload = json.loads(run.run_data or "{}") or {}
+                            payload["ide_handoff_pending"] = True
+                            payload["ide_ticket_path"] = output
+                            run.run_data = json.dumps(payload)
+                            db.commit()
+                except Exception:
+                    pass
             return {
                 "output": (
                     f"Project CLI backend: {backend_name}\n"

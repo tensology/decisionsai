@@ -15,7 +15,38 @@ logger = logging.getLogger(__name__)
 # ── Verification engine ──
 
 
-def _run_verification(step: AutoWorkflowStep, result: str, caller_passed: bool) -> bool:
+def _project_runtime_snapshot(project_id: int | None) -> dict[str, Any]:
+    """Build a compact runtime snapshot for validation and UI."""
+    if not project_id:
+        return {}
+    try:
+        from distr.core.hermes import list_project_runtime_sessions
+
+        sessions = list_project_runtime_sessions(project_id=int(project_id), active_only=True, limit=10)
+        urls: list[dict[str, Any]] = []
+        for session in sessions:
+            for item in session.get("urls") or []:
+                if isinstance(item, dict) and item.get("url"):
+                    urls.append(item)
+        policy = sessions[0].get("safe_restart_policy") if sessions else ""
+        return {
+            "sessions": sessions,
+            "urls": urls[:5],
+            "active_terminal_count": len(sessions),
+            "safe_restart_policy": policy or "",
+        }
+    except Exception:
+        logger.debug("Could not load project runtime snapshot", exc_info=True)
+        return {}
+
+
+def _run_verification(
+    step: AutoWorkflowStep,
+    result: str,
+    caller_passed: bool,
+    *,
+    project_id: int | None = None,
+) -> bool:
     """
     Run the configured validation for a step. Returns True if passed.
     If validation_type is 'none', uses the caller's passed flag.
@@ -39,7 +70,12 @@ def _run_verification(step: AutoWorkflowStep, result: str, caller_passed: bool) 
         elif vtype == "screenshot_compare":
             return _verify_screenshot(step, result, prompt)
         elif vtype == "playwright":
-            return _verify_playwright(step, caller_passed)
+            runtime = _project_runtime_snapshot(project_id)
+            base_url = ""
+            urls = runtime.get("urls") or []
+            if urls and isinstance(urls[0], dict):
+                base_url = str(urls[0].get("url") or "").strip()
+            return _verify_playwright(step, caller_passed, base_url=base_url)
         else:
             logger.warning("Unknown validation type '%s', defaulting to caller_passed", vtype)
             return caller_passed
@@ -53,6 +89,8 @@ def build_validation_snapshot(
     result: str,
     caller_passed: bool,
     verified_passed: bool,
+    *,
+    project_id: int | None = None,
 ) -> Dict[str, Any]:
     """Build a compact, serializable record of the validation decision."""
     vtype = (getattr(step, "validation_type", None) or "none").strip().lower()
@@ -64,7 +102,7 @@ def build_validation_snapshot(
     observed = (result or "").strip()
     if len(observed) > 600:
         observed = observed[:600] + "..."
-    return {
+    snapshot: Dict[str, Any] = {
         "step_id": getattr(step, "id", None),
         "step_name": getattr(step, "name", None) or f"Step {getattr(step, 'id', '')}",
         "validation_type": vtype,
@@ -74,6 +112,15 @@ def build_validation_snapshot(
         "verified_passed": bool(verified_passed),
         "verdict": "pass" if verified_passed else "fail",
     }
+    runtime = _project_runtime_snapshot(project_id)
+    urls = runtime.get("urls") or []
+    if urls and isinstance(urls[0], dict) and urls[0].get("url"):
+        snapshot["validation_url"] = str(urls[0]["url"]).strip()
+        snapshot["runtime"] = {
+            "urls": urls[:3],
+            "active_terminal_count": runtime.get("active_terminal_count"),
+        }
+    return snapshot
 
 
 def _verify_text_match(result: str, criteria: str) -> bool:
@@ -126,16 +173,26 @@ def _verify_rule_based(result: str, rules: str) -> bool:
     return True
 
 
-def _verify_llm_judgment(result: str, validation_prompt: str) -> bool:
-    """Send the result + validation prompt to the LLM for judgment."""
+def _verify_llm_judgment(result: str, validation_prompt: str, *, standards_context: str = "", ticket_context: str = "") -> bool:
+    """Send the result + validation prompt to the Hermes validator model."""
     try:
-        from distr.core.signals import signal_manager
+        from distr.core.hermes_validator import run_hermes_validator_judgment
+
+        verdict = run_hermes_validator_judgment(
+            result=result,
+            validation_prompt=validation_prompt,
+            standards_context=standards_context,
+            ticket_context=ticket_context,
+            mode="primary",
+        )
+        if verdict is not None:
+            return bool(verdict.get("passed"))
+
         try:
             from distr.core.workflow.standards_memory import UNIVERSAL_WORKFLOW_STANDARDS
             standards = "\n\nQUALITY STANDARDS:\n" + UNIVERSAL_WORKFLOW_STANDARDS.strip()
         except Exception:
             standards = ""
-        # Build a judgment prompt
         judgment_prompt = (
             f"You are a validation judge. Evaluate whether the following result passes the validation criteria.\n\n"
             f"VALIDATION CRITERIA:\n{validation_prompt}\n\n"
@@ -143,7 +200,6 @@ def _verify_llm_judgment(result: str, validation_prompt: str) -> bool:
             f"RESULT TO VALIDATE:\n{result}\n\n"
             f"Respond with exactly PASS or FAIL followed by a brief explanation."
         )
-        # Use synchronous LLM call if available
         try:
             from distr.core.agent.services.llm.shared import get_shared_llm_response
             response = get_shared_llm_response(judgment_prompt)
@@ -195,7 +251,7 @@ def _verify_screenshot(step: AutoWorkflowStep, result: str, validation_prompt: s
         return True
 
 
-def _verify_playwright(step: AutoWorkflowStep, caller_passed: bool) -> bool:
+def _verify_playwright(step: AutoWorkflowStep, caller_passed: bool, *, base_url: str = "") -> bool:
     """Execute a Playwright validation script. Exit code 0 = passed, non-zero = failed.
     Falls back to caller_passed if validation_code is empty."""
     validation_code = (step.validation_code or "").strip()
@@ -205,7 +261,7 @@ def _verify_playwright(step: AutoWorkflowStep, caller_passed: bool) -> bool:
 
     try:
         from distr.core.workflow_engine.test_loop import TestLoopService
-        result = TestLoopService()._execute_playwright(validation_code)
+        result = TestLoopService()._execute_playwright(validation_code, base_url=base_url or None)
         exit_code = result.get("exit_code", 1) if isinstance(result, dict) else getattr(result, "exit_code", 1)
         output = result.get("output", "") if isinstance(result, dict) else getattr(result, "output", "")
         if exit_code == 0:

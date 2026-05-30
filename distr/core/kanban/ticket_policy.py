@@ -98,16 +98,44 @@ def _global_complexity_route(level: str) -> dict[str, str]:
     return route
 
 
-def resolve_ticket_cli_route(project: Any, complexity: str | None) -> dict[str, str]:
+def resolve_ticket_cli_route(
+    project: Any,
+    complexity: str | None,
+    board: Any | None = None,
+) -> dict[str, str]:
     """Return the intended backend/model for a ticket complexity.
 
-    Ticket complexity is global routing policy, not project metadata. Projects
-    provide the folder/context; the selected backend/model comes from Settings.
+    Ticket complexity is global routing policy by default. Boards may override
+    per-complexity backend/model via ``hermes_policy.complexity_routing``.
     """
     from distr.core.project_cli_backends import get_backend
 
     level = normalize_ticket_complexity(complexity)
     route = _global_complexity_route(level)
+
+    if board is not None:
+        try:
+            from distr.core.hermes import parse_board_hermes_policy
+
+            policy = parse_board_hermes_policy(getattr(board, "hermes_policy", None))
+            board_routes = policy.get("complexity_routing") or {}
+            if isinstance(board_routes, dict):
+                override = board_routes.get(level) or {}
+                if isinstance(override, dict):
+                    from distr.core.project_cli_backends import normalize_backend_id
+
+                    if override.get("backend"):
+                        route["backend"] = normalize_backend_id(override["backend"])
+                    if override.get("model"):
+                        route["model"] = str(override["model"]).strip()
+                    if route.get("backend") == "codex":
+                        if override.get("codex_reasoning_effort"):
+                            route["codex_reasoning_effort"] = str(override["codex_reasoning_effort"]).strip()
+                        if override.get("codex_service_tier"):
+                            route["codex_service_tier"] = str(override["codex_service_tier"]).strip()
+        except Exception:
+            pass
+
     backend = route["backend"]
     model = route["model"]
     try:

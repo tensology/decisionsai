@@ -19,6 +19,8 @@
     var latestActiveRuns = [];
     var latestWorkflowExecutionSessions = [];
     var latestHermesEvents = [];
+    var latestBoardActivity = null;
+    var latestLearnedRules = [];
     var wfContextMenuEl = null;
     var wfContextMenuId = null;
     var workflowRuntimeStateById = {};
@@ -32,6 +34,8 @@
     var workflowQueueTickets = [];
     var workflowActionsCatalog = [];
     var workflowActionsCatalogLoaded = false;
+    var workflowSkillsCatalog = [];
+    var workflowSkillsCatalogLoaded = false;
     var workflowQueueBoardFilter = "all";
     var workflowQueueDragTicketId = null;
     var workflowBoardDragPayload = null;
@@ -687,6 +691,7 @@
                     '<div class="flex gap-6 px-5 border-b border-white/10">' +
                         '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-white border-b-2 border-[#f97316]" data-tab="details">Details</button>' +
                         '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="advanced">Advanced</button>' +
+                        (opt.source === "database" ? '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="hermes">Hermes</button>' : '') +
                     '</div>' +
                     '<div id="wf-board-edit-tab-details" class="wf-board-edit-pane p-5 space-y-3">' +
                         '<div>' +
@@ -738,6 +743,33 @@
                             '<p class="text-xs text-gray-400">WhatsApp check-in uses the board links configured in Ticket Boards. This board setting decides whether those linked WhatsApp chats are included during check-in.</p>' +
                         '</div>' +
                     '</div>' +
+                    '<div id="wf-board-edit-tab-hermes" class="wf-board-edit-pane hidden p-5 space-y-3">' +
+                        '<p class="text-xs text-gray-400">Hybrid routing: policy baseline with optional Hermes LLM override.</p>' +
+                        '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
+                            '<label class="space-y-1"><span class="text-xs text-gray-500">Routing mode</span>' +
+                                '<select id="wf-board-hermes-routing-mode" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
+                                    '<option value="hybrid">Hybrid</option><option value="policy">Policy only</option><option value="llm">LLM advisory</option>' +
+                                '</select></label>' +
+                            '<label class="space-y-1"><span class="text-xs text-gray-500">Prefer IDE above complexity</span>' +
+                                '<select id="wf-board-hermes-ide-threshold" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
+                                    '<option value="">Off</option><option value="medium">Medium+</option><option value="high">High only</option>' +
+                                '</select></label>' +
+                        '</div>' +
+                        '<label class="flex items-center gap-2 text-sm text-gray-300">' +
+                            '<input type="checkbox" id="wf-board-hermes-require-approval" class="accent-[#f97316]">' +
+                            '<span>Require approval before applying Hermes route overrides</span>' +
+                        '</label>' +
+                        '<div class="rounded border border-white/10 bg-[#152054]/40 p-3 space-y-2">' +
+                            '<p class="text-xs text-gray-400 uppercase tracking-wide">Complexity routing overrides</p>' +
+                            '<div class="grid grid-cols-1 md:grid-cols-3 gap-2">' +
+                                ['low', 'medium', 'high'].map(function (level) {
+                                    return '<label class="space-y-1"><span class="text-[11px] text-gray-500">' + level + '</span>' +
+                                        '<input type="text" class="wf-board-route-backend w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs" data-level="' + level + '" placeholder="backend / model">' +
+                                    '</label>';
+                                }).join("") +
+                            '</div>' +
+                        '</div>' +
+                    '</div>' +
                     '<div class="flex items-center justify-center gap-3 px-5 py-4 border-t border-white/10">' +
                         '<button type="button" class="wf-board-edit-close min-w-[72px] px-3 py-1.5 rounded border border-white/20 text-center text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
                         '<button type="button" id="wf-board-edit-save" class="min-w-[72px] px-3 py-1.5 rounded bg-[#f97316] text-center text-white text-xs font-medium hover:bg-[#ea580c]">Save</button>' +
@@ -776,6 +808,28 @@
                 colorHex.textContent = "#f97316";
             });
         }
+        function populateHermesPolicy(policy) {
+            policy = policy && typeof policy === "object" ? policy : {};
+            var modeEl = document.getElementById("wf-board-hermes-routing-mode");
+            var ideEl = document.getElementById("wf-board-hermes-ide-threshold");
+            var approvalEl = document.getElementById("wf-board-hermes-require-approval");
+            if (modeEl) modeEl.value = policy.routing_mode || "hybrid";
+            if (ideEl) ideEl.value = policy.prefer_ide_above_complexity || "";
+            if (approvalEl) approvalEl.checked = policy.require_approval_for_override !== false;
+            var routes = policy.complexity_routing || {};
+            document.querySelectorAll(".wf-board-route-backend").forEach(function (input) {
+                var level = input.dataset.level || "";
+                var route = routes[level] || {};
+                var backend = route.backend || "";
+                var model = route.model || "";
+                input.value = backend ? (model && model !== "auto" ? backend + " / " + model : backend) : "";
+            });
+        }
+        if (opt.source === "database") {
+            api("GET", "/kanban/boards/" + encodeURIComponent(opt.id)).then(function (data) {
+                populateHermesPolicy(data && data.hermes_policy);
+            }).catch(function () { populateHermesPolicy({}); });
+        }
         var saveBtn = document.getElementById("wf-board-edit-save");
         if (saveBtn) {
             saveBtn.addEventListener("click", function () {
@@ -794,6 +848,25 @@
                     color: nextColor,
                     whatsapp_checkin_enabled: whatsappEnabled,
                 };
+                if (opt.source === "database") {
+                    var complexityRouting = {};
+                    document.querySelectorAll(".wf-board-route-backend").forEach(function (input) {
+                        var level = input.dataset.level || "";
+                        var raw = (input.value || "").trim();
+                        if (!level || !raw) return;
+                        var parts = raw.split("/").map(function (part) { return part.trim(); });
+                        complexityRouting[level] = {
+                            backend: parts[0] || raw,
+                            model: parts[1] || "auto",
+                        };
+                    });
+                    payload.hermes_policy = {
+                        routing_mode: (document.getElementById("wf-board-hermes-routing-mode") || {}).value || "hybrid",
+                        require_approval_for_override: !!(document.getElementById("wf-board-hermes-require-approval") || {}).checked,
+                        prefer_ide_above_complexity: (document.getElementById("wf-board-hermes-ide-threshold") || {}).value || "",
+                        complexity_routing: complexityRouting,
+                    };
+                }
                 saveBtn.disabled = true;
                 var request = opt.source === "database"
                     ? api("PUT", "/kanban/boards/" + encodeURIComponent(opt.id), payload).then(function () {
@@ -1110,6 +1183,8 @@
             loadWorkflowTicketQueue();
             loadHermesTimeline({ quiet: true });
             renderContextRules(data);
+            renderSkillChains(data);
+            loadLearnedRules({ quiet: true });
             checkActiveRun();
         }).catch(function () { snack("Failed to load workflow", "error"); });
     }
@@ -1255,6 +1330,7 @@
         var modal = document.getElementById("wf-wa-ticket-modal");
         if (modal) modal.classList.add("hidden");
         workflowWhatsappTicketDraft = null;
+        setWorkflowWhatsappLoadOlderVisible(false);
         setWorkflowWhatsappTicketLoading(false);
     }
 
@@ -1372,6 +1448,119 @@
         });
     }
 
+    function setWorkflowWhatsappLoadOlderVisible(show) {
+        var btn = document.getElementById("wf-wa-ticket-load-older");
+        if (btn) btn.classList.toggle("hidden", !show);
+    }
+
+    function workflowWhatsappEmptyStatusText(data) {
+        var stats = data && data.intake_stats ? data.intake_stats : {};
+        var reason = data && data.empty_reason ? data.empty_reason : "no_unticketed_messages";
+        if (reason === "no_unticketed_in_recent_window") {
+            var windowHours = stats.since_hours || 48;
+            return "No unticketed WhatsApp messages in the last " + windowHours + " hours for this chat. "
+                + stats.total_unticketed + " older unticketed message" + (stats.total_unticketed === 1 ? "" : "s")
+                + " exist; use Load older unticketed messages if you need to ticket backlog.";
+        }
+        if (reason === "no_new_messages_since_last_ticket") {
+            var parts = ["No new WhatsApp messages since the last ticket for this chat."];
+            if (stats.total_ticketed) {
+                parts.push(stats.total_ticketed + " message" + (stats.total_ticketed === 1 ? "" : "s") + " already linked to tickets.");
+            }
+            if (stats.total_unticketed) {
+                parts.push(stats.total_unticketed + " older unticketed message" + (stats.total_unticketed === 1 ? "" : "s") + " remain outside the current window.");
+            }
+            parts.push("Send a new WhatsApp message, sync again, or load older unticketed messages.");
+            return parts.join(" ");
+        }
+        if (stats.total_unticketed) {
+            return "No WhatsApp messages matched the current intake window. " + stats.total_unticketed + " unticketed message" + (stats.total_unticketed === 1 ? "" : "s") + " exist for this chat; try loading older messages.";
+        }
+        return "No unticketed WhatsApp messages found for this board link. Messages may already be linked to tickets, or sync has not pulled new chat activity yet.";
+    }
+
+    function applyWorkflowWhatsappPreviewData(data, syncNote) {
+        syncNote = syncNote || "";
+        workflowWhatsappTicketDraft = {
+            board_id: workflowWhatsappTicketDraft.board_id,
+            link_id: workflowWhatsappTicketDraft.link_id,
+            scope: workflowWhatsappTicketDraft.scope || "new_since_last_ticket",
+            message_count: data.message_count || 0,
+            message_ids: data.message_ids || []
+        };
+        var saveBtn = document.getElementById("wf-wa-ticket-save");
+        if (data.empty) {
+            document.getElementById("wf-wa-ticket-title").value = "";
+            document.getElementById("wf-wa-ticket-desc").value = "";
+            document.getElementById("wf-wa-ticket-priority").value = "medium";
+            document.getElementById("wf-wa-ticket-complexity").value = "medium";
+            document.getElementById("wf-wa-ticket-meta").textContent = (data.board_name || "Board") + " / " + (data.lane_name || "Backlog") + " / " + (data.contact_name || "WhatsApp");
+            document.getElementById("wf-wa-ticket-status").textContent = workflowWhatsappEmptyStatusText(data) + syncNote;
+            renderWorkflowWhatsappTicketMedia([]);
+            setWorkflowWhatsappLoadOlderVisible(!!(data.intake_stats && data.intake_stats.older_unticketed_available));
+            if (saveBtn) {
+                saveBtn.disabled = true;
+                saveBtn.classList.add("opacity-60", "cursor-not-allowed");
+            }
+            setWorkflowWhatsappTicketLoading(false);
+            return Promise.resolve();
+        }
+        setWorkflowWhatsappLoadOlderVisible(false);
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.classList.remove("opacity-60", "cursor-not-allowed");
+        }
+        document.getElementById("wf-wa-ticket-title").value = data.title || "WhatsApp ticket";
+        document.getElementById("wf-wa-ticket-desc").value = data.description || "";
+        document.getElementById("wf-wa-ticket-priority").value = data.priority || "medium";
+        document.getElementById("wf-wa-ticket-complexity").value = data.complexity || "medium";
+        document.getElementById("wf-wa-ticket-meta").textContent = (data.board_name || "Board") + " / " + (data.lane_name || "Backlog") + " / " + (data.contact_name || "WhatsApp");
+        var previewQuality = workflowWhatsappQualityText(data.quality);
+        document.getElementById("wf-wa-ticket-status").textContent = "Draft ready from " + (data.message_count || 0) + " unticketed WhatsApp message" + ((data.message_count || 0) === 1 ? "" : "s") + (previewQuality ? "; " + previewQuality : "") + "; improving from WhatsApp context...";
+        renderWorkflowWhatsappTicketMedia(data.media || []);
+        if (!workflowWhatsappTicketDraft.message_ids.length) {
+            document.getElementById("wf-wa-ticket-status").textContent = "Draft updated; you can edit before creating." + (previewQuality ? " " + previewQuality + "." : "");
+            setWorkflowWhatsappTicketLoading(false);
+            return Promise.resolve();
+        }
+        setWorkflowWhatsappTicketLoading(true, "Composing a clean ticket from the messages, captions, attachments, and voice transcripts. This can take a little while.", "Composing ticket", 68);
+        return api("POST", "/kanban/whatsapp/compose-ticket", {
+            message_ids: workflowWhatsappTicketDraft.message_ids
+        }).then(function (composed) {
+            if (composed.title) document.getElementById("wf-wa-ticket-title").value = composed.title;
+            if (composed.description) document.getElementById("wf-wa-ticket-desc").value = composed.description;
+            if (composed.priority) document.getElementById("wf-wa-ticket-priority").value = composed.priority;
+            if (composed.complexity) document.getElementById("wf-wa-ticket-complexity").value = composed.complexity;
+            renderWorkflowWhatsappTicketMedia(composed.media || data.media || []);
+            var composedQuality = workflowWhatsappQualityText(composed.quality);
+            if (composed.fallback) {
+                document.getElementById("wf-wa-ticket-status").textContent = "Ticket drafted locally. AI compose failed, but you can edit and create it." + (composedQuality ? " " + composedQuality + "." : "");
+            } else {
+                document.getElementById("wf-wa-ticket-status").textContent = "Draft updated; you can edit before creating." + (composedQuality ? " " + composedQuality + "." : "");
+            }
+        }).catch(function () {
+            document.getElementById("wf-wa-ticket-status").textContent = "Using quick draft. AI compose request failed, but you can edit and create it.";
+        }).finally(function () {
+            setWorkflowWhatsappTicketLoading(false);
+        });
+    }
+
+    function loadWorkflowWhatsappTicketPreview(scope) {
+        if (!workflowWhatsappTicketDraft || !workflowWhatsappTicketDraft.board_id) return Promise.resolve();
+        var boardId = workflowWhatsappTicketDraft.board_id;
+        var linkId = workflowWhatsappTicketDraft.link_id || "";
+        workflowWhatsappTicketDraft.scope = scope || "new_since_last_ticket";
+        setWorkflowWhatsappTicketLoading(true, "Finding WhatsApp messages for this board.", "Collecting messages", 12);
+        return api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
+            link_id: linkId ? parseInt(linkId, 10) : null,
+            limit: 500,
+            scope: workflowWhatsappTicketDraft.scope
+        }).then(function (data) {
+            setWorkflowWhatsappTicketLoading(true, "Reading messages, attaching media, and transcribing voice notes where needed.", "Preparing media", 42);
+            return applyWorkflowWhatsappPreviewData(data, "");
+        });
+    }
+
     function openWorkflowWhatsappTicketModal(btn) {
         if (!btn || btn.disabled) return;
         var boardId = btn.dataset.boardId || "";
@@ -1385,7 +1574,7 @@
             snack("WhatsApp ticket modal not found", "error");
             return;
         }
-        workflowWhatsappTicketDraft = { board_id: boardId, link_id: linkId };
+        workflowWhatsappTicketDraft = { board_id: boardId, link_id: linkId, scope: "new_since_last_ticket" };
         document.getElementById("wf-wa-ticket-title").value = "WhatsApp ticket";
         document.getElementById("wf-wa-ticket-desc").value = "";
         document.getElementById("wf-wa-ticket-priority").value = "medium";
@@ -1393,55 +1582,38 @@
         document.getElementById("wf-wa-ticket-meta").textContent = "Board WhatsApp intake";
         document.getElementById("wf-wa-ticket-status").textContent = "Draft ready; loading WhatsApp context...";
         renderWorkflowWhatsappTicketMedia([]);
+        setWorkflowWhatsappLoadOlderVisible(false);
+        var saveBtn = document.getElementById("wf-wa-ticket-save");
+        if (saveBtn) {
+            saveBtn.disabled = false;
+            saveBtn.classList.remove("opacity-60", "cursor-not-allowed");
+        }
         modal.classList.remove("hidden");
-        setWorkflowWhatsappTicketLoading(true, "Finding unread WhatsApp messages for this board.", "Collecting messages", 8);
+        setWorkflowWhatsappTicketLoading(true, "Syncing WhatsApp messages from relay, then loading board context.", "Syncing WhatsApp", 4);
         btn.disabled = true;
         btn.classList.add("opacity-60", "cursor-wait");
-        api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
-            link_id: linkId ? parseInt(linkId, 10) : null,
-            limit: 500
+        var syncNote = "";
+        api("POST", "/kanban/whatsapp/sync", {}).then(function (syncResult) {
+            if (syncResult && syncResult.error) {
+                syncNote = " Sync skipped: " + syncResult.error + ". Using locally stored messages.";
+            } else if (syncResult && typeof syncResult.synced === "number") {
+                syncNote = " Synced " + syncResult.synced + " message(s) from relay.";
+            }
+        }).catch(function () {
+            syncNote = " Sync unavailable; using locally stored messages.";
+        }).finally(function () {
+            setWorkflowWhatsappTicketLoading(true, "Finding new WhatsApp messages for this board." + syncNote, "Collecting messages", 12);
+            return api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/whatsapp-snapshot-preview", {
+                link_id: linkId ? parseInt(linkId, 10) : null,
+                limit: 500,
+                scope: "new_since_last_ticket"
+            });
         }).then(function (data) {
             setWorkflowWhatsappTicketLoading(true, "Reading messages, attaching media, and transcribing voice notes where needed.", "Preparing media", 42);
-            workflowWhatsappTicketDraft = {
-                board_id: boardId,
-                link_id: linkId,
-                message_count: data.message_count || 0,
-                message_ids: data.message_ids || []
-            };
-            document.getElementById("wf-wa-ticket-title").value = data.title || "WhatsApp ticket";
-            document.getElementById("wf-wa-ticket-desc").value = data.description || "";
-            document.getElementById("wf-wa-ticket-priority").value = data.priority || "medium";
-            document.getElementById("wf-wa-ticket-complexity").value = data.complexity || "medium";
-            document.getElementById("wf-wa-ticket-meta").textContent = (data.board_name || "Board") + " / " + (data.lane_name || "Backlog") + " / " + (data.contact_name || "WhatsApp");
-            var previewQuality = workflowWhatsappQualityText(data.quality);
-            document.getElementById("wf-wa-ticket-status").textContent = "Draft ready from " + (data.message_count || 0) + " unticketed WhatsApp message" + ((data.message_count || 0) === 1 ? "" : "s") + (previewQuality ? "; " + previewQuality : "") + "; improving from WhatsApp context...";
-            renderWorkflowWhatsappTicketMedia(data.media || []);
-            if (workflowWhatsappTicketDraft.message_ids.length) {
-                setWorkflowWhatsappTicketLoading(true, "Composing a clean ticket from the messages, captions, attachments, and voice transcripts. This can take a little while.", "Composing ticket", 68);
-                return api("POST", "/kanban/whatsapp/compose-ticket", {
-                    message_ids: workflowWhatsappTicketDraft.message_ids
-                }).then(function (composed) {
-                    if (composed.title) document.getElementById("wf-wa-ticket-title").value = composed.title;
-                    if (composed.description) document.getElementById("wf-wa-ticket-desc").value = composed.description;
-                    if (composed.priority) document.getElementById("wf-wa-ticket-priority").value = composed.priority;
-                    if (composed.complexity) document.getElementById("wf-wa-ticket-complexity").value = composed.complexity;
-                    renderWorkflowWhatsappTicketMedia(composed.media || data.media || []);
-                    var composedQuality = workflowWhatsappQualityText(composed.quality);
-                    if (composed.fallback) {
-                        document.getElementById("wf-wa-ticket-status").textContent = "Ticket drafted locally. AI compose failed, but you can edit and create it." + (composedQuality ? " " + composedQuality + "." : "");
-                    } else {
-                        document.getElementById("wf-wa-ticket-status").textContent = "Draft updated; you can edit before creating." + (composedQuality ? " " + composedQuality + "." : "");
-                    }
-                    setWorkflowWhatsappTicketLoading(false);
-                }).catch(function () {
-                    document.getElementById("wf-wa-ticket-status").textContent = "Using quick draft. AI compose request failed, but you can edit and create it.";
-                    setWorkflowWhatsappTicketLoading(false);
-                });
-            }
-            document.getElementById("wf-wa-ticket-status").textContent = "Draft updated; you can edit before creating." + (previewQuality ? " " + previewQuality + "." : "");
-            setWorkflowWhatsappTicketLoading(false);
+            return applyWorkflowWhatsappPreviewData(data, syncNote);
         }).catch(function (e) {
-            closeWorkflowWhatsappTicketModal();
+            document.getElementById("wf-wa-ticket-status").textContent = e.message || "Could not load WhatsApp messages";
+            setWorkflowWhatsappTicketLoading(false);
             snack(e.message || "Could not load WhatsApp messages", "error");
         }).finally(function () {
             btn.disabled = false;
@@ -1451,6 +1623,10 @@
 
     function submitWorkflowWhatsappTicketModal() {
         if (!workflowWhatsappTicketDraft || !workflowWhatsappTicketDraft.board_id) return;
+        if (!workflowWhatsappTicketDraft.message_ids || !workflowWhatsappTicketDraft.message_ids.length) {
+            snack("No WhatsApp messages are selected for this ticket yet", "error");
+            return;
+        }
         var title = (document.getElementById("wf-wa-ticket-title").value || "").trim();
         if (!title) {
             snack("Title is required", "error");
@@ -1731,6 +1907,181 @@
                 }, 250);
             });
         });
+        loadBoardActivity({ quiet: true });
+    }
+
+    function getSelectedBoardLocalId() {
+        var select = document.getElementById("wf-board-select");
+        if (!select || !select.value) return "";
+        var selected = workflowBoardOptions.filter(function (opt) { return opt.value === select.value; })[0];
+        return workflowBoardLocalId(selected);
+    }
+
+    function learnedRuleTypeLabel(ruleType) {
+        var value = String(ruleType || "rule").replace(/_/g, " ");
+        return value.charAt(0).toUpperCase() + value.slice(1);
+    }
+
+    function renderBoardActivity(data) {
+        var list = document.getElementById("wf-board-activity-list");
+        var empty = document.getElementById("wf-board-activity-empty");
+        if (!list || !empty) return;
+        data = data || {};
+        var events = Array.isArray(data.events) ? data.events : [];
+        var rules = Array.isArray(data.learned_rules) ? data.learned_rules : [];
+        latestBoardActivity = data;
+        if (!events.length && !rules.length) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "No board activity yet. Run a ticket to populate Hermes events.";
+            return;
+        }
+        empty.classList.add("hidden");
+        var html = "";
+        if (rules.length) {
+            html += '<div class="mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1.5 text-[11px] text-sky-200">' +
+                esc(String(rules.length)) + " learned rule" + (rules.length === 1 ? "" : "s") + " on this board" +
+                "</div>";
+        }
+        html += events.slice(0, 10).map(function (event) {
+            var when = event.created_at ? new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+            return '' +
+                '<div class="rounded border border-white/10 bg-[#10183f]/80 px-2 py-1.5">' +
+                    '<div class="flex items-start gap-2">' +
+                        '<span class="mt-0.5 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + hermesStatusClass(event.status || "event") + '">' + esc(event.status || "event") + '</span>' +
+                        '<div class="min-w-0 flex-1">' +
+                            '<p class="text-[11px] text-gray-200 truncate">' + esc(event.summary || event.event_type || "Event") + '</p>' +
+                            '<p class="text-[10px] text-gray-500 truncate">' + esc(event.event_type || "") + (event.ticket_id ? " · ticket #" + event.ticket_id : "") + '</p>' +
+                        '</div>' +
+                        '<span class="text-[10px] text-gray-500 flex-shrink-0">' + esc(when) + '</span>' +
+                    '</div>' +
+                '</div>';
+        }).join("");
+        list.innerHTML = html;
+    }
+
+    function loadBoardActivity(options) {
+        options = options || {};
+        var boardId = getSelectedBoardLocalId();
+        if (!boardId) {
+            renderBoardActivity(null);
+            var empty = document.getElementById("wf-board-activity-empty");
+            if (empty) {
+                empty.classList.remove("hidden");
+                empty.textContent = "Select a board to view activity.";
+            }
+            return Promise.resolve(null);
+        }
+        return api("GET", "/kanban/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=12&rule_limit=5")
+            .then(function (data) {
+                renderBoardActivity(data);
+                return data;
+            })
+            .catch(function (e) {
+                renderBoardActivity(null);
+                if (!options.quiet) snack(e.message || "Failed to load board activity", "error");
+                return null;
+            });
+    }
+
+    function renderLearnedRules(rules, boardId) {
+        var list = document.getElementById("wf-learned-rules-list");
+        var empty = document.getElementById("wf-learned-rules-empty");
+        var note = document.getElementById("wf-learned-rules-note");
+        if (!list || !empty) return;
+        rules = Array.isArray(rules) ? rules : [];
+        latestLearnedRules = rules;
+        if (!boardId) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "Select a board to view learned rules.";
+            if (note) note.textContent = "Captured from validation failures and IDE iteration on the selected board.";
+            return;
+        }
+        if (!rules.length) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "No learned rules yet for this board.";
+            if (note) note.textContent = "Hermes will capture rules when validation fails or IDE iteration reports back.";
+            return;
+        }
+        empty.classList.add("hidden");
+        if (note) note.textContent = "These rules are injected into validation context for tickets on board #" + boardId + ".";
+        list.innerHTML = rules.map(function (rule) {
+            var enabled = rule.enabled !== false;
+            var evidence = parseInt(rule.evidence_count, 10) || 0;
+            var confidence = Math.round((parseFloat(rule.confidence) || 0) * 100);
+            return '' +
+                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-learned-rule-id="' + esc(rule.id) + '">' +
+                    '<div class="flex items-start gap-3">' +
+                        '<label class="mt-1 flex items-center gap-2 flex-shrink-0">' +
+                            '<input type="checkbox" class="wf-learned-rule-toggle accent-[#f97316]" data-rule-id="' + esc(rule.id) + '"' + (enabled ? " checked" : "") + '>' +
+                            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + esc(learnedRuleTypeLabel(rule.rule_type)) + '</span>' +
+                        '</label>' +
+                        '<div class="min-w-0 flex-1">' +
+                            '<p class="text-sm text-gray-200">' + esc(rule.summary || "") + '</p>' +
+                            '<p class="mt-1 text-[11px] text-gray-500">Evidence: ' + esc(String(evidence)) + (confidence ? " · confidence " + confidence + "%" : "") + '</p>' +
+                        '</div>' +
+                        (boardId ? '<button type="button" class="wf-learned-rule-promote flex-shrink-0 px-2 py-1 rounded border border-white/20 text-[11px] text-gray-300 hover:bg-white/10" data-rule-id="' + esc(rule.id) + '">Promote hint</button>' : '') +
+                    '</div>' +
+                '</div>';
+        }).join("");
+        list.querySelectorAll(".wf-learned-rule-toggle").forEach(function (input) {
+            input.addEventListener("change", function () {
+                var ruleId = input.dataset.ruleId;
+                if (!ruleId || !boardId) return;
+                api("PATCH", "/kanban/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId), {
+                    enabled: !!input.checked
+                }).then(function () {
+                    snack(input.checked ? "Learned rule enabled" : "Learned rule disabled", "success");
+                    loadBoardActivity({ quiet: true });
+                }).catch(function (e) {
+                    input.checked = !input.checked;
+                    snack(e.message || "Failed to update learned rule", "error");
+                });
+            });
+        });
+        list.querySelectorAll(".wf-learned-rule-promote").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                var ruleId = btn.dataset.ruleId;
+                if (!ruleId || !boardId) return;
+                btn.disabled = true;
+                api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId) + "/promote", {
+                    category: "general"
+                }).then(function () {
+                    snack("Learned rule promoted to board Hermes hints", "success");
+                    refreshBoardHermesViews({ quiet: true });
+                }).catch(function (e) {
+                    snack(e.message || "Failed to promote learned rule", "error");
+                }).finally(function () { btn.disabled = false; });
+            });
+        });
+    }
+
+    function loadLearnedRules(options) {
+        options = options || {};
+        var boardId = getSelectedBoardLocalId();
+        if (!boardId) {
+            renderLearnedRules([], "");
+            return Promise.resolve([]);
+        }
+        return api("GET", "/kanban/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=1&rule_limit=30")
+            .then(function (data) {
+                var rules = data && Array.isArray(data.learned_rules) ? data.learned_rules : [];
+                renderLearnedRules(rules, boardId);
+                return rules;
+            })
+            .catch(function (e) {
+                renderLearnedRules([], boardId);
+                if (!options.quiet) snack(e.message || "Failed to load learned rules", "error");
+                return [];
+            });
+    }
+
+    function refreshBoardHermesViews(options) {
+        options = options || {};
+        loadBoardActivity(options);
+        loadLearnedRules(options);
     }
 
     // Soft refresh — only update step statuses/results without rebuilding DOM
@@ -2077,6 +2428,7 @@
             loadList();
             renderRunSettings(currentWorkflow);
             renderBoardConsumers(latestActiveRuns);
+            renderRunCommandCenter(latestActiveRuns);
             renderWorkflowTickets(workflowQueueTickets);
             if (stopAllBtn) {
                 var hasActiveCurrentWorkflowRuns = latestActiveRuns.some(function (r) {
@@ -2101,9 +2453,16 @@
                 var sourceText = meta.sourceText;
                 var stepText = r.current_step_name || (r.current_step_id ? ("Step #" + r.current_step_id) : "Starting");
                 var workflowText = meta.workflowText || ("Workflow #" + r.workflow_id);
+                var routeCard = renderRouteCard(r.execution_route || {}, {
+                    pendingApproval: r.pending_route_approval && Object.keys(r.pending_route_approval || {}).length
+                });
                 var rowCls = "rounded px-3 py-2 border border-white/10 " + (isCurrentWorkflow ? "wf-live-run" : "bg-[#152054]/50");
+                var waitingKind = r.waiting_kind || "";
+                var continueLabel = waitingKind === "ide_handoff"
+                    ? "Report IDE complete"
+                    : (waitingKind === "route_approval" ? "Review route" : "Continue");
                 var actions = '<div class="flex items-center gap-2 ml-auto">' +
-                    (r.status === "waiting" ? '<button type="button" class="wf-active-continue px-2 py-1 rounded border border-amber-500/50 text-amber-300 text-xs hover:bg-amber-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '">Continue</button>' : '') +
+                    (r.status === "waiting" ? '<button type="button" class="wf-active-continue px-2 py-1 rounded border border-amber-500/50 text-amber-300 text-xs hover:bg-amber-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '" data-waiting-kind="' + esc(waitingKind) + '">' + esc(continueLabel) + '</button>' : '') +
                     '<button type="button" class="wf-active-stop inline-flex items-center gap-1 px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20" data-workflow-id="' + esc(r.workflow_id) + '" data-run-id="' + esc(r.id) + '">' + SVG_STOP + '<span>Stop</span></button>' +
                 '</div>';
                 return '<div class="' + rowCls + '">' +
@@ -2122,21 +2481,34 @@
                         '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(workflowText) + '</span></div>' +
                         '<div><span class="text-gray-500">Current step:</span> <span class="text-gray-200">' + esc(stepText) + '</span></div>' +
                     '</div>' +
+                    '<div class="mt-2">' + routeCard + '</div>' +
                 '</div>';
             }).join("");
             listEl.querySelectorAll(".wf-active-continue").forEach(function (btn) {
                 btn.addEventListener("click", function () {
                     btn.disabled = true;
-                    api("POST", "/workflows/" + encodeURIComponent(btn.dataset.workflowId) + "/runs/" + encodeURIComponent(btn.dataset.runId) + "/continue")
-                        .then(function (resp) {
-                            snack(workflowFeedbackText(resp, "Run continued"));
-                            loadActiveRuns();
-                            if (currentWorkflowId) loadDetail(currentWorkflowId);
-                        })
-                        .catch(function (e) {
-                            btn.disabled = false;
-                            snack(workflowErrorText(e, "Failed to continue"), "error");
-                        });
+                    var waitingKind = btn.dataset.waitingKind || "";
+                    var workflowId = btn.dataset.workflowId;
+                    var runId = btn.dataset.runId;
+                    function submitContinue(feedback) {
+                        continueWorkflowRun(workflowId, runId, { input: feedback || "" })
+                            .then(function (resp) {
+                                snack(workflowFeedbackText(resp, "Run continued"));
+                                loadActiveRuns();
+                                if (currentWorkflowId) loadDetail(currentWorkflowId);
+                                refreshBoardHermesViews({ quiet: true });
+                            })
+                            .catch(function (e) {
+                                btn.disabled = false;
+                                snack(workflowErrorText(e, "Failed to continue"), "error");
+                            });
+                    }
+                    if (waitingKind === "ide_handoff") {
+                        btn.disabled = false;
+                        openIdeHandoffModal(submitContinue);
+                        return;
+                    }
+                    submitContinue("");
                 });
             });
             listEl.querySelectorAll(".wf-active-stop").forEach(function (btn) {
@@ -2374,9 +2746,264 @@
         var route = ticket && ticket.cli_route ? ticket.cli_route : {};
         var backend = route.backend || route.backend_id || "";
         var model = route.model || "";
+        var source = route.source || route.route_source || "";
+        var label = "";
         if (!backend && !model) return "";
-        if (!model || String(model).toLowerCase() === "auto") return backend || "auto";
-        return backend ? backend + " / " + model : model;
+        if (!model || String(model).toLowerCase() === "auto") label = backend || "auto";
+        else label = backend ? backend + " / " + model : model;
+        if (source) label += " · " + source.replace(/_/g, " ");
+        return label;
+    }
+
+    function formatRouteSource(source) {
+        if (!source) return "policy";
+        return String(source).replace(/_/g, " ");
+    }
+
+    function renderRouteCard(route, options) {
+        options = options || {};
+        route = route && typeof route === "object" ? route : {};
+        var backend = route.backend || route.backend_id || "auto";
+        var model = route.model || "auto";
+        var source = route.source || route.route_source || "policy";
+        var rationale = route.rationale || route.route_rationale || "";
+        var pending = options.pendingApproval || route.requires_approval;
+        var html = '<div class="rounded border border-blue-500/25 bg-blue-500/5 px-3 py-2 text-xs">' +
+            '<div class="flex flex-wrap items-center gap-2">' +
+                '<span class="text-[10px] uppercase tracking-wide text-blue-200">Route</span>' +
+                '<span class="rounded bg-white/10 px-1.5 py-0.5 text-gray-200">' + esc(backend) + '</span>' +
+                '<span class="rounded bg-white/10 px-1.5 py-0.5 text-gray-300">' + esc(model) + '</span>' +
+                '<span class="rounded bg-blue-500/15 px-1.5 py-0.5 text-blue-200">' + esc(formatRouteSource(source)) + '</span>' +
+                (pending ? '<span class="rounded bg-amber-500/15 px-1.5 py-0.5 text-amber-200">override pending approval</span>' : '') +
+            '</div>';
+        if (rationale) html += '<p class="mt-1 text-[11px] text-gray-400">' + esc(rationale) + '</p>';
+        html += '</div>';
+        return html;
+    }
+
+    function openIdeHandoffModal(onSubmit) {
+        var existing = document.getElementById("wf-ide-handoff-modal");
+        if (existing) existing.remove();
+        var html = '' +
+            '<div id="wf-ide-handoff-modal" class="fixed inset-0 z-[10001] flex items-center justify-center bg-black/60">' +
+                '<div class="w-full max-w-lg mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
+                    '<div class="px-5 pt-5 pb-3">' +
+                        '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">IDE handoff</p>' +
+                        '<h3 class="text-white text-lg font-semibold">Report IDE work complete</h3>' +
+                        '<p class="mt-1 text-xs text-gray-400">Summarize files changed, tests run, and current status.</p>' +
+                    '</div>' +
+                    '<div class="px-5 pb-2">' +
+                        '<textarea id="wf-ide-handoff-feedback" rows="5" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" placeholder="Updated auth middleware, added tests, ready for validation."></textarea>' +
+                    '</div>' +
+                    '<div class="flex items-center justify-end gap-2 px-5 py-4 border-t border-white/10">' +
+                        '<button type="button" class="wf-ide-handoff-cancel px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
+                        '<button type="button" id="wf-ide-handoff-submit" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]">Continue workflow</button>' +
+                    '</div>' +
+                '</div>' +
+            '</div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        var modal = document.getElementById("wf-ide-handoff-modal");
+        var textarea = document.getElementById("wf-ide-handoff-feedback");
+        function closeModal() { if (modal) modal.remove(); }
+        modal.addEventListener("click", function (evt) { if (evt.target === modal) closeModal(); });
+        modal.querySelectorAll(".wf-ide-handoff-cancel").forEach(function (btn) { btn.addEventListener("click", closeModal); });
+        var submitBtn = document.getElementById("wf-ide-handoff-submit");
+        if (submitBtn) {
+            submitBtn.addEventListener("click", function () {
+                var feedback = textarea ? (textarea.value || "").trim() : "";
+                if (!feedback) {
+                    snack("Add a short IDE completion summary", "error");
+                    return;
+                }
+                closeModal();
+                if (typeof onSubmit === "function") onSubmit(feedback);
+            });
+        }
+        if (textarea) textarea.focus();
+    }
+
+    function renderRunCommandCenter(runs) {
+        var el = document.getElementById("wf-run-command-center");
+        if (!el) return;
+        runs = Array.isArray(runs) ? runs : [];
+        var currentRuns = runs.filter(function (r) {
+            return currentWorkflowId && String(r.workflow_id) === String(currentWorkflowId);
+        });
+        if (!currentRuns.length) {
+            el.classList.add("hidden");
+            el.innerHTML = "";
+            return;
+        }
+        var run = currentRuns[0];
+        var route = run.execution_route || {};
+        var pending = run.pending_route_approval || {};
+        var hasPendingRoute = pending && typeof pending === "object" && Object.keys(pending).length > 0;
+        var pendingBackend = hasPendingRoute ? (pending.backend || "auto") : "";
+        var pendingModel = hasPendingRoute ? (pending.model || "auto") : "";
+        var pendingRationale = hasPendingRoute ? (pending.rationale || "") : "";
+        var runtimeHtml = "";
+        if (run.project_id) {
+            runtimeHtml = '<p class="text-[11px] text-gray-500 mt-2">Project #' + esc(run.project_id) + (run.project_name ? " · " + esc(run.project_name) : "") + '</p>';
+        }
+        var approvalHtml = "";
+        if (hasPendingRoute && (run.waiting_kind === "route_approval" || run.status === "waiting")) {
+            approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
+                '<p class="text-xs text-amber-200 font-medium">Hermes route override pending approval</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">Suggested: <span class="font-mono">' + esc(pendingBackend) + '</span>' +
+                (pendingModel ? ' / <span class="font-mono">' + esc(pendingModel) + '</span>' : '') + '</p>' +
+                (pendingRationale ? '<p class="mt-1 text-[11px] text-gray-400">' + esc(pendingRationale) + '</p>' : '') +
+                '<div class="mt-2 flex items-center gap-2">' +
+                    '<button type="button" class="wf-route-approve px-2 py-1 rounded bg-green-600/80 text-white text-xs hover:bg-green-600" data-run-id="' + esc(run.id) + '" data-workflow-id="' + esc(run.workflow_id) + '">Approve override</button>' +
+                    '<button type="button" class="wf-route-reject px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10" data-run-id="' + esc(run.id) + '" data-workflow-id="' + esc(run.workflow_id) + '">Use policy route</button>' +
+                '</div>' +
+            '</div>';
+        }
+        el.classList.remove("hidden");
+        var steerHtml = "";
+        if (run.steerable) {
+            steerHtml = '<div class="mt-3 rounded border border-white/10 bg-[#0d1333]/60 p-3">' +
+                '<p class="text-xs text-gray-300 font-medium">Steer harness</p>' +
+                '<p class="text-[11px] text-gray-500 mt-1">Redirect Pi/Codex mid-step without restarting the run.</p>' +
+                '<textarea id="wf-run-steer-input" rows="2" class="mt-2 w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" placeholder="Focus on the login form only — skip the dashboard refactor"></textarea>' +
+                '<div class="mt-2 flex items-center gap-2">' +
+                    '<button type="button" class="wf-run-steer-send px-2 py-1 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]" data-run-id="' + esc(run.id) + '" data-workflow-id="' + esc(run.workflow_id) + '">Send steer</button>' +
+                '</div>' +
+                (run.last_harness_steer && run.last_harness_steer.message ?
+                    '<p class="mt-2 text-[11px] text-gray-500">Last steer (' + esc(run.last_harness_steer.method || "queued") + '): ' + esc(String(run.last_harness_steer.message).slice(0, 120)) + '</p>' : '') +
+            '</div>';
+        }
+        el.innerHTML = '<div class="flex items-start justify-between gap-3 mb-2">' +
+                '<div><p class="text-sm font-semibold text-white">Run command center</p>' +
+                '<p class="text-xs text-gray-400">Run #' + esc(run.id) + ' · ' + esc(run.status || "running") + '</p></div>' +
+                (run.ide_handoff_pending ? '<span class="rounded bg-amber-500/15 px-2 py-1 text-[11px] text-amber-200">IDE handoff pending</span>' : '') +
+            '</div>' +
+            renderRouteCard(route, { pendingApproval: hasPendingRoute }) +
+            approvalHtml +
+            steerHtml +
+            runtimeHtml;
+        el.querySelectorAll(".wf-route-approve").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                submitRouteApproval(btn.dataset.workflowId, btn.dataset.runId, true);
+            });
+        });
+        el.querySelectorAll(".wf-route-reject").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                submitRouteApproval(btn.dataset.workflowId, btn.dataset.runId, false);
+            });
+        });
+        el.querySelectorAll(".wf-run-steer-send").forEach(function (btn) {
+            btn.addEventListener("click", function () {
+                submitHarnessSteer(btn.dataset.workflowId, btn.dataset.runId);
+            });
+        });
+    }
+
+    function submitHarnessSteer(workflowId, runId) {
+        var input = document.getElementById("wf-run-steer-input");
+        var message = input ? (input.value || "").trim() : "";
+        if (!message) {
+            snack("Enter a steer message", "error");
+            return;
+        }
+        api("POST", "/workflows/" + encodeURIComponent(workflowId) + "/runs/" + encodeURIComponent(runId) + "/steer", {
+            message: message
+        }).then(function (resp) {
+            snack(resp.delivered ? "Steer delivered to harness" : "Steer queued for harness", "success");
+            if (input) input.value = "";
+            loadActiveRuns();
+            loadHermesTimeline({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to steer harness", "error");
+        });
+    }
+
+    function submitRouteApproval(workflowId, runId, approved) {
+        if (!workflowId || !runId) return;
+        api("POST", "/workflows/" + encodeURIComponent(workflowId) + "/runs/" + encodeURIComponent(runId) + "/route-approval", {
+            approved: !!approved
+        }).then(function (resp) {
+            snack(approved ? "Route override approved" : "Using policy route", "success");
+            loadActiveRuns();
+            if (currentWorkflowId) loadDetail(currentWorkflowId);
+            loadHermesTimeline({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to update route approval", "error");
+        });
+    }
+
+    function parseSkillChainInput(raw) {
+        return String(raw || "").split(",").map(function (part) { return part.trim(); }).filter(Boolean);
+    }
+
+    function loadWorkflowSkillsCatalog() {
+        if (workflowSkillsCatalogLoaded) return Promise.resolve(workflowSkillsCatalog);
+        return api("GET", "/workflows/skills?limit=300").then(function (data) {
+            workflowSkillsCatalog = Array.isArray(data && data.skills) ? data.skills : [];
+            workflowSkillsCatalogLoaded = true;
+            renderSkillsCatalogPanel();
+            return workflowSkillsCatalog;
+        }).catch(function () {
+            workflowSkillsCatalog = [];
+            return workflowSkillsCatalog;
+        });
+    }
+
+    function renderSkillsCatalogPanel() {
+        var datalist = document.getElementById("wf-skills-datalist");
+        var panel = document.getElementById("wf-skills-catalog");
+        if (!datalist && !panel) return;
+        if (datalist) {
+            datalist.innerHTML = workflowSkillsCatalog.map(function (skill) {
+                var label = (skill.name || skill.id || "") + " — " + String(skill.description || "").slice(0, 80);
+                return '<option value="' + esc(skill.id || "") + '">' + esc(label) + "</option>";
+            }).join("");
+        }
+        if (panel && workflowSkillsCatalog.length) {
+            panel.classList.remove("hidden");
+            var googleSkills = workflowSkillsCatalog.filter(function (s) { return (s.source || "") === "google/skills"; });
+            var coreSkills = workflowSkillsCatalog.filter(function (s) { return (s.source || "") !== "google/skills"; });
+            panel.innerHTML =
+                "<p class=\"text-gray-300 mb-1\">Bundled skills (" + workflowSkillsCatalog.length + ")</p>" +
+                (googleSkills.length ? "<p class=\"text-[#f97316] mb-1\">Google Cloud (" + googleSkills.length + "): " +
+                    googleSkills.slice(0, 8).map(function (s) { return esc(s.id); }).join(", ") +
+                    (googleSkills.length > 8 ? "…" : "") + "</p>" : "") +
+                "<p class=\"text-gray-500\">Core: " + coreSkills.slice(0, 10).map(function (s) { return esc(s.id); }).join(", ") +
+                    (coreSkills.length > 10 ? "…" : "") + "</p>";
+        }
+    }
+
+    function renderSkillChains(data) {
+        var preEl = document.getElementById("wf-pre-chain");
+        var postEl = document.getElementById("wf-post-chain");
+        var saveEl = document.getElementById("wf-skill-chains-save");
+        if (!preEl || !postEl) return;
+        var pre = Array.isArray(data && data.pre_chain) ? data.pre_chain : [];
+        var post = Array.isArray(data && data.post_chain) ? data.post_chain : [];
+        preEl.value = pre.join(", ");
+        postEl.value = post.join(", ");
+        var locked = workflowHasActiveRuns();
+        preEl.disabled = locked;
+        postEl.disabled = locked;
+        if (saveEl) saveEl.disabled = locked;
+    }
+
+    function saveSkillChains() {
+        if (!currentWorkflowId) return;
+        var preEl = document.getElementById("wf-pre-chain");
+        var postEl = document.getElementById("wf-post-chain");
+        var saveEl = document.getElementById("wf-skill-chains-save");
+        if (saveEl) saveEl.disabled = true;
+        api("PATCH", "/workflows/" + currentWorkflowId, {
+            pre_chain: parseSkillChainInput(preEl ? preEl.value : ""),
+            post_chain: parseSkillChainInput(postEl ? postEl.value : "")
+        }).then(function () {
+            snack("Skill chains saved", "success");
+            if (currentWorkflowId) loadDetail(currentWorkflowId);
+        }).catch(function (e) {
+            snack(e.message || "Failed to save skill chains", "error");
+        }).finally(function () {
+            if (saveEl) saveEl.disabled = workflowHasActiveRuns();
+        });
     }
 
     function workflowComplexitySelect(ticket, locked) {
@@ -2743,6 +3370,7 @@
             loadWorkflowTicketQueue();
             loadActiveRuns();
             loadWorkflowExecutionSessions();
+            refreshBoardHermesViews({ quiet: true });
         }).catch(function (e) {
             snack(workflowErrorText(e, "Failed to start ticket run"), "error");
             buttons.forEach(function (btn) { btn.disabled = false; btn.textContent = "Run"; });
@@ -4040,13 +4668,33 @@
             .catch(function () { snack("Failed to cancel", "error"); });
     }
 
+    function continueWorkflowRun(workflowId, runId, options) {
+        options = options || {};
+        var payload = {};
+        if (options.input) payload.input = options.input;
+        return api("POST", "/workflows/" + encodeURIComponent(workflowId) + "/runs/" + encodeURIComponent(runId) + "/continue", payload);
+    }
+
     function continueWaitingRun() {
         if (!currentWorkflowId) return;
         api("GET", "/workflows/" + currentWorkflowId + "/active-run").then(function (data) {
             if (data && data.id) {
-                api("POST", "/workflows/" + currentWorkflowId + "/runs/" + data.id + "/continue")
-                    .then(function (resp) { snack(workflowFeedbackText(resp, "Run continued")); startPolling(); loadDetail(currentWorkflowId); })
-                    .catch(function (e) { snack(workflowErrorText(e, "Failed to continue"), "error"); });
+                var waitingKind = data.waiting_kind || "";
+                function submitContinue(feedback) {
+                    continueWorkflowRun(currentWorkflowId, data.id, { input: feedback || "" })
+                        .then(function (resp) {
+                            snack(workflowFeedbackText(resp, "Run continued"));
+                            startPolling();
+                            loadDetail(currentWorkflowId);
+                            refreshBoardHermesViews({ quiet: true });
+                        })
+                        .catch(function (e) { snack(workflowErrorText(e, "Failed to continue"), "error"); });
+                }
+                if (waitingKind === "ide_handoff") {
+                    openIdeHandoffModal(submitContinue);
+                    return;
+                }
+                submitContinue("");
             } else {
                 snack(workflowFeedbackText(data, "No active run to continue"), "error");
             }
@@ -4329,6 +4977,15 @@
             var payload = event.payload && typeof event.payload === "object" ? event.payload : {};
             var evidence = event.evidence && typeof event.evidence === "object" ? event.evidence : {};
             var detailLines = [];
+            if (payload.decision && typeof payload.decision === "object") {
+                if (payload.decision.backend) detailLines.push("Route backend: " + payload.decision.backend);
+                if (payload.decision.model) detailLines.push("Route model: " + payload.decision.model);
+                if (payload.decision.source) detailLines.push("Route source: " + payload.decision.source);
+                if (payload.decision.rationale) detailLines.push("Rationale: " + payload.decision.rationale);
+            }
+            if (payload.override && typeof payload.override === "object" && payload.override.backend) {
+                detailLines.push("Override: " + payload.override.backend + (payload.override.model ? " / " + payload.override.model : ""));
+            }
             if (payload.route_backend) detailLines.push("Backend: " + payload.route_backend);
             if (payload.model) detailLines.push("Model: " + payload.model);
             if (payload.complexity) detailLines.push("Complexity: " + payload.complexity);
@@ -4372,7 +5029,10 @@
             renderHermesTimeline([]);
             return Promise.resolve([]);
         }
-        return api("GET", "/workflows/" + currentWorkflowId + "/hermes-events?limit=120")
+        return api("GET", "/workflows/" + currentWorkflowId + "/hermes-events?limit=120" + (function () {
+            var boardId = getSelectedBoardLocalId();
+            return boardId ? ("&board_id=" + encodeURIComponent(boardId)) : "";
+        })())
             .then(function (events) {
                 renderHermesTimeline(events);
                 return events;
@@ -4465,6 +5125,7 @@
         document.querySelectorAll(".wf-tab-content").forEach(function (el) { el.classList.add("hidden"); });
         var target = document.getElementById("wf-tab-" + tab);
         if (target) target.classList.remove("hidden");
+        if (tab === "context") loadLearnedRules({ quiet: true });
     }
 
     // ── Presets ──
@@ -4662,6 +5323,7 @@
         if (hermesRefresh) {
             hermesRefresh.addEventListener("click", function () {
                 loadHermesTimeline();
+                refreshBoardHermesViews({ quiet: true });
             });
         }
         var hermesSetupBtn = document.getElementById("wf-open-hermes-setup");
@@ -4691,7 +5353,24 @@
         if (workflowBoardSelect) {
             workflowBoardSelect.addEventListener("change", function () {
                 if (workflowBoardSelect.value) loadWorkflowBoardTickets(workflowBoardSelect.value);
+                loadLearnedRules({ quiet: true });
             });
+        }
+        var refreshBoardActivityBtn = document.getElementById("wf-refresh-board-activity");
+        if (refreshBoardActivityBtn) {
+            refreshBoardActivityBtn.addEventListener("click", function () {
+                refreshBoardHermesViews();
+            });
+        }
+        var refreshLearnedRulesBtn = document.getElementById("wf-refresh-learned-rules");
+        if (refreshLearnedRulesBtn) {
+            refreshLearnedRulesBtn.addEventListener("click", function () {
+                refreshBoardHermesViews();
+            });
+        }
+        var skillChainsSaveBtn = document.getElementById("wf-skill-chains-save");
+        if (skillChainsSaveBtn) {
+            skillChainsSaveBtn.addEventListener("click", saveSkillChains);
         }
         var workflowBoardEdit = document.getElementById("wf-edit-board-link");
         if (workflowBoardEdit) {
@@ -5080,9 +5759,17 @@
         var waCloseBtn = document.getElementById("wf-wa-ticket-close");
         var waCancelBtn = document.getElementById("wf-wa-ticket-cancel");
         var waSaveBtn = document.getElementById("wf-wa-ticket-save");
+        var waLoadOlderBtn = document.getElementById("wf-wa-ticket-load-older");
         if (waCloseBtn) waCloseBtn.addEventListener("click", closeWorkflowWhatsappTicketModal);
         if (waCancelBtn) waCancelBtn.addEventListener("click", closeWorkflowWhatsappTicketModal);
         if (waSaveBtn) waSaveBtn.addEventListener("click", submitWorkflowWhatsappTicketModal);
+        if (waLoadOlderBtn) {
+            waLoadOlderBtn.addEventListener("click", function () {
+                loadWorkflowWhatsappTicketPreview("all_unticketed").catch(function (e) {
+                    snack(e.message || "Could not load older WhatsApp messages", "error");
+                });
+            });
+        }
         if (waTicketModal) {
             waTicketModal.addEventListener("click", function (evt) {
                 if (evt.target === waTicketModal) closeWorkflowWhatsappTicketModal();
@@ -5092,6 +5779,7 @@
         loadList();
         loadWorkflowBoardCollapsedColumns();
         loadWorkflowBoards();
+        loadWorkflowSkillsCatalog();
         checkPresetsExist();
         connectWebSocket();
         // Start version polling as initial fallback until WebSocket connects

@@ -55,15 +55,29 @@ _FEEDBACK_SIGNALS = (
 )
 
 
-def build_standards_context(context_rules: Optional[str] = None) -> str:
-    """Append universal workflow standards to a context-rules block."""
+def build_standards_context(context_rules: Optional[str] = None, board_id: int | None = None) -> str:
+    """Append universal workflow standards and board learned rules to context."""
     existing = (context_rules or "").strip()
     standards = UNIVERSAL_WORKFLOW_STANDARDS.strip()
     if not existing:
-        return standards
-    if "[UNIVERSAL WORKFLOW QUALITY STANDARDS]" in existing:
-        return existing
-    return existing + "\n\n" + standards
+        base = standards
+    elif "[UNIVERSAL WORKFLOW QUALITY STANDARDS]" in existing:
+        base = existing
+    else:
+        base = existing + "\n\n" + standards
+
+    if board_id:
+        try:
+            from distr.core.hermes import build_learned_rules_context
+
+            learned = build_learned_rules_context(int(board_id))
+            if learned:
+                if "[BOARD LEARNED RULES]" in base:
+                    return base
+                return base + "\n\n" + learned
+        except Exception:
+            pass
+    return base
 
 
 def should_capture_feedback(feedback: str) -> bool:

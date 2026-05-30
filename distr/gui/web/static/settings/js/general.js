@@ -27,6 +27,15 @@ function populateProviderDropdown(selectedId) {
     });
 }
 
+function setVoiceOptionMetadata(option, voice) {
+    if (!option || !voice || typeof voice !== 'object') return;
+    if (voice.custom) option.dataset.custom = '1';
+    if (voice.custom_voice_id) option.dataset.customVoiceId = String(voice.custom_voice_id);
+    if (voice.provider_voice_id) option.dataset.providerVoiceId = voice.provider_voice_id;
+    if (voice.custom_source) option.dataset.customSource = voice.custom_source;
+    if (voice.category) option.dataset.category = voice.category;
+}
+
 // Load general settings from backend
 async function loadGeneralSettings() {
     try {
@@ -185,7 +194,7 @@ async function updateVoiceOptions(provider) {
         const option = document.createElement('option');
         option.value = voice.id;
         option.textContent = voice.name;
-        if (voice.custom) option.dataset.custom = '1';
+        setVoiceOptionMetadata(option, voice);
         voiceSelect.appendChild(option);
     });
 
@@ -485,11 +494,41 @@ function deleteSelectedCustomVoice() {
     if (!confirm('Delete custom voice "' + voiceName + '"? This cannot be undone.')) return;
 
     const provider = document.getElementById('tts_provider').value;
-    _resolveAndDeleteCustomVoice(provider, voiceId, voiceName);
+    _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, selected);
 }
 
-async function _resolveAndDeleteCustomVoice(provider, voiceId, voiceName) {
+async function _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, selectedOption = null) {
     try {
+        const dbId = selectedOption && selectedOption.dataset.customVoiceId;
+        if (dbId) {
+            const delResp = await fetch('/api/custom-voices/' + encodeURIComponent(dbId), { method: 'DELETE' });
+            if (!delResp.ok) {
+                const err = await delResp.json();
+                throw new Error(err.error || 'Delete failed');
+            }
+            showNotification('Custom voice "' + voiceName + '" deleted', 'success');
+            await _refreshProviderVoices();
+            const voiceSelect = document.getElementById('tts_voice');
+            if (voiceSelect && voiceSelect.options.length > 0) voiceSelect.selectedIndex = 0;
+            _updateDeleteButton();
+            return;
+        }
+
+        const providerVoiceId = selectedOption && selectedOption.dataset.providerVoiceId;
+        if (provider === 'elevenlabs' && providerVoiceId) {
+            const delResp = await fetch('/api/elevenlabs-voices/' + encodeURIComponent(providerVoiceId), { method: 'DELETE' });
+            if (!delResp.ok) {
+                const err = await delResp.json();
+                throw new Error(err.error || 'Delete failed');
+            }
+            showNotification('Custom voice "' + voiceName + '" deleted', 'success');
+            await _refreshProviderVoices();
+            const voiceSelect = document.getElementById('tts_voice');
+            if (voiceSelect && voiceSelect.options.length > 0) voiceSelect.selectedIndex = 0;
+            _updateDeleteButton();
+            return;
+        }
+
         // Fetch custom voices from DB to find the matching one
         const resp = await fetch('/api/custom-voices?provider=' + encodeURIComponent(provider));
         if (!resp.ok) throw new Error('Failed to fetch custom voices');
@@ -786,6 +825,12 @@ async function openEditCustomVoiceModal() {
 
     const provider = document.getElementById('tts_provider').value;
     const voiceId = selected.value;
+    const dbId = selected.dataset.customVoiceId;
+
+    if (dbId) {
+        document.getElementById('edit_voice_id').value = dbId;
+        document.getElementById('edit_voice_name').textContent = selected.textContent.replace(/^⭐\s*/, '');
+    }
 
     // Fetch custom voices from DB to find the matching one and get personality
     try {
@@ -793,7 +838,9 @@ async function openEditCustomVoiceModal() {
         if (!resp.ok) throw new Error('Failed to fetch custom voices');
         const customs = await resp.json();
         const match = customs.find(cv =>
-            cv.provider_voice_id === voiceId || 'custom_' + cv.id === voiceId
+            (dbId && String(cv.id) === String(dbId)) ||
+            cv.provider_voice_id === voiceId ||
+            'custom_' + cv.id === voiceId
         );
         if (!match) {
             showNotification('Custom voice not found in database', 'error');

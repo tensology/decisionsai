@@ -20,6 +20,21 @@ function isMaskedSecret(value) {
     return !!value && value.indexOf('*') !== -1;
 }
 
+function setStoredKeyState(input, hasStoredKey) {
+    if (!input) return;
+
+    input.value = '';
+    input.removeAttribute('data-masked');
+
+    if (hasStoredKey) {
+        input.setAttribute('data-has-secret', 'true');
+        input.placeholder = 'Saved key - paste a new key to replace';
+    } else {
+        input.removeAttribute('data-has-secret');
+        input.placeholder = 'Enter API key';
+    }
+}
+
 // Load settings from backend
 async function loadThirdPartySettings() {
     try {
@@ -41,7 +56,7 @@ async function loadThirdPartySettings() {
             const input = document.getElementById(`${provider.id}_${provider.keyField}`);
 
             const enabled = settings[`${settingsKey}_enabled`] || false;
-            const key = settings[`${settingsKey}_${provider.keyField}`] || '';
+            const hasStoredKey = !!settings[`${settingsKey}_${provider.keyField}_set`];
 
             if (checkbox) {
                 checkbox.checked = enabled;
@@ -49,16 +64,10 @@ async function loadThirdPartySettings() {
             }
 
             if (input) {
-                input.value = key;
-                if (isMaskedSecret(key)) {
-                    input.setAttribute('data-masked', 'true');
-                } else {
-                    input.removeAttribute('data-masked');
-                }
+                setStoredKeyState(input, hasStoredKey);
 
-                // Auto-validate if enabled and has a key
-                if (enabled && key && key.trim() && !isMaskedSecret(key)) {
-                    validationPromises.push(validateProvider(provider.id));
+                if (enabled && hasStoredKey) {
+                    setValidationIndicator(provider.id, 'valid', 'Stored key');
                 } else {
                     clearValidationIndicator(provider.id);
                 }
@@ -88,10 +97,10 @@ async function saveThirdPartySettings() {
             const input = document.getElementById(`${provider.id}_${provider.keyField}`);
             const validationState = validationStates[provider.id];
 
-            // If enabled and has a key, it must be validated and valid
+            // If enabled and a new key was typed, it must be validated and valid.
+            // A blank field with data-has-secret means "keep the saved key".
             if (checkbox && checkbox.checked && input && input.value.trim()) {
-                const masked = isMaskedSecret(input.value.trim());
-                if (!masked && (validationState === 'invalid' || !validationState)) {
+                if (validationState === 'invalid' || !validationState) {
                         invalidProviders.push(provider.name);
                 }
             }
@@ -180,11 +189,11 @@ async function validateProvider(providerId) {
     const key = input ? input.value.trim() : '';
 
     if (!key) {
-        setValidationIndicator(providerId, 'invalid', 'API key is required');
-        return;
-    }
-    if (isMaskedSecret(key)) {
-        setValidationIndicator(providerId, 'valid', 'Stored key');
+        if (input && input.getAttribute('data-has-secret') === 'true') {
+            setValidationIndicator(providerId, 'valid', 'Stored key');
+            return;
+        }
+        setValidationIndicator(providerId, 'invalid', 'Paste a new key to validate');
         return;
     }
 

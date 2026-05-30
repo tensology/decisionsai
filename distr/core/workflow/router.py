@@ -69,14 +69,74 @@ class StepRouter:
             if not step:
                 return {"action": "end_run", "status": "failed", "error": "Step not found"}
 
+            run = db.query(AutoWorkflowRun).filter(
+                AutoWorkflowRun.id == run_id,
+            ).first()
+            if run:
+                try:
+                    run_data = json.loads(run.run_data or "{}")
+                except Exception:
+                    run_data = {}
+                if run_data.pop("ide_handoff_pending", False):
+                    run_data["waiting_kind"] = "ide_handoff"
+                    run.run_data = json.dumps(run_data)
+                    db.flush()
+                    return self._enter_wait_state(db, step, run_id, result, passed)
+                if run_data.pop("route_approval_pending", False):
+                    run_data["waiting_kind"] = "route_approval"
+                    run.run_data = json.dumps(run_data)
+                    db.flush()
+                    return self._enter_wait_state(db, step, run_id, result, passed)
+
             # ── wait_for_continue gate ──
             # Skip when resuming from feedback (the step has already waited)
             if step.wait_for_continue and not skip_wait:
                 return self._enter_wait_state(db, step, run_id, result, passed)
 
             # ── verify ──
-            verified_passed = _run_verification(step, result, passed)
-            validation_snapshot = build_validation_snapshot(step, result, passed, verified_passed)
+            verify_project_id = None
+            if run:
+                try:
+                    verify_run_data = json.loads(run.run_data or "{}") or {}
+                    raw_project_id = verify_run_data.get("project_id")
+                    verify_project_id = int(raw_project_id) if raw_project_id not in (None, "") else None
+                except Exception:
+                    verify_project_id = None
+            verified_passed = _run_verification(
+                step, result, passed, project_id=verify_project_id
+            )
+            hermes_overlay = None
+            try:
+                from distr.core.db.kanban import KanbanTicket
+                from distr.core.hermes_validator import apply_hermes_validator_overlay
+                from distr.core.workflow.standards_memory import build_standards_context
+
+                ticket_context = ""
+                if run and getattr(run, "ticket_id", None):
+                    ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
+                    if ticket:
+                        ticket_context = f"{getattr(ticket, 'title', '')}\n{getattr(ticket, 'description', '')}".strip()
+                hermes_overlay = apply_hermes_validator_overlay(
+                    step=step,
+                    result=result,
+                    caller_passed=passed,
+                    mechanical_passed=verified_passed,
+                    standards_context=build_standards_context(
+                        getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
+                        board_id=getattr(run, "board_id", None) if run else None,
+                    ),
+                    ticket_context=ticket_context,
+                )
+                if hermes_overlay is not None:
+                    verified_passed = bool(hermes_overlay.get("passed"))
+            except Exception:
+                logger.debug("Hermes validator overlay skipped", exc_info=True)
+
+            validation_snapshot = build_validation_snapshot(
+                step, result, passed, verified_passed, project_id=verify_project_id
+            )
+            if hermes_overlay:
+                validation_snapshot["hermes_validator"] = hermes_overlay
 
             # ── approval gate (after verify, before marking passed) ──
             if step.require_approval and verified_passed and not skip_approval:
@@ -163,7 +223,10 @@ class StepRouter:
                     ),
                     execution_session_id=getattr(latest_execution, "id", None),
                     validation_snapshot=validation_snapshot,
-                    standards_context=build_standards_context(getattr(run.workflow, "context_rules", None)),
+                    standards_context=build_standards_context(
+                        getattr(run.workflow, "context_rules", None),
+                        board_id=getattr(run, "board_id", None),
+                    ),
                     payload={
                         "step_name": step.name or f"Step {step_id}",
                         "action_type": step.action_type,
@@ -652,6 +715,8 @@ class StepRouter:
             run_data["waiting_result"] = result
             run_data["waiting_passed"] = passed
             run_data["waiting_prompt"] = handoff["prompt"]
+            if not run_data.get("waiting_kind"):
+                run_data["waiting_kind"] = ""
             run.run_data = json.dumps(run_data)
         db.add(AutoWorkflowStepResult(
             step_id=step_id,

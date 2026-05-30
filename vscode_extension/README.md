@@ -41,11 +41,24 @@ Continue implementing the previous task and only apply this delta:
 
 ## Workflow Callback Behavior
 
-When a ticket contains a `decisions-meta` HTML comment with callback fields, the extension posts a callback after submission.
+When a ticket contains a `decisions-meta` or `decisions-ide-meta` HTML comment with callback fields, the extension coordinates with DecisionsAI workflows.
 
-- `callback_url`: explicit URL to POST to
-- `callback_payload_type: workflow_continue`: sends `{ "input": "..." }` (workflow-compatible)
-- otherwise sends a structured JSON status payload
+- `callback_url` / `continue_url`: workflow resume endpoint
+- `bridge_url`: progress events while the workflow is waiting
+- `callback_payload_type: workflow_continue`: completion reports send `{ "input": "..." }`
+- `auto_continue_on_pickup: false` (default for DecisionsAI IDE packets): do **not** resume the workflow when the ticket is picked up
+
+Pickup behavior:
+
+1. Extension loads the work packet into Cursor chat
+2. Posts `ide_work_started` to `bridge_url`
+3. Leaves the workflow waiting
+
+When you finish IDE work, run:
+
+- Command palette → **DecisionsAI: Report Workflow Complete**
+
+Or resume from the DecisionsAI Workflows UI with **Report IDE complete**.
 
 If `callback_url` is missing but workflow metadata exists (`run_id`, `workflow_id`, `api_base`), the extension falls back to:
 

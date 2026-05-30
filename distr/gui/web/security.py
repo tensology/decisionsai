@@ -113,7 +113,7 @@ def redact_thirdparty_settings(settings: Dict[str, Any]) -> Dict[str, Any]:
     }
     for field in secret_fields:
         raw = (settings.get(field) or "").strip()
-        response[field] = mask_secret(raw)
+        response[field] = ""
         response[f"{field}_set"] = bool(raw)
     return response
 

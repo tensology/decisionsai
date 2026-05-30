@@ -138,6 +138,8 @@ class WorkflowUpdateRequest(BaseModel):
     workflow_type: Optional[str] = None
     context_rules: Optional[str] = None
     run_settings: Optional[dict] = None
+    pre_chain: Optional[List[str]] = None
+    post_chain: Optional[List[str]] = None
 
 
 class CodexBridgeEventRequest(BaseModel):
@@ -237,6 +239,32 @@ def register_routes(router, templates):
             return JSONResponse(list_workflows(limit=limit, search=search, workflow_type=type))
         except Exception as e:
             logger.error("Workflow list failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/skills")
+    async def workflow_skills_catalog(source: Optional[str] = None, limit: int = 200):
+        """Bundled skills registry for workflow skill chains and Hermes transfer."""
+        try:
+            from distr.core.skills.catalog import load_registry
+
+            rows = load_registry()
+            if source:
+                src = source.strip().lower()
+                rows = tuple(r for r in rows if str(r.get("source") or "").lower() == src)
+            out = []
+            for row in rows[: max(1, min(int(limit or 200), 500))]:
+                out.append(
+                    {
+                        "id": row.get("id"),
+                        "name": row.get("name") or row.get("id"),
+                        "description": row.get("description") or "",
+                        "source": row.get("source") or "bundled",
+                        "tags": row.get("tags") or [],
+                    }
+                )
+            return JSONResponse({"skills": out, "count": len(out)})
+        except Exception as e:
+            logger.error("Workflow skills catalog failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows")
@@ -361,14 +389,21 @@ def register_routes(router, templates):
             ledger_error = str(exc)
 
         routing = {}
+        from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
+
         for level, default_backend, default_model in [
             ("low", "cursor", "auto"),
             ("medium", "codex", "auto"),
             ("high", "codex", "gpt-5.3-codex"),
         ]:
+            backend = (settings.get(f"project_cli_{level}_backend") or default_backend).strip().lower()
             routing[level] = {
-                "backend": (settings.get(f"project_cli_{level}_backend") or default_backend).strip().lower(),
+                "backend": backend,
                 "model": (settings.get(f"project_cli_{level}_model") or default_model).strip(),
+                "codex_intelligence": normalize_codex_intelligence(
+                    settings.get(f"project_cli_{level}_codex_intelligence")
+                ),
+                "codex_speed": normalize_codex_speed(settings.get(f"project_cli_{level}_codex_speed")),
             }
 
         try:
@@ -437,6 +472,7 @@ def register_routes(router, templates):
         """Save Hermes workflow onboarding settings."""
         from distr.core.settings import load_settings_from_db, save_settings_to_db
         from distr.core.project_cli_backends import normalize_backend_id
+        from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
 
         data = await request.json()
         settings = load_settings_from_db()
@@ -461,6 +497,17 @@ def register_routes(router, templates):
                 row = routing.get(level) or {}
                 settings[f"project_cli_{level}_backend"] = normalize_backend_id(row.get("backend") or default_backend)
                 settings[f"project_cli_{level}_model"] = (row.get("model") or default_model).strip()
+                backend_id = settings[f"project_cli_{level}_backend"]
+                if backend_id == "codex":
+                    settings[f"project_cli_{level}_codex_intelligence"] = normalize_codex_intelligence(
+                        row.get("codex_intelligence") or row.get("codex_reasoning_effort")
+                    )
+                    settings[f"project_cli_{level}_codex_speed"] = normalize_codex_speed(
+                        row.get("codex_speed") or row.get("codex_service_tier")
+                    )
+                else:
+                    settings.pop(f"project_cli_{level}_codex_intelligence", None)
+                    settings.pop(f"project_cli_{level}_codex_speed", None)
 
         # Keep the existing workflow LLM fallback aligned with Hermes orchestration
         # so older code paths still resolve to the same brain.
@@ -779,7 +826,13 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.get("/workflows/{workflow_id}/hermes-events")
-    async def workflow_hermes_events(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None):
+    async def workflow_hermes_events(
+        workflow_id: int,
+        limit: int = 100,
+        ticket_id: Optional[int] = None,
+        run_id: Optional[int] = None,
+        board_id: Optional[int] = None,
+    ):
         try:
             from distr.core.hermes import list_events
 
@@ -787,6 +840,7 @@ def register_routes(router, templates):
                 workflow_id=workflow_id,
                 ticket_id=ticket_id,
                 run_id=run_id,
+                board_id=board_id,
                 limit=limit,
             ))
         except Exception as e:
@@ -971,6 +1025,52 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow stop-reset failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "reset"), status_code=500)
+
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/route-approval")
+    async def workflow_route_approval(workflow_id: int, run_id: int, request: Request):
+        """Approve or reject a pending Hermes route override for a waiting run."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        approved = bool(body.get("approved"))
+        try:
+            from distr.core.workflow.service import apply_run_route_approval
+
+            result = apply_run_route_approval(run_id, approved=approved)
+            if result.get("error"):
+                return JSONResponse(
+                    {"detail": result["error"]},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow route approval failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/steer")
+    async def workflow_harness_steer(workflow_id: int, run_id: int, request: Request):
+        """Steer the active harness mid-flight without restarting the workflow step."""
+        try:
+            body = await request.json()
+        except Exception:
+            body = {}
+        message = ""
+        if isinstance(body, dict):
+            message = str(body.get("message") or body.get("input") or body.get("instruction") or "")
+        try:
+            from distr.core.workflow.service import apply_run_harness_steer
+
+            result = apply_run_harness_steer(run_id, message)
+            if result.get("error"):
+                return JSONResponse(
+                    {"detail": result["error"]},
+                    status_code=int(result.get("status_code") or 400),
+                )
+            return JSONResponse(result)
+        except Exception as e:
+            logger.error("Workflow harness steer failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
     async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
@@ -1492,3 +1592,31 @@ def register_routes(router, templates):
         except Exception as e:
             logger.error("Workflow export preset failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.websocket("/ws/workflows")
+    async def workflows_websocket(websocket):
+        """WebSocket stream for realtime workflow UI refresh."""
+        import asyncio
+        from fastapi import WebSocketDisconnect
+        from distr.gui.web.security import is_allowed_local_origin
+        from distr.gui.web.workflow_events import register_wf_websocket, unregister_wf_websocket
+
+        origin = websocket.headers.get("origin")
+        if origin and not is_allowed_local_origin(origin):
+            await websocket.close(code=1008, reason="Origin not allowed")
+            return
+        await websocket.accept()
+        loop = asyncio.get_event_loop()
+        register_wf_websocket(websocket, loop)
+        try:
+            while True:
+                try:
+                    await asyncio.wait_for(websocket.receive_text(), timeout=30.0)
+                except asyncio.TimeoutError:
+                    await websocket.send_text('{"type":"ping"}')
+        except WebSocketDisconnect:
+            pass
+        except Exception:
+            pass
+        finally:
+            unregister_wf_websocket(websocket)

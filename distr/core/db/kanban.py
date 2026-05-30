@@ -42,6 +42,7 @@ class KanbanBoard(Base):
     in_use = Column(Boolean, default=False)  # only one board can be in_use at a time (default board for agent)
     color = Column(String, nullable=True)  # board accent color (hex, e.g. '#f97316')
     position = Column(Integer, default=0)  # sidebar display order
+    hermes_policy = Column(Text, nullable=True)  # JSON board overrides for routing/corrections
 
     created_date = Column(DateTime, default=datetime.utcnow)
     modified_date = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

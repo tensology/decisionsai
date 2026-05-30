@@ -1,9 +1,39 @@
 [
   {
+    "id": "agent-platform-skill-registry",
+    "name": "agent-platform-skill-registry",
+    "description": ">",
+    "path": "agent-platform-skill-registry",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
     "id": "algorithmic-art",
     "name": "algorithmic-art",
     "description": "Creating algorithmic art using p5.js with seeded randomness and interactive parameter exploration. Use this when users request creating art using code, generative art, algorithmic art, flow fields, or particle systems. Create original algorithmic art rather than copying existing artists' work to avoid copyright violations.",
     "path": "algorithmic-art"
+  },
+  {
+    "id": "alloydb-basics",
+    "name": "alloydb-basics",
+    "description": ">-",
+    "path": "alloydb-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "bigquery-basics",
+    "name": "bigquery-basics",
+    "description": ">-",
+    "path": "bigquery-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
   },
   {
     "id": "brainstorming",
@@ -22,6 +52,32 @@
     "name": "canvas-design",
     "description": "Create beautiful visual art in .png and .pdf documents using design philosophy. You should use this skill when the user asks to create a poster, piece of art, design, or other static piece. Create original visual designs, never copying existing artists' work to avoid copyright violations.",
     "path": "canvas-design"
+  },
+  {
+    "id": "ceo-scope-review",
+    "name": "ceo-scope-review",
+    "description": "CEO/founder-mode scope review. Challenges the scope of any plan, workflow, or feature before execution. Four modes: SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, SCOPE REDUCTION. Prevents scope creep and missed opportunities. Use before multi-step workflows or when questioning scope.",
+    "path": "ceo-scope-review"
+  },
+  {
+    "id": "cloud-run-basics",
+    "name": "cloud-run-basics",
+    "description": ">-",
+    "path": "cloud-run-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "cloud-sql-basics",
+    "name": "cloud-sql-basics",
+    "description": ">-",
+    "path": "cloud-sql-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
   },
   {
     "id": "dispatching-parallel-agents",
@@ -54,16 +110,162 @@
     "path": "finishing-a-development-branch"
   },
   {
+    "id": "firebase-basics",
+    "name": "firebase-basics",
+    "description": "Use this skill whenever you are working on a project that uses Firebase products or services, especially for mobile or web apps.",
+    "path": "firebase-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
     "id": "frontend-design",
     "name": "frontend-design",
     "description": "Create distinctive, production-grade frontend interfaces with high design quality. Use this skill when the user asks to build web components, pages, artifacts, posters, or applications (examples include websites, landing pages, dashboards, React components, HTML/CSS layouts, or when styling/beautifying any web UI). Generates creative, polished code and UI design that avoids generic AI aesthetics.",
     "path": "frontend-design"
   },
   {
+    "id": "gemini-agents-api",
+    "name": "gemini-managed-agents-api",
+    "description": "Manages custom Agent resources on Gemini Enterprise Agent Platform. Use when the user wants to programmatically create, configure, list, update, or delete stateful, server-managed Agent resources (including mounting files, skills, and tools) before executing conversations.",
+    "path": "gemini-agents-api",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "gemini-api",
+    "name": "gemini-api",
+    "description": "Guides the usage of the Gemini API on Agent Platform with the Google Gen AI SDK. Use when the user asks about using Gemini in an enterprise environment or explicitly mentions Vertex AI, Google Cloud, or Agent Platform. Covers SDK usage (Python, JS/TS, Go, Java, C#), capabilities like Live API, tools, multimedia generation, caching, and batch prediction.",
+    "path": "gemini-api",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "gemini-interactions-api",
+    "name": "gemini-interactions-api",
+    "description": "Guides the usage of Gemini Interactions API on Gemini Enterprise Agent Platform. Use when the user wants to use the stateful, server-managed Interactions API for multi-turn conversations, background execution, streaming, structured output, and function calling on the Agent Platform.",
+    "path": "gemini-interactions-api",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "gke-basics",
+    "name": "gke-basics",
+    "description": "Plan, create, and configure production-ready Google Kubernetes Engine (GKE) clusters using the golden path Autopilot configuration. Covers Day-0 checklist, Autopilot vs Standard, networking (private clusters, VPC-native, Gateway API), security (Workload Identity, Secret Manager, RBAC hardening), observability, scaling, cost optimization, and AI/ML inference. WHEN: create GKE cluster, provision GKE environment, design GKE networking, secure GKE, optimize GKE cost, GKE autoscaling, GKE inference, GKE upgrade, GKE observability, GKE multi-tenancy, GKE batch, GKE HPC, GKE compute class.",
+    "path": "gke-basics",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-networking-observability",
+    "name": "google-cloud-networking-observability",
+    "description": ">-",
+    "path": "google-cloud-networking-observability",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-recipe-auth",
+    "name": "google-cloud-recipe-auth",
+    "description": "Provides expert guidance on authenticating and authorizing to Google Cloud services and APIs, covering human users, service identities, Application Default Credentials (ADC), and best practices for secure access.",
+    "path": "google-cloud-recipe-auth",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-recipe-onboarding",
+    "name": "google-cloud-recipe-onboarding",
+    "description": "Guidance for a developer's first steps on Google Cloud, covering account creation, billing setup, project management, and deploying a first resource.",
+    "path": "google-cloud-recipe-onboarding",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-cost-optimization",
+    "name": "google-cloud-waf-cost-optimization",
+    "description": "Generates cost optimization guidance for Google Cloud workloads based on the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify cost requirements and constraints, and provide actionable recommendations for build, deploy, and manage the workload cost-efficiently in Google Cloud.",
+    "path": "google-cloud-waf-cost-optimization",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-operational-excellence",
+    "name": "google-cloud-waf-operational-excellence",
+    "description": ">-",
+    "path": "google-cloud-waf-operational-excellence",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-performance-optimization",
+    "name": "google-cloud-waf-performance-optimization",
+    "description": ">-",
+    "path": "google-cloud-waf-performance-optimization",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-reliability",
+    "name": "google-cloud-waf-reliability",
+    "description": "Generates reliability-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Google Cloud Well-Architected Framework. Use this skill to evaluate a workload, identify reliability requirements, and provide actionable recommendations for build, deploy, and manage the workload reliably in Google Cloud.",
+    "path": "google-cloud-waf-reliability",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-security",
+    "name": "google-cloud-waf-security",
+    "description": "Generates security-focused guidance for Google Cloud workloads based on the design principles and recommendations in the Google Cloud Well-Architected Framework (WAF). Use this skill to evaluate a workload, identify security requirements, and provide actionable recommendations for IAM, network security, data protection, and operational security.",
+    "path": "google-cloud-waf-security",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
+    "id": "google-cloud-waf-sustainability",
+    "name": "google-cloud-waf-sustainability",
+    "description": ">-",
+    "path": "google-cloud-waf-sustainability",
+    "source": "google/skills",
+    "tags": [
+      "google-cloud"
+    ]
+  },
+  {
     "id": "internal-comms",
     "name": "internal-comms",
     "description": "A set of resources to help me write all kinds of internal communications, using the formats that my company likes to use. Claude should use this skill whenever asked to write some sort of internal communications (status reports, leadership updates, 3P updates, company newsletters, FAQs, incident reports, project updates, etc.).",
     "path": "internal-comms"
+  },
+  {
+    "id": "learnings-keeper",
+    "name": "learnings-keeper",
+    "description": "Persistent cross-session knowledge base. Manages per-project learnings that compound across sessions — patterns, pitfalls, preferences, and project quirks. Agent gets smarter on your codebase over time. Supports review, search, prune, and export.",
+    "path": "learnings-keeper"
   },
   {
     "id": "ln-111-root-docs-creator",
@@ -164,7 +366,7 @@
   {
     "id": "ln-624-code-quality-auditor",
     "name": "ln-624-code-quality-auditor",
-    "description": "Checks cyclomatic complexity, nesting, long methods, god classes, method signatures, O(n\u00b2), N+1 queries, constants management. Returns findings.",
+    "description": "Checks cyclomatic complexity, nesting, long methods, god classes, method signatures, O(n²), N+1 queries, constants management. Returns findings.",
     "path": "ln-624-code-quality-auditor"
   },
   {
@@ -368,7 +570,7 @@
   {
     "id": "ln-810-performance-optimizer",
     "name": "ln-810-performance-optimizer",
-    "description": "Multi-cycle diagnostic pipeline: profile \u2192 research \u2192 optimize \u2192 repeat with full-stack bottleneck analysis",
+    "description": "Multi-cycle diagnostic pipeline: profile → research → optimize → repeat with full-stack bottleneck analysis",
     "path": "ln-810-performance-optimizer"
   },
   {
@@ -428,8 +630,20 @@
   {
     "id": "pptx",
     "name": "pptx",
-    "description": "Use this skill any time a .pptx file is involved in any way \u2014 as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \\\"deck,\\\" \\\"slides,\\\" \\\"presentation,\\\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.",
+    "description": "Use this skill any time a .pptx file is involved in any way — as input, output, or both. This includes: creating slide decks, pitch decks, or presentations; reading, parsing, or extracting text from any .pptx file (even if the extracted content will be used elsewhere, like in an email or summary); editing, modifying, or updating existing presentations; combining or splitting slide files; working with templates, layouts, speaker notes, or comments. Trigger whenever the user mentions \\\"deck,\\\" \\\"slides,\\\" \\\"presentation,\\\" or references a .pptx filename, regardless of what they plan to do with the content afterward. If a .pptx file needs to be opened, created, or touched, use this skill.",
     "path": "pptx"
+  },
+  {
+    "id": "pre-flight-review",
+    "name": "pre-flight-review",
+    "description": "One-command pre-execution review pipeline. Runs scope → architecture → security → design reviews automatically before executing any workflow. Auto-detects which reviews apply. Surfaces only taste decisions for user approval.",
+    "path": "pre-flight-review"
+  },
+  {
+    "id": "qa-tester",
+    "name": "qa-tester",
+    "description": "Systematic QA testing for web apps, desktop apps, and workflows. Three tiers: QUICK (P0/P1), STANDARD (+P2), EXHAUSTIVE (+P3/P4). Produces before/after health scores and ship-readiness summary. Optionally auto-fixes with atomic commits.",
+    "path": "qa-tester"
   },
   {
     "id": "receiving-code-review",
@@ -442,6 +656,18 @@
     "name": "requesting-code-review",
     "description": "Use when completing tasks, implementing major features, or before merging to verify work meets requirements",
     "path": "requesting-code-review"
+  },
+  {
+    "id": "safety-guard",
+    "name": "safety-guard",
+    "description": "Safety guardrails for destructive operations. Three modes: CAREFUL (warns before rm, DROP TABLE, force-push), FREEZE (restricts edits to one directory), GUARD (both combined). Use in production, during debugging, or with destructive workflows.",
+    "path": "safety-guard"
+  },
+  {
+    "id": "session-retro",
+    "name": "session-retro",
+    "description": "Session retrospective. Analyzes what shipped, what failed, and patterns observed after workflow or coding sessions. Generates per-step breakdowns, shipping streaks, and test health trends. Supports global retro across all projects.",
+    "path": "session-retro"
   },
   {
     "id": "skill-creator",
@@ -512,43 +738,7 @@
   {
     "id": "xlsx",
     "name": "xlsx",
-    "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path \u2014 even casually (like \\\"the xlsx in my downloads\\\") \u2014 and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved.",
+    "description": "Use this skill any time a spreadsheet file is the primary input or output. This means any task where the user wants to: open, read, edit, or fix an existing .xlsx, .xlsm, .csv, or .tsv file (e.g., adding columns, computing formulas, formatting, charting, cleaning messy data); create a new spreadsheet from scratch or from other data sources; or convert between tabular file formats. Trigger especially when the user references a spreadsheet file by name or path — even casually (like \\\"the xlsx in my downloads\\\") — and wants something done to it or produced from it. Also trigger for cleaning or restructuring messy tabular data files (malformed rows, misplaced headers, junk data) into proper spreadsheets. The deliverable must be a spreadsheet file. Do NOT trigger when the primary deliverable is a Word document, HTML report, standalone Python script, database pipeline, or Google Sheets API integration, even if tabular data is involved.",
     "path": "xlsx"
-  },
-  {
-    "id": "ceo-scope-review",
-    "name": "ceo-scope-review",
-    "description": "CEO/founder-mode scope review. Challenges the scope of any plan, workflow, or feature before execution. Four modes: SCOPE EXPANSION, SELECTIVE EXPANSION, HOLD SCOPE, SCOPE REDUCTION. Prevents scope creep and missed opportunities. Use before multi-step workflows or when questioning scope.",
-    "path": "ceo-scope-review"
-  },
-  {
-    "id": "session-retro",
-    "name": "session-retro",
-    "description": "Session retrospective. Analyzes what shipped, what failed, and patterns observed after workflow or coding sessions. Generates per-step breakdowns, shipping streaks, and test health trends. Supports global retro across all projects.",
-    "path": "session-retro"
-  },
-  {
-    "id": "learnings-keeper",
-    "name": "learnings-keeper",
-    "description": "Persistent cross-session knowledge base. Manages per-project learnings that compound across sessions \u2014 patterns, pitfalls, preferences, and project quirks. Agent gets smarter on your codebase over time. Supports review, search, prune, and export.",
-    "path": "learnings-keeper"
-  },
-  {
-    "id": "qa-tester",
-    "name": "qa-tester",
-    "description": "Systematic QA testing for web apps, desktop apps, and workflows. Three tiers: QUICK (P0/P1), STANDARD (+P2), EXHAUSTIVE (+P3/P4). Produces before/after health scores and ship-readiness summary. Optionally auto-fixes with atomic commits.",
-    "path": "qa-tester"
-  },
-  {
-    "id": "pre-flight-review",
-    "name": "pre-flight-review",
-    "description": "One-command pre-execution review pipeline. Runs scope \u2192 architecture \u2192 security \u2192 design reviews automatically before executing any workflow. Auto-detects which reviews apply. Surfaces only taste decisions for user approval.",
-    "path": "pre-flight-review"
-  },
-  {
-    "id": "safety-guard",
-    "name": "safety-guard",
-    "description": "Safety guardrails for destructive operations. Three modes: CAREFUL (warns before rm, DROP TABLE, force-push), FREEZE (restricts edits to one directory), GUARD (both combined). Use in production, during debugging, or with destructive workflows.",
-    "path": "safety-guard"
   }
 ]

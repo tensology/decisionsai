@@ -56,6 +56,41 @@ def register_routes(router, templates):
     _voices_cache: dict = {}       # provider_id -> (voices_list, timestamp)
     _voices_cache_ttl = 30.0       # seconds before re-fetching
 
+    def _invalidate_voices_cache(provider_id: str | None = None) -> None:
+        if provider_id:
+            _voices_cache.pop(provider_id, None)
+        else:
+            _voices_cache.clear()
+
+    def _custom_voice_entry(cv):
+        provider_voice_id = cv.provider_voice_id or f"custom_{cv.id}"
+        return {
+            "id": provider_voice_id,
+            "name": f"⭐ {cv.name}",
+            "custom": True,
+            "custom_voice_id": cv.id,
+            "provider_voice_id": provider_voice_id,
+            "custom_source": "database",
+        }
+
+    def _elevenlabs_api_voice_entry(voice):
+        category = (getattr(voice, "category", "") or "").strip().lower()
+        voice_id = getattr(voice, "voice_id", "") or ""
+        name = getattr(voice, "name", voice_id) or voice_id
+        is_custom = bool(category and category != "premade")
+        if not is_custom:
+            return {"id": voice_id, "name": name, "category": category or "premade"}
+        label = category.replace("_", " ").title()
+        return {
+            "id": voice_id,
+            "name": f"⭐ {name} ({label})",
+            "custom": True,
+            "api_cloned": category == "cloned",
+            "custom_source": "elevenlabs_api",
+            "provider_voice_id": voice_id,
+            "category": category,
+        }
+
     async def _get_voices_for_provider(provider_id: str):
         """Fetch voice list for a provider. Includes custom voices from DB."""
         # Return cached result if still fresh
@@ -79,12 +114,7 @@ def register_routes(router, templates):
                     client = ElevenLabs(api_key=api_key)
                     el_voices = client.voices.get_all().voices
                     voices = []
-                    for v in el_voices:
-                        cat = getattr(v, "category", "premade")
-                        if cat == "cloned":
-                            voices.append({"id": v.voice_id, "name": f"⭐ {v.name}", "custom": True, "api_cloned": True})
-                        else:
-                            voices.append({"id": v.voice_id, "name": v.name})
+                    voices = [_elevenlabs_api_voice_entry(v) for v in el_voices]
             elif provider_id == "openai":
                 voices = list(OPENAI_TTS_VOICES)
             elif provider_id == "coqui":
@@ -124,7 +154,14 @@ def register_routes(router, templates):
                         vid = row[2] or f"custom_{row[0]}"
                         custom_provider_ids.add(vid)
                         custom_names.add(row[1].strip().lower())
-                        voices.append({"id": vid, "name": f"⭐ {row[1]}", "custom": True})
+                        voices.append({
+                            "id": vid,
+                            "name": f"⭐ {row[1]}",
+                            "custom": True,
+                            "custom_voice_id": row[0],
+                            "provider_voice_id": vid,
+                            "custom_source": "database",
+                        })
                     logger.info("Custom IDs: %s, Custom names: %s", custom_provider_ids, custom_names)
                     # Remove duplicates: drop non-DB entries whose id or name matches a DB custom voice
                     # This covers both plain API entries and api_cloned entries that have a DB counterpart
@@ -194,11 +231,7 @@ def register_routes(router, templates):
                     CustomVoice.provider == 'kokoro', CustomVoice.status == 'ready'
                 ).all()
                 for cv in customs:
-                    voices.append({
-                        "id": f"custom_{cv.id}",
-                        "name": f"⭐ {cv.name}",
-                        "custom": True,
-                    })
+                    voices.append(_custom_voice_entry(cv))
             finally:
                 session.close()
         except Exception as e:
@@ -220,11 +253,7 @@ def register_routes(router, templates):
             voices = client.voices.get_all().voices
             result = []
             for v in voices:
-                cat = getattr(v, "category", "premade")
-                if cat == "cloned":
-                    result.append({"id": v.voice_id, "name": f"⭐ {v.name}", "custom": True, "api_cloned": True})
-                else:
-                    result.append({"id": v.voice_id, "name": v.name})
+                result.append(_elevenlabs_api_voice_entry(v))
             return result
         except Exception as e:
             logger.warning(f"Could not load ElevenLabs voices: {e}")
@@ -254,8 +283,7 @@ def register_routes(router, templates):
                     CustomVoice.provider == 'coqui', CustomVoice.status == 'ready'
                 ).all()
                 for cv in customs:
-                    vid = cv.provider_voice_id or f"custom_{cv.id}"
-                    voices.append({"id": vid, "name": f"⭐ {cv.name}", "custom": True})
+                    voices.append(_custom_voice_entry(cv))
             finally:
                 session.close()
         except Exception as e:
@@ -275,11 +303,7 @@ def register_routes(router, templates):
                     CustomVoice.provider == 'f5tts', CustomVoice.status == 'ready'
                 ).all()
                 for cv in customs:
-                    voices.append({
-                        "id": f"custom_{cv.id}",
-                        "name": f"⭐ {cv.name}",
-                        "custom": True,
-                    })
+                    voices.append(_custom_voice_entry(cv))
             finally:
                 session.close()
         except Exception as e:
@@ -298,11 +322,7 @@ def register_routes(router, templates):
                     CustomVoice.provider == 'voxcpm', CustomVoice.status == 'ready'
                 ).all()
                 for cv in customs:
-                    voices.append({
-                        "id": f"custom_{cv.id}",
-                        "name": f"⭐ {cv.name}",
-                        "custom": True,
-                    })
+                    voices.append(_custom_voice_entry(cv))
             finally:
                 session.close()
         except Exception as e:
@@ -321,11 +341,7 @@ def register_routes(router, templates):
                     CustomVoice.provider == 'chatterbox', CustomVoice.status == 'ready'
                 ).all()
                 for cv in customs:
-                    voices.append({
-                        "id": cv.provider_voice_id or f"custom_{cv.id}",
-                        "name": f"⭐ {cv.name}",
-                        "custom": True,
-                    })
+                    voices.append(_custom_voice_entry(cv))
             finally:
                 session.close()
         except Exception as e:
@@ -468,6 +484,7 @@ def register_routes(router, templates):
 
             session.delete(voice)
             session.commit()
+            _invalidate_voices_cache(provider)
             return JSONResponse({"success": True})
         finally:
             session.close()
@@ -484,6 +501,7 @@ def register_routes(router, templates):
             from elevenlabs import ElevenLabs
             client = ElevenLabs(api_key=api_key)
             client.voices.delete(voice_id)
+            _invalidate_voices_cache("elevenlabs")
             return JSONResponse({"success": True})
         except Exception as e:
             logger.warning("Could not delete ElevenLabs voice %s: %s", voice_id, e)
@@ -563,4 +581,7 @@ def register_routes(router, templates):
     def _process_voice_bg(voice_id: int):
         """Delegate to voice_cloning service."""
         from distr.core.audio.voice_cloning import process_custom_voice
-        process_custom_voice(voice_id)
+        try:
+            process_custom_voice(voice_id)
+        finally:
+            _invalidate_voices_cache()

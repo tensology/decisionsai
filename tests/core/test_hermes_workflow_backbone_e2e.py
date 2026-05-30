@@ -272,6 +272,8 @@ def test_ticket_workflow_uses_hermes_as_backbone(tmp_path):
             assert run.ticket_id == ids["ticket_id"]
             assert run.board_id == ids["board_id"]
             assert json.loads(run.run_data or "{}")["result_packet"]["status"] == "completed"
+            run_data = json.loads(run.run_data or "{}")
+            assert run_data.get("execution_route", {}).get("backend")
 
             assert ticket.workflow_status == "completed"
             assert f"[Workflow Run #{run_id}] Status: completed" in ticket.description
@@ -293,6 +295,7 @@ def test_ticket_workflow_uses_hermes_as_backbone(tmp_path):
             assert validations[0].validation_type == "text_match"
 
             assert "workflow_run_started" in event_types
+            assert "route_decided" in event_types
             assert "execution_session_created" in event_types
             assert "execution_executor_start" in event_types
             assert "execution_executor_message" in event_types

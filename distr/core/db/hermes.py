@@ -122,3 +122,26 @@ Index("ix_hermes_validation_records_verdict", HermesValidationRecord.verdict)
 Index("ix_hermes_correction_attempts_validation", HermesCorrectionAttempt.validation_record_id)
 Index("ix_hermes_correction_attempts_workflow_run", HermesCorrectionAttempt.workflow_id, HermesCorrectionAttempt.run_id)
 Index("ix_hermes_correction_attempts_status", HermesCorrectionAttempt.status)
+
+
+class HermesLearnedRule(Base):
+    """Board/project-scoped rules captured from validation and IDE iteration."""
+
+    __tablename__ = "hermes_learned_rules"
+
+    id = Column(Integer, primary_key=True)
+    scope = Column(String, nullable=False, default="board")  # global | board | project
+    scope_id = Column(Integer, nullable=True)
+    rule_type = Column(String, nullable=False, default="validation")
+    summary = Column(Text, nullable=False, default="")
+    payload = Column(Text, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.5)
+    evidence_count = Column(Integer, nullable=False, default=1)
+    enabled = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+Index("ix_hermes_events_board_id", HermesEvent.board_id)
+Index("ix_hermes_learned_rules_scope", HermesLearnedRule.scope, HermesLearnedRule.scope_id)
+Index("ix_hermes_learned_rules_type", HermesLearnedRule.rule_type)

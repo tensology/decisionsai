@@ -23,9 +23,20 @@ Hermes owns events and learning signals. It does not own WhatsApp, Telegram, Gma
 - [x] Auto-dispatch corrections re-run failed steps when run policy enables it.
 - [x] Approval gates emit Hermes events and hold verified steps until continue/approval.
 - [x] Channel intake events are emitted for WhatsApp/Telegram/Gmail ticket creation.
+- [x] Hermes hybrid orchestrator resolves execution routes with policy baseline, board overrides, harness preferences, optional LLM advisory, and `route_decided` events.
+- [x] Workflow step executor dispatches through the unified harness adapter and provisions pre_chain skills before execution.
+- [x] Workflow run completion provisions post_chain skills.
+- [x] Playwright validation receives project runtime URLs via Hermes runtime sessions (`PLAYWRIGHT_BASE_URL`).
+- [x] Workflows UI exposes route cards, run command center, IDE handoff modal, board Hermes policy editor, skill chains, and learned-rule promote hints.
+- [x] `/api/ws/workflows` pushes realtime workflow refresh events to the Workflows page.
+- [x] Route override approval: when board policy requires approval, Hermes LLM override pauses the run (`waiting_kind: route_approval`), exposes Approve/Reject in the Active Run command center, and redispatches on approval via `POST /workflows/{id}/runs/{run_id}/route-approval`.
+- [x] Google Agent Skills (`google/skills`) cloned to `COMPETITION/google-skills`, synced into `DecisionsAI/skills/` (19 Google Cloud skills) with registry entries and `GET /workflows/skills` catalog API.
+- [x] Hermes skill transfer catalog (`distr/core/skills/catalog.py`): ticket keyword inference, LLM advisory skill list, validated push via workflow pre_chain + `RouteDecision.skills`.
+- [x] Harness steer mid-flight: `POST /workflows/{id}/runs/{run_id}/steer`, Pi RPC delivery when live, queued steers + `harness_steer` Hermes events for Codex/CLI, Run command center UI.
+- [x] Hermes validator LLM second pass (`distr/core/hermes_validator.py`): uses `hermes_validator_*` model settings, runs after mechanical verification, emits `validation_second_pass` events.
 - [ ] The Events subtab does not yet show a ticket-centric timeline across all workflows/boards.
-- [ ] Hermes does not yet produce learned routing/validation rules from outcomes.
-- [ ] Hermes does not yet fully manage project runtime state before execution and validation.
+- [x] Hermes produces learned routing/validation rules from outcomes (board-scoped learned rules + promote-to-policy hints).
+- [x] Hermes attaches project runtime context to validation snapshots and workflow active-run payloads.
 
 ## Implementation Tasks
 
@@ -51,13 +62,14 @@ Hermes owns events and learning signals. It does not own WhatsApp, Telegram, Gma
 - [x] Add approval events for human gates (approval_requested, approval_granted).
 - [ ] Add approval events for outbound replies.
 - [x] Add a durable project runtime registry: project, command, terminal id, PID, cwd, owner, port, URL, health, started_at, last_seen_at.
-- [ ] Attach runtime health checks to workflow validation so Browser Use and Playwright know which URL to inspect.
-- [ ] Add safe runtime actions: reuse, start missing runtime, restart Hermes-owned runtime, and request approval before killing user-owned terminals.
-- [ ] Show runtime context in the workflow Runs/Timeline UI for each ticket execution.
-- [ ] Add Hermes learned rules table: suggested rule, scope, confidence, evidence count, enabled/disabled.
-- [ ] Add Rules UI for learned/manual Hermes rules.
-- [ ] Feed learned rules into complexity routing and validation policy.
-- [ ] Add tests proving events are emitted for workflow run, step result, CLI session, and validation failure.
+- [x] Attach runtime health checks to workflow validation so Browser Use and Playwright know which URL to inspect.
+- [x] Show runtime context in the workflow Runs/Timeline UI for each ticket execution.
+- [x] Add Hermes learned rules table: suggested rule, scope, confidence, evidence count, enabled/disabled.
+- [x] Add Rules UI for learned/manual Hermes rules.
+- [x] Feed learned rules into complexity routing and validation policy.
+- [x] Add tests proving orchestrator routing (policy, harness preference, approval, fallback).
+- [x] Add tests for route override approval approve/reject and run_data updates (`test_run_route_approval.py`).
+- [x] Add route_decided Hermes events for workflow/kanban/agent/initiative dispatch paths.
 - [x] Wire auto_dispatch_corrections run policy to re-run failed steps with correction packets.
 - [x] Honor hermes_enabled before emitting ledger events.
 - [x] Resolve hermes_correction_* models when auto-dispatching corrections.
@@ -95,9 +107,18 @@ Examples:
 
 ## Next Build Order
 
-1. Hermes event ledger and Timeline UI.
-2. Project runtime registry and runtime-aware execution.
-3. Validation and approval events.
-4. Channel intake events.
-5. Learned rules storage and UI.
-6. Route-policy integration based on ticket complexity and learned rules.
+1. ~~Hermes event ledger and Timeline UI.~~
+2. ~~Project runtime registry and runtime-aware execution.~~
+3. ~~Validation and approval events (step gates + route override approval).~~
+4. ~~Channel intake events.~~
+5. ~~Learned rules storage and UI.~~
+6. ~~Route-policy integration based on ticket complexity and learned rules.~~
+
+### Recommended next (pick one at a time)
+
+1. **Ticket-centric Events timeline** — aggregate Hermes events across boards/workflows for a selected ticket.
+2. ~~**Harness steer mid-flight**~~ — done: Pi RPC + queued steer for Codex/CLI.
+3. ~~**Hermes validator LLM**~~ — done: second pass after mechanical verification.
+4. **Outbound reply approval events** — audit trail when Hermes sends WhatsApp/Telegram/Gmail replies.
+5. **Step editor cleanup** — remove dead JS / read-only Steps subtab confusion.
+6. **Safe runtime restart actions** — controlled restart from workflow command center.

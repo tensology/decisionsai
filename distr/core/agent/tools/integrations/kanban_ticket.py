@@ -2789,7 +2789,20 @@ class KanbanTicketTool(BaseTool):
 
             folder = project.folder_location
             project_name = project.name
-            route = resolve_ticket_cli_route(project, complexity)
+            board = None
+            if t.lane:
+                board = orm_get_by_id(s, KB, t.lane.board_id)
+
+            from distr.core.hermes_orchestrator import resolve_execution_route
+
+            decision = resolve_execution_route(
+                project=project,
+                ticket=t,
+                board=board,
+                complexity=complexity,
+                emit_event=True,
+            )
+            route = decision.to_route_dict()
 
             from distr.core.kanban.ticket_cli_context import build_kanban_ticket_cli_instruction
 

@@ -422,6 +422,12 @@ class EditorTicketBackend(ProjectCliBackend):
         return tickets_dir / f"decisionsai_{self.id}_{stamp}_{suffix}.md"
 
     def _ticket_body(self, task: ProjectTask) -> str:
+        api_base = (os.environ.get("DECISIONS_API_BASE") or "http://127.0.0.1:8765").rstrip("/")
+        continue_url = ""
+        bridge_url = ""
+        if task.workflow_id and task.run_id:
+            continue_url = f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/continue"
+            bridge_url = f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events"
         meta = {
             "project_id": task.project_id,
             "project_name": task.project_name,
@@ -430,13 +436,27 @@ class EditorTicketBackend(ProjectCliBackend):
             "run_id": task.run_id,
             "workflow_id": task.workflow_id,
             "step_id": task.step_id or task.audit_id,
+            "ticket_id": task.ticket_id,
+            "board_id": task.board_id,
+            "execution_session_id": task.execution_session_id,
+            "api_base": api_base,
+            "callback_url": continue_url,
+            "continue_url": continue_url,
+            "bridge_url": bridge_url,
+            "callback_payload_type": "workflow_continue",
         }
+        meta_json = json.dumps({k: v for k, v in meta.items() if v is not None}, separators=(",", ":"))
         return (
+            "<!-- decisions-meta: "
+            + meta_json
+            + " -->\n"
             "<!-- decisions-ide-meta: "
-            + json.dumps({k: v for k, v in meta.items() if v is not None}, separators=(",", ":"))
+            + meta_json
             + " -->\n"
             "---\n"
             "mode: append\n"
+            "auto_continue_on_pickup: false\n"
+            "callback_payload_type: workflow_continue\n"
             "---\n\n"
             f"# DecisionsAI Work Packet\n\n"
             f"Project: {task.project_name} ({task.project_id})\n"
@@ -449,7 +469,12 @@ class EditorTicketBackend(ProjectCliBackend):
             "- Summary\n"
             "- Files changed\n"
             "- Tests run\n"
-            "- Blockers or next step\n"
+            "- Blockers or next step\n\n"
+            "## Callback\n\n"
+            "The workflow stays waiting until you report completion.\n"
+            + (f"- VS Code/Cursor command: `DecisionsAI: Report Workflow Complete`\n" if continue_url else "")
+            + (f"- Resume workflow: POST {continue_url}\n" if continue_url else "")
+            + (f"- Bridge events: POST {bridge_url}\n" if bridge_url else "")
         )
 
     async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
@@ -467,6 +492,30 @@ class EditorTicketBackend(ProjectCliBackend):
             msg = f"Failed to create {self.name} work packet: {exc}"
             _emit(on_event, {"type": "error", "message": msg})
             return BackendTaskResult(False, self.id, "ide_ticket", error=msg, session_id=task.audit_id)
+
+        try:
+            from distr.core.hermes import emit_event
+
+            emit_event(
+                source=self.id,
+                event_type="ide_work_packet_created",
+                status="waiting",
+                workflow_id=task.workflow_id,
+                run_id=task.run_id,
+                step_id=task.step_id or task.audit_id,
+                ticket_id=task.ticket_id,
+                board_id=task.board_id,
+                project_id=task.project_id,
+                execution_session_id=task.execution_session_id,
+                summary=f"IDE work packet created for {self.editor_name}.",
+                payload={
+                    "ticket_path": str(ticket_path),
+                    "editor": self.id,
+                    "project_folder": task.folder,
+                },
+            )
+        except Exception:
+            pass
 
         message = (
             f"Created IDE work packet for {self.editor_name}: {ticket_path}\n"
@@ -623,6 +672,15 @@ async def run_project_task(
         create_execution_session,
     )
 
+    board_id = None
+    if ticket_id:
+        try:
+            from distr.core.hermes import resolve_board_id_for_ticket
+
+            board_id = resolve_board_id_for_ticket(int(ticket_id))
+        except Exception:
+            board_id = None
+
     backend_id = normalize_backend_id(backend_id_override) if backend_id_override else get_project_backend_id(project)
     backend = get_backend(backend_id)
     task = ProjectTask(
@@ -638,6 +696,7 @@ async def run_project_task(
         origin=origin,
         model=(model_override if model_override is not None else (getattr(project, "coding_backend_model", "") or "")).strip(),
         ticket_id=ticket_id,
+        board_id=board_id,
         ticket_complexity=ticket_complexity,
         codex_reasoning_effort=(codex_reasoning_effort_override or "").strip(),
         codex_service_tier=(codex_service_tier_override or "").strip(),
@@ -693,7 +752,7 @@ async def run_project_task(
     task.execution_session_id = execution_session_id
     if runtime_snapshot:
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.hermes import emit_event, resolve_board_id_for_ticket
 
             active_count = int(runtime_snapshot.get("active_terminal_count") or 0)
             urls = runtime_snapshot.get("urls") or []
@@ -706,6 +765,7 @@ async def run_project_task(
                 run_id=run_id,
                 step_id=step_id,
                 ticket_id=ticket_id,
+                board_id=board_id or resolve_board_id_for_ticket(ticket_id),
                 project_id=task.project_id,
                 execution_session_id=execution_session_id,
                 summary=(

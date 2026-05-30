@@ -7,6 +7,8 @@ const http = require('http');
 const https = require('https');
 const { exec } = require('child_process');
 
+let lastWorkflowMeta = null;
+
 // This method is called when your extension is activated
 // Your extension is activated the very first time the command is executed
 
@@ -37,6 +39,11 @@ function activate(context) {
 		});
 
 		context.subscriptions.push(disposable);
+
+		const reportComplete = vscode.commands.registerCommand('decisionsai.reportWorkflowComplete', function () {
+			reportWorkflowComplete(outputChannel);
+		});
+		context.subscriptions.push(reportComplete);
 
 		// Start watching for STARTUP.md file
 		startStartupWatcher(outputChannel, context);
@@ -262,17 +269,27 @@ function startStartupWatcher(outputChannel, context) {
 }
 
 /**
- * Parse decisions-meta comment from ticket file contents.
- * Format: <!-- decisions-meta: {"run_id": 42, "step_id": 7, "workflow_id": 5, "api_base": "http://localhost:5555"} -->
+ * Parse decisions-meta / decisions-ide-meta comment from ticket file contents.
  * @param {string} fileContents
- * @returns {{ run_id: number, step_id: number, workflow_id: number, api_base: string, callback_url?: string, callback_payload_type?: string, context_type?: string } | null}
+ * @returns {object | null}
  */
 function parseDecisionsMeta(fileContents) {
 	try {
-		const match = fileContents.match(/<!--\s*decisions-meta:\s*(\{.*?\})\s*-->/);
+		const match = fileContents.match(/<!--\s*decisions-(?:ide-)?meta:\s*(\{.*?\})\s*-->/);
 		if (!match) return null;
 		const meta = JSON.parse(match[1]);
-		if (meta.run_id != null && meta.api_base) {
+		const hasContinue = !!(meta.callback_url || meta.continue_url);
+		if (meta.run_id != null && (meta.api_base || hasContinue)) {
+			if (!meta.callback_url && meta.continue_url) {
+				meta.callback_url = meta.continue_url;
+			}
+			if (!meta.api_base && meta.callback_url) {
+				try {
+					meta.api_base = new URL(meta.callback_url).origin;
+				} catch (e) {
+					meta.api_base = 'http://127.0.0.1:8765';
+				}
+			}
 			return meta;
 		}
 		return null;
@@ -283,19 +300,19 @@ function parseDecisionsMeta(fileContents) {
 
 /**
  * Parse optional ticket dispatch controls from YAML frontmatter.
- * Supported controls:
- * - mode: append
- * - append_to_current_session: true
- * - continue_current_ticket: true
- * - do_not_start_new_ticket: true
  * @param {string} fileContents
- * @returns {{ appendToCurrentSession: boolean, body: string }}
+ * @returns {{ appendToCurrentSession: boolean, autoContinueOnPickup: boolean, callbackPayloadType: string, body: string }}
  */
 function parseTicketDispatchControl(fileContents) {
 	try {
 		const frontmatterMatch = fileContents.match(/^---\s*\n([\s\S]*?)\n---\s*\n?/);
 		if (!frontmatterMatch) {
-			return { appendToCurrentSession: false, body: fileContents };
+			return {
+				appendToCurrentSession: false,
+				autoContinueOnPickup: false,
+				callbackPayloadType: 'workflow_continue',
+				body: fileContents,
+			};
 		}
 
 		const rawFrontmatter = frontmatterMatch[1] || '';
@@ -319,25 +336,82 @@ function parseTicketDispatchControl(fileContents) {
 			isTrue(controlMap.continue_current_ticket) ||
 			isTrue(controlMap.do_not_start_new_ticket);
 
-		return { appendToCurrentSession, body: body || fileContents };
+		return {
+			appendToCurrentSession,
+			autoContinueOnPickup: isTrue(controlMap.auto_continue_on_pickup),
+			callbackPayloadType: controlMap.callback_payload_type || 'workflow_continue',
+			body: body || fileContents,
+		};
 	} catch (e) {
-		return { appendToCurrentSession: false, body: fileContents };
+		return {
+			appendToCurrentSession: false,
+			autoContinueOnPickup: false,
+			callbackPayloadType: 'workflow_continue',
+			body: fileContents,
+		};
 	}
 }
 
 /**
- * Post callback payload to explicit callback_url if present.
- * Falls back to workflow continue endpoint for legacy metadata.
- * @param {{ run_id: number, step_id: number, workflow_id: number, api_base: string, callback_url?: string, callback_payload_type?: string, context_type?: string }} meta
- * @param {{ event_type: string, status: string, input: string, filename: string }} payload
+ * POST JSON payload to a DecisionsAI URL.
+ * @param {string} url
+ * @param {object} bodyObj
  * @param {vscode.OutputChannel} outputChannel
+ * @returns {Promise<{ statusCode: number, body: string }>}
  */
-function callTicketCallback(meta, payload, outputChannel) {
+function postJson(url, bodyObj, outputChannel) {
+	return new Promise((resolve, reject) => {
+		try {
+			const body = JSON.stringify(bodyObj);
+			const parsedUrl = new URL(url);
+			const transport = parsedUrl.protocol === 'https:' ? https : http;
+			const options = {
+				hostname: parsedUrl.hostname,
+				port: parsedUrl.port,
+				path: parsedUrl.pathname + (parsedUrl.search || ''),
+				method: 'POST',
+				headers: {
+					'Content-Type': 'application/json',
+					'Content-Length': Buffer.byteLength(body),
+				},
+			};
+
+			const req = transport.request(options, (res) => {
+				let data = '';
+				res.on('data', (chunk) => { data += chunk; });
+				res.on('end', () => {
+					outputChannel.appendLine(`HTTP ${res.statusCode}: ${data}`);
+					resolve({ statusCode: res.statusCode || 0, body: data });
+				});
+			});
+
+			req.on('error', (err) => {
+				outputChannel.appendLine(`HTTP request failed: ${err.message}`);
+				reject(err);
+			});
+
+			req.write(body);
+			req.end();
+			outputChannel.appendLine(`POST ${url}`);
+		} catch (err) {
+			reject(err);
+		}
+	});
+}
+
+/**
+ * Post callback payload to explicit callback_url if present.
+ * @param {object} meta
+ * @param {{ event_type: string, status: string, input: string, filename?: string }} payload
+ * @param {vscode.OutputChannel} outputChannel
+ * @param {string} callbackPayloadType
+ */
+async function callTicketCallback(meta, payload, outputChannel, callbackPayloadType) {
 	try {
 		const wfId = meta.workflow_id || 0;
 		const fallbackUrl = `${meta.api_base}/api/workflows/${wfId}/runs/${meta.run_id}/continue`;
-		const url = meta.callback_url || fallbackUrl;
-		const callbackType = (meta.callback_payload_type || '').toLowerCase();
+		const url = meta.callback_url || meta.continue_url || fallbackUrl;
+		const callbackType = (callbackPayloadType || meta.callback_payload_type || '').toLowerCase();
 		const bodyObj = (callbackType === 'workflow_continue')
 			? { input: payload.input }
 			: {
@@ -351,38 +425,61 @@ function callTicketCallback(meta, payload, outputChannel) {
 				input: payload.input || '',
 				ts: new Date().toISOString(),
 			};
-		const body = JSON.stringify(bodyObj);
-		const parsedUrl = new URL(url);
-		const transport = parsedUrl.protocol === 'https:' ? https : http;
-
-		const options = {
-			hostname: parsedUrl.hostname,
-			port: parsedUrl.port,
-			path: parsedUrl.pathname,
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				'Content-Length': Buffer.byteLength(body)
-			}
-		};
-
-		const req = transport.request(options, (res) => {
-			let data = '';
-			res.on('data', (chunk) => { data += chunk; });
-			res.on('end', () => {
-				outputChannel.appendLine(`Callback response (${res.statusCode}): ${data}`);
-			});
-		});
-
-		req.on('error', (err) => {
-			outputChannel.appendLine(`⚠ Callback failed: ${err.message}`);
-		});
-
-		req.write(body);
-		req.end();
-		outputChannel.appendLine(`Sent callback to ${url}`);
+		const result = await postJson(url, bodyObj, outputChannel);
+		return result;
 	} catch (err) {
-		outputChannel.appendLine(`⚠ Callback error: ${err.message}`);
+		outputChannel.appendLine(`Callback error: ${err.message}`);
+		return { statusCode: 0, body: err.message || '' };
+	}
+}
+
+/**
+ * Emit a bridge event while the workflow is still waiting in the IDE.
+ * @param {object} meta
+ * @param {object} payload
+ * @param {vscode.OutputChannel} outputChannel
+ */
+async function callBridgeEvent(meta, payload, outputChannel) {
+	const bridgeUrl = meta.bridge_url;
+	if (!bridgeUrl) return null;
+	try {
+		return await postJson(bridgeUrl, payload, outputChannel);
+	} catch (err) {
+		outputChannel.appendLine(`Bridge event error: ${err.message}`);
+		return null;
+	}
+}
+
+async function reportWorkflowComplete(outputChannel) {
+	const meta = lastWorkflowMeta;
+	if (!meta) {
+		vscode.window.showErrorMessage('DecisionsAI: No active workflow handoff found. Process a DecisionsAI ticket first.');
+		return;
+	}
+
+	const summary = await vscode.window.showInputBox({
+		title: 'Report workflow completion to DecisionsAI',
+		prompt: 'Summarize what changed, tests run, and current status',
+		placeHolder: 'Completed: updated X, ran npm test, all passing',
+		ignoreFocusOut: true,
+	});
+
+	if (!summary || !summary.trim()) {
+		return;
+	}
+
+	outputChannel.appendLine('Reporting workflow completion...');
+	const result = await callTicketCallback(meta, {
+		event_type: 'ide_iteration_completed',
+		status: 'completed',
+		input: summary.trim(),
+	}, outputChannel, 'workflow_continue');
+
+	if (result.statusCode >= 200 && result.statusCode < 300) {
+		vscode.window.showInformationMessage('DecisionsAI: Workflow resumed with your report.');
+		lastWorkflowMeta = null;
+	} else {
+		vscode.window.showErrorMessage(`DecisionsAI: Failed to resume workflow (HTTP ${result.statusCode}).`);
 	}
 }
 
@@ -495,14 +592,32 @@ function startTicketWatcher(outputChannel, context) {
 				
 				outputChannel.appendLine('Chat submission completed.');
 				
-				// Post callback if metadata was present (workflow or custom callback URL).
 				if (decisionsMeta) {
-					callTicketCallback(decisionsMeta, {
-						event_type: 'cursor_ticket_submitted',
-						status: 'submitted',
-						filename: filename,
-						input: 'Cursor ticket submitted from VS extension',
+					lastWorkflowMeta = decisionsMeta;
+					await callBridgeEvent(decisionsMeta, {
+						event_type: 'ide_work_started',
+						status: 'running',
+						step_id: decisionsMeta.step_id,
+						ticket_id: decisionsMeta.ticket_id,
+						project_id: decisionsMeta.project_id,
+						execution_session_id: decisionsMeta.execution_session_id,
+						message: `IDE picked up ${filename}`,
+						input: 'IDE work packet picked up by DecisionsAI extension',
 					}, outputChannel);
+
+					if (dispatchControl.autoContinueOnPickup) {
+						await callTicketCallback(decisionsMeta, {
+							event_type: 'cursor_ticket_submitted',
+							status: 'submitted',
+							filename: filename,
+							input: 'Cursor ticket submitted from VS extension',
+						}, outputChannel, dispatchControl.callbackPayloadType);
+					} else {
+						outputChannel.appendLine('Workflow remains waiting until you report completion.');
+						vscode.window.showInformationMessage(
+							'DecisionsAI: Work packet loaded. Run "DecisionsAI: Report Workflow Complete" when finished.'
+						);
+					}
 				}
 			} catch (error) {
 				outputChannel.appendLine(`Error processing file ${filename}: ${error.message}`);

@@ -157,6 +157,7 @@ class TestLoopService:
         code: str,
         headless: bool = True,
         timeout: int = 120,
+        base_url: str | None = None,
     ) -> ExecutionResult:
         """Run Playwright *code* in a subprocess.
 
@@ -166,12 +167,15 @@ class TestLoopService:
         browser startup).
         """
         env_extra = {"PLAYWRIGHT_HEADLESS": "1" if headless else "0"}
+        if base_url:
+            env_extra["PLAYWRIGHT_BASE_URL"] = str(base_url).strip()
 
         # Inject a headless helper at the top of the code so scripts that
         # use ``launch(headless=...)`` can read the env var automatically.
         headless_preamble = (
             "import os as _os\n"
             "_HEADLESS = _os.environ.get('PLAYWRIGHT_HEADLESS', '1') == '1'\n"
+            "BASE_URL = _os.environ.get('PLAYWRIGHT_BASE_URL', '')\n"
         )
         augmented_code = headless_preamble + code
 

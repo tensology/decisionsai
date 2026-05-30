@@ -56,6 +56,7 @@ class ProjectTask:
     origin: str = "cli"
     model: str = ""
     ticket_id: Optional[int] = None
+    board_id: Optional[int] = None
     ticket_complexity: str = "medium"
     codex_reasoning_effort: str = ""
     codex_service_tier: str = ""

@@ -54,6 +54,8 @@ def _serialize_workflow(wf: AutoWorkflow) -> Dict[str, Any]:
         "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
         "last_run_at": wf.last_run_at.isoformat() if wf.last_run_at else None,
         "start_step_position": wf.start_step_position or 0,
+        "pre_chain": _safe_json_loads(getattr(wf, "pre_chain", None)) or [],
+        "post_chain": _safe_json_loads(getattr(wf, "post_chain", None)) or [],
         "created_date": wf.created_date.isoformat() if wf.created_date else None,
         "modified_date": wf.modified_date.isoformat() if wf.modified_date else None,
         "steps": [_serialize_step(s) for s in steps],

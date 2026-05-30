@@ -161,7 +161,15 @@ def run_project_cli_tasks(payload: dict[str, Any]) -> dict[str, Any]:
                 project_folder=project.folder_location or "",
                 project_id=project.id,
             )
-            route = resolve_ticket_cli_route(project, getattr(ticket, "complexity", "medium"))
+            from distr.core.hermes_orchestrator import resolve_execution_route
+
+            decision = resolve_execution_route(
+                project=project,
+                ticket=ticket,
+                board=board,
+                emit_event=True,
+            )
+            route = decision.to_route_dict()
             result = _run_async(run_project_task(
                 project,
                 instruction,

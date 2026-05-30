@@ -822,6 +822,8 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
         If the resolved model is not installed in Ollama, falls back to the
         first available model and logs a warning so the user knows.
         """
+        from distr.core.llm_factory import is_anthropic_model, is_gemini_model, is_openai_model
+
         model = self._model_name
         if self.chat_manager and hasattr(self.chat_manager, 'current_model') and self.chat_manager.current_model:
             mgr = self.chat_manager.current_model
@@ -838,6 +840,23 @@ class OllamaLLMService(OllamaResponseMixin, LLMSharedMixin, LLMService):
                     session.close()
                 except Exception:
                     pass
+
+        model_lower = (model or "").lower()
+        model_is_cloud = (
+            is_openai_model(model)
+            or is_anthropic_model(model)
+            or is_gemini_model(model)
+            or "/" in (model or "")
+            or (
+                model_lower.startswith(('llama-3', 'llama3', 'mixtral-', 'gemma2-', 'whisper-large'))
+                and ':' not in (model or "")
+            )
+        )
+        if model_is_cloud:
+            # Keep provider-owned model IDs intact so _check_provider_mismatch()
+            # can hot-swap or surface missing-key errors instead of silently
+            # replacing them with an arbitrary local Ollama model.
+            return model
 
         # Validate the model is actually installed in Ollama
         try:

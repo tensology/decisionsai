@@ -76,7 +76,7 @@ def create_execution_session(
         session.add(event)
         session.commit()
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.hermes import emit_event, resolve_board_id_for_ticket
 
             emit_event(
                 source="executor",
@@ -86,6 +86,7 @@ def create_execution_session(
                 run_id=run_id,
                 step_id=step_id,
                 ticket_id=ticket_id,
+                board_id=resolve_board_id_for_ticket(ticket_id),
                 project_id=int(project_id),
                 execution_session_id=int(row.id),
                 summary="Project execution session created.",

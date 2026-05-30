@@ -2189,3 +2189,25 @@ def run_migrations():
                     logger.info("Added remote_hotkey column to snippets table")
     except Exception as e:
         logger.warning("Could not add snippets.remote_hotkey column: %s", e)
+
+    # Board Hermes policy overrides
+    try:
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE kanban_boards ADD COLUMN hermes_policy TEXT"))
+                conn.commit()
+                logger.info("Added hermes_policy column to kanban_boards table")
+            except Exception as e:
+                if "duplicate column" not in str(e).lower():
+                    logger.debug(f"Could not add hermes_policy to kanban_boards: {e}")
+    except Exception as e:
+        logger.debug(f"Ticket Board hermes_policy migration: {e}")
+
+    # Hermes learned rules table
+    try:
+        from distr.core.hermes import ensure_hermes_tables
+
+        ensure_hermes_tables()
+        logger.info("Ensured Hermes learned rules tables exist")
+    except Exception as e:
+        logger.debug(f"Hermes learned rules migration: {e}")

@@ -42,6 +42,60 @@ from distr.core.integrations.telegram.sender import TelegramSenderMixin
 from distr.core.integrations.telegram.remote_control import TelegramRemoteControlMixin
 from distr.core.integrations.base import IntegrationReconnectMixin
 
+# How often to repeat the same "not connected" summary in the main log.
+_CONNECT_FAILURE_LOG_INTERVAL_S = 300.0
+
+
+def relay_endpoint_label(server_url: str) -> str:
+    """Human-readable relay host from a WebSocket URL."""
+    base = server_url.split("/ws/")[0]
+    return (
+        base.replace("wss://", "")
+        .replace("ws://", "")
+        .replace("https://", "")
+        .replace("http://", "")
+    )
+
+
+def friendly_telegram_connect_error(exc: Exception, *, endpoint: str = "") -> str:
+    """Map a requests/network exception to a short user-facing offline reason."""
+    msg = str(exc).lower()
+    host = endpoint or "Telegram relay"
+    if any(
+        token in msg
+        for token in (
+            "nodename nor servname",
+            "name resolution",
+            "failed to resolve",
+            "getaddrinfo failed",
+            "name or service not known",
+        )
+    ):
+        return f"cannot reach {host} — check internet or DNS"
+    if "can't assign requested address" in msg:
+        return "network unavailable — Telegram not connected (will retry automatically)"
+    if "connection reset" in msg or "connection aborted" in msg:
+        return "Telegram relay closed the connection — reconnecting automatically"
+    if "timed out" in msg or "timeout" in msg:
+        return f"Telegram relay timed out ({host}) — reconnecting automatically"
+    return f"Telegram relay unreachable — not connected"
+
+
+def friendly_telegram_socket_error(err_str: str, *, endpoint: str = "") -> str:
+    """Map a Qt WebSocket error string to a short user-facing offline reason."""
+    lowered = (err_str or "").lower()
+    host = endpoint or "Telegram relay"
+    if "host not found" in lowered or "can't assign requested address" in lowered:
+        return f"cannot reach {host} — check internet or DNS"
+    if "remote host closed" in lowered or "connection closed" in lowered:
+        return "Telegram relay dropped the connection — reconnecting automatically"
+    if "tls" in lowered or "ssl" in lowered:
+        return "secure connection to Telegram relay failed — reconnecting automatically"
+    if err_str:
+        return f"Telegram not connected ({err_str})"
+    return "Telegram not connected"
+
+
 class TelegramWebSocketManager(
     TelegramMessagesMixin,
     TelegramSenderMixin,
@@ -157,6 +211,13 @@ class TelegramWebSocketManager(
         self._reconnect_attempts = 0
         self._active_disconnect = False  # True if we intentionally disconnected
         self._init_reconnect_state(initial_delay_ms=3000, max_delay_ms=60000)
+
+        # Quiet offline logging — one friendly summary, then silence until interval elapses.
+        self._connect_failure_reason: Optional[str] = None
+        self._connect_failure_logged_at: float = 0.0
+        self._outage_announced: bool = False
+        self._last_socket_error_log_at: float = 0.0
+        self._dns_fallback_applied: bool = False
 
         # Rate Limiting & Dedup
         self._last_send_time = 0
@@ -278,6 +339,40 @@ class TelegramWebSocketManager(
                     f.write(f"[{timestamp}] {message}\n")
             except Exception:
                 pass
+
+    def _relay_endpoint_label(self) -> str:
+        return relay_endpoint_label(self.server_url)
+
+    def _announce_connect_failure(self, reason: str, *, force: bool = False) -> None:
+        """Log a human-readable offline status; repeat at most every few minutes."""
+        self._connect_failure_reason = reason
+        now = time.time()
+        if (
+            not force
+            and self._outage_announced
+            and (now - self._connect_failure_logged_at) < _CONNECT_FAILURE_LOG_INTERVAL_S
+        ):
+            self._log_detailed(f"NOT CONNECTED (suppressed): {reason}")
+            return
+
+        self._connect_failure_logged_at = now
+        self._outage_announced = True
+        logger.warning("[Telegram] Not connected — %s", reason)
+        self._log_detailed(f"NOT CONNECTED: {reason}")
+        self.connection_status_changed.emit(False, reason)
+
+    def _clear_connect_failure(self) -> None:
+        """Reset offline state after a successful connection."""
+        if self._outage_announced:
+            logger.info(
+                "[Telegram] Connected to relay (%s)",
+                self._relay_endpoint_label(),
+            )
+        self._connect_failure_reason = None
+        self._outage_announced = False
+        self._connect_failure_logged_at = 0.0
+        self._last_socket_error_log_at = 0.0
+        self._dns_fallback_applied = False
 
     # =========================================================================
     # Connection Management
@@ -415,7 +510,13 @@ class TelegramWebSocketManager(
         url_str = self.server_url
         ws_token = self._fetch_ws_token()
         if not ws_token:
-            logger.error("Cannot connect: relay did not issue a websocket token")
+            reason = (
+                self._connect_failure_reason
+                or "could not obtain relay token — Telegram not connected"
+            )
+            self._announce_connect_failure(reason)
+            if not self._active_disconnect:
+                self._schedule_reconnect("Telegram")
             return
         params = []
         params.append(f"token={quote(ws_token, safe='')}")
@@ -474,12 +575,33 @@ class TelegramWebSocketManager(
         try:
             response = requests.post(api_url, headers=headers, json=payload, timeout=10)
             if response.status_code != 200:
-                logger.error("[Telegram] WS token request failed: HTTP %s %s", response.status_code, response.text[:200])
+                reason = (
+                    f"Telegram relay rejected connection (HTTP {response.status_code})"
+                )
+                self._connect_failure_reason = reason
+                logger.debug(
+                    "[Telegram] WS token request failed: HTTP %s %s",
+                    response.status_code,
+                    response.text[:200],
+                )
+                self._log_detailed(
+                    f"WS TOKEN HTTP {response.status_code}: {response.text[:500]}"
+                )
                 return None
             token = (response.json().get("token") or "").strip()
-            return token or None
+            if not token:
+                self._connect_failure_reason = (
+                    "Telegram relay did not return a connection token"
+                )
+                return None
+            return token
         except Exception as e:
-            logger.error("[Telegram] WS token request error: %s", e, exc_info=True)
+            endpoint = self._relay_endpoint_label()
+            self._connect_failure_reason = friendly_telegram_connect_error(
+                e, endpoint=endpoint
+            )
+            logger.debug("[Telegram] WS token request failed: %s", e)
+            self._log_detailed(f"WS TOKEN ERROR: {e}")
             return None
 
     def disconnect(self, check_staleness: bool = False):
@@ -574,10 +696,17 @@ class TelegramWebSocketManager(
         """Called by timer to retry connection with exponential backoff."""
         if not self._active_disconnect:
             self._reconnect_attempts += 1
-            logger.info(
-                "[Telegram] 🔄 Auto-reconnect attempt #%d (delay was %dms)...",
-                self._reconnect_attempts, self._reconnect_delay_current_ms,
-            )
+            if self._reconnect_attempts <= 2 or self._reconnect_attempts % 10 == 0:
+                logger.info(
+                    "[Telegram] Reconnecting (attempt #%d)...",
+                    self._reconnect_attempts,
+                )
+            else:
+                logger.debug(
+                    "[Telegram] Reconnecting (attempt #%d, delay %dms)",
+                    self._reconnect_attempts,
+                    self._reconnect_delay_current_ms,
+                )
             self._is_auto_reconnecting = True  # Mark as auto-reconnect
             self.connect(self.short_code, self.app_user_id, self.telegram_user_id)
 
@@ -586,7 +715,9 @@ class TelegramWebSocketManager(
         if not self.is_connected():
             # If we're not connected and not actively disconnecting, trigger reconnect
             if not self._active_disconnect and not self._reconnect_timer.isActive():
-                logger.warning("[Telegram] 🔄 Health check: not connected, triggering reconnect")
+                logger.debug(
+                    "[Telegram] Health check: not connected, scheduling reconnect"
+                )
                 self._reconnect_delay_current_ms = self._reconnect_delay_ms  # reset backoff
                 self._reconnect_timer.start(self._reconnect_delay_current_ms)
             return
@@ -683,6 +814,7 @@ class TelegramWebSocketManager(
         else:
             logger.info("✅ Telegram WebSocket connected")
 
+        self._clear_connect_failure()
         self.connection_status_changed.emit(True, "Connected")
 
         self._reset_reconnect_state("Telegram")
@@ -741,14 +873,15 @@ class TelegramWebSocketManager(
         self._release_sleep()
 
         if not self._active_disconnect:
-            logger.warning(
-                "[Telegram] ⚠️ WebSocket disconnected unexpectedly (will auto-reconnect, attempt #%d)",
-                self._reconnect_attempts + 1,
-            )
+            reason = "Telegram relay disconnected — reconnecting automatically"
+            if not self._outage_announced:
+                self._announce_connect_failure(reason)
+            else:
+                logger.debug("[Telegram] WebSocket disconnected (reconnect pending)")
+                self._connect_failure_reason = reason
         else:
             logger.info("[Telegram] WebSocket disconnected (intentional)")
-
-        self.connection_status_changed.emit(False, "Disconnected")
+            self.connection_status_changed.emit(False, "Disconnected")
 
         # Reset connection status tracking
         self._last_connection_status = None
@@ -759,11 +892,16 @@ class TelegramWebSocketManager(
     def _on_error(self, error_code):
         """Handle socket errors."""
         err_str = self.socket.errorString()
-        logger.error(
-            "[Telegram] ❌ WebSocket Error: %s (Code: %s, connected: %s, attempts: %d)",
-            err_str, error_code, self.is_connected(), self._reconnect_attempts,
-        )
-        self._log_detailed(f"ERROR: {err_str} (code={error_code})")
+        endpoint = self._relay_endpoint_label()
+        friendly = friendly_telegram_socket_error(err_str, endpoint=endpoint)
+        self._log_detailed(f"SOCKET ERROR: {err_str} (code={error_code})")
+
+        now = time.time()
+        if (now - self._last_socket_error_log_at) >= 60.0 or not self._outage_announced:
+            self._last_socket_error_log_at = now
+            self._announce_connect_failure(friendly)
+        else:
+            self._log_detailed(f"SOCKET ERROR (suppressed): {err_str}")
 
         # If host resolution for the www subdomain is flaky, fall back to apex.
         # Both hosts terminate on the same endpoint; this avoids repeated
@@ -774,7 +912,12 @@ class TelegramWebSocketManager(
             if host_resolution_err and "www.decisionsai.net" in self.server_url:
                 fallback = self.server_url.replace("www.decisionsai.net", "decisionsai.net")
                 if fallback != self.server_url:
-                    logger.warning("[Telegram] DNS fallback: switching WS host to %s", fallback)
+                    if not self._dns_fallback_applied:
+                        logger.info(
+                            "[Telegram] Trying alternate relay host: %s",
+                            relay_endpoint_label(fallback),
+                        )
+                        self._dns_fallback_applied = True
                     self.server_url = fallback
         except Exception:
             pass
@@ -786,7 +929,7 @@ class TelegramWebSocketManager(
             # Subsequent errors (same cycle) should be ignored to avoid resetting backoff.
             if not self._reconnect_timer.isActive():
                 self._reconnect_delay_current_ms = self._reconnect_delay_ms  # reset to base for fast first retry
-                logger.info("[Telegram] 🔄 Triggering immediate reconnect after socket error")
+                logger.debug("[Telegram] Scheduling immediate reconnect after socket error")
                 self._reconnect_timer.start(min(self._reconnect_delay_ms, 1000))  # 1s initial retry
 
     def _on_ssl_errors(self, errors):

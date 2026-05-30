@@ -4,7 +4,7 @@ API routes for Ticket Board management.
 from fastapi import APIRouter, HTTPException, File, UploadFile, Form, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from typing import Optional, List, Tuple
 from urllib.parse import quote, urlparse, unquote
 from datetime import datetime
@@ -445,6 +445,75 @@ def _build_whatsapp_ticket_draft(messages) -> dict:
     }
 
 
+def _whatsapp_link_message_filter(identifiers: List[str]):
+    """SQLAlchemy filter matching WhatsApp messages for a linked chat."""
+    return or_(
+        WhatsAppMessage.jid.in_(identifiers),
+        WhatsAppMessage.jid_phone.in_(identifiers),
+        WhatsAppMessage.sender_jid.in_(identifiers),
+        WhatsAppMessage.sender_phone.in_(identifiers),
+    )
+
+
+def _whatsapp_unticketed_query(s, identifiers: List[str]):
+    """Base query for messages not yet assigned to a ticket batch."""
+    existing_ticket_message_ids = {
+        row[0]
+        for row in s.query(KanbanTicket.whatsapp_message_id)
+        .filter(KanbanTicket.whatsapp_message_id.isnot(None))
+        .all()
+        if row[0]
+    }
+    query = s.query(WhatsAppMessage).filter(
+        _whatsapp_link_message_filter(identifiers),
+        WhatsAppMessage.snapshot_group.is_(None),
+    )
+    if existing_ticket_message_ids:
+        query = query.filter(~WhatsAppMessage.id.in_(existing_ticket_message_ids))
+    return query
+
+
+def _whatsapp_last_ticketed_timestamp(s, identifiers: List[str]) -> Optional[int]:
+    """Unix timestamp of the newest WhatsApp message already consumed into a ticket."""
+    return s.query(func.max(WhatsAppMessage.whatsapp_timestamp)).filter(
+        _whatsapp_link_message_filter(identifiers),
+        WhatsAppMessage.snapshot_group.isnot(None),
+    ).scalar()
+
+
+def _whatsapp_snapshot_intake_stats(s, identifiers: List[str], scope: str, since_hours: int) -> dict:
+    """Counts and timestamps to explain WhatsApp intake selection."""
+    unticketed_query = _whatsapp_unticketed_query(s, identifiers)
+    total_unticketed = unticketed_query.count()
+    total_ticketed = s.query(WhatsAppMessage).filter(
+        _whatsapp_link_message_filter(identifiers),
+        WhatsAppMessage.snapshot_group.isnot(None),
+    ).count()
+    last_ticketed_at = _whatsapp_last_ticketed_timestamp(s, identifiers)
+    stats = {
+        "scope": scope,
+        "since_hours": since_hours,
+        "total_unticketed": total_unticketed,
+        "total_ticketed": total_ticketed,
+        "last_ticketed_at": last_ticketed_at,
+        "older_unticketed_available": False,
+    }
+    if scope == "new_since_last_ticket" and last_ticketed_at:
+        newer_count = unticketed_query.filter(
+            WhatsAppMessage.whatsapp_timestamp > last_ticketed_at,
+        ).count()
+        stats["new_since_last_ticket_count"] = newer_count
+        stats["older_unticketed_available"] = total_unticketed > newer_count
+    elif scope == "new_since_last_ticket" and since_hours > 0:
+        cutoff = int(datetime.utcnow().timestamp()) - (since_hours * 3600)
+        recent_count = unticketed_query.filter(
+            WhatsAppMessage.whatsapp_timestamp >= cutoff,
+        ).count()
+        stats["recent_window_count"] = recent_count
+        stats["older_unticketed_available"] = total_unticketed > recent_count
+    return stats
+
+
 def _whatsapp_message_identifier_values(link) -> List[str]:
     raw_identifiers = [
         (getattr(link, "phone_jid", "") or "").strip(),
@@ -503,7 +572,16 @@ def _whatsapp_media_items(messages, enrichment: dict | None = None) -> List[dict
     return media_items
 
 
-def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int = 500, message_ids: Optional[List[int]] = None) -> dict:
+def _resolve_board_whatsapp_snapshot(
+    s,
+    board_id: int,
+    link_id=None,
+    limit: int = 500,
+    message_ids: Optional[List[int]] = None,
+    scope: str = "new_since_last_ticket",
+    since_hours: int = 48,
+    allow_empty: bool = False,
+) -> dict:
     """Resolve a board's linked WhatsApp chat, unticketed messages, and target lane."""
     from distr.core.db import WhatsAppPhoneLink
 
@@ -522,16 +600,16 @@ def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int 
     if not identifiers:
         raise HTTPException(400, "The linked WhatsApp chat has no stored phone or JID")
 
-    message_query = s.query(WhatsAppMessage).filter(
-        or_(
-            WhatsAppMessage.jid.in_(identifiers),
-            WhatsAppMessage.jid_phone.in_(identifiers),
-            WhatsAppMessage.sender_jid.in_(identifiers),
-            WhatsAppMessage.sender_phone.in_(identifiers),
-        )
-    ).filter(
-        WhatsAppMessage.snapshot_group.is_(None),
-    )
+    scope = (scope or "new_since_last_ticket").strip().lower()
+    if scope not in ("new_since_last_ticket", "all_unticketed"):
+        scope = "new_since_last_ticket"
+    try:
+        since_hours = max(0, min(int(since_hours or 48), 24 * 30))
+    except Exception:
+        since_hours = 48
+
+    message_query = _whatsapp_unticketed_query(s, identifiers)
+    intake_stats = _whatsapp_snapshot_intake_stats(s, identifiers, scope, since_hours)
     clean_message_ids = []
     for raw_id in message_ids or []:
         try:
@@ -549,15 +627,13 @@ def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int 
         if missing_ids:
             raise HTTPException(409, f"Some reviewed WhatsApp messages are no longer available for ticketing: {missing_ids}")
     else:
-        existing_ticket_message_ids = {
-            row[0]
-            for row in s.query(KanbanTicket.whatsapp_message_id)
-            .filter(KanbanTicket.whatsapp_message_id.isnot(None))
-            .all()
-            if row[0]
-        }
-        if existing_ticket_message_ids:
-            message_query = message_query.filter(~WhatsAppMessage.id.in_(existing_ticket_message_ids))
+        if scope == "new_since_last_ticket":
+            last_ticketed_at = intake_stats.get("last_ticketed_at")
+            if last_ticketed_at:
+                message_query = message_query.filter(WhatsAppMessage.whatsapp_timestamp > last_ticketed_at)
+            elif since_hours > 0:
+                cutoff = int(datetime.utcnow().timestamp()) - (since_hours * 3600)
+                message_query = message_query.filter(WhatsAppMessage.whatsapp_timestamp >= cutoff)
         messages_desc = message_query.order_by(
             WhatsAppMessage.whatsapp_timestamp.desc(),
             WhatsAppMessage.id.desc(),
@@ -565,6 +641,33 @@ def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int 
         messages = list(reversed(messages_desc))
 
     if not messages:
+        if allow_empty:
+            source_lane_name = (board.agent_source_lane or "").strip()
+            lane = None
+            if source_lane_name:
+                lane = s.query(KanbanLane).filter_by(board_id=board_id, name=source_lane_name).first()
+            if not lane:
+                lane = s.query(KanbanLane).filter(
+                    KanbanLane.board_id == board_id,
+                    KanbanLane.name.ilike("%backlog%"),
+                ).first()
+            if not lane:
+                lane = s.query(KanbanLane).filter_by(board_id=board_id).order_by(KanbanLane.position.asc()).first()
+            empty_reason = "no_unticketed_messages"
+            if intake_stats.get("total_unticketed", 0) > 0 and scope == "new_since_last_ticket":
+                if intake_stats.get("last_ticketed_at"):
+                    empty_reason = "no_new_messages_since_last_ticket"
+                else:
+                    empty_reason = "no_unticketed_in_recent_window"
+            return {
+                "board": board,
+                "link": link,
+                "messages": [],
+                "lane": lane,
+                "empty": True,
+                "empty_reason": empty_reason,
+                "intake_stats": intake_stats,
+            }
         raise HTTPException(404, "No unticketed WhatsApp messages found for this board link")
 
     source_lane_name = (board.agent_source_lane or "").strip()
@@ -581,7 +684,14 @@ def _resolve_board_whatsapp_snapshot(s, board_id: int, link_id=None, limit: int 
     if not lane:
         raise HTTPException(400, "Board has no columns")
 
-    return {"board": board, "link": link, "messages": messages, "lane": lane}
+    return {
+        "board": board,
+        "link": link,
+        "messages": messages,
+        "lane": lane,
+        "empty": False,
+        "intake_stats": intake_stats,
+    }
 
 
 def _yaml_scalar(s: str) -> str:
@@ -1193,6 +1303,7 @@ class BoardUpdate(BaseModel):
     color: Optional[str] = None
     position: Optional[int] = None
     whatsapp_checkin_enabled: Optional[bool] = None
+    hermes_policy: Optional[dict] = None
 
 
 class BoardAgentEnabledUpdate(BaseModel):
@@ -2076,6 +2187,9 @@ def create_routes():
                 board.position = payload.position
             if payload.whatsapp_checkin_enabled is not None:
                 board.whatsapp_checkin_enabled = payload.whatsapp_checkin_enabled
+            if payload.hermes_policy is not None:
+                import json as _json
+                board.hermes_policy = _json.dumps(payload.hermes_policy or {})
             s.commit()
             
             # Sync Project's kanban_board_id reference if default_project_id changed
@@ -2149,6 +2263,7 @@ def create_routes():
                 raise HTTPException(404, "Board not found")
             # Get WhatsApp links for this board
             from distr.core.db import WhatsAppPhoneLink
+            from distr.core.hermes import parse_board_hermes_policy
             whatsapp_links = s.query(WhatsAppPhoneLink).filter_by(board_id=board_id).all()
             lanes = []
             for lane in board.lanes:
@@ -2187,8 +2302,65 @@ def create_routes():
                 "default_action_id": board.default_action_id,
                 "color": board.color or "",
                 "in_use": getattr(board, 'in_use', False) or False,
+                "hermes_policy": parse_board_hermes_policy(getattr(board, "hermes_policy", None)),
                 "whatsapp_links": [{"id": l.id, "phone_number": l.phone_number, "contact_name": l.contact_name, "auto_snapshot": l.auto_snapshot or False} for l in whatsapp_links],
             })
+
+    @router.get("/kanban/boards/{board_id}/activity")
+    async def board_activity(board_id: int, event_limit: int = 50, rule_limit: int = 20):
+        with get_session() as s:
+            board = orm_get_by_id(s, KanbanBoard, board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+        try:
+            from distr.core.hermes import list_board_activity
+
+            return JSONResponse(list_board_activity(board_id, event_limit=event_limit, rule_limit=rule_limit))
+        except Exception as e:
+            logger.error("Board activity failed: %s", e, exc_info=True)
+            raise HTTPException(500, str(e))
+
+    @router.patch("/kanban/boards/{board_id}/learned-rules/{rule_id}")
+    async def update_board_learned_rule(board_id: int, rule_id: int, payload: dict):
+        with get_session() as s:
+            board = orm_get_by_id(s, KanbanBoard, board_id)
+            if not board:
+                raise HTTPException(404, "Board not found")
+        try:
+            from distr.core.hermes import list_learned_rules, set_learned_rule_enabled
+
+            rules = list_learned_rules(board_id=int(board_id), enabled_only=False, limit=200)
+            match = next((row for row in rules if int(row.get("id") or 0) == int(rule_id)), None)
+            if not match or int(match.get("scope_id") or 0) != int(board_id):
+                raise HTTPException(404, "Learned rule not found for this board")
+            enabled = bool(payload.get("enabled", True))
+            if not set_learned_rule_enabled(int(rule_id), enabled):
+                raise HTTPException(404, "Learned rule not found")
+            return JSONResponse({"success": True, "id": int(rule_id), "enabled": enabled})
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.error("Update learned rule failed: %s", e, exc_info=True)
+            raise HTTPException(500, str(e))
+
+    @router.post("/kanban/boards/{board_id}/learned-rules/{rule_id}/promote")
+    async def promote_board_learned_rule(board_id: int, rule_id: int, payload: dict | None = None):
+        payload = payload or {}
+        category = str(payload.get("category") or "general").strip().lower() or "general"
+        try:
+            from distr.core.hermes import promote_learned_rule_to_board_policy
+
+            policy = promote_learned_rule_to_board_policy(
+                board_id=int(board_id),
+                rule_id=int(rule_id),
+                category=category,
+            )
+            return JSONResponse({"success": True, "hermes_policy": policy})
+        except ValueError as exc:
+            raise HTTPException(404, str(exc)) from exc
+        except Exception as exc:
+            logger.error("Promote learned rule failed: %s", exc, exc_info=True)
+            raise HTTPException(500, str(exc)) from exc
 
     # ── Tickets ──
 
@@ -2318,9 +2490,14 @@ def create_routes():
                         else None
                     ),
                     "cli_route": (
-                        resolve_ticket_cli_route(
-                            projects.get(t.linked_project_id or board.default_project_id),
-                            normalize_ticket_complexity(t.complexity),
+                        _resolve_ticket_execution_route(
+                            s,
+                            {
+                                "project": projects.get(t.linked_project_id or board.default_project_id),
+                                "ticket": t,
+                                "board": board,
+                                "complexity": normalize_ticket_complexity(t.complexity),
+                            },
                         )
                         if projects.get(t.linked_project_id or board.default_project_id)
                         else {}
@@ -4238,7 +4415,24 @@ source: kanban_ticket_{t.id}
             "folder": folder,
             "complexity": complexity,
             "instruction": instruction,
+            "board": (
+                orm_get_by_id(s, KanbanBoard, lane.board_id)
+                if (lane := orm_get_by_id(s, KanbanLane, t.lane_id)) and lane.board_id
+                else None
+            ),
         }
+
+    def _resolve_ticket_execution_route(s, ctx: dict) -> dict:
+        from distr.core.hermes_orchestrator import resolve_execution_route
+
+        decision = resolve_execution_route(
+            project=ctx["project"],
+            ticket=ctx.get("ticket"),
+            board=ctx.get("board"),
+            complexity=ctx.get("complexity"),
+            emit_event=False,
+        )
+        return decision.to_route_dict()
 
     @router.get("/kanban/tickets/{ticket_id}/cli-context")
     async def get_ticket_cli_context(ticket_id: int):
@@ -4248,7 +4442,7 @@ source: kanban_ticket_{t.id}
             project = ctx["project"]
             from distr.core.project_cli_backends import get_backend_statuses, get_project_backend_id
 
-            route = resolve_ticket_cli_route(project, ctx["complexity"])
+            route = _resolve_ticket_execution_route(s, ctx)
             active_backend = route.get("backend") or get_project_backend_id(project)
             return JSONResponse({
                 "ticket_id": ctx["ticket_id"],
@@ -4260,6 +4454,9 @@ source: kanban_ticket_{t.id}
                 "instruction": ctx["instruction"],
                 "backend_id": active_backend,
                 "model": route.get("model") or "auto",
+                "route_source": route.get("source") or "policy",
+                "route_rationale": route.get("rationale") or "",
+                "requires_approval": bool(route.get("requires_approval")),
                 "codex_reasoning_effort": route.get("codex_reasoning_effort") or "",
                 "codex_service_tier": route.get("codex_service_tier") or "",
                 **get_backend_statuses(active_backend),
@@ -4309,7 +4506,7 @@ source: kanban_ticket_{t.id}
                 project = orm_get_by_id(s, Project, project_id)
                 if not project:
                     raise HTTPException(400, "Project no longer exists")
-                route = resolve_ticket_cli_route(project, complexity)
+                route = _resolve_ticket_execution_route(s, ctx)
             backend_override = (payload.backend_id or "").strip() or route.get("backend")
             model_override = (payload.model or "").strip() or route.get("model", "")
             if (model_override or "").lower() in ("", "auto"):
@@ -4659,17 +4856,53 @@ source: kanban_ticket_{t.id}
         """Preview the unticketed WhatsApp messages that would become a board ticket."""
         link_id = payload.get("link_id")
         message_ids = payload.get("message_ids") if isinstance(payload.get("message_ids"), list) else None
+        scope = payload.get("scope") or "new_since_last_ticket"
         try:
             limit = max(1, min(int(payload.get("limit") or 500), 500))
         except Exception:
             limit = 500
+        try:
+            since_hours = max(0, min(int(payload.get("since_hours") or 48), 24 * 30))
+        except Exception:
+            since_hours = 48
 
         with get_session() as s:
-            snapshot = _resolve_board_whatsapp_snapshot(s, board_id, link_id=link_id, limit=limit, message_ids=message_ids)
+            snapshot = _resolve_board_whatsapp_snapshot(
+                s,
+                board_id,
+                link_id=link_id,
+                limit=limit,
+                message_ids=message_ids,
+                scope=scope,
+                since_hours=since_hours,
+                allow_empty=True,
+            )
             board = snapshot["board"]
             link = snapshot["link"]
             messages = snapshot["messages"]
             lane = snapshot["lane"]
+            intake_stats = snapshot.get("intake_stats") or {}
+            if snapshot.get("empty"):
+                return JSONResponse({
+                    "success": True,
+                    "empty": True,
+                    "empty_reason": snapshot.get("empty_reason") or "no_unticketed_messages",
+                    "board_id": board.id,
+                    "board_name": board.name,
+                    "lane_id": lane.id if lane else None,
+                    "lane_name": lane.name if lane else "",
+                    "link_id": link.id,
+                    "contact_name": link.contact_name or link.phone_number or link.phone_jid or "WhatsApp",
+                    "message_count": 0,
+                    "message_ids": [],
+                    "title": "",
+                    "description": "",
+                    "priority": "medium",
+                    "complexity": "medium",
+                    "media": [],
+                    "quality": {"passed": False, "score": 0, "issues": [], "warnings": []},
+                    "intake_stats": intake_stats,
+                })
             enrichment = _ensure_whatsapp_messages_enriched(messages)
             draft = _build_whatsapp_ticket_draft(messages)
             quality = _validate_whatsapp_ticket_quality(
@@ -4681,6 +4914,7 @@ source: kanban_ticket_{t.id}
             s.flush()
             return JSONResponse({
                 "success": True,
+                "empty": False,
                 "board_id": board.id,
                 "board_name": board.name,
                 "lane_id": lane.id,
@@ -4697,6 +4931,7 @@ source: kanban_ticket_{t.id}
                 "media_enrichment": enrichment,
                 "quality": quality,
                 "raw_text": draft.get("raw_text") or "",
+                "intake_stats": intake_stats,
             })
 
     @router.post("/kanban/boards/{board_id}/whatsapp-links")

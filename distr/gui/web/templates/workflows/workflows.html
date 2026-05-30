@@ -143,6 +143,17 @@
             <div id="wf-board-ticket-list" class="flex-1 overflow-y-auto space-y-3 min-h-0">
                 <p class="text-sm text-gray-500">Select a board to view tickets.</p>
             </div>
+            <div id="wf-board-activity-panel" class="flex-shrink-0 mt-3 pt-3 border-t border-white/10 min-h-0">
+                <div class="mb-2 flex items-center justify-between gap-2">
+                    <div>
+                        <p class="text-xs uppercase tracking-wide text-gray-500">Board activity</p>
+                        <p class="text-[11px] text-gray-600">Hermes events and learned rules for the selected board.</p>
+                    </div>
+                    <button type="button" id="wf-refresh-board-activity" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                </div>
+                <div id="wf-board-activity-list" class="max-h-44 overflow-y-auto space-y-1.5"></div>
+                <p id="wf-board-activity-empty" class="text-xs text-gray-500">Select a board to view activity.</p>
+            </div>
         </div>
         <!-- Right panel -->
         <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
@@ -242,6 +253,39 @@
                             </div>
                             <p id="wf-context-save-status" class="text-xs text-gray-500 mt-2"></p>
                         </div>
+                        <div id="wf-skill-chains-panel" class="w-full rounded border border-white/10 bg-[#152054]/40 p-3">
+                            <div class="flex items-center justify-between gap-3 mb-2">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Skill chains</p>
+                                    <p class="text-xs text-gray-500">Skills pushed to the harness before and after workflow runs.</p>
+                                </div>
+                                <button type="button" id="wf-skill-chains-save" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Pre-chain (comma-separated skill ids)</span>
+                                    <input id="wf-pre-chain" type="text" list="wf-skills-datalist" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="ceo-scope-review, pre-flight-review">
+                                </label>
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Post-chain (comma-separated skill ids)</span>
+                                    <input id="wf-post-chain" type="text" list="wf-skills-datalist" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="session-retro">
+                                </label>
+                            </div>
+                            <datalist id="wf-skills-datalist"></datalist>
+                            <div id="wf-skills-catalog" class="mt-3 max-h-40 overflow-y-auto rounded border border-white/10 bg-[#0d1333]/60 p-2 text-xs text-gray-400 hidden"></div>
+                            <p id="wf-skills-catalog-note" class="mt-2 text-[11px] text-gray-500">Hermes auto-transfers matching skills from ticket text; pre-chain skills push before each harness run.</p>
+                        </div>
+                        <div id="wf-learned-rules-panel" class="w-full">
+                            <div class="flex items-center justify-between gap-3 mb-2">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Board learned rules</p>
+                                    <p id="wf-learned-rules-note" class="text-xs text-gray-500">Captured from validation failures and IDE iteration on the selected board.</p>
+                                </div>
+                                <button type="button" id="wf-refresh-learned-rules" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                            </div>
+                            <div id="wf-learned-rules-list" class="space-y-2"></div>
+                            <p id="wf-learned-rules-empty" class="text-sm text-gray-500">Select a board to view learned rules.</p>
+                        </div>
                     </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">
@@ -265,6 +309,7 @@
                                     <button type="button" id="wf-stop-reset-btn" class="hidden px-2 py-1 rounded border border-orange-500/60 text-orange-300 text-xs font-medium hover:bg-orange-500/20" title="Stop all active runs for this workflow">Stop all</button>
                                 </div>
                             </div>
+                            <div id="wf-run-command-center" class="hidden mb-3 rounded border border-[#f97316]/30 bg-[#f97316]/5 p-3"></div>
                             <div id="wf-active-runs-list" class="space-y-2"></div>
                             <p id="wf-active-runs-empty" class="text-sm text-gray-500">No active runs.</p>
                         </div>
@@ -546,6 +591,7 @@
             <div id="wf-wa-ticket-media" class="space-y-2"></div>
         </div>
         <div class="flex justify-end gap-2 px-5 py-3 border-t border-white/20">
+            <button type="button" id="wf-wa-ticket-load-older" class="hidden mr-auto px-4 py-2 rounded border border-[#f97316]/40 text-[#f97316] text-sm hover:bg-[#f97316]/10">Load older unticketed messages</button>
             <button type="button" id="wf-wa-ticket-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>
             <button type="button" id="wf-wa-ticket-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm hover:bg-[#ea580c]">Save</button>
         </div>
@@ -580,11 +626,12 @@
         '<div id="hermes-readiness-strip" class="mb-3 rounded border border-white/10 bg-[#10183f] px-3 py-2 text-xs text-gray-400">Execution readiness loading...</div>',
         '<div class="mb-4 border-b border-white/10 pb-2">',
         '<h4 class="text-sm font-semibold text-white">Ticket complexity routing</h4>',
-        '<p class="text-xs text-gray-500 mb-3">Ticket complexity chooses the implementation agent and model.</p>',
+        '<p class="text-xs text-gray-500 mb-3">Ticket complexity chooses the implementation agent and model. Codex routes can set intelligence (reasoning effort) and speed (service tier).</p>',
         '<div class="space-y-2">',
         ['low', 'medium', 'high'].map(function(level) {
             var label = level.charAt(0).toUpperCase() + level.slice(1);
-            return '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr);">' +
+            return '<div class="wf-cli-route-block space-y-1" data-level="' + level + '">' +
+                '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
                 '<label class="text-xs text-gray-400 font-medium">' + label + '</label>' +
                 '<select id="wf-cli-' + level + '-backend" class="wf-cli-backend px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
                     '<option value="pi">Pi</option><option value="cursor">Cursor CLI</option><option value="codex">Codex CLI</option><option value="claude_code">Claude Code</option><option value="cursor_ide">Cursor IDE</option><option value="vscode_ide">VS Code IDE</option>' +
@@ -592,6 +639,19 @@
                 '<select id="wf-cli-' + level + '-model" class="wf-cli-model px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
                     '<option value="auto">Auto</option>' +
                 '</select>' +
+                '<button type="button" id="wf-cli-' + level + '-codex-cog" class="wf-cli-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
+                '</div>' +
+                '<div id="wf-cli-' + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
+                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Intelligence</span>' +
+                    '<select id="wf-cli-' + level + '-codex-intelligence" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
+                        '<option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option>' +
+                    '</select></label>' +
+                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Speed</span>' +
+                    '<select id="wf-cli-' + level + '-codex-speed" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
+                        '<option value="">Default</option><option value="flex">Flex</option><option value="fast">Fast</option>' +
+                    '</select></label>' +
+                    '<p class="col-span-2 text-[10px] text-gray-500">Codex CLI only — passed as model_reasoning_effort and service_tier when this complexity route runs.</p>' +
+                '</div>' +
             '</div>';
         }).join(''),
         '</div>',
@@ -624,6 +684,22 @@
         if (!model) return '';
         if (typeof model === 'string') return model;
         return model.id || model.model || model.name || '';
+    }
+
+    function updateCodexPrefVisibility(level) {
+        var backend = document.getElementById('wf-cli-' + level + '-backend');
+        var cog = document.getElementById('wf-cli-' + level + '-codex-cog');
+        var panel = document.getElementById('wf-cli-' + level + '-codex-prefs');
+        var isCodex = backend && backend.value === 'codex';
+        if (cog) cog.disabled = !isCodex;
+        if (!isCodex && panel) panel.classList.add('hidden');
+    }
+
+    function toggleCodexPrefPanel(level) {
+        var backend = document.getElementById('wf-cli-' + level + '-backend');
+        var panel = document.getElementById('wf-cli-' + level + '-codex-prefs');
+        if (!panel || !backend || backend.value !== 'codex') return;
+        panel.classList.toggle('hidden');
     }
 
     function loadRouteModels(level, backendId, selectedModel) {
@@ -660,6 +736,7 @@
                 if (current && !seen[current]) append(current, current);
                 select.value = current || 'auto';
                 select.disabled = false;
+                updateCodexPrefVisibility(level);
             })
             .catch(function() {
                 select.innerHTML = '';
@@ -668,6 +745,7 @@
                 opt.textContent = current;
                 select.appendChild(opt);
                 select.disabled = false;
+                updateCodexPrefVisibility(level);
             });
     }
 
@@ -713,7 +791,14 @@
                     var modelValue = route.model || llm['project_cli_' + level + '_model'] || routeDefaults[level].model;
                     if (backend) backend.value = backendValue;
                     if (model) model.value = modelValue;
+                    var intelligence = document.getElementById('wf-cli-' + level + '-codex-intelligence');
+                    var speed = document.getElementById('wf-cli-' + level + '-codex-speed');
+                    if (intelligence) intelligence.value = route.codex_intelligence || '';
+                    if (speed) speed.value = route.codex_speed || '';
                     loadRouteModels(level, backendValue, modelValue);
+                    updateCodexPrefVisibility(level);
+                    var prefsPanel = document.getElementById('wf-cli-' + level + '-codex-prefs');
+                    if (prefsPanel) prefsPanel.classList.add('hidden');
                 });
                 modal.classList.remove('hidden');
                 modal.classList.add('flex');
@@ -725,6 +810,12 @@
     document.querySelectorAll('.wf-cli-backend').forEach(function(select) {
         select.addEventListener('change', function() {
             loadRouteModels(select.dataset.level, select.value, 'auto');
+            updateCodexPrefVisibility(select.dataset.level);
+        });
+    });
+    document.querySelectorAll('.wf-cli-codex-cog').forEach(function(btn) {
+        btn.addEventListener('click', function() {
+            toggleCodexPrefPanel(btn.dataset.level);
         });
     });
     document.getElementById('wf-sr-llm-btn').addEventListener('click', openModal);
@@ -737,10 +828,17 @@
         ['low', 'medium', 'high'].forEach(function(level) {
             var backend = document.getElementById('wf-cli-' + level + '-backend');
             var model = document.getElementById('wf-cli-' + level + '-model');
-            routing[level] = {
+            var intelligence = document.getElementById('wf-cli-' + level + '-codex-intelligence');
+            var speed = document.getElementById('wf-cli-' + level + '-codex-speed');
+            var row = {
                 backend: (backend && backend.value) || routeDefaults[level].backend,
                 model: (model && model.value) || routeDefaults[level].model
             };
+            if (row.backend === 'codex') {
+                row.codex_intelligence = (intelligence && intelligence.value) || '';
+                row.codex_speed = (speed && speed.value) || '';
+            }
+            routing[level] = row;
         });
         fetch('/api/workflows/hermes-setup', {
             method: 'POST',

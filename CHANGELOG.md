@@ -12,6 +12,32 @@ That means more work on orchestration quality, ticket parsing, tool selection, w
 
 ---
 
+## [2.7.16] - 2026-05-30
+
+### Hermes orchestration, live executor feedback, learned rules, and agent handoff hardening
+
+**Hermes moved from passive ledger toward active orchestration memory.** The workflow backbone now records board-scoped learned rules from validation failures, IDE iterations, Codex steering, and correction loops. Learned rules can be listed, enabled/disabled, promoted into board policy, and fed back into planning and validation context so repeated standards can influence future runs instead of living only in chat history.
+
+**Workflow execution routing is now more explicit and inspectable.** Hermes routing can combine global complexity defaults, board policy overrides, harness preferences, recent outcomes, optional LLM advisory, approval gates, and skill transfer recommendations. Route decisions are emitted into the Hermes event stream, approval overrides can pause and resume runs, and Codex-specific reasoning/speed settings travel with the selected route.
+
+**Codex and IDE handoff gained a real feedback bridge.** Codex work packets now include a Decisions callback block and reporter script path so `codex_started`, `codex_progress`, `user_steer`, `codex_waiting`, `codex_completed`, and failure events can flow back into workflow runs, execution sessions, and Hermes. Cursor/VS Code packets now include both continue and bridge URLs, post pickup events, stay waiting by default, and expose a command to report workflow completion when IDE work is done.
+
+**The Workflows area became a stronger run command center.** Active runs expose route cards, executor trails, events, history, runtime context, IDE handoff state, route approval controls, harness steering, validation second-pass evidence, and correction/retry state. The UI also gained board Hermes policy editing, learned-rule promotion hints, and realtime workflow refresh over `/api/ws/workflows`.
+
+**Validation and correction loops are now more evidence-driven.** Hermes validation records preserve expected/observed evidence, validation type, runtime context, second-pass validator output, correction hints, and bounded correction attempts. Auto-dispatch can re-run failed steps when policy allows it, while correction packets carry prior executor output and runtime URLs so retries start from the actual failure instead of vague memory.
+
+**Skills became part of the execution route.** Google Cloud skills were synced into the local skill catalog, registry entries were added, and Hermes can infer or request skill transfers for tickets before execution. Workflow pre-chain and post-chain provisioning now gives Codex/CLI/IDE runs more targeted capability context.
+
+**WhatsApp board intake got safer and less repetitive.** Board snapshots can target messages since the last ticket, report intake stats, avoid re-ticketing already consumed messages, handle empty intake states more clearly, and expose better board activity context. This makes WhatsApp-to-ticket workflows less noisy when a group has old messages mixed with new work.
+
+**Telegram relay handling is quieter and clearer.** Connection failures now produce friendlier offline reasons, repeat noisy reconnect logs less often, try alternate relay hosts when DNS is flaky, and keep reconnect behavior visible without flooding the app log.
+
+**Settings, model, and voice reliability were tightened.** Third-party secret updates preserve existing credentials unless explicitly replaced, cloud/provider model IDs are no longer silently swapped for arbitrary Ollama models, model recommendations were refreshed, TTS provider registration was tightened, and voice settings/security routes got additional hardening.
+
+**Regression coverage expanded around the new loop.** Added tests for Hermes orchestration routing, validator second pass, route approval, harness steering, learned-rule context, IDE iteration learning, Codex callback contracts, Codex bridge signal flow, skills catalog behavior, secret preservation, Telegram connection logging, and workflow backbone behavior.
+
+---
+
 ## [2.7.15] - 2026-05-13
 
 ### Snippets, Codex plugin groundwork, remote control polish, and stronger agentic workflow handoff

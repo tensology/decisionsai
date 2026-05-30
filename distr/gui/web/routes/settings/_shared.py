@@ -65,11 +65,11 @@ def route_handler(label: str, *, status_code: int = 500, fallback=None):
 # ---------------------------------------------------------------------------
 
 def resolve_secret_update(existing_value: str, incoming_value: str) -> str:
-    """Keep existing secret when client submits the displayed masked value."""
+    """Keep existing secret when client submits a blank or displayed masked value."""
     existing = (existing_value or "").strip()
     incoming = (incoming_value or "").strip()
     if not incoming:
-        return ""
+        return existing
     if existing and incoming == mask_secret(existing):
         return existing
     return incoming

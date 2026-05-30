@@ -25,6 +25,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
+DISABLED_TTS_PROVIDER_IDS = frozenset({"chatterbox"})
+
 
 class TTSProviderRegistry:
     """Central registry for TTS provider descriptors.
@@ -89,7 +91,10 @@ class TTSProviderRegistry:
     def enabled_providers(self) -> list[TTSProviderDescriptor]:
         """Return all registered descriptors where ``enabled`` is ``True``."""
         self._ensure_discovered()
-        return [d for d in self._providers.values() if d.enabled]
+        return [
+            d for d in self._providers.values()
+            if d.enabled and d.id not in DISABLED_TTS_PROVIDER_IDS
+        ]
 
     def all_providers(self) -> list[TTSProviderDescriptor]:
         """Return all registered descriptors (enabled and disabled)."""

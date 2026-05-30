@@ -88,7 +88,26 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "source_provider": getattr(ticket, "source_provider", None) if ticket else None,
         "source_contact": getattr(ticket, "source_contact", None) if ticket else None,
         "source_url": getattr(ticket, "source_url", None) if ticket else None,
+        "execution_route": run_data.get("execution_route") or {},
+        "pending_route_approval": run_data.get("pending_route_approval") or {},
+        "execution_session_id": run_data.get("execution_session_id"),
+        "ide_handoff_pending": bool(run_data.get("ide_handoff_pending")),
+        "steerable": _run_is_steerable(run, run_data),
+        "pending_harness_steers": (run_data.get("pending_harness_steers") or [])[-5:],
+        "last_harness_steer": run_data.get("last_harness_steer") or {},
+        "last_codex_bridge_state": run_data.get("last_codex_bridge_state") or {},
     }
+
+
+def _run_is_steerable(run: AutoWorkflowRun, run_data: dict[str, Any]) -> bool:
+    from distr.core.project_cli_backends.harness import is_steerable_backend
+
+    waiting_kind = str(run_data.get("waiting_kind") or "")
+    if waiting_kind == "route_approval":
+        return False
+    route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+    backend = str(route.get("backend") or "pi")
+    return run.status in ("running", "waiting") and is_steerable_backend(backend)
 
 
 def _compact_result_packet_for_api(packet: Any) -> Dict[str, Any]:
@@ -326,6 +345,7 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
         "schedule_preset", "schedule_cron", "schedule_time",
         "schedule_days", "schedule_timezone", "next_run_at",
         "start_step_position", "workflow_type", "context_rules", "run_settings",
+        "pre_chain", "post_chain",
     }
     if "workflow_type" in kwargs and not validate_workflow_type(kwargs["workflow_type"]):
         raise ValueError(
@@ -337,7 +357,10 @@ def update_workflow(workflow_id: int, **kwargs) -> bool:
             return False
         for k, v in kwargs.items():
             if k in allowed:
-                setattr(wf, k, v)
+                if k in {"pre_chain", "post_chain"} and isinstance(v, (list, dict)):
+                    setattr(wf, k, json.dumps(v))
+                else:
+                    setattr(wf, k, v)
         db.commit()
         return True
 
@@ -689,7 +712,222 @@ def get_active_run(workflow_id: int) -> Optional[Dict[str, Any]]:
             "started_at": run.started_at.isoformat() if run.started_at else None,
             **enriched,
             "phase": run_data.get("phase"),
+            "waiting_kind": run_data.get("waiting_kind") or "",
         }
+
+
+def apply_run_route_approval(run_id: int, approved: bool) -> Dict[str, Any]:
+    """Approve or reject a pending Hermes route override for an active run."""
+    from distr.core.project_cli_backends import normalize_backend_id
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        run_data = _safe_json_loads(run.run_data) or {}
+        pending = run_data.get("pending_route_approval") or {}
+        if not isinstance(pending, dict) or not pending:
+            return {"error": "No pending route override for this run", "status_code": 409}
+
+        step_id = run.current_step_id
+        workflow_id = run.workflow_id
+        ticket_id = run.ticket_id
+        board_id = run.board_id
+        waiting_kind = str(run_data.get("waiting_kind") or "")
+        was_waiting = run.status == "waiting" and waiting_kind == "route_approval"
+
+        if approved:
+            backend_id = normalize_backend_id(str(pending.get("backend") or "").strip() or "pi")
+            model = str(pending.get("model") or "auto").strip()
+            rationale = str(pending.get("rationale") or "").strip()
+            current_route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+            run_data["approved_route_override"] = dict(pending)
+            run_data["execution_route"] = {
+                **current_route,
+                "backend": backend_id,
+                "model": model,
+                "source": "hermes_override",
+                "rationale": rationale,
+                "requires_approval": False,
+            }
+            event_type = "route_approval_granted"
+            summary = f"Route override approved: {backend_id} / {model or 'auto'}"
+        else:
+            event_type = "route_approval_rejected"
+            summary = "Route override rejected; policy route will be used."
+            run_data.pop("approved_route_override", None)
+            run_data["suppress_hermes_override"] = True
+
+        run_data.pop("pending_route_approval", None)
+        run_data.pop("route_approval_pending", None)
+        run_data["waiting_kind"] = ""
+        run.run_data = json.dumps(run_data)
+
+        if was_waiting and step_id:
+            step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+            if step:
+                step.status = "running"
+            run.status = "running"
+        db.commit()
+
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="hermes",
+            event_type=event_type,
+            status="approved" if approved else "rejected",
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            summary=summary,
+            payload={"pending_route": pending, "approved": approved},
+        )
+    except Exception:
+        logger.debug("Could not emit route approval event", exc_info=True)
+
+    increment_workflow_updated()
+
+    redispatched = False
+    if was_waiting and step_id:
+        try:
+            from distr.core.workflow.dispatcher import StepDispatcher
+
+            StepDispatcher().run_in_workflow(int(step_id), int(run_id))
+            redispatched = True
+        except Exception:
+            logger.exception("Failed to redispatch workflow step after route approval")
+
+    return {
+        "success": True,
+        "approved": approved,
+        "run_id": run_id,
+        "redispatched": redispatched,
+        "execution_route": run_data.get("execution_route") or {},
+    }
+
+
+def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
+    """Steer the active harness for a workflow run without restarting the step."""
+    import time
+
+    instruction = str(message or "").strip()
+    if not instruction:
+        return {"error": "Steer message is required", "status_code": 400}
+
+    with get_session() as db:
+        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+        if not run:
+            return {"error": "Run not found", "status_code": 404}
+        if run.status not in ("running", "waiting"):
+            return {"error": "Run is not active", "status_code": 409}
+
+        run_data = _safe_json_loads(run.run_data) or {}
+        if not _run_is_steerable(run, run_data):
+            return {"error": "This run does not accept mid-flight steering right now", "status_code": 409}
+
+        enriched = _enrich_run_record(db, run, run_data)
+        route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
+        backend_id = str(route.get("backend") or "pi")
+        project_id = enriched.get("project_id")
+        project = (
+            db.query(Project).filter(Project.id == int(project_id)).first()
+            if project_id
+            else None
+        )
+
+        from distr.core.project_cli_backends.harness import steer_harness
+
+        steer_result = steer_harness(
+            message=instruction,
+            backend_id=backend_id,
+            project_id=int(project_id) if project_id else None,
+            project_folder=getattr(project, "folder_location", None) if project else None,
+        )
+        if not steer_result.get("success"):
+            return {
+                "error": steer_result.get("error") or "Steer failed",
+                "status_code": 409,
+            }
+
+        steer_entry = {
+            "message": instruction[:4000],
+            "ts": time.time(),
+            "backend_id": steer_result.get("backend_id") or backend_id,
+            "delivered": bool(steer_result.get("delivered")),
+            "method": steer_result.get("method") or "queued",
+        }
+        history = run_data.get("pending_harness_steers") or []
+        if not isinstance(history, list):
+            history = []
+        history.append(steer_entry)
+        run_data["pending_harness_steers"] = history[-20:]
+        run_data["last_harness_steer"] = steer_entry
+        run.run_data = json.dumps(run_data)
+        db.commit()
+
+        step_id = run.current_step_id
+        workflow_id = run.workflow_id
+        ticket_id = run.ticket_id
+        board_id = run.board_id
+        execution_session_id = run_data.get("execution_session_id")
+
+    try:
+        from distr.core.kanban.project_execution import append_execution_event
+
+        append_execution_event(
+            int(execution_session_id) if execution_session_id else None,
+            "harness_steer",
+            status="delivered" if steer_result.get("delivered") else "queued",
+            message=instruction[:2000],
+            payload={
+                "backend_id": steer_result.get("backend_id") or backend_id,
+                "method": steer_result.get("method"),
+                "delivered": bool(steer_result.get("delivered")),
+            },
+        )
+    except Exception:
+        logger.debug("Could not append harness steer execution event", exc_info=True)
+
+    try:
+        from distr.core.hermes import emit_event
+
+        emit_event(
+            source="hermes",
+            event_type="harness_steer",
+            status="delivered" if steer_result.get("delivered") else "queued",
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            project_id=int(project_id) if project_id else None,
+            execution_session_id=int(execution_session_id) if execution_session_id else None,
+            summary=instruction[:240],
+            payload=steer_entry,
+        )
+    except Exception:
+        logger.debug("Could not emit harness_steer event", exc_info=True)
+
+    try:
+        from distr.core.workflow.standards_memory import capture_feedback_as_standard
+
+        if workflow_id:
+            capture_feedback_as_standard(int(workflow_id), instruction)
+    except Exception:
+        logger.debug("Could not capture steer as workflow standard", exc_info=True)
+
+    increment_workflow_updated()
+    return {
+        "success": True,
+        "run_id": run_id,
+        "delivered": bool(steer_result.get("delivered")),
+        "method": steer_result.get("method"),
+        "backend_id": steer_result.get("backend_id") or backend_id,
+        "steer": steer_entry,
+    }
 
 
 def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
@@ -767,6 +1005,7 @@ def get_active_runs(limit: int = 50, workflow_id: Optional[int] = None) -> List[
                 **enriched,
                 "ticket_title": run_data.get("ticket_title") or ticket_title_by_id.get(r.ticket_id),
                 "phase": run_data.get("phase"),
+                "waiting_kind": run_data.get("waiting_kind") or "",
             })
         return results
 
