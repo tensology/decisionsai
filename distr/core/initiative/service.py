@@ -737,6 +737,32 @@ class InitiativeService:
             return
 
         bundle = self._context_assembler.build(settings)
+        if scope == "morning":
+            try:
+                from distr.core.hermes import emit_event
+                from distr.core.hermes_daily_triage import enqueue_triage_candidates
+
+                triage = (
+                    bundle.work_scan.get("hermes_triage")
+                    if isinstance(bundle.work_scan, dict)
+                    else {}
+                )
+                candidates = triage.get("candidates") if isinstance(triage, dict) else []
+                if isinstance(candidates, list):
+                    added = enqueue_triage_candidates(self._draft_queue, candidates, limit=6)
+                    emit_event(
+                        source="hermes",
+                        event_type="daily_triage_generated",
+                        status="ready",
+                        summary=triage.get("summary") if isinstance(triage, dict) else "",
+                        payload={
+                            "candidate_count": len(candidates),
+                            "drafts_added": added,
+                            "triage": triage,
+                        },
+                    )
+            except Exception:
+                logger.warning("InitiativeService: Hermes daily triage enqueue failed", exc_info=True)
         markdown, date_info = generate_planner_markdown(
             scope, settings, bundle, instruction
         )
@@ -755,10 +781,13 @@ class InitiativeService:
         self._log_planner_to_chat(chat_body)
 
         excerpt = tts_excerpt_from_markdown(markdown, max_len=700)
-        tg_body = (
-            f"I’ve prepared your {scope_label} in the app."
-            + (f"\n\n{excerpt}" if excerpt else "")
-        )
+        if scope == "morning":
+            tg_body = excerpt or "Hermes found no standup triage decisions yet."
+        else:
+            tg_body = (
+                f"I’ve prepared your {scope_label} in the app."
+                + (f"\n\n{excerpt}" if excerpt else "")
+            )
         self._send_telegram_if_allowed(tg_body, settings)
 
         if settings.get("chat_voice_enabled", True):

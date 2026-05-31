@@ -102,6 +102,10 @@ def _fallback_planner_markdown(
 ) -> str:
     """Create a useful planner when configured LLM providers are unavailable."""
     work_scan = bundle.work_scan if isinstance(bundle.work_scan, dict) else {}
+    hermes_triage = work_scan.get("hermes_triage") if isinstance(work_scan.get("hermes_triage"), dict) else {}
+    triage_candidates = [
+        c for c in hermes_triage.get("candidates", []) if isinstance(c, dict)
+    ]
     proposals = [p for p in work_scan.get("proposals", []) if isinstance(p, dict)]
     connected_sources = [
         s for s in work_scan.get("connected_sources", []) if isinstance(s, dict)
@@ -138,6 +142,12 @@ def _fallback_planner_markdown(
         today_items.append("No connected work source produced actionable items yet.")
 
     attention_items: list[str] = []
+    for candidate in triage_candidates[:8]:
+        attention_items.append(_first_nonempty(
+            candidate.get("question"),
+            candidate.get("title"),
+            default="Hermes triage candidate needs a decision.",
+        ))
     for task in bundle.stuck_tasks[:5]:
         attention_items.append(_first_nonempty(
             task.get("title") if isinstance(task, dict) else task,
@@ -187,9 +197,9 @@ def _fallback_planner_markdown(
 
     if scope == "morning":
         return "\n\n".join([
-            "## Today",
+            "## Standup Triage",
             "\n".join(f"- {item}" for item in today_items),
-            "## What Needs Attention",
+            "## Decisions I Need From You",
             "\n".join(f"- {item}" for item in attention_items[:8]),
             "## Approvals & Blockers",
             "\n".join(f"- {item}" for item in blockers[:6]),
@@ -251,20 +261,22 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
     )
     if scope == "morning":
         return (
-            "You are a morning brief assistant for a proactive desktop work agent. "
-            "The user does not want a generic notification. They need a useful, specific brief "
-            "built from the available context.\n"
+            "You are Hermes, the daily standup triage orchestrator for a proactive desktop work agent. "
+            "The user does not want a passive report. They need decisions: create tickets, update tickets, "
+            "make bookings, draft replies, attach agent work back to tickets, or ignore noise.\n"
             + common
             + "Use these sections (## headings):\n"
-            "## Today — what needs attention\n"
-            "## Active work — tickets, workflows, or projects to move\n"
+            "## Standup Triage — what changed across sources\n"
+            "## Decisions I Need From You — direct questions the user can approve/reject\n"
             "## Approvals & blockers\n"
             "## Suggested next action\n"
             "Rules:\n"
             "- Be concise and direct.\n"
-            "- If context is thin, say exactly what to connect or enable next.\n"
+            "- Use work_scan.hermes_triage.candidates as the primary source of decisions.\n"
+            "- Ask concrete questions, e.g. 'Should I create a ticket from this WhatsApp thread?'\n"
+            "- If source context is thin, say exactly which connector or permission is missing.\n"
             "- Do not say only that a proactive brief ran.\n"
-            "- Prefer one concrete next action over a broad list.\n"
+            "- Prefer an actionable triage queue over a broad status list.\n"
         )
     if scope == "day":
         return (

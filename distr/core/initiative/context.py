@@ -107,6 +107,16 @@ class ContextAssembler:
             from distr.core.initiative.work_scanner import build_work_scan
 
             work_scan = build_work_scan(settings)
+            try:
+                from distr.core.hermes_daily_triage import build_daily_triage
+
+                work_scan["hermes_triage"] = build_daily_triage(
+                    work_scan=work_scan,
+                    developer_context=developer_context,
+                    recent_events=[],
+                )
+            except Exception:
+                logger.warning("ContextAssembler: failed to build Hermes daily triage", exc_info=True)
         except Exception:
             logger.warning("ContextAssembler: failed to scan actionable work sources", exc_info=True)
 

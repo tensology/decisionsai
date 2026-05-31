@@ -94,6 +94,18 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
             settings=settings,
         )
         return
+    if kind == "hermes_triage_ack":
+        from distr.core.hermes import emit_event
+
+        candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+        emit_event(
+            source="hermes",
+            event_type="daily_triage_candidate_approved",
+            status="approved",
+            summary=str(candidate.get("question") or candidate.get("title") or "Hermes triage candidate approved"),
+            payload={"candidate": candidate},
+        )
+        return
     raise ValueError(f"unknown execute_payload kind: {kind!r}")
 
 

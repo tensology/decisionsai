@@ -79,7 +79,7 @@ def test_generate_planner_markdown_omits_custom_temperature_for_o_series():
     fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
     fake_litellm.completion = MagicMock(
         return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content="## Today\n\nUse the live model."))]
+            choices=[MagicMock(message=MagicMock(content="## Standup Triage\n\nUse the live model."))]
         )
     )
     bundle = ContextBundle(current_datetime="2026-05-31T07:00:00Z")
@@ -102,7 +102,7 @@ def test_morning_brief_prompt_demands_specific_next_action():
     fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
     fake_litellm.completion = MagicMock(
         return_value=MagicMock(
-            choices=[MagicMock(message=MagicMock(content="## Today\n\nFix the stale brief."))]
+            choices=[MagicMock(message=MagicMock(content="## Standup Triage\n\nFix the stale brief."))]
         )
     )
     bundle = ContextBundle(
@@ -118,11 +118,11 @@ def test_morning_brief_prompt_demands_specific_next_action():
         md, date_info = planners.generate_planner_markdown(
             "morning", settings, bundle, "Produce a concise morning brief."
         )
-    assert "Today" in md
+    assert "Standup Triage" in md
     assert date_info.get("period") == "morning"
     messages = fake_litellm.completion.call_args.kwargs["messages"]
-    assert "morning brief assistant" in messages[0]["content"].lower()
-    assert "Suggested next action" in messages[0]["content"]
+    assert "daily standup triage orchestrator" in messages[0]["content"].lower()
+    assert "Decisions I Need From You" in messages[0]["content"]
     assert "work_scan" in messages[1]["content"]
 
 
@@ -158,7 +158,7 @@ def test_generate_planner_markdown_falls_back_when_llms_fail():
             "morning", settings, bundle, "Produce a concise morning brief."
         )
     assert date_info.get("period") == "morning"
-    assert "## Today" in md
+    assert "## Standup Triage" in md
     assert "Telegram" in md
     assert "ClickUp" in md
     assert "Promote the ready ticket" in md
