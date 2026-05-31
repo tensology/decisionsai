@@ -361,6 +361,8 @@ def register_routes(router, templates):
             "trello_accounts": [],
             "jira_has_valid": False,
             "trello_has_valid": False,
+            "clickup_configured": False,
+            "monday_configured": False,
         },
     )
     async def get_connection_status():
@@ -393,6 +395,8 @@ def register_routes(router, templates):
         discord_bot_configured = bool((os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or "").strip())
         slack_bot_configured = bool((os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or "").strip())
         slack_signing_configured = bool((os.environ.get("DECISIONSAI_SLACK_SIGNING_SECRET") or "").strip())
+        clickup_configured = False
+        monday_configured = False
         for acc in connected_accounts:
             if not isinstance(acc, dict):
                 continue
@@ -403,6 +407,10 @@ def register_routes(router, templates):
                     slack_bot_configured = True
                 if (acc.get("signing_secret") or "").strip():
                     slack_signing_configured = True
+            if acc.get("provider") == "clickup" and (acc.get("api_token") or "").strip():
+                clickup_configured = True
+            if acc.get("provider") == "monday" and (acc.get("api_token") or "").strip():
+                monday_configured = True
 
         return JSONResponse({
             "google_connected": google_connected,
@@ -415,6 +423,8 @@ def register_routes(router, templates):
             "trello_accounts": trello_accounts,
             "jira_has_valid": jira_has_valid,
             "trello_has_valid": trello_has_valid,
+            "clickup_configured": clickup_configured,
+            "monday_configured": monday_configured,
         })
 
     @router.get("/advanced/integration-connectors")
@@ -433,16 +443,24 @@ def register_routes(router, templates):
         accounts = integration_accounts_from_settings(settings)
         d_acc = next((a for a in accounts if a.get("provider") == PROVIDER_DISCORD_BOT), {})
         s_acc = next((a for a in accounts if a.get("provider") == PROVIDER_SLACK_APP), {})
+        c_acc = next((a for a in accounts if a.get("provider") == "clickup"), {})
+        m_acc = next((a for a in accounts if a.get("provider") == "monday"), {})
         d_tok = (d_acc.get("bot_token") or "").strip()
         s_bt = (s_acc.get("bot_token") or "").strip()
         s_sg = (s_acc.get("signing_secret") or "").strip()
+        c_tok = (c_acc.get("api_token") or "").strip()
+        m_tok = (m_acc.get("api_token") or "").strip()
         return JSONResponse({
             "discord_bot_token": mask_secret(d_tok),
             "slack_bot_token": mask_secret(s_bt),
             "slack_signing_secret": mask_secret(s_sg),
+            "clickup_api_token": mask_secret(c_tok),
+            "monday_api_token": mask_secret(m_tok),
             "discord_bot_token_set": bool(d_tok),
             "slack_bot_token_set": bool(s_bt),
             "slack_signing_secret_set": bool(s_sg),
+            "clickup_api_token_set": bool(c_tok),
+            "monday_api_token_set": bool(m_tok),
             "discord_from_env": bool((os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or "").strip()),
             "slack_bot_from_env": bool((os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or "").strip()),
             "slack_signing_from_env": bool((os.environ.get("DECISIONSAI_SLACK_SIGNING_SECRET") or "").strip()),
@@ -468,6 +486,14 @@ def register_routes(router, templates):
         )
         existing_s = next(
             (a for a in accounts if isinstance(a, dict) and a.get("provider") == PROVIDER_SLACK_APP),
+            {},
+        )
+        existing_c = next(
+            (a for a in accounts if isinstance(a, dict) and a.get("provider") == "clickup"),
+            {},
+        )
+        existing_m = next(
+            (a for a in accounts if isinstance(a, dict) and a.get("provider") == "monday"),
             {},
         )
 
@@ -502,6 +528,22 @@ def register_routes(router, templates):
                 if new_sg:
                     row["signing_secret"] = new_sg
                 accounts.append(row)
+
+        if "clickup_api_token" in body:
+            accounts = strip_provider(accounts, "clickup")
+            inc = str(body.get("clickup_api_token") or "").strip()
+            if inc:
+                new_tok = resolve_secret_update(existing_c.get("api_token") or "", inc).strip()
+                if new_tok:
+                    accounts.append({"provider": "clickup", "name": "ClickUp", "api_token": new_tok})
+
+        if "monday_api_token" in body:
+            accounts = strip_provider(accounts, "monday")
+            inc = str(body.get("monday_api_token") or "").strip()
+            if inc:
+                new_tok = resolve_secret_update(existing_m.get("api_token") or "", inc).strip()
+                if new_tok:
+                    accounts.append({"provider": "monday", "name": "Monday", "api_token": new_tok})
 
         settings["connected_accounts"] = accounts
         save_settings_to_db(settings)

@@ -37,8 +37,14 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
         "boards": [],
         "proposals": [],
         "messages": {"whatsapp": [], "telegram": [], "email": []},
+        "connected_sources": [],
         "unavailable_sources": [],
     }
+
+    try:
+        scan["connected_sources"] = _connected_work_sources(settings)
+    except Exception as exc:
+        scan["unavailable_sources"].append({"source": "connected_sources", "reason": str(exc)})
 
     try:
         _scan_local_boards(scan, settings)
@@ -72,6 +78,58 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
         pass
 
     return scan
+
+
+def _connected_work_sources(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    import json
+
+    raw = settings.get("connected_accounts") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = []
+    if not isinstance(raw, list):
+        return []
+
+    work_providers = {
+        "jira": "Jira",
+        "trello": "Trello",
+        "slack_app": "Slack",
+        "clickup": "ClickUp",
+        "monday": "Monday",
+        "whatsapp": "WhatsApp",
+        "telegram": "Telegram",
+    }
+    sources = []
+    for account in raw:
+        if not isinstance(account, dict):
+            continue
+        provider = str(account.get("provider") or "").strip().lower()
+        label = work_providers.get(provider)
+        if not label:
+            continue
+        connected = bool(
+            account.get("is_valid", True)
+            and (
+                account.get("status") == "connected"
+                or account.get("api_token")
+                or account.get("bot_token")
+                or account.get("access_token")
+                or account.get("user_id")
+                or account.get("app_user_id")
+                or provider in {"jira", "trello"}
+            )
+        )
+        sources.append(
+            {
+                "provider": provider,
+                "label": label,
+                "name": account.get("name") or label,
+                "connected": connected,
+            }
+        )
+    return sources
 
 
 def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:

@@ -17,6 +17,7 @@ from distr.core.initiative.scheduler import default_local_tz
 logger = logging.getLogger(__name__)
 
 _SCOPE_BY_TASK_NAME = {
+    "morning brief": "morning",
     "day planner": "day",
     "week planner": "week",
     "month planner": "month",
@@ -83,6 +84,8 @@ def build_date_info(scope: str, *, local_now: datetime | None = None) -> dict[st
     iso_d = d.isoformat()
     if scope == "day":
         return {"period": "day", "local_iso_date": iso_d, "timezone": str(tz)}
+    if scope == "morning":
+        return {"period": "morning", "local_iso_date": iso_d, "timezone": str(tz)}
     if scope == "week":
         week_start = d - timedelta(days=d.weekday())
         week_end = week_start + timedelta(days=6)
@@ -108,6 +111,23 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
         "Do not wrap in JSON. Do not use markdown code fences around the whole document.\n"
         f"Period context (machine-readable): {json.dumps(date_info, ensure_ascii=False)}\n"
     )
+    if scope == "morning":
+        return (
+            "You are a morning brief assistant for a proactive desktop work agent. "
+            "The user does not want a generic notification. They need a useful, specific brief "
+            "built from the available context.\n"
+            + common
+            + "Use these sections (## headings):\n"
+            "## Today — what needs attention\n"
+            "## Active work — tickets, workflows, or projects to move\n"
+            "## Approvals & blockers\n"
+            "## Suggested next action\n"
+            "Rules:\n"
+            "- Be concise and direct.\n"
+            "- If context is thin, say exactly what to connect or enable next.\n"
+            "- Do not say only that a proactive brief ran.\n"
+            "- Prefer one concrete next action over a broad list.\n"
+        )
     if scope == "day":
         return (
             "You are a day-planning assistant. The user uses a personal productivity agent with "
@@ -171,6 +191,8 @@ def _user_payload(
             "unfinished_workflows": bundle.unfinished_workflows,
             "active_project": bundle.active_project,
             "recent_audit": bundle.recent_audit[:15],
+            "developer_context": bundle.developer_context,
+            "work_scan": bundle.work_scan,
             "memory_files_trimmed": {
                 "agent": (bundle.memory_agent or "")[:8000],
                 "user": (bundle.memory_user or "")[:8000],

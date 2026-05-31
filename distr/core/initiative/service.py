@@ -749,13 +749,14 @@ class InitiativeService:
                 proactive_task_id=task_id,
             )
 
+        scope_label = "morning brief" if scope == "morning" else f"{scope} planner"
         header = f"[Planner — {task_name}]"
         chat_body = f"{header}\n\n{markdown.strip()}"
         self._log_planner_to_chat(chat_body)
 
         excerpt = tts_excerpt_from_markdown(markdown, max_len=700)
         tg_body = (
-            f"I’ve prepared your {scope} planner in the app."
+            f"I’ve prepared your {scope_label} in the app."
             + (f"\n\n{excerpt}" if excerpt else "")
         )
         self._send_telegram_if_allowed(tg_body, settings)
@@ -764,7 +765,7 @@ class InitiativeService:
             if excerpt:
                 try:
                     signal_manager.speak_text_directly.emit(
-                        f"Here's your {scope} planner. {excerpt}"
+                        f"Here's your {scope_label}. {excerpt}"
                     )
                 except Exception as e:
                     logger.debug("InitiativeService: planner TTS emit failed: %s", e)

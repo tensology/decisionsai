@@ -11,10 +11,10 @@ from distr.core.initiative import planners
 
 
 def test_planner_scope_for_task_name():
+    assert planners.planner_scope_for_task_name("Morning Brief") == "morning"
     assert planners.planner_scope_for_task_name("Day Planner") == "day"
     assert planners.planner_scope_for_task_name("week planner") == "week"
     assert planners.planner_scope_for_task_name("Month Planner") == "month"
-    assert planners.planner_scope_for_task_name("Morning Brief") is None
 
 
 def test_build_date_info_week():
@@ -25,6 +25,14 @@ def test_build_date_info_week():
     assert info["period"] == "week"
     assert info["week_start"] == "2026-05-04"
     assert info["week_end"] == "2026-05-10"
+
+
+def test_build_date_info_morning():
+    tz = timezone.utc
+    local = datetime(2026, 5, 31, 7, 0, tzinfo=tz)
+    info = planners.build_date_info("morning", local_now=local)
+    assert info["period"] == "morning"
+    assert info["local_iso_date"] == "2026-05-31"
 
 
 def test_tts_excerpt_from_markdown_strips_headers():
@@ -64,3 +72,32 @@ def test_generate_planner_markdown_uses_scope_specific_system_prompt():
     assert "day-planning assistant" in messages[0]["content"].lower()
     user = messages[1]["content"]
     assert "Custom instruction from task row." in user
+
+
+def test_morning_brief_prompt_demands_specific_next_action():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="## Today\n\nFix the stale brief."))]
+        )
+    )
+    bundle = ContextBundle(
+        current_datetime="2026-05-31T07:00:00Z",
+        work_scan={"proposals": [{"description": "Ticket ready to execute"}]},
+    )
+    settings = {
+        "conversational_llm_provider": "ollama",
+        "conversational_llm_model": "llama3.2",
+        "ollama_url": "http://localhost:11434",
+    }
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, date_info = planners.generate_planner_markdown(
+            "morning", settings, bundle, "Produce a concise morning brief."
+        )
+    assert "Today" in md
+    assert date_info.get("period") == "morning"
+    messages = fake_litellm.completion.call_args.kwargs["messages"]
+    assert "morning brief assistant" in messages[0]["content"].lower()
+    assert "Suggested next action" in messages[0]["content"]
+    assert "work_scan" in messages[1]["content"]

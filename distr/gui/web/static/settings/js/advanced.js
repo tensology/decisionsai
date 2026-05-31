@@ -300,6 +300,8 @@ function updateConnectionStatus() {
         var telegramBtn = document.getElementById('telegram_connect_btn');
         var trelloBtn = document.getElementById('trello_connect_btn');
         var jiraBtn = document.getElementById('jira_connect_btn');
+        var clickupBtn = document.getElementById('clickup_connect_btn');
+        var mondayBtn = document.getElementById('monday_connect_btn');
         if (googleBtn) {
             googleBtn.className = data.google_connected ? connectedClass : shell + ' bg-[#007bff] hover:bg-[#0069d9] text-white' + filledBorder;
             googleBtn.innerHTML = data.google_connected ? '✓ Google' : 'Google';
@@ -332,6 +334,14 @@ function updateConnectionStatus() {
             slackBtn.className = slackOk ? connectedClass : shell + ' bg-[#4A154B] hover:bg-[#611f69] text-white' + filledBorder;
             slackBtn.innerHTML = slackOk ? '\u2713 Slack' : 'Slack';
         }
+        if (clickupBtn) {
+            clickupBtn.className = data.clickup_configured ? connectedClass : shell + ' bg-[#7B68EE] hover:bg-[#6754d8] text-white' + filledBorder;
+            clickupBtn.innerHTML = data.clickup_configured ? '\u2713 ClickUp' : 'ClickUp';
+        }
+        if (mondayBtn) {
+            mondayBtn.className = data.monday_configured ? connectedClass : shell + ' bg-[#00C875] hover:bg-[#00a862] text-white' + filledBorder;
+            mondayBtn.innerHTML = data.monday_configured ? '\u2713 Monday' : 'Monday';
+        }
     }).catch(function () {});
 }
 
@@ -347,6 +357,8 @@ function loadIntegrationConnectorModal() {
         var dIn = document.getElementById('integration_discord_token');
         var sbIn = document.getElementById('integration_slack_bot_token');
         var sgIn = document.getElementById('integration_slack_signing_secret');
+        var cuIn = document.getElementById('integration_clickup_token');
+        var moIn = document.getElementById('integration_monday_token');
         var hint = document.getElementById('integration_connectors_env_hint');
         if (dIn) {
             dIn.value = data.discord_bot_token || '';
@@ -359,6 +371,14 @@ function loadIntegrationConnectorModal() {
         if (sgIn) {
             sgIn.value = data.slack_signing_secret || '';
             sgIn.disabled = !!data.slack_signing_from_env;
+        }
+        if (cuIn) {
+            cuIn.value = data.clickup_api_token || '';
+            cuIn.disabled = false;
+        }
+        if (moIn) {
+            moIn.value = data.monday_api_token || '';
+            moIn.disabled = false;
         }
         if (hint) {
             var parts = [];
@@ -398,7 +418,9 @@ function openIntegrationConnectorsModal() {
             var payload = {
                 discord_bot_token: (document.getElementById('integration_discord_token') || {}).value || '',
                 slack_bot_token: (document.getElementById('integration_slack_bot_token') || {}).value || '',
-                slack_signing_secret: (document.getElementById('integration_slack_signing_secret') || {}).value || ''
+                slack_signing_secret: (document.getElementById('integration_slack_signing_secret') || {}).value || '',
+                clickup_api_token: (document.getElementById('integration_clickup_token') || {}).value || '',
+                monday_api_token: (document.getElementById('integration_monday_token') || {}).value || ''
             };
             if (statusEl) {
                 statusEl.textContent = 'Saving...';
@@ -936,6 +958,10 @@ if (document.readyState === 'loading') {
             if (discordBtn) discordBtn.addEventListener('click', openIntegrationConnectorsModal);
             var slackBtn = document.getElementById('slack_connect_btn');
             if (slackBtn) slackBtn.addEventListener('click', openIntegrationConnectorsModal);
+            var clickupBtn = document.getElementById('clickup_connect_btn');
+            if (clickupBtn) clickupBtn.addEventListener('click', openIntegrationConnectorsModal);
+            var mondayBtn = document.getElementById('monday_connect_btn');
+            if (mondayBtn) mondayBtn.addEventListener('click', openIntegrationConnectorsModal);
             var reindexBtn = document.getElementById('reindex_button');
             if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
         }
@@ -958,6 +984,10 @@ if (document.readyState === 'loading') {
         if (discordBtn) discordBtn.addEventListener('click', openIntegrationConnectorsModal);
         var slackBtn = document.getElementById('slack_connect_btn');
         if (slackBtn) slackBtn.addEventListener('click', openIntegrationConnectorsModal);
+        var clickupBtn = document.getElementById('clickup_connect_btn');
+        if (clickupBtn) clickupBtn.addEventListener('click', openIntegrationConnectorsModal);
+        var mondayBtn = document.getElementById('monday_connect_btn');
+        if (mondayBtn) mondayBtn.addEventListener('click', openIntegrationConnectorsModal);
         var reindexBtn = document.getElementById('reindex_button');
         if (reindexBtn) reindexBtn.addEventListener('click', reindexModels);
     }
