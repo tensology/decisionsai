@@ -111,3 +111,83 @@ def test_old_style_readout_is_compact(monkeypatch, tmp_path):
     assert "Pending approval:" in sent
     assert "Payload:" not in sent
     assert "Draft:" not in sent
+
+
+def test_hermes_triage_reply_approves_first_candidate(monkeypatch, tmp_path):
+    from distr.core.integrations.telegram.messages import TelegramMessagesMixin
+
+    now = datetime.now(tz=timezone.utc)
+    queue = DraftQueue(path=str(tmp_path / "drafts.json"))
+    queue.add(DraftEntry(
+        id="hermes-one",
+        action_type="hermes_triage_candidate",
+        description="Roland sent a WhatsApp that looks like a booking. Should I create a ticket?",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+        execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": "one"}},
+    ))
+    queue.add(DraftEntry(
+        id="hermes-two",
+        action_type="hermes_triage_candidate",
+        description="Promote Player1Sport backlog items?",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+        execute_payload={"kind": "hermes_triage_ack", "candidate": {"id": "two"}},
+    ))
+    monkeypatch.setattr(
+        "distr.core.initiative.draft_queue.DraftQueue",
+        lambda: queue,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        "distr.core.initiative.draft_execute.approve_draft_in_queue",
+        lambda q, draft_id: q.remove(draft_id),
+        raising=False,
+    )
+
+    handler = TelegramMessagesMixin()
+    handler.send_to_telegram = MagicMock()
+
+    handled = handler._handle_initiative_draft_command("approve")
+
+    assert handled is True
+    assert queue.get_by_id("hermes-one") is None
+    assert queue.get_by_id("hermes-two") is not None
+    sent = handler.send_to_telegram.call_args.args[0]
+    assert "Approved:" in sent
+    assert "Roland" in sent
+
+
+def test_hermes_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):
+    from distr.core.integrations.telegram.messages import TelegramMessagesMixin
+
+    now = datetime.now(tz=timezone.utc)
+    queue = DraftQueue(path=str(tmp_path / "drafts.json"))
+    queue.add(DraftEntry(
+        id="hermes-one",
+        action_type="hermes_triage_candidate",
+        description="Create a ticket from Telegram?",
+        draft="Decision draft",
+        reason="Hermes standup",
+        created_at=now.isoformat(),
+        expires_at=(now + timedelta(hours=1)).isoformat(),
+    ))
+    monkeypatch.setattr(
+        "distr.core.initiative.draft_queue.DraftQueue",
+        lambda: queue,
+        raising=False,
+    )
+
+    handler = TelegramMessagesMixin()
+    handler.send_to_telegram = MagicMock()
+
+    handled = handler._handle_initiative_draft_command("show hermes decisions")
+
+    assert handled is True
+    sent = handler.send_to_telegram.call_args.args[0]
+    assert "Hermes standup decisions waiting" in sent
+    assert "1. Create a ticket from Telegram?" in sent

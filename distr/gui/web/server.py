@@ -5,6 +5,8 @@ This server runs once when the app starts and serves all web UIs.
 """
 import sys
 import threading
+import subprocess
+import re
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,11 +38,37 @@ DEFAULT_PORT = 8765
 
 # Singleton instance
 _unified_server: Optional['UnifiedGuiServer'] = None
+_APP_VERSION_CACHE: str | None = None
 
 
 def get_unified_server() -> Optional['UnifiedGuiServer']:
     """Get the global unified server instance"""
     return _unified_server
+
+
+def _app_version_label(project_root: Path) -> str:
+    """Short version label for the web chrome."""
+    global _APP_VERSION_CACHE
+    if _APP_VERSION_CACHE:
+        return _APP_VERSION_CACHE
+    try:
+        commit = subprocess.run(
+            ["git", "rev-parse", "--short", "HEAD"],
+            cwd=str(project_root),
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=True,
+        ).stdout.strip()
+        version = ""
+        changelog = project_root / "CHANGELOG.md"
+        if changelog.exists():
+            match = re.search(r"^## \[([0-9][^\]]*)\]", changelog.read_text(encoding="utf-8"), re.M)
+            version = match.group(1).strip() if match else ""
+        _APP_VERSION_CACHE = f"{version}+{commit}" if version and commit else (version or commit or "dev")
+    except Exception:
+        _APP_VERSION_CACHE = "dev"
+    return _APP_VERSION_CACHE
 
 
 def _mount_static(app: FastAPI, url_path: str, directory: Path, name: str):
@@ -186,6 +214,7 @@ def create_app() -> FastAPI:
         return {
             "base_path": base_path,
             "internal_api_token": app.state.internal_api_token,
+            "app_version": _app_version_label(project_root),
         }
     
     try:

@@ -665,6 +665,10 @@ class TelegramMessagesMixin:
                     return True
                 return False
 
+            hermes_handled = self._handle_hermes_triage_reply(queue_obj, entries, text_lower)
+            if hermes_handled:
+                return True
+
             read_token = match_read_draft_by_id_request(text_lower)
             if read_token or wants_pending_draft_readout(text_lower):
                 entry = entries[0]
@@ -723,6 +727,91 @@ class TelegramMessagesMixin:
         removed = queue_obj.remove(draft_id)
         self.send_to_telegram("Rejected and removed from the Initiative queue." if removed else "That pending action was not found.")
         return True
+
+    def _handle_hermes_triage_reply(self, queue_obj, entries, text_lower: str) -> bool:
+        """Make Hermes standup approvals conversational instead of ID-first."""
+        import re
+
+        hermes_entries = [
+            e for e in entries
+            if e.action_type == "hermes_triage_candidate"
+        ]
+        if not hermes_entries:
+            return False
+
+        def _decision_word(text: str) -> str | None:
+            if re.search(r"\b(approve|approved|yes|yep|correct|go ahead|do it|create it|make it|turn it into|ticket it)\b", text):
+                return "approve"
+            if re.search(r"\b(reject|rejected|no|nope|ignore|dismiss|skip|not now)\b", text):
+                return "reject"
+            return None
+
+        decision = _decision_word(text_lower)
+        if not decision:
+            if re.search(r"\b(what|show|read|list).*\b(hermes|standup|triage|decision)", text_lower):
+                self.send_to_telegram(self._format_hermes_triage_entries(hermes_entries))
+                return True
+            return False
+
+        idx = 0
+        numbered = re.search(r"\b(?:approve|reject|yes|no|ignore|skip)\s+(\d{1,2})\b", text_lower)
+        if numbered:
+            idx = max(0, int(numbered.group(1)) - 1)
+        elif len(hermes_entries) > 1 and re.search(r"\b(all|everything)\b", text_lower):
+            acted = 0
+            for entry in list(hermes_entries):
+                if decision == "approve":
+                    if self._approve_hermes_triage_entry(queue_obj, entry):
+                        acted += 1
+                elif queue_obj.remove(entry.id):
+                    acted += 1
+            verb = "Approved" if decision == "approve" else "Rejected"
+            self.send_to_telegram(f"{verb} {acted} Hermes standup decision(s).")
+            return True
+
+        if idx >= len(hermes_entries):
+            self.send_to_telegram(
+                f"I only have {len(hermes_entries)} Hermes standup decision(s) waiting. "
+                "Reply 'show Hermes decisions' to see them."
+            )
+            return True
+
+        entry = hermes_entries[idx]
+        if len(hermes_entries) > 1 and not numbered:
+            # The standup message asks for a conversational reply. Treat a plain
+            # approve/reject as the first/current Hermes decision, then explain.
+            prefix = "I’ll apply that to the first Hermes standup decision."
+        else:
+            prefix = ""
+
+        if decision == "approve":
+            ok = self._approve_hermes_triage_entry(queue_obj, entry)
+            self.send_to_telegram(
+                f"{prefix + ' ' if prefix else ''}Approved: {entry.description}"
+                if ok else
+                f"{prefix + ' ' if prefix else ''}I could not approve that Hermes decision. It may still be pending."
+            )
+            return True
+
+        removed = queue_obj.remove(entry.id)
+        self.send_to_telegram(
+            f"{prefix + ' ' if prefix else ''}Rejected: {entry.description}"
+            if removed else
+            "That Hermes decision was not found."
+        )
+        return True
+
+    def _approve_hermes_triage_entry(self, queue_obj, entry) -> bool:
+        from distr.core.initiative.draft_execute import approve_draft_in_queue
+
+        return bool(approve_draft_in_queue(queue_obj, entry.id))
+
+    def _format_hermes_triage_entries(self, entries) -> str:
+        lines = ["Hermes standup decisions waiting:"]
+        for i, entry in enumerate(entries[:8], start=1):
+            lines.append(f"{i}. {entry.description}")
+        lines.append("\nReply approve 1, reject 1, approve all, or tell me what to turn into tickets.")
+        return "\n".join(lines)
 
     def _track_telegram_group(
         self,

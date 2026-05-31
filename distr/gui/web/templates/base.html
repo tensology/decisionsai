@@ -105,6 +105,10 @@
     </nav>
 
     {% block content %}{% endblock %}
+    <div
+      class="fixed bottom-2 right-3 z-40 rounded border border-white/10 bg-black/35 px-2 py-1 text-[10px] font-medium text-white/45 backdrop-blur"
+      title="DecisionsAI version"
+    >v{{ app_version or 'dev' }}</div>
     <script>
     (function() {
       var meta = document.querySelector('meta[name="decisionsai-internal-api-token"]');
