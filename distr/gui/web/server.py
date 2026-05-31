@@ -5,7 +5,6 @@ This server runs once when the app starts and serves all web UIs.
 """
 import sys
 import threading
-import subprocess
 import re
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -52,20 +51,12 @@ def _app_version_label(project_root: Path) -> str:
     if _APP_VERSION_CACHE:
         return _APP_VERSION_CACHE
     try:
-        commit = subprocess.run(
-            ["git", "rev-parse", "--short", "HEAD"],
-            cwd=str(project_root),
-            capture_output=True,
-            text=True,
-            timeout=2,
-            check=True,
-        ).stdout.strip()
         version = ""
         changelog = project_root / "CHANGELOG.md"
         if changelog.exists():
             match = re.search(r"^## \[([0-9][^\]]*)\]", changelog.read_text(encoding="utf-8"), re.M)
             version = match.group(1).strip() if match else ""
-        _APP_VERSION_CACHE = f"{version}+{commit}" if version and commit else (version or commit or "dev")
+        _APP_VERSION_CACHE = version or "dev"
     except Exception:
         _APP_VERSION_CACHE = "dev"
     return _APP_VERSION_CACHE
