@@ -1,185 +1,56 @@
 <h2 class="text-xl font-semibold text-white mb-2">Initiative</h2>
-<p class="text-sm text-gray-400 mb-6">Choose how much initiative I should take when helping you. You can let me wait for instructions, suggest next steps, or handle approved routine tasks and keep you updated.</p>
+<p class="text-sm text-gray-400 mb-6">Choose how proactive Hermes should be across your day. Approvals should become conversations, not a growing web inbox.</p>
 
 <div id="initiative-health" class="flex items-center gap-2 mb-6 text-xs text-gray-400" role="status">
     <span id="initiative-health-dot" class="inline-block w-2.5 h-2.5 rounded-full bg-gray-500 shrink-0" title=""></span>
     <span id="initiative-health-label">Cycle status: checking…</span>
 </div>
 
-<div class="mb-8 rounded-lg border border-[#f97316]/30 bg-[#f97316]/10 p-4">
-    <h3 class="text-sm font-semibold text-white mb-2">Useful daily assistant setup</h3>
-    <div class="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs text-gray-300">
-        <div class="rounded-md border border-white/10 bg-black/15 p-3">
-            <div class="text-white font-medium mb-1">To get helpful morning briefs</div>
-            <p>Use Operate, allow Telegram updates, scan local boards, scan messages, and connect work tools in Advanced. The brief will then include priorities, blockers, approvals, and a concrete next action.</p>
-        </div>
-        <div class="rounded-md border border-white/10 bg-black/15 p-3">
-            <div class="text-white font-medium mb-1">To let the agent move work forward</div>
-            <p>Enable routine task execution, workflow starts, and project CLI tasks. Keep external communication, file changes, and sensitive actions on ask-first until you trust the routine.</p>
-        </div>
-    </div>
-</div>
-
 <!-- Proactivity Level -->
 <div class="mb-8">
-    <label class="block text-sm font-medium text-gray-300 mb-3">Proactivity Level</label>
-    <div id="initiative-level" class="grid grid-cols-2 gap-3">
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="observe">
-            <div class="text-sm font-medium text-white mb-1">Observe</div>
-            <div class="text-xs text-gray-400">I only act when you explicitly ask me to. No suggestions, no independent actions.</div>
+    <label class="block text-sm font-medium text-gray-300 mb-3">Hermes posture</label>
+    <div id="initiative-level" class="grid grid-cols-1 md:grid-cols-4 gap-3">
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="observe">
+            <div class="text-sm font-medium text-white mb-1">Quiet</div>
+            <div class="text-xs text-gray-400">Only respond when you ask.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="assist">
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="assist">
             <div class="text-sm font-medium text-white mb-1">Assist</div>
-            <div class="text-xs text-gray-400">I notice useful next steps and flag risks during our conversation, but I won't initiate anything on my own.</div>
+            <div class="text-xs text-gray-400">Notice patterns and suggest next steps.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="operate">
-            <div class="text-sm font-medium text-white mb-1">Operate</div>
-            <div class="text-xs text-gray-400">I follow up on stuck work, run approved routine tasks, and keep you updated on progress.</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="operate">
+            <div class="text-sm font-medium text-white mb-1">Standup</div>
+            <div class="text-xs text-gray-400">Triage sources, ask decisions in Telegram, run approved routines.</div>
         </button>
-        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/20 text-left transition-all hover:border-white/40" data-level="own">
-            <div class="text-sm font-medium text-white mb-1">Own</div>
-            <div class="text-xs text-gray-400">I manage defined outcomes end-to-end, follow through automatically, and only pull you in when it matters.</div>
+        <button type="button" class="initiative-btn p-4 rounded-lg border border-white/15 text-left transition-all hover:border-white/30" data-level="own">
+            <div class="text-sm font-medium text-white mb-1">Own outcomes</div>
+            <div class="text-xs text-gray-400">Follow through automatically inside defined boundaries.</div>
         </button>
     </div>
     <input type="hidden" id="initiative_level" value="assist">
 </div>
 
-<!-- Boundary Controls -->
-<div class="mb-6">
-    <h3 class="text-sm font-medium text-gray-300 mb-3">Boundaries &amp; Permissions</h3>
-    <p class="text-xs text-gray-500 mb-4">These controls apply when the proactivity level allows independent action. Toggle what I'm allowed to do without asking first.</p>
-    <div class="space-y-3">
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Allow automatic Telegram updates</div>
-                <div class="text-xs text-gray-500">Send status updates and notifications via Telegram without asking.</div>
-            </div>
-            <input type="checkbox" id="initiative_allow_telegram" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Allow routine task execution</div>
-                <div class="text-xs text-gray-500">Run scheduled or recurring tasks (ticket board agent, workflows) automatically.</div>
-            </div>
-            <input type="checkbox" id="initiative_allow_routine_tasks" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Allow approved lane moves</div>
-                <div class="text-xs text-gray-500">Let Initiative move selected tickets between local board lanes after policy or user approval.</div>
-            </div>
-            <input type="checkbox" id="initiative_allow_ticket_lane_moves" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Allow approved workflow starts</div>
-                <div class="text-xs text-gray-500">Let Initiative start linked ticket workflows when routine execution is enabled.</div>
-            </div>
-            <input type="checkbox" id="initiative_allow_workflow_start" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Allow approved project CLI tasks</div>
-                <div class="text-xs text-gray-500">Let Initiative send selected tickets to the project’s configured coding CLI.</div>
-            </div>
-            <input type="checkbox" id="initiative_allow_project_cli" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Ask before external communication</div>
-                <div class="text-xs text-gray-500">Confirm before sending emails, messages, or making API calls to external services.</div>
-            </div>
-            <input type="checkbox" id="initiative_ask_external_comms" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Ask before file changes</div>
-                <div class="text-xs text-gray-500">Confirm before routine creates/edits. Deletes and large bulk operations always prompt, even when this is off.</div>
-            </div>
-            <input type="checkbox" id="initiative_ask_file_changes" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Ask before sensitive actions</div>
-                <div class="text-xs text-gray-500">Always confirm before actions involving money, customers, or publishing.</div>
-            </div>
-            <input type="checkbox" id="initiative_ask_sensitive" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-    </div>
+<div class="mb-8 rounded-lg border border-white/10 bg-white/[0.03] p-4">
+    <div class="text-sm font-medium text-white mb-2">What this means</div>
+    <div id="initiative-posture-summary" class="text-sm text-gray-300">Hermes will suggest useful next steps when it sees them.</div>
 </div>
 
-<!-- Work Sources -->
-<div class="mb-6">
-    <h3 class="text-sm font-medium text-gray-300 mb-3">Work Sources &amp; Execution Scope</h3>
-    <p class="text-xs text-gray-500 mb-4">Choose what Initiative may inspect when deciding whether to surface work, propose board changes, or start an approved execution path.</p>
-    <div class="space-y-3">
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Scan local ticket boards</div>
-                <div class="text-xs text-gray-500">Look for backlog, current-lane, workflow, and project CLI opportunities.</div>
-            </div>
-            <input type="checkbox" id="initiative_scan_boards" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Suggest backlog promotion</div>
-                <div class="text-xs text-gray-500">Flag backlog items that look ready to move into the current lane.</div>
-            </div>
-            <input type="checkbox" id="initiative_suggest_backlog_promotion" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Scan WhatsApp work messages</div>
-                <div class="text-xs text-gray-500">Surface recent unprocessed WhatsApp messages that look work-related.</div>
-            </div>
-            <input type="checkbox" id="initiative_scan_whatsapp" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Scan Telegram group messages</div>
-                <div class="text-xs text-gray-500">Surface stored Telegram group/channel messages that look work-related.</div>
-            </div>
-            <input type="checkbox" id="initiative_scan_telegram" class="accent-[#f97316] w-5 h-5" checked>
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Scan external boards</div>
-                <div class="text-xs text-gray-500">Reserve scope for Jira/Trello board inspection when detailed external scanning is enabled.</div>
-            </div>
-            <input type="checkbox" id="initiative_scan_external_boards" class="accent-[#f97316] w-5 h-5">
-        </label>
-
-        <label class="flex items-center justify-between p-3 rounded-lg border border-white/10 hover:border-white/20 cursor-pointer">
-            <div>
-                <div class="text-sm text-white">Scan email work items</div>
-                <div class="text-xs text-gray-500">Reserve scope for connected email triage once mailbox sync is wired into Initiative.</div>
-            </div>
-            <input type="checkbox" id="initiative_scan_email" class="accent-[#f97316] w-5 h-5">
-        </label>
+<details class="mb-6 rounded-lg border border-white/10 bg-black/10">
+    <summary class="cursor-pointer select-none px-4 py-3 text-sm font-medium text-gray-300">Advanced source and safety controls</summary>
+    <div class="px-4 pb-4 pt-1 grid grid-cols-1 md:grid-cols-2 gap-3 text-sm text-gray-300">
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_allow_telegram" class="accent-[#f97316] w-4 h-4"> Telegram conversations</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_allow_routine_tasks" class="accent-[#f97316] w-4 h-4"> Routine execution</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_allow_ticket_lane_moves" class="accent-[#f97316] w-4 h-4"> Ticket lane moves</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_allow_workflow_start" class="accent-[#f97316] w-4 h-4"> Workflow starts</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_allow_project_cli" class="accent-[#f97316] w-4 h-4"> Project agent runs</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_scan_boards" class="accent-[#f97316] w-4 h-4" checked> Local boards</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_suggest_backlog_promotion" class="accent-[#f97316] w-4 h-4" checked> Backlog promotion</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_scan_whatsapp" class="accent-[#f97316] w-4 h-4" checked> WhatsApp</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_scan_telegram" class="accent-[#f97316] w-4 h-4" checked> Telegram</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_scan_external_boards" class="accent-[#f97316] w-4 h-4"> Jira/Trello details</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_scan_email" class="accent-[#f97316] w-4 h-4"> Email</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_ask_external_comms" class="accent-[#f97316] w-4 h-4" checked> Ask before external sends</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_ask_file_changes" class="accent-[#f97316] w-4 h-4" checked> Ask before file changes</label>
+        <label class="flex items-center gap-3"><input type="checkbox" id="initiative_ask_sensitive" class="accent-[#f97316] w-4 h-4" checked> Ask before sensitive actions</label>
     </div>
-</div>
-
-<!-- Pending Actions -->
-<div class="mb-6">
-    <div class="flex items-center justify-between gap-3 mb-3">
-        <h3 class="text-sm font-medium text-gray-300">Pending Actions</h3>
-        <button id="initiative-reject-all-drafts" type="button" class="hidden px-3 py-1.5 text-xs rounded bg-red-600 hover:bg-red-500 disabled:opacity-50 disabled:cursor-not-allowed text-white transition-colors">
-            Reject all
-        </button>
-    </div>
-    <p class="text-xs text-gray-500 mb-4">Actions waiting for your approval. These were proposed by the initiative system and need confirmation before execution.</p>
-    <div id="initiative-drafts" class="space-y-3">
-        <div id="initiative-drafts-empty" class="text-xs text-gray-500 italic">No pending actions.</div>
-    </div>
-</div>
+</details>

@@ -27,39 +27,83 @@
             var isActive = btn.dataset.level === level;
             btn.classList.toggle('border-[#f97316]', isActive);
             btn.classList.toggle('bg-[#f97316]/10', isActive);
-            btn.classList.toggle('border-white/20', !isActive);
+            btn.classList.toggle('border-white/15', !isActive);
         });
+        paintPostureSummary(level);
     }
 
     function init() {
         document.querySelectorAll('.initiative-btn').forEach(function(btn) {
             btn.addEventListener('click', function() {
                 setLevel(btn.dataset.level);
+                applyLevelDefaults(btn.dataset.level);
             });
         });
-        var rejectAllBtn = document.getElementById('initiative-reject-all-drafts');
-        if (rejectAllBtn) {
-            rejectAllBtn.addEventListener('click', function() {
-                window.rejectAllDrafts();
-            });
-        }
         loadInitiativeSettings();
         startInitiativeStatusPoll();
     }
 
     function updateDraftNavBadge(count) {
         var badge = document.getElementById('initiative-nav-badge');
-        var rejectAllBtn = document.getElementById('initiative-reject-all-drafts');
         if (!badge) return;
-        var n = typeof count === 'number' ? count : 0;
-        if (n > 0) {
-            badge.textContent = n > 99 ? '99+' : String(n);
-            badge.classList.remove('hidden');
-            if (rejectAllBtn) rejectAllBtn.classList.remove('hidden');
-        } else {
-            badge.classList.add('hidden');
-            if (rejectAllBtn) rejectAllBtn.classList.add('hidden');
-        }
+        badge.classList.add('hidden');
+    }
+
+    function paintPostureSummary(level) {
+        var el = document.getElementById('initiative-posture-summary');
+        if (!el) return;
+        var copy = {
+            observe: 'Hermes stays quiet and only responds when you ask.',
+            assist: 'Hermes watches context and suggests useful next steps during conversation.',
+            operate: 'Hermes runs daily standup triage, sends gated decisions to Telegram, and runs approved routines.',
+            own: 'Hermes follows through on defined outcomes and only pulls you in for sensitive or unclear decisions.',
+        };
+        el.textContent = copy[level] || copy.assist;
+    }
+
+    function setChecked(id, value) {
+        var el = document.getElementById(id);
+        if (el) el.checked = !!value;
+    }
+
+    function applyLevelDefaults(level) {
+        var presets = {
+            observe: {
+                tg: false, routine: false, lanes: false, workflows: false, cli: false,
+                boards: false, backlog: false, whatsapp: false, telegram: false, external: false, email: false,
+                askExternal: true, askFiles: true, askSensitive: true,
+            },
+            assist: {
+                tg: false, routine: false, lanes: false, workflows: false, cli: false,
+                boards: true, backlog: true, whatsapp: true, telegram: true, external: false, email: false,
+                askExternal: true, askFiles: true, askSensitive: true,
+            },
+            operate: {
+                tg: true, routine: true, lanes: false, workflows: true, cli: true,
+                boards: true, backlog: true, whatsapp: true, telegram: true, external: true, email: true,
+                askExternal: true, askFiles: true, askSensitive: true,
+            },
+            own: {
+                tg: true, routine: true, lanes: true, workflows: true, cli: true,
+                boards: true, backlog: true, whatsapp: true, telegram: true, external: true, email: true,
+                askExternal: true, askFiles: false, askSensitive: true,
+            },
+        };
+        var p = presets[level] || presets.assist;
+        setChecked(FIELDS.allowTelegram, p.tg);
+        setChecked(FIELDS.allowRoutineTasks, p.routine);
+        setChecked(FIELDS.allowTicketLaneMoves, p.lanes);
+        setChecked(FIELDS.allowWorkflowStart, p.workflows);
+        setChecked(FIELDS.allowProjectCli, p.cli);
+        setChecked(FIELDS.scanBoards, p.boards);
+        setChecked(FIELDS.suggestBacklogPromotion, p.backlog);
+        setChecked(FIELDS.scanWhatsapp, p.whatsapp);
+        setChecked(FIELDS.scanTelegram, p.telegram);
+        setChecked(FIELDS.scanExternalBoards, p.external);
+        setChecked(FIELDS.scanEmail, p.email);
+        setChecked(FIELDS.askExternalComms, p.askExternal);
+        setChecked(FIELDS.askFileChanges, p.askFiles);
+        setChecked(FIELDS.askSensitive, p.askSensitive);
     }
 
     function paintHealthDot(dot, labelEl, state, detail) {
@@ -145,7 +189,7 @@
             document.getElementById(FIELDS.askSensitive).checked = data.initiative_ask_sensitive !== false;
         }).catch(function() {});
 
-        loadDrafts();
+        updateDraftNavBadge(0);
     };
 
     window.saveInitiativeSettings = function() {
@@ -176,50 +220,6 @@
         }).catch(function() { showNotification('Failed to save', 'error'); });
     };
 
-    // ------------------------------------------------------------------
-    // Pending drafts
-    // ------------------------------------------------------------------
-
-    function loadDrafts() {
-        var container = document.getElementById('initiative-drafts');
-        var emptyMsg = document.getElementById('initiative-drafts-empty');
-        if (!container) return;
-
-        fetch('/api/initiative/drafts').then(function(r) { return r.ok ? r.json() : []; })
-        .then(function(drafts) {
-            // Remove old draft cards (keep the empty message element)
-            container.querySelectorAll('.draft-card').forEach(function(el) { el.remove(); });
-
-            updateDraftNavBadge(drafts ? drafts.length : 0);
-
-            if (!drafts || drafts.length === 0) {
-                if (emptyMsg) emptyMsg.style.display = '';
-                return;
-            }
-            if (emptyMsg) emptyMsg.style.display = 'none';
-
-            drafts.forEach(function(draft) {
-                var card = document.createElement('div');
-                card.className = 'draft-card p-4 rounded-lg border border-white/10 bg-white/5';
-                card.innerHTML =
-                    '<div class="flex items-start justify-between gap-3">' +
-                        '<div class="flex-1 min-w-0">' +
-                            '<div class="text-sm text-white font-medium mb-1">' + escapeHtml(draft.description) + '</div>' +
-                            '<div class="text-xs text-gray-400 mb-2">Type: ' + escapeHtml(draft.action_type) + '</div>' +
-                            (draft.draft && draft.draft !== draft.description
-                                ? '<div class="text-xs text-gray-500 bg-black/20 rounded p-2 mb-2 max-h-20 overflow-y-auto">' + escapeHtml(draft.draft) + '</div>'
-                                : '') +
-                        '</div>' +
-                        '<div class="flex gap-2 shrink-0">' +
-                            '<button onclick="approveDraft(\'' + draft.id + '\')" class="px-3 py-1 text-xs rounded bg-green-600 hover:bg-green-500 text-white transition-colors">Approve</button>' +
-                            '<button onclick="rejectDraft(\'' + draft.id + '\')" class="px-3 py-1 text-xs rounded bg-red-600 hover:bg-red-500 text-white transition-colors">Reject</button>' +
-                        '</div>' +
-                    '</div>';
-                container.appendChild(card);
-            });
-        }).catch(function() { updateDraftNavBadge(0); });
-    }
-
     function escapeHtml(str) {
         var div = document.createElement('div');
         div.textContent = str || '';
@@ -231,7 +231,7 @@
         .then(function(r) {
             if (r.ok) {
                 showNotification('Action approved', 'success');
-                loadDrafts();
+                updateDraftNavBadge(0);
             } else {
                 showNotification('Failed to approve', 'error');
             }
@@ -243,7 +243,7 @@
         .then(function(r) {
             if (r.ok) {
                 showNotification('Action rejected', 'success');
-                loadDrafts();
+                updateDraftNavBadge(0);
             } else {
                 showNotification('Failed to reject', 'error');
             }
@@ -261,7 +261,7 @@
                 if (r.ok) {
                     var removed = typeof data.removed === 'number' ? data.removed : 0;
                     showNotification(removed > 0 ? ('Rejected ' + removed + ' pending action' + (removed === 1 ? '' : 's')) : 'No pending actions to reject', 'success');
-                    loadDrafts();
+                    updateDraftNavBadge(0);
                 } else {
                     showNotification('Failed to reject pending actions', 'error');
                 }

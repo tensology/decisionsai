@@ -737,6 +737,8 @@ class InitiativeService:
             return
 
         bundle = self._context_assembler.build(settings)
+        triage_summary = ""
+        triage_candidate_count = 0
         if scope == "morning":
             try:
                 from distr.core.hermes import emit_event
@@ -748,6 +750,8 @@ class InitiativeService:
                     else {}
                 )
                 candidates = triage.get("candidates") if isinstance(triage, dict) else []
+                triage_summary = str(triage.get("summary") or "") if isinstance(triage, dict) else ""
+                triage_candidate_count = len(candidates) if isinstance(candidates, list) else 0
                 if isinstance(candidates, list):
                     added = enqueue_triage_candidates(self._draft_queue, candidates, limit=6)
                     emit_event(
@@ -782,7 +786,14 @@ class InitiativeService:
 
         excerpt = tts_excerpt_from_markdown(markdown, max_len=700)
         if scope == "morning":
-            tg_body = excerpt or "Hermes found no standup triage decisions yet."
+            if triage_candidate_count:
+                tg_body = (
+                    f"Hermes standup: I found {triage_candidate_count} decision(s) that need you.\n\n"
+                    f"{excerpt}\n\n"
+                    "Reply approve, reject, or tell me what to turn into tickets."
+                )
+            else:
+                tg_body = excerpt or triage_summary or "Hermes found no standup triage decisions yet."
         else:
             tg_body = (
                 f"I’ve prepared your {scope_label} in the app."
