@@ -106,7 +106,7 @@
 
     {% block content %}{% endblock %}
     <div
-      class="fixed bottom-2 right-3 z-40 rounded border border-white/10 bg-black/35 px-2 py-1 text-[10px] font-medium text-white/45 backdrop-blur"
+      style="position: fixed; right: 8px; bottom: 8px; z-index: 9999; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; background: rgba(0,0,0,0.38); padding: 3px 7px; font-size: 10px; font-weight: 600; line-height: 1; color: rgba(255,255,255,0.48); backdrop-filter: blur(6px); pointer-events: none;"
       title="DecisionsAI version"
     >v{{ app_version or 'dev' }}</div>
     <script>
