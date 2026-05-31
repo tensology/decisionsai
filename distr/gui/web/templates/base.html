@@ -18,7 +18,8 @@
 </head>
 <body class="bg-[#0d1642] text-[#ececf1] min-h-screen font-['Quicksand',sans-serif]">
     <div
-      style="position: fixed; right: 8px; bottom: 8px; z-index: 2147483647; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; background: rgba(0,0,0,0.38); padding: 3px 7px; font-size: 10px; font-weight: 600; line-height: 1; color: rgba(255,255,255,0.48); backdrop-filter: blur(6px); pointer-events: none;"
+      id="decisionsai-version-overlay"
+      style="position: fixed !important; top: 8px !important; right: 8px !important; z-index: 2147483647 !important; border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; background: rgba(0,0,0,0.38); padding: 3px 7px; font-size: 10px; font-weight: 600; line-height: 1; color: rgba(255,255,255,0.48); backdrop-filter: blur(6px); pointer-events: none; transform: translateZ(0);"
       title="DecisionsAI version"
       aria-label="DecisionsAI version"
     >v{{ app_version or 'dev' }}</div>
@@ -110,6 +111,14 @@
     </nav>
 
     {% block content %}{% endblock %}
+    <script>
+    (function() {
+      var badge = document.getElementById('decisionsai-version-overlay');
+      if (badge && badge.parentElement !== document.body) {
+        document.body.appendChild(badge);
+      }
+    })();
+    </script>
     <script>
     (function() {
       var meta = document.querySelector('meta[name="decisionsai-internal-api-token"]');
