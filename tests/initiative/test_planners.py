@@ -74,6 +74,29 @@ def test_generate_planner_markdown_uses_scope_specific_system_prompt():
     assert "Custom instruction from task row." in user
 
 
+def test_generate_planner_markdown_omits_custom_temperature_for_o_series():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(
+        return_value=MagicMock(
+            choices=[MagicMock(message=MagicMock(content="## Today\n\nUse the live model."))]
+        )
+    )
+    bundle = ContextBundle(current_datetime="2026-05-31T07:00:00Z")
+    settings = {
+        "conversational_llm_provider": "openai",
+        "conversational_llm_model": "o4-mini",
+    }
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        planners.generate_planner_markdown(
+            "morning", settings, bundle, "Produce a concise morning brief."
+        )
+    call_kw = fake_litellm.completion.call_args.kwargs
+    assert call_kw["model"] == "o4-mini"
+    assert "temperature" not in call_kw
+    assert call_kw["max_tokens"] == 3072
+
+
 def test_morning_brief_prompt_demands_specific_next_action():
     fake_litellm = MagicMock()
     fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
@@ -101,3 +124,42 @@ def test_morning_brief_prompt_demands_specific_next_action():
     assert "morning brief assistant" in messages[0]["content"].lower()
     assert "Suggested next action" in messages[0]["content"]
     assert "work_scan" in messages[1]["content"]
+
+
+def test_generate_planner_markdown_falls_back_when_llms_fail():
+    fake_litellm = MagicMock()
+    fake_litellm.AuthenticationError = type("AuthenticationError", (Exception,), {})
+    fake_litellm.completion = MagicMock(side_effect=RuntimeError("provider unavailable"))
+    bundle = ContextBundle(
+        current_datetime="2026-05-31T07:00:00Z",
+        work_scan={
+            "connected_sources": [
+                {"label": "Telegram", "connected": True},
+                {"label": "ClickUp", "connected": False},
+            ],
+            "boards": [
+                {
+                    "name": "Product",
+                    "lanes": [
+                        {"ticket_count": 2},
+                        {"ticket_count": 1},
+                    ],
+                }
+            ],
+            "proposals": [{"description": "Promote the ready ticket into Current."}],
+        },
+    )
+    settings = {
+        "conversational_llm_provider": "openai",
+        "conversational_llm_model": "o4-mini",
+    }
+    with patch.dict(sys.modules, {"litellm": fake_litellm}):
+        md, date_info = planners.generate_planner_markdown(
+            "morning", settings, bundle, "Produce a concise morning brief."
+        )
+    assert date_info.get("period") == "morning"
+    assert "## Today" in md
+    assert "Telegram" in md
+    assert "ClickUp" in md
+    assert "Promote the ready ticket" in md
+    assert "Planner LLM fallback was used" in md

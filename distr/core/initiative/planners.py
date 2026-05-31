@@ -69,6 +69,144 @@ def _llm_candidates(settings: dict) -> list[tuple[str, str]]:
     return candidates
 
 
+def _completion_options(litellm_model: str) -> dict[str, Any]:
+    """Return provider-safe LiteLLM options for planner calls."""
+    model_name = (litellm_model or "").split("/")[-1].lower()
+    options: dict[str, Any] = {"max_tokens": 3072}
+    if not model_name.startswith(("o1", "o3", "o4")):
+        options["temperature"] = 0.45
+    return options
+
+
+def _clip_text(value: Any, limit: int = 140) -> str:
+    text = re.sub(r"\s+", " ", str(value or "")).strip()
+    if len(text) <= limit:
+        return text
+    return text[: limit - 1].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+def _first_nonempty(*values: Any, default: str = "") -> str:
+    for value in values:
+        text = _clip_text(value, 180)
+        if text:
+            return text
+    return default
+
+
+def _fallback_planner_markdown(
+    scope: str,
+    date_info: dict[str, Any],
+    bundle: ContextBundle,
+    task_instruction: str,
+    failure_summary: str,
+) -> str:
+    """Create a useful planner when configured LLM providers are unavailable."""
+    work_scan = bundle.work_scan if isinstance(bundle.work_scan, dict) else {}
+    proposals = [p for p in work_scan.get("proposals", []) if isinstance(p, dict)]
+    connected_sources = [
+        s for s in work_scan.get("connected_sources", []) if isinstance(s, dict)
+    ]
+    unavailable_sources = [
+        s for s in work_scan.get("unavailable_sources", []) if isinstance(s, dict)
+    ]
+    boards = [b for b in work_scan.get("boards", []) if isinstance(b, dict)]
+    board_summary = bundle.kanban_summary or []
+
+    connected_labels = [
+        s.get("label") or s.get("provider")
+        for s in connected_sources
+        if s.get("connected") and (s.get("label") or s.get("provider"))
+    ]
+    pending_sources = [
+        s.get("label") or s.get("provider")
+        for s in connected_sources
+        if not s.get("connected") and (s.get("label") or s.get("provider"))
+    ]
+
+    today_items: list[str] = []
+    if connected_labels:
+        today_items.append(f"Connected work sources: {', '.join(connected_labels[:8])}.")
+    if pending_sources:
+        today_items.append(f"Needs setup: {', '.join(pending_sources[:6])}.")
+    for board in boards[:4]:
+        lane_count = len(board.get("lanes") or [])
+        ticket_count = sum(int(l.get("ticket_count") or 0) for l in board.get("lanes") or [])
+        today_items.append(
+            f"{_first_nonempty(board.get('name'), default='Board')} has {ticket_count} visible item(s) across {lane_count} lane(s)."
+        )
+    if not today_items:
+        today_items.append("No connected work source produced actionable items yet.")
+
+    attention_items: list[str] = []
+    for task in bundle.stuck_tasks[:5]:
+        attention_items.append(_first_nonempty(
+            task.get("title") if isinstance(task, dict) else task,
+            task.get("description") if isinstance(task, dict) else "",
+            default="Stuck task needs review.",
+        ))
+    for proposal in proposals[:6]:
+        attention_items.append(_first_nonempty(
+            proposal.get("description"),
+            proposal.get("action_type"),
+            default="Proposed work item needs review.",
+        ))
+    for workflow in bundle.unfinished_workflows[:4]:
+        attention_items.append(_first_nonempty(
+            workflow.get("name") if isinstance(workflow, dict) else workflow,
+            workflow.get("title") if isinstance(workflow, dict) else "",
+            default="Unfinished workflow needs review.",
+        ))
+    if not attention_items:
+        for board in board_summary[:4]:
+            if not isinstance(board, dict):
+                continue
+            overdue = int(board.get("overdue_tickets") or 0)
+            total = int(board.get("total_tickets") or 0)
+            if overdue or total:
+                attention_items.append(
+                    f"{_first_nonempty(board.get('board_name'), default='Board')}: {total} ticket(s), {overdue} overdue."
+                )
+    if not attention_items:
+        attention_items.append("No stuck tickets, unfinished workflows, or board proposals were found in the current scan.")
+
+    blockers = []
+    if unavailable_sources:
+        blockers.extend(
+            f"{_first_nonempty(s.get('source'), default='source')}: {_first_nonempty(s.get('reason'), default='unavailable')}"
+            for s in unavailable_sources[:4]
+        )
+    blockers.append(
+        "Planner LLM fallback was used. Check the OpenAI key or install/configure the local Ollama fallback model."
+    )
+
+    next_action = (
+        attention_items[0]
+        if attention_items and not attention_items[0].startswith("No stuck")
+        else "Open Advanced > Work Connectors, confirm the key work sources, then run the morning brief again."
+    )
+
+    if scope == "morning":
+        return "\n\n".join([
+            "## Today",
+            "\n".join(f"- {item}" for item in today_items),
+            "## What Needs Attention",
+            "\n".join(f"- {item}" for item in attention_items[:8]),
+            "## Approvals & Blockers",
+            "\n".join(f"- {item}" for item in blockers[:6]),
+            "## Suggested Next Action",
+            f"- {next_action}",
+        ])
+
+    return "\n\n".join([
+        f"## {scope.title()} Plan",
+        f"- Task instruction: {_clip_text(task_instruction, 220)}",
+        "\n".join(f"- {item}" for item in attention_items[:8]),
+        "## Blockers",
+        "\n".join(f"- {item}" for item in blockers[:6]),
+        f"<!-- planner provider failures: {_clip_text(failure_summary, 500)} -->",
+    ])
+
+
 def build_date_info(scope: str, *, local_now: datetime | None = None) -> dict[str, Any]:
     """Structured period labels for persistence (local timezone)."""
     tz = default_local_tz()
@@ -250,8 +388,7 @@ def generate_planner_markdown(
             response = litellm.completion(
                 model=litellm_model,
                 messages=messages,
-                max_tokens=3072,
-                temperature=0.45,
+                **_completion_options(litellm_model),
             )
             raw = (response.choices[0].message.content or "").strip()
             markdown = _strip_outer_fence(raw)
@@ -278,7 +415,17 @@ def generate_planner_markdown(
             continue
 
     summary = ", ".join(f"{p}/{m}: {r}" for p, m, r in failure_reasons)
-    raise RuntimeError(f"planners: all LLM providers failed. Tried: [{summary}]")
+    logger.warning(
+        "planners: all LLM providers failed; using deterministic fallback. Tried: [%s]",
+        summary,
+    )
+    return _fallback_planner_markdown(
+        scope,
+        date_info,
+        bundle,
+        task_instruction,
+        summary,
+    ), date_info
 
 
 def tts_excerpt_from_markdown(markdown: str, max_len: int = 950) -> str:
