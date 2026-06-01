@@ -98,15 +98,140 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
         from distr.core.hermes import emit_event
 
         candidate = payload.get("candidate") if isinstance(payload.get("candidate"), dict) else {}
+        execution_result = _execute_hermes_triage_candidate(candidate)
         emit_event(
             source="hermes",
             event_type="daily_triage_candidate_approved",
             status="approved",
             summary=str(candidate.get("question") or candidate.get("title") or "Hermes triage candidate approved"),
-            payload={"candidate": candidate},
+            payload={"candidate": candidate, "execution_result": execution_result},
         )
         return
     raise ValueError(f"unknown execute_payload kind: {kind!r}")
+
+
+def _execute_hermes_triage_candidate(candidate: dict[str, Any]) -> dict[str, Any]:
+    """Perform the safest concrete action for an approved Hermes triage item."""
+    if not isinstance(candidate, dict):
+        return {"status": "noop", "reason": "candidate missing"}
+    action_type = str(candidate.get("action_type") or "").strip().lower()
+    source = str(candidate.get("source") or "").strip().lower()
+    proposal = (candidate.get("payload") or {}).get("proposal")
+    proposal_payload = proposal.get("payload") if isinstance(proposal, dict) and isinstance(proposal.get("payload"), dict) else {}
+
+    if action_type == "create_ticket" and source == "whatsapp":
+        board_id = proposal_payload.get("linked_board_id")
+        message_ids = proposal_payload.get("message_ids")
+        if board_id and isinstance(message_ids, list) and message_ids:
+            return _create_whatsapp_snapshot_ticket(
+                board_id=int(board_id),
+                message_ids=[int(mid) for mid in message_ids if str(mid).strip().isdigit()],
+                candidate=candidate,
+            )
+        return {
+            "status": "needs_input",
+            "reason": "WhatsApp candidate has no linked board/message ids yet",
+        }
+
+    return {
+        "status": "acknowledged",
+        "reason": f"{action_type or 'decision'} approval recorded for Hermes/orchestrator follow-up",
+    }
+
+
+def _create_whatsapp_snapshot_ticket(
+    *,
+    board_id: int,
+    message_ids: list[int],
+    candidate: dict[str, Any],
+) -> dict[str, Any]:
+    from distr.core.db import WhatsAppMessage, get_session
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+
+    if not message_ids:
+        return {"status": "needs_input", "reason": "no message ids"}
+
+    with get_session() as session:
+        board = session.query(KanbanBoard).filter(KanbanBoard.id == board_id).first()
+        if not board:
+            return {"status": "failed", "reason": f"board {board_id} not found"}
+        lane = (
+            session.query(KanbanLane)
+            .filter(KanbanLane.board_id == board.id)
+            .order_by(KanbanLane.position.asc(), KanbanLane.id.asc())
+            .first()
+        )
+        if not lane:
+            return {"status": "failed", "reason": f"board {board_id} has no lanes"}
+        messages = (
+            session.query(WhatsAppMessage)
+            .filter(WhatsAppMessage.id.in_(message_ids))
+            .order_by(WhatsAppMessage.whatsapp_timestamp.asc(), WhatsAppMessage.id.asc())
+            .all()
+        )
+        if not messages:
+            return {"status": "failed", "reason": "messages not found"}
+
+        latest = messages[-1]
+        contact = (
+            getattr(latest, "sender_push_name", None)
+            or getattr(latest, "sender_phone", None)
+            or getattr(latest, "jid_phone", None)
+            or "WhatsApp"
+        )
+        title = str(candidate.get("title") or "").strip()
+        if not title or len(title) > 120:
+            title = f"WhatsApp follow-up: {contact}"
+        lines = [
+            str(candidate.get("question") or candidate.get("title") or "Approved Hermes WhatsApp triage."),
+            "",
+            "Source messages:",
+        ]
+        for msg in messages:
+            who = "Me" if getattr(msg, "from_me", False) else (
+                getattr(msg, "sender_push_name", None)
+                or getattr(msg, "sender_phone", None)
+                or "Unknown"
+            )
+            body = (
+                getattr(msg, "text", None)
+                or getattr(msg, "caption", None)
+                or f"[{getattr(msg, 'media_type', None) or 'message'}]"
+            )
+            lines.append(f"- #{getattr(msg, 'id', '')} {who}: {str(body).strip()[:500]}")
+
+        max_pos = max((int(t.position or 0) for t in lane.tickets), default=-1)
+        ticket = KanbanTicket(
+            lane_id=lane.id,
+            title=title[:250],
+            description="\n".join(lines),
+            priority="medium",
+            complexity="medium",
+            position=max_pos + 1,
+            whatsapp_message_id=getattr(latest, "id", None),
+            whatsapp_message_wa_id=getattr(latest, "message_id", None),
+            source_provider="whatsapp",
+            source_external_id=getattr(latest, "message_id", None),
+            source_thread_id=getattr(latest, "jid", None) or getattr(latest, "jid_phone", None),
+            source_contact=contact,
+            source_label="WhatsApp",
+        )
+        session.add(ticket)
+        session.flush()
+        snapshot_group = f"{ticket.id}_{lane.id}"
+        for msg in messages:
+            msg.processed = True
+            msg.snapshot_group = snapshot_group
+        ticket_id = ticket.id
+        board_name = board.name or f"Board {board.id}"
+
+    return {
+        "status": "created_ticket",
+        "ticket_id": ticket_id,
+        "board_id": board_id,
+        "board_name": board_name,
+        "message_count": len(messages),
+    }
 
 
 def validated_mcp_server_for_install(

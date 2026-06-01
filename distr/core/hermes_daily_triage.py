@@ -27,6 +27,14 @@ EXPECTED_WORK_SOURCES = {
     "email": "Email",
 }
 
+TRIAGE_BUCKETS = {
+    "needs_reply": "Needs Reply",
+    "make_ticket": "Make Ticket",
+    "waiting_on_me": "Waiting On Me",
+    "risk_blocker": "Risk / Blocker",
+    "fyi": "FYI",
+}
+
 
 def build_daily_triage(
     *,
@@ -56,6 +64,7 @@ def build_daily_triage(
     candidates = _dedupe_candidates(candidates)
     candidates.sort(key=lambda c: (float(c.get("confidence") or 0), _priority(c)), reverse=True)
     candidates = candidates[: max(1, int(max_candidates or 12))]
+    buckets = _bucket_candidates(candidates)
 
     missing_required = [
         s for s in source_health
@@ -67,6 +76,7 @@ def build_daily_triage(
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "summary": _summary(candidates, source_health),
         "source_health": source_health,
+        "buckets": buckets,
         "candidates": candidates,
         "recent_event_count": len(recent_events or []),
         "missing_required_sources": missing_required,
@@ -113,6 +123,7 @@ def enqueue_triage_candidates(
 def format_triage_markdown(triage: dict[str, Any], *, max_candidates: int = 8) -> str:
     """Render a concise standup-style markdown summary."""
     candidates = _list(triage.get("candidates"))[:max_candidates]
+    buckets = triage.get("buckets") if isinstance(triage.get("buckets"), dict) else {}
     source_health = _list(triage.get("source_health"))
     connected = [s.get("label") for s in source_health if s.get("connected")]
     missing = [s.get("label") for s in source_health if not s.get("connected")]
@@ -126,6 +137,12 @@ def format_triage_markdown(triage: dict[str, Any], *, max_candidates: int = 8) -
         lines.append(f"- Not wired yet: {', '.join([str(x) for x in missing if x])}.")
 
     if candidates:
+        if buckets:
+            lines.extend(["", "## Intake Buckets"])
+            for key, label in TRIAGE_BUCKETS.items():
+                items = _list(buckets.get(key))
+                if items:
+                    lines.append(f"- {label}: {len(items)}")
         lines.extend(["", "## Decisions I Need From You"])
         for idx, candidate in enumerate(candidates, start=1):
             lines.append(f"{idx}. {candidate.get('question') or candidate.get('title')}")
@@ -147,8 +164,12 @@ def _candidate_from_proposal(proposal: dict[str, Any]) -> dict[str, Any] | None:
     source = str(payload.get("source") or proposal.get("source") or "work_scan").strip().lower()
 
     if action_type == "message_triage":
-        suggested = "create_ticket"
-        question = f"{description} Should I create or update a ticket from this?"
+        if _looks_like_reply_candidate(description, payload):
+            suggested = "draft_reply"
+            question = f"{description} Should I draft a reply or turn it into a ticket?"
+        else:
+            suggested = "create_ticket"
+            question = f"{description} Should I create or update a ticket from this?"
     elif action_type == "ticket_lane_move":
         suggested = "update_ticket"
         question = f"{description} Should I promote these ticket(s)?"
@@ -193,6 +214,22 @@ def _candidates_from_messages(source: str, messages: list[dict[str, Any]]) -> li
             risk_level="medium",
         )
     ]
+
+
+def _looks_like_reply_candidate(description: str, payload: dict[str, Any]) -> bool:
+    text = " ".join(
+        str(x or "")
+        for x in (
+            description,
+            payload.get("latest_preview"),
+            payload.get("latest_sender"),
+        )
+    ).lower()
+    if payload.get("linked_board_id") or payload.get("message_ids"):
+        return False
+    reply_markers = ("messaged", "message from", "just got", "asked", "are you around", "can you", "could you")
+    ticket_markers = ("ticket", "bug", "fix", "quote", "invoice", "deadline", "project", "urgent", "issue")
+    return any(marker in text for marker in reply_markers) and not any(marker in text for marker in ticket_markers)
 
 
 def _developer_context_candidates(context: dict[str, Any]) -> list[dict[str, Any]]:
@@ -256,6 +293,7 @@ def _candidate(
     base = {
         "source": source,
         "action_type": action_type,
+        "bucket": _bucket_for_action(action_type, risk_level),
         "title": _clip(title, 240),
         "question": _clip(question, 320),
         "evidence": [_clip(e, 300) for e in evidence if e],
@@ -276,6 +314,33 @@ def _candidate(
     )
     base["id"] = hashlib.sha1(raw.encode("utf-8")).hexdigest()
     return base
+
+
+def _bucket_candidates(candidates: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+    buckets: dict[str, list[dict[str, Any]]] = {key: [] for key in TRIAGE_BUCKETS}
+    for candidate in candidates:
+        bucket = str(candidate.get("bucket") or _bucket_for_action(
+            str(candidate.get("action_type") or ""),
+            str(candidate.get("risk_level") or ""),
+        ))
+        if bucket not in buckets:
+            bucket = "fyi"
+        buckets[bucket].append(candidate)
+    return buckets
+
+
+def _bucket_for_action(action_type: str, risk_level: str = "") -> str:
+    action = (action_type or "").strip().lower()
+    risk = (risk_level or "").strip().lower()
+    if risk in {"high", "critical", "blocker"}:
+        return "risk_blocker"
+    if action == "draft_reply":
+        return "needs_reply"
+    if action == "create_ticket":
+        return "make_ticket"
+    if action in {"update_ticket", "execute_work", "attach_agent_work_to_ticket", "review_board"}:
+        return "waiting_on_me"
+    return "fyi"
 
 
 def _dedupe_candidates(candidates: list[dict[str, Any]]) -> list[dict[str, Any]]:

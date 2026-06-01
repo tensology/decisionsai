@@ -38,6 +38,7 @@ def test_build_daily_triage_turns_messages_into_decision_candidates():
     assert triage["mode"] == "daily_standup_triage"
     assert "decision candidate" in triage["summary"]
     assert any(c["action_type"] == "create_ticket" for c in triage["candidates"])
+    assert triage["buckets"]["make_ticket"]
     assert any(s["provider"] == "clickup" and not s["connected"] for s in triage["source_health"])
 
 
@@ -58,6 +59,7 @@ def test_format_triage_markdown_asks_for_decisions():
     markdown = format_triage_markdown(triage)
 
     assert "## Standup Triage" in markdown
+    assert "## Intake Buckets" in markdown
     assert "## Decisions I Need From You" in markdown
     assert "Should I promote" in markdown
 
@@ -83,3 +85,59 @@ def test_enqueue_triage_candidates_dedupes(tmp_path):
     assert len(entries) == 1
     assert entries[0].action_type == "hermes_triage_candidate"
     assert entries[0].execute_payload["kind"] == "hermes_triage_ack"
+
+
+def test_build_daily_triage_buckets_reply_candidates():
+    triage = build_daily_triage(
+        work_scan={
+            "proposals": [
+                {
+                    "action_type": "message_triage",
+                    "description": "You just got a WhatsApp message from Maya.",
+                    "payload": {
+                        "source": "whatsapp",
+                        "latest_sender": "Maya",
+                        "latest_preview": "hey are you around?",
+                    },
+                }
+            ]
+        }
+    )
+
+    assert triage["candidates"][0]["action_type"] == "draft_reply"
+    assert triage["buckets"]["needs_reply"][0]["source"] == "whatsapp"
+
+
+def test_hermes_triage_ack_executes_whatsapp_ticket_when_linked(monkeypatch):
+    from distr.core.initiative import draft_execute
+
+    created = {}
+
+    def fake_create(*, board_id, message_ids, candidate):
+        created["board_id"] = board_id
+        created["message_ids"] = message_ids
+        return {"status": "created_ticket", "ticket_id": 123}
+
+    events = []
+    monkeypatch.setattr(draft_execute, "_create_whatsapp_snapshot_ticket", fake_create)
+    monkeypatch.setattr("distr.core.hermes.emit_event", lambda **kw: events.append(kw))
+
+    draft_execute.run_execute_payload({
+        "kind": "hermes_triage_ack",
+        "candidate": {
+            "source": "whatsapp",
+            "action_type": "create_ticket",
+            "question": "Create ticket?",
+            "payload": {
+                "proposal": {
+                    "payload": {
+                        "linked_board_id": 7,
+                        "message_ids": [42],
+                    }
+                }
+            },
+        },
+    })
+
+    assert created == {"board_id": 7, "message_ids": [42]}
+    assert events[0]["payload"]["execution_result"]["status"] == "created_ticket"
