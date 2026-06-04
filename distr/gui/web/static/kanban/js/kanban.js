@@ -543,6 +543,7 @@
         openCopyModal: openCopyModal,
         apiFetch: apiFetch,
         sendTicketToProjectById: sendTicketToProjectById,
+        sendTicketToAgentById: sendTicketToAgentById,
         pushTicketToCli: pushTicketToCli,
         reloadCurrentDatabaseBoard: reloadCurrentDatabaseBoard,
         showKanbanConfirm: showKanbanConfirm,
@@ -1111,7 +1112,7 @@
         }
 
         if (source === "database") {
-            Promise.all([
+            var boardPromise = Promise.all([
                 apiFetch("/api/kanban/boards/" + id),
                 apiFetch("/api/kanban/boards").catch(function() { return []; }),
             ]).then(function(results) {
@@ -1129,12 +1130,15 @@
                 document.getElementById("kb-empty").classList.remove("hidden");
                 }
                 showSnackbar("Failed to load board: " + e.message, "error");
+                if (opts.rejectOnError) throw e;
             });
+            loadBoards(); // uses cache, just re-renders sidebar active state
+            return boardPromise;
         } else {
-            (function fetchExtBoard(attempt) {
+            var externalPromise = (function fetchExtBoard(attempt) {
                 attempt = attempt || 0;
                 var forceQ = opts.forceRefresh && attempt === 0 ? "?force_refresh=1" : "";
-                apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id) + forceQ).then(function(data) {
+                return apiFetch("/api/kanban/external-boards/" + source + "/" + encodeURIComponent(id) + forceQ).then(function(data) {
                     currentBoardData = data;
                     if (data.cache_ready === false && attempt < 90) {
                         if (!keepMessagesVisible) {
@@ -1142,8 +1146,9 @@
                             document.getElementById("kb-board-view").classList.remove("hidden");
                         }
                         renderBoard(data, false);
-                        setTimeout(function() { fetchExtBoard(attempt + 1); }, 700);
-                        return;
+                        return new Promise(function(resolve) {
+                            setTimeout(function() { resolve(fetchExtBoard(attempt + 1)); }, 700);
+                        });
                     }
                     if (!keepMessagesVisible) {
                         document.getElementById("kb-loading").classList.add("hidden");
@@ -1163,10 +1168,12 @@
                         document.getElementById("kb-empty").classList.remove("hidden");
                     }
                     showSnackbar("Failed to load external board: " + e.message, "error");
+                    if (opts.rejectOnError) throw e;
                 });
             })(0);
+            loadBoards(); // uses cache, just re-renders sidebar active state
+            return externalPromise;
         }
-        loadBoards(); // uses cache, just re-renders sidebar active state
     }
 
     function renderBoard(data, isLocal) {
@@ -1435,6 +1442,41 @@
             });
     }
 
+    /** Send a local ticket to the project agent route. Auto routing chooses Cursor/Codex by complexity. */
+    function sendTicketToAgentById(ticketId, btnEl, opts) {
+        opts = opts || {};
+        var prevHtml = btnEl ? btnEl.innerHTML : "";
+        if (btnEl) {
+            btnEl.dataset.prevHtml = prevHtml;
+            btnEl.disabled = true;
+            btnEl.classList.add("text-orange-400");
+            btnEl.innerHTML = '<svg class="animate-spin" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4m0 12v4m-7.07-3.93l2.83-2.83m8.48-8.48l2.83-2.83M2 12h4m12 0h4m-3.93 7.07l-2.83-2.83M7.76 7.76L4.93 4.93"/></svg>';
+        }
+        var backendId = (opts.backendId || "").trim();
+        var payload = {};
+        if (backendId) payload.backend_id = backendId;
+        showSnackbar(backendId ? ("Sending ticket to " + backendId + "…") : "Sending ticket to agent…", "info");
+        return apiFetch("/api/kanban/tickets/" + ticketId + "/send-to-cli", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+        }).then(function(r) {
+            var backend = r.backend_id || backendId || "agent";
+            showSnackbar(r.message || ("Sent to " + backend));
+            _pollCliStatus(ticketId, btnEl || null);
+            return r;
+        }).catch(function(err) {
+            showSnackbar("Agent error: " + err.message, "error");
+            throw err;
+        }).finally(function() {
+            if (btnEl) {
+                btnEl.innerHTML = btnEl.dataset.prevHtml || prevHtml;
+                btnEl.classList.remove("text-orange-400");
+                btnEl.disabled = false;
+            }
+        });
+    }
+
     /** Send a local ticket to project by ID. */
     function sendTicketToProjectById(ticketId, btnEl) {
         if (btnEl) {
@@ -1461,9 +1503,9 @@
     }
 
     /** Copy an external ticket to the local board, then optionally send to CLI or project. */
-    function copyAndPushExternalTicket(ticket, source, action, selectedWorkflowId) {
+    function copyAndPushExternalTicket(ticket, source, action, selectedWorkflowId, backendOverride, btnEl) {
         if (!dbBoards.length) { showSnackbar("No local boards available", "error"); return; }
-        var requiresProject = action === 'cli' || action === 'project';
+        var requiresProject = action === 'cli' || action === 'project' || action === 'agent';
         // Project may be set on the external (Trello/Jira) board config, while tickets are copied
         // onto a source=database board only — local_id points at the external shadow row, not dbBoards.
         var extProjectId = currentBoardData && currentBoardData.default_project_id ? currentBoardData.default_project_id : null;
@@ -1515,9 +1557,9 @@
             method: "POST", headers: { "Content-Type": "application/json" },
             body: JSON.stringify(payload)
         }).then(function(r) {
-            if (action === 'cli' && r.id) {
-                showSnackbar("Ticket copied — pushing to CLI…");
-                pushTicketToCli(r.id, null);
+            if ((action === 'cli' || action === 'agent') && r.id) {
+                showSnackbar("Ticket copied — sending to agent…");
+                sendTicketToAgentById(r.id, btnEl || null, { backendId: backendOverride || "" });
             } else if (action === 'workflow') {
                 if (r.workflow_started) {
                     showSnackbar("Ticket copied and sent to workflow");

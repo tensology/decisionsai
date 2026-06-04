@@ -2,6 +2,107 @@
     "use strict";
 
     function createTicketUi(deps) {
+        var agentMenuEl = null;
+        var agentMenuBound = false;
+
+        function backendReady(backends, backendId) {
+            var row = (backends || []).find(function(b) { return b && b.id === backendId; });
+            return !!(row && (row.ready || row.available));
+        }
+
+        function hideAgentMenu() {
+            if (agentMenuEl) agentMenuEl.classList.add("hidden");
+        }
+
+        function ensureAgentMenu() {
+            if (agentMenuEl) return agentMenuEl;
+            agentMenuEl = document.createElement("div");
+            agentMenuEl.id = "kb-ticket-agent-menu";
+            agentMenuEl.className = "fixed hidden z-50 min-w-[210px] py-1 bg-[#1a1f3a] border border-white/20 rounded-lg shadow-xl";
+            document.body.appendChild(agentMenuEl);
+            if (!agentMenuBound) {
+                agentMenuBound = true;
+                document.addEventListener("click", function(e) {
+                    if (!agentMenuEl || e.target.closest("#kb-ticket-agent-menu") || e.target.closest(".kb-act-agent")) return;
+                    hideAgentMenu();
+                });
+                document.addEventListener("keydown", function(e) {
+                    if (e.key === "Escape") hideAgentMenu();
+                });
+            }
+            return agentMenuEl;
+        }
+
+        function menuButtonHtml(action, label, hint, disabled) {
+            return '<button type="button" data-action="' + deps.esc(action) + '" class="w-full text-left px-4 py-2 text-sm flex flex-col gap-0.5 ' +
+                (disabled ? 'text-gray-600 cursor-not-allowed' : 'text-gray-300 hover:bg-white/10') + '"' + (disabled ? " disabled" : "") + ">" +
+                '<span class="font-medium">' + deps.esc(label) + "</span>" +
+                (hint ? '<span class="text-[11px] text-gray-500">' + deps.esc(hint) + "</span>" : "") +
+                "</button>";
+        }
+
+        function runAgentDispatch(ticket, isLocal, backendId, btnEl) {
+            if (!ticket) return;
+            if (isLocal) {
+                deps.sendTicketToAgentById(ticket.id, btnEl, { backendId: backendId || "" });
+                return;
+            }
+            var currentBoard = deps.getCurrentBoard();
+            if (!currentBoard) return;
+            deps.copyAndPushExternalTicket(ticket, currentBoard.source, "agent", null, backendId || "", btnEl);
+        }
+
+        function showAgentMenu(event, ticket, isLocal, btnEl, opts) {
+            event.preventDefault();
+            event.stopPropagation();
+            var menu = ensureAgentMenu();
+            var canRun = !!(opts && opts.hasProject);
+            menu.innerHTML =
+                menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                '<div class="my-1 border-t border-white/10"></div>' +
+                menuButtonHtml("auto", "Run with auto route", "Use complexity routing and availability fallback.", !canRun) +
+                menuButtonHtml("cursor", "Send to Cursor", "Force Cursor when available.", true) +
+                menuButtonHtml("codex", "Send to Codex", "Force Codex when available.", true);
+            menu.style.left = Math.min(event.clientX, window.innerWidth - 230) + "px";
+            menu.style.top = Math.min(event.clientY, window.innerHeight - 190) + "px";
+            menu.classList.remove("hidden");
+
+            deps.apiFetch("/api/projects/cli-backends").then(function(data) {
+                var backends = (data && data.backends) || [];
+                var cursorReady = canRun && backendReady(backends, "cursor");
+                var codexReady = canRun && backendReady(backends, "codex");
+                menu.innerHTML =
+                    menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                    '<div class="my-1 border-t border-white/10"></div>' +
+                    menuButtonHtml("auto", "Run with auto route", "Complexity decides Cursor/Codex; falls back if needed.", !canRun) +
+                    menuButtonHtml("cursor", "Send to Cursor", cursorReady ? "Available now." : "Cursor is not available.", !cursorReady) +
+                    menuButtonHtml("codex", "Send to Codex", codexReady ? "Available now." : "Codex is not available.", !codexReady);
+            }).catch(function() {
+                menu.innerHTML =
+                    menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                    '<div class="my-1 border-t border-white/10"></div>' +
+                    menuButtonHtml("auto", "Run with auto route", "Could not check availability; backend will validate.", !canRun) +
+                    menuButtonHtml("cursor", "Send to Cursor", "Availability check failed.", true) +
+                    menuButtonHtml("codex", "Send to Codex", "Availability check failed.", true);
+            });
+
+            menu.onclick = function(e) {
+                var item = e.target.closest("button[data-action]");
+                if (!item || item.disabled) return;
+                e.preventDefault();
+                e.stopPropagation();
+                var action = item.getAttribute("data-action");
+                hideAgentMenu();
+                if (action === "discuss") {
+                    deps.startTicketDiscussion(ticket, isLocal);
+                } else if (action === "auto") {
+                    runAgentDispatch(ticket, isLocal, "", btnEl);
+                } else if (action === "cursor" || action === "codex") {
+                    runAgentDispatch(ticket, isLocal, action, btnEl);
+                }
+            };
+        }
+
         function buildSourceBadge(source) {
             if (!source || source === "database") return "";
             return '<span class="text-[10px] px-1.5 py-0.5 rounded bg-white/10 text-gray-300 font-medium">' + deps.esc(source) + "</span>";
@@ -35,55 +136,14 @@
         function buildActionRow(opts) {
             var leftActions = [
                 actionButtonHtml({
-                    keyClass: "kb-act-copy",
-                    tooltip: "Copy ticket title and description",
+                    keyClass: "kb-act-agent",
+                    tooltip: opts.hasProject ? "Talk to agent. Right-click for Cursor/Codex routing." : "Link this board or ticket to a project before running an agent.",
+                    disabled: false,
                     nativeTooltip: true,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
-                }),
-                actionButtonHtml({
-                    keyClass: "kb-act-workflow",
-                    tooltip: "Send to Workflow",
-                    nativeTooltip: true,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
-                }),
-                actionButtonHtml({
-                    keyClass: "kb-act-cli",
-                    tooltip: "Push to CLI",
-                    hidden: !opts.hasProject,
-                    nativeTooltip: true,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
-                }),
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg><span class="kb-act-label">Agent</span>',
+                })
             ];
-            leftActions.push(actionButtonHtml({
-                keyClass: "kb-act-project",
-                tooltip: "Send to Project (.tickets)",
-                hidden: !opts.hasProject,
-                nativeTooltip: true,
-                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
-            }));
-            if (opts.canTransfer) {
-                leftActions.push(actionButtonHtml({
-                    keyClass: "kb-act-transfer",
-                    tooltip: "Copy ticket into a local board",
-                    disabled: false,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="2" y="2" width="20" height="8" rx="2" ry="2"/><rect x="2" y="14" width="20" height="8" rx="2" ry="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
-                }));
-            }
-            leftActions.push(actionButtonHtml({
-                keyClass: "kb-act-discuss",
-                tooltip: "Let's talk about it — feeds this ticket into your agent chat (uses your current / last chat, or creates one)",
-                nativeTooltip: true,
-                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15a2 2 0 01-2 2H7l-4 4V5a2 2 0 012-2h14a2 2 0 012 2z"/></svg>',
-            }));
             var deleteAction = "";
-            if (opts.canDelete) {
-                deleteAction = actionButtonHtml({
-                    keyClass: "kb-act-delete",
-                    tooltip: "Delete ticket",
-                    disabled: false,
-                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 01-2 2H7a2 2 0 01-2-2V6m3 0V4a2 2 0 012-2h4a2 2 0 012 2v2"/></svg>',
-                });
-            }
             return '<div class="kb-card-actions-left">' + leftActions.join("") + "</div>" +
                 '<div class="kb-card-actions-right">' + deleteAction + "</div>";
         }
@@ -379,40 +439,21 @@
             });
 
             card.addEventListener("click", function(e) {
-                if (e.target.closest(".kb-card-actions") || e.target.closest(".kb-act-transfer") || e.target.closest(".kb-act-discuss") || e.target.closest("a")) return;
+                if (e.target.closest(".kb-card-actions") || e.target.closest("a")) return;
                 if (isLocal) deps.openTicketModal(ticket.id);
                 else openExternalTicketModal(ticket, currentBoard.source);
             });
-            var copyBtn = card.querySelector(".kb-act-copy");
-            if (copyBtn) copyBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                var text = deps.stripHtml(ticket.title) + (cleanDesc ? "\n\n" + cleanDesc : "");
-                navigator.clipboard.writeText(text).then(function() { deps.showSnackbar("Copied to clipboard"); });
-            });
-            var cliBtn = card.querySelector(".kb-act-cli");
-            if (cliBtn && !cliBtn.disabled) cliBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                if (isLocal) deps.pushTicketToCli(ticket.id, cliBtn);
-                else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli");
-            });
-            var projectBtn = card.querySelector(".kb-act-project");
-            if (projectBtn && !projectBtn.disabled) projectBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
-                else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project");
-            });
-            var transferBtn = card.querySelector(".kb-act-transfer");
-            if (transferBtn && !transferBtn.disabled) transferBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                deps.openCopyModal(ticket);
-            });
-            var workflowBtn = card.querySelector(".kb-act-workflow");
-            if (workflowBtn && !workflowBtn.disabled) workflowBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                if (typeof deps.openSendWorkflowModal === "function") {
-                    deps.openSendWorkflowModal(ticket, isLocal ? null : currentBoard.source);
-                }
-            });
+            var agentBtn = card.querySelector(".kb-act-agent");
+            if (agentBtn) {
+                agentBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.startTicketDiscussion(ticket, isLocal);
+                });
+                agentBtn.addEventListener("contextmenu", function(e) {
+                    showAgentMenu(e, ticket, isLocal, agentBtn, { hasProject: hasProject });
+                });
+            }
             var wfBadge = card.querySelector(".kb-wf-status-badge");
             if (wfBadge && wfBadge.tagName === "BUTTON" && isLocal && typeof deps.showRunPopover === "function") {
                 wfBadge.addEventListener("click", function(e) {
@@ -420,36 +461,6 @@
                     deps.showRunPopover(wfBadge, ticket.id);
                 });
             }
-            var discussBtn = card.querySelector(".kb-act-discuss");
-            if (discussBtn && !discussBtn.disabled) {
-                discussBtn.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    if (typeof deps.startTicketDiscussion === "function") {
-                        deps.startTicketDiscussion(ticket, isLocal);
-                    }
-                });
-            }
-            var delBtn = card.querySelector(".kb-act-delete");
-            if (delBtn && !delBtn.disabled) delBtn.addEventListener("click", function(e) {
-                e.stopPropagation();
-                var tid = ticket.id;
-                deps.showKanbanConfirm({
-                    title: "Delete ticket",
-                    message: 'Delete "' + ticket.title + '"? This cannot be undone.',
-                    confirmLabel: "Delete",
-                    danger: true,
-                    onConfirm: function() {
-                        deps.hideKanbanConfirm();
-                        deps.apiFetch("/api/kanban/tickets/" + tid, { method: "DELETE" }).then(function() {
-                            deps.showSnackbar("Ticket deleted");
-                            deps.reloadCurrentDatabaseBoard();
-                        }).catch(function(err) {
-                            deps.showSnackbar("Delete failed: " + err.message, "error");
-                        });
-                    }
-                });
-            });
             return card;
         }
 

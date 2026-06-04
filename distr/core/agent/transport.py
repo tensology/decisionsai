@@ -11,7 +11,7 @@ import time
 from distr.core.audio.time_stretcher import TimeStretcher
 from .libs import (
     LocalAudioTransport, LocalAudioInputTransport, LocalAudioOutputTransport, LocalAudioTransportParams,
-    AudioRawFrame, EndFrame, Frame, TTSStoppedFrame, LLMFullResponseEndFrame, OutputAudioRawFrame,
+    AudioRawFrame, InputAudioRawFrame, EndFrame, Frame, TTSStoppedFrame, LLMFullResponseEndFrame, OutputAudioRawFrame,
     TTSStartedFrame, InterruptionFrame,
     librosa, LIBROSA_AVAILABLE,
     pyaudio, PYAUDIO_AVAILABLE
@@ -25,8 +25,168 @@ class AudioPlaybackState(IntEnum):
     DRAINING = auto()       # TTS finished, waiting for buffer/hardware to finish
     COMPLETED = auto()      # Playback finished, safe to close
 
+
+def _normalize_output_device_name(device_name: Optional[str]) -> str:
+    if not device_name:
+        return "System Default"
+    text = str(device_name).strip()
+    if not text or text.lower() in {"system default", "system_default", "default"}:
+        return "System Default"
+    return text
+
+
 class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
     """Local audio input transport that supports hot-swapping devices."""
+
+    def __init__(self, py_audio, params):
+        super().__init__(py_audio, params)
+        self._input_callback_count = 0
+        self._input_callback_bytes = 0
+        self._input_callback_errors = 0
+        self._input_last_callback_at = 0.0
+        self._input_last_callback_peak = 0
+
+    def _ensure_audio_task_ready(self):
+        """Ensure Pipecat's downstream audio queue exists after an idle resume."""
+        self._paused = False
+        task = getattr(self, "_audio_task", None)
+        if task is not None and getattr(task, "done", lambda: False)():
+            try:
+                exc = task.exception()
+            except Exception as exc:
+                logger.warning("Audio input task ended unexpectedly and will be recreated: %s", exc)
+            else:
+                if exc:
+                    logger.warning("Audio input task failed and will be recreated: %s", exc)
+                else:
+                    logger.info("Audio input task ended and will be recreated")
+            self._audio_task = None
+
+        if getattr(self._params, "audio_in_enabled", True) and getattr(self, "_audio_task", None) is None:
+            self._create_audio_task()
+
+    def _open_input_stream(self):
+        """Open and start the PortAudio input stream if it is not already active."""
+        if self._in_stream:
+            try:
+                if self._in_stream.is_active():
+                    return
+            except Exception:
+                pass
+
+        if not self._sample_rate:
+            self._sample_rate = getattr(self._params, "audio_in_sample_rate", None) or 16000
+        num_frames = int(self._sample_rate / 100) * 2  # 20ms of audio
+        logger.info(
+            "Opening audio input stream: device=%s rate=%s channels=%s frames=%s",
+            self._params.input_device_index,
+            self._sample_rate,
+            self._params.audio_in_channels,
+            num_frames,
+        )
+        self._in_stream = self._py_audio.open(
+            format=self._py_audio.get_format_from_width(2),
+            channels=self._params.audio_in_channels,
+            rate=self._sample_rate,
+            frames_per_buffer=num_frames,
+            stream_callback=self._audio_in_callback,
+            input=True,
+            input_device_index=self._params.input_device_index,
+        )
+        self._in_stream.start_stream()
+
+    def _audio_in_callback(self, in_data, frame_count, time_info, status):
+        """PortAudio callback with health logging around Pipecat enqueue."""
+        self._input_callback_count += 1
+        self._input_callback_bytes += len(in_data or b"")
+        self._input_last_callback_at = time.time()
+        if status:
+            logger.warning("Audio input callback status: %s", status)
+
+        if in_data:
+            try:
+                audio_data = np.frombuffer(in_data, dtype=np.int16)
+                self._input_last_callback_peak = int(np.max(np.abs(audio_data))) if audio_data.size else 0
+            except Exception:
+                self._input_last_callback_peak = 0
+
+        try:
+            frame = InputAudioRawFrame(
+                audio=in_data,
+                sample_rate=self._sample_rate,
+                num_channels=self._params.audio_in_channels,
+            )
+            future = asyncio.run_coroutine_threadsafe(
+                self.push_audio_frame(frame),
+                self.get_event_loop(),
+            )
+
+            def _log_enqueue_failure(done_future):
+                try:
+                    done_future.result()
+                except Exception as exc:
+                    self._input_callback_errors += 1
+                    logger.error("Audio input callback could not enqueue frame: %s", exc, exc_info=True)
+
+            future.add_done_callback(_log_enqueue_failure)
+        except Exception as exc:
+            self._input_callback_errors += 1
+            logger.error("Audio input callback failed before enqueue: %s", exc, exc_info=True)
+
+        return (None, pyaudio.paContinue)
+
+    def _close_input_stream(self):
+        """Close the PortAudio input stream if it is open."""
+        old_stream = self._in_stream
+        self._in_stream = None
+        if old_stream:
+            try:
+                if old_stream.is_active():
+                    old_stream.stop_stream()
+                old_stream.close()
+            except Exception as e:
+                logger.error(f"Error closing input stream: {e}")
+
+    def pause_idle_input(self):
+        """Release the mic/CoreAudio input stream while no voice capture mode is active."""
+        self._params.audio_in_enabled = False
+        self._close_input_stream()
+        logger.info("Audio input stream paused while idle: %s", self.get_input_health())
+
+    def resume_input(self):
+        """Ensure the mic/CoreAudio input stream is ready for capture."""
+        self._params.audio_in_enabled = True
+        try:
+            self._ensure_audio_task_ready()
+            self._open_input_stream()
+            logger.info("Audio input stream resumed: %s", self.get_input_health())
+        except Exception as e:
+            logger.error(f"Error opening input stream: {e}")
+            self._in_stream = None
+
+    def get_input_health(self):
+        stream_active = False
+        if self._in_stream:
+            try:
+                stream_active = bool(self._in_stream.is_active())
+            except Exception:
+                stream_active = False
+        return {
+            "enabled": bool(getattr(self._params, "audio_in_enabled", False)),
+            "stream_active": stream_active,
+            "sample_rate": self._sample_rate,
+            "device_index": self._params.input_device_index,
+            "callbacks": self._input_callback_count,
+            "bytes": self._input_callback_bytes,
+            "last_peak": self._input_last_callback_peak,
+            "callback_errors": self._input_callback_errors,
+            "audio_task_alive": bool(getattr(self, "_audio_task", None)),
+        }
+
+    async def process_frame(self, frame, direction):
+        await super().process_frame(frame, direction)
+        if not getattr(self._params, "audio_in_enabled", True) and self._in_stream:
+            self._close_input_stream()
 
     def set_device(self, device_index: int):
         """Switch the input device on the fly."""
@@ -37,30 +197,16 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         self._params.input_device_index = device_index
 
         # 1. Stop using the current stream immediately
-        old_stream = self._in_stream
-        self._in_stream = None
+        self._close_input_stream()
 
-        if old_stream:
-            try:
-                old_stream.stop_stream()
-                old_stream.close()
-            except Exception as e:
-                logger.error(f"Error closing input stream: {e}")
-            
         # Re-open the stream with the new device
         try:
-            num_frames = int(self._sample_rate / 100) * 2  # 20ms of audio
-            self._in_stream = self._py_audio.open(
-                format=self._py_audio.get_format_from_width(2),
-                channels=self._params.audio_in_channels,
-                rate=self._sample_rate,
-                frames_per_buffer=num_frames,
-                stream_callback=self._audio_in_callback,
-                input=True,
-                input_device_index=self._params.input_device_index,
-            )
-            self._in_stream.start_stream()
-            logger.info(f"Input device switched successfully to index {device_index}")
+            if getattr(self._params, "audio_in_enabled", True):
+                self._ensure_audio_task_ready()
+                self._open_input_stream()
+                logger.info(f"Input device switched successfully to index {device_index}")
+            else:
+                logger.info(f"Input device updated to index {device_index}; stream remains paused")
         except Exception as e:
             logger.error(f"Error opening new input stream: {e}")
             self._in_stream = None
@@ -84,11 +230,13 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 cls._librosa_available = False
         return cls._librosa_available
 
-    def __init__(self, py_audio, params, event_queue=None, aec_reference_buffer=None):
+    def __init__(self, py_audio, params, event_queue=None, aec_reference_buffer=None, output_device_name=None):
         super().__init__(py_audio, params)
         self.event_queue = event_queue
         self._volume = 1.0
         self._speed = 1.0
+        self._output_device_name = _normalize_output_device_name(output_device_name)
+        self._resolved_output_device_index = getattr(params, 'output_device_index', None)
         
         # AEC reference buffer — output audio is pushed here so the input
         # filter can subtract it from the mic signal.
@@ -135,6 +283,106 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         self._state = AudioPlaybackState.IDLE
         self._playback_monitor_task = None
 
+    def _get_default_output_device_index(self) -> Optional[int]:
+        try:
+            info = self._py_audio.get_default_output_device_info()
+            return int(info.get("index")) if info is not None else None
+        except Exception as exc:
+            logger.warning("Transport: Could not resolve system default output device: %s", exc)
+            return None
+
+    def _iter_output_devices(self):
+        try:
+            count = self._py_audio.get_device_count()
+        except Exception as exc:
+            logger.warning("Transport: Could not enumerate output devices: %s", exc)
+            return
+        for index in range(count):
+            try:
+                info = self._py_audio.get_device_info_by_index(index)
+            except Exception:
+                continue
+            if int(info.get("maxOutputChannels") or 0) > 0:
+                yield int(info.get("index", index)), str(info.get("name") or ""), info
+
+    def _resolve_configured_output_device_index(self) -> Optional[int]:
+        configured_name = _normalize_output_device_name(self._output_device_name)
+        if configured_name == "System Default":
+            return self._get_default_output_device_index()
+
+        wanted = configured_name.lower()
+        output_devices = list(self._iter_output_devices())
+        for index, name, _info in output_devices:
+            if name == configured_name:
+                return index
+        for index, name, _info in output_devices:
+            if name.strip().lower() == wanted:
+                return index
+        for index, name, _info in output_devices:
+            lname = name.strip().lower()
+            if wanted in lname or lname in wanted:
+                logger.info(
+                    "Transport: Output device match (substring): requested '%s' -> using '%s' (index %d)",
+                    configured_name,
+                    name,
+                    index,
+                )
+                return index
+
+        logger.warning(
+            "Transport: Configured output device '%s' is unavailable; falling back to system default",
+            configured_name,
+        )
+        return self._get_default_output_device_index()
+
+    def _describe_output_device(self, device_index: Optional[int]) -> str:
+        if device_index is None:
+            return "System Default"
+        try:
+            info = self._py_audio.get_device_info_by_index(device_index)
+            return str(info.get("name") or f"index {device_index}")
+        except Exception:
+            return f"index {device_index}"
+
+    def _output_stream_is_active(self) -> bool:
+        if not self._out_stream:
+            return False
+        try:
+            return bool(self._out_stream.is_active())
+        except Exception:
+            return False
+
+    def _ensure_output_stream_for_configured_device(self, *, reason: str) -> None:
+        target_index = self._resolve_configured_output_device_index()
+        current_index = self._resolved_output_device_index
+        if (
+            self._output_stream_is_active()
+            and current_index == target_index
+            and self._params.output_device_index == target_index
+        ):
+            return
+
+        logger.info(
+            "Transport: Refreshing output stream for %s: configured='%s' current=%s target=%s (%s)",
+            reason,
+            self._output_device_name,
+            current_index,
+            target_index,
+            self._describe_output_device(target_index),
+        )
+        self._params.output_device_index = target_index
+        self._reopen_output_stream(target_index)
+
+    async def _ensure_output_stream_ready_async(self, *, reason: str):
+        if hasattr(self, '_executor'):
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(
+                self._executor,
+                lambda: self._ensure_output_stream_for_configured_device(reason=reason),
+            )
+            return
+        self._ensure_output_stream_for_configured_device(reason=reason)
+
     def set_base_vad_confidence(self, confidence: float):
         """No-op — echo gate in STT service handles suppression."""
         pass
@@ -147,6 +395,25 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
     def _map_speed(self, ui_speed: float) -> float:
         """Map UI speed (0.5-2.0) to narrower internal effective speed (0.8-1.4)."""
         return 1.0 + (ui_speed - 1.0) * 0.4
+
+    def _effective_playback_speed(self) -> float:
+        return self._map_speed(self._speed)
+
+    def _uses_time_stretch(self) -> bool:
+        return abs(self._effective_playback_speed() - 1.0) >= 0.01
+
+    async def _process_playback_audio(self, audio_data: np.ndarray) -> np.ndarray:
+        """Apply time-stretch only when playback speed is not 1.0x (avoids block-edge crackle)."""
+        if len(audio_data) == 0:
+            return audio_data
+        if not self._uses_time_stretch():
+            return audio_data
+        return await self._time_stretcher.async_process(audio_data, self._effective_playback_speed())
+
+    async def _flush_playback_tail(self) -> np.ndarray:
+        if not self._uses_time_stretch():
+            return np.array([], dtype=np.float32)
+        return await self._time_stretcher.async_flush()
 
     def set_speed(self, speed: float):
         """Set playback speed multiplier (0.5 to 2.0)."""
@@ -209,6 +476,8 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         if self._force_silence:
             # Replace audio with silence so the OS buffer drains quietly
             frame.audio = b'\x00' * len(frame.audio)
+        if not self._output_stream_is_active():
+            await self._ensure_output_stream_ready_async(reason="inactive stream before audio write")
         try:
             result = await super().write_audio_frame(frame)
             # Successful write — reset error tracking
@@ -234,6 +503,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
     async def _recover_output_stream(self):
         """Recreate the PortAudio output stream after a fatal error."""
         logger.warning("Transport: Attempting to recreate output stream")
+        self._params.output_device_index = self._resolve_configured_output_device_index()
         old_stream = self._out_stream
         self._out_stream = None
         if old_stream:
@@ -250,7 +520,11 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 output_device_index=self._params.output_device_index,
             )
             self._out_stream.start_stream()
-            logger.info("Transport: Output stream recreated successfully")
+            self._resolved_output_device_index = self._params.output_device_index
+            logger.info(
+                "Transport: Output stream recreated successfully on %s",
+                self._describe_output_device(self._resolved_output_device_index),
+            )
             self._stream_error_count = 0
             self._stream_error_logged = False
         except Exception as e:
@@ -366,6 +640,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 "Transport: TTSStartedFrame state=%s pipeline_cut=%s",
                 self._state.name, self._pipeline_cut,
             )
+            await self._ensure_output_stream_ready_async(reason="TTS session start")
             # Signal AEC that speaker is active
             if self._aec_ref_buf is not None:
                 self._aec_ref_buf.set_active(True)
@@ -414,7 +689,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
 
             # Flush TimeStretcher (discard buffered audio)
             try:
-                await self._time_stretcher.async_flush()
+                await self._flush_playback_tail()
             except Exception as e:
                 logger.error(f"Transport: Error flushing TimeStretcher: {e}")
 
@@ -473,7 +748,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
             
             if isinstance(frame, TTSStoppedFrame):
                 # Per-sentence — flush buffer, consume frame (don't pass through)
-                remaining_audio = await self._time_stretcher.async_flush()
+                remaining_audio = await self._flush_playback_tail()
                 if len(remaining_audio) > 0:
                     tail_duration = len(remaining_audio) / self._original_sample_rate
                     if self._volume != 1.0:
@@ -514,7 +789,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 )
             
             # Flush remaining audio
-            remaining_audio = await self._time_stretcher.async_flush()
+            remaining_audio = await self._flush_playback_tail()
             if len(remaining_audio) > 0:
                 tail_duration = len(remaining_audio) / self._original_sample_rate
                 if self._volume != 1.0:
@@ -604,8 +879,7 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                     if self._state == AudioPlaybackState.SYNTHESIZING:
                         await self._transition_to(AudioPlaybackState.PLAYING)
                 
-                effective_speed = self._map_speed(self._speed)
-                processed_audio = await self._time_stretcher.async_process(audio_data, effective_speed)
+                processed_audio = await self._process_playback_audio(audio_data)
                 
                 if len(processed_audio) > 0:
                     if self._volume != 1.0:
@@ -675,33 +949,25 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
         else:
             await super().process_frame(frame, direction)
 
-    def set_device(self, device_index: int):
-        """Switch the output device on the fly."""
-        logger.debug(f"set_device called on thread: {threading.current_thread().name}")
-
-        if self._params.output_device_index == device_index:
-            return
-
-        self._hardware_check_disabled = True
-
-        logger.info(f"Switching output device to index {device_index}")
-        self._params.output_device_index = device_index
-
+    def _reopen_output_stream(self, device_index: Optional[int]) -> None:
+        """Recreate the PortAudio output stream (must run off the asyncio event loop)."""
+        if not self._sample_rate:
+            self._sample_rate = (
+                getattr(self._params, 'audio_out_sample_rate', None)
+                or getattr(self._params, 'output_sample_rate', None)
+                or self._original_sample_rate
+                or 24000
+            )
         old_stream = self._out_stream
         self._out_stream = None
-
         if old_stream:
-            if hasattr(self, '_executor'):
-                try:
-                    self._executor.submit(lambda: None).result()
-                except Exception as e:
-                    logger.warning(f"Error waiting for executor flush: {e}")
             try:
-                old_stream.stop_stream()
+                if old_stream.is_active():
+                    old_stream.stop_stream()
                 old_stream.close()
             except Exception as e:
                 logger.error(f"Error closing output stream: {e}")
-            
+
         try:
             self._out_stream = self._py_audio.open(
                 format=self._py_audio.get_format_from_width(2),
@@ -711,19 +977,69 @@ class HotSwappableLocalAudioOutputTransport(LocalAudioOutputTransport):
                 output_device_index=self._params.output_device_index,
             )
             self._out_stream.start_stream()
-            logger.info(f"Output device switched successfully to index {device_index}")
+            self._stream_error_count = 0
+            self._stream_error_logged = False
+            self._resolved_output_device_index = device_index
+            logger.info(
+                "Output device switched successfully to %s",
+                self._describe_output_device(device_index),
+            )
         except Exception as e:
             logger.error(f"Error opening new output stream: {e}")
             self._out_stream = None
+
+    def set_device(self, device_index: Optional[int], device_name: Optional[str] = None):
+        """Switch the output device on the fly."""
+        logger.debug(f"set_device called on thread: {threading.current_thread().name}")
+
+        if device_name is not None:
+            self._output_device_name = _normalize_output_device_name(device_name)
+        elif device_index is None:
+            self._output_device_name = "System Default"
+
+        target_index = self._resolve_configured_output_device_index()
+
+        if (
+            self._params.output_device_index == target_index
+            and self._resolved_output_device_index == target_index
+            and self._output_stream_is_active()
+        ):
+            return
+
+        self._hardware_check_disabled = True
+
+        logger.info(
+            "Switching output device: configured='%s' target=%s (%s)",
+            self._output_device_name,
+            target_index,
+            self._describe_output_device(target_index),
+        )
+        self._params.output_device_index = target_index
+
+        # Reopen on the PortAudio executor so we never close the stream while a
+        # write is in flight (causes crackling / PortAudio -9986 errors).
+        if hasattr(self, '_executor'):
+            try:
+                loop = asyncio.get_running_loop()
+                loop.run_in_executor(
+                    self._executor,
+                    lambda: self._reopen_output_stream(target_index),
+                )
+                return
+            except RuntimeError:
+                pass
+
+        self._reopen_output_stream(target_index)
 
 
 class HotSwappableLocalAudioTransport(LocalAudioTransport):
     """Complete local audio transport with hot-swapping capabilities."""
     
-    def __init__(self, params, event_queue=None, aec_reference_buffer=None):
+    def __init__(self, params, event_queue=None, aec_reference_buffer=None, output_device_name=None):
         super().__init__(params)
         self.event_queue = event_queue
         self._aec_ref_buf = aec_reference_buffer
+        self._output_device_name = _normalize_output_device_name(output_device_name)
 
     def input(self) -> HotSwappableLocalAudioInputTransport:
         if not self._input:
@@ -736,6 +1052,7 @@ class HotSwappableLocalAudioTransport(LocalAudioTransport):
                 self._pyaudio, self._params,
                 event_queue=self.event_queue,
                 aec_reference_buffer=self._aec_ref_buf,
+                output_device_name=self._output_device_name,
             )
             # Give output transport a reference to input so it can toggle
             # _allow_interruptions during TTS playback.

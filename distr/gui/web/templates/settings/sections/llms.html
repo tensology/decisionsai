@@ -1,4 +1,28 @@
 <!-- LLMs Tab -->
+    <style>
+        .project-cli-route-row {
+            display: grid;
+            grid-template-columns: 5rem minmax(11rem, 1fr) minmax(13rem, 1.4fr);
+            align-items: center;
+            gap: 0.75rem;
+        }
+
+        .project-cli-route-label {
+            white-space: nowrap;
+        }
+
+        .project-cli-route-row select {
+            min-width: 0;
+            width: 100%;
+        }
+
+        @media (max-width: 760px) {
+            .project-cli-route-row {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+
     <div class="mb-6 pb-4 border-b border-[#565869] text-center">
         <h2 class="text-xl font-semibold text-white mb-1">Language Models</h2>
         <p class="text-sm text-gray-400">Configure LLM providers and models</p>
@@ -246,9 +270,9 @@
             <h3 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h3>
             <p class="mb-4 text-center text-xs text-gray-500">Global backend and model used when tickets are sent to project implementation agents.</p>
             <div id="project_cli_routes" class="space-y-3">
-                {% for level, label in [("low", "Low complexity"), ("medium", "Medium complexity"), ("high", "High complexity")] %}
-                <div class="grid gap-3 md:grid-cols-[11rem_minmax(0,1fr)_minmax(0,1fr)] md:items-center">
-                    <div class="text-sm font-medium text-[#ececf1]">{{ label }}</div>
+                {% for level, label in [("low", "Low"), ("medium", "Medium"), ("high", "High")] %}
+                <div class="project-cli-route-row">
+                    <div class="project-cli-route-label text-sm font-medium text-[#ececf1]">{{ label }}</div>
                     <select id="project_cli_{{ level }}_backend" class="project-cli-backend bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
                         <option value="pi">Pi</option>
                         <option value="cursor">Cursor CLI</option>

@@ -798,15 +798,18 @@
                 deps.getExternalBoards(true).then(function(data) {
                     deps.renderExternalBoards("kb-trello-boards", data.trello || [], "trello");
                     deps.renderExternalBoards("kb-jira-boards", data.jira || [], "jira");
-                    deps.showSnackbar("External boards re-synced");
                     var cur = deps.getCurrentBoard && deps.getCurrentBoard();
+                    var currentRefresh = Promise.resolve();
                     if (cur && cur.id != null && cur.source) {
                         if (cur.source === "jira" || cur.source === "trello") {
-                            deps.selectBoard(cur.source, cur.id, cur.extUrl || "", { forceRefresh: true });
+                            currentRefresh = deps.selectBoard(cur.source, cur.id, cur.extUrl || "", { forceRefresh: true, rejectOnError: true }) || currentRefresh;
                         } else if (cur.source === "database") {
-                            deps.selectBoard("database", cur.id, "", { forceRefresh: true });
+                            currentRefresh = deps.selectBoard("database", cur.id, "", { forceRefresh: true, rejectOnError: true }) || currentRefresh;
                         }
                     }
+                    return currentRefresh.then(function() {
+                        deps.showSnackbar("External boards re-synced");
+                    });
                 }).catch(function(e) {
                     deps.showSnackbar("Re-sync failed: " + e.message, "error");
                 }).finally(function() {

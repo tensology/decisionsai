@@ -272,10 +272,35 @@ def _cmd_update_stt_model(session, params):
 # Audio commands
 # ---------------------------------------------------------------------------
 
+def _normalize_audio_device_name(name) -> str:
+    if not name:
+        return "System Default"
+    text = str(name).strip()
+    if not text or text.lower() in ("system default", "system_default"):
+        return "System Default"
+    return text
+
+
+def _active_audio_device_name(session, *, is_input: bool) -> str:
+    audio = session.config.get("audio") or {}
+    if is_input:
+        raw = session.input_device or audio.get("input_device")
+    else:
+        raw = session.output_device or audio.get("output_device")
+    return _normalize_audio_device_name(raw)
+
+
 def _cmd_update_audio_devices(session, params):
     input_device = params.get('input_device')
     output_device = params.get('output_device')
     session.logger.debug(f"Received command: update_audio_devices (Input: {input_device}, Output: {output_device})")
+
+    prev_input = _active_audio_device_name(session, is_input=True)
+    prev_output = _active_audio_device_name(session, is_input=False)
+    new_input = _normalize_audio_device_name(input_device) if input_device is not None else prev_input
+    new_output = _normalize_audio_device_name(output_device) if output_device is not None else prev_output
+    input_changed = input_device is not None and new_input != prev_input
+    output_changed = output_device is not None and new_output != prev_output
 
     # Keep canonical session-level overrides in sync. _load_config() prefers
     # session.input_device/output_device over persisted settings, so if these
@@ -285,30 +310,43 @@ def _cmd_update_audio_devices(session, params):
     if output_device is not None:
         session.output_device = output_device
 
+    audio_cfg = session.config.setdefault('audio', {})
+
     # Prefer the pipeline/runner loop; fall back to main loop.
     target_loop = getattr(getattr(session, 'runner', None), '_loop', None)
     if target_loop is None:
         target_loop = getattr(session, '_main_loop', None)
 
     if input_device:
-        session.config['audio']['input_device'] = input_device
-        input_idx = session._get_device_index(input_device, is_input=True)
-        if hasattr(session, 'transport'):
+        audio_cfg['input_device'] = input_device
+        if input_changed and hasattr(session, 'transport'):
+            input_idx = session._get_device_index(input_device, is_input=True)
             session.logger.debug(f"Hot-swapping input device to index {input_idx} (None=Default)")
             if target_loop and target_loop.is_running():
                 target_loop.call_soon_threadsafe(session.transport.input().set_device, input_idx)
             else:
                 session.transport.input().set_device(input_idx)
+        elif not input_changed:
+            session.logger.debug("Skipping input hot-swap (device unchanged)")
 
     if output_device:
-        session.config['audio']['output_device'] = output_device
-        output_idx = session._get_device_index(output_device, is_input=False)
-        if hasattr(session, 'transport'):
+        audio_cfg['output_device'] = output_device
+        if output_changed and hasattr(session, 'transport'):
+            output_idx = session._get_device_index(output_device, is_input=False)
             session.logger.debug(f"Hot-swapping output device to index {output_idx} (None=Default)")
             if target_loop and target_loop.is_running():
-                target_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx)
+                target_loop.call_soon_threadsafe(session.transport.output().set_device, output_idx, output_device)
             else:
-                session.transport.output().set_device(output_idx)
+                session.transport.output().set_device(output_idx, output_device)
+        elif not output_changed:
+            if hasattr(session, 'transport') and new_output == "System Default":
+                session.logger.debug("Refreshing output stream for unchanged System Default selection")
+                if target_loop and target_loop.is_running():
+                    target_loop.call_soon_threadsafe(session.transport.output().set_device, None, output_device)
+                else:
+                    session.transport.output().set_device(None, output_device)
+            else:
+                session.logger.debug("Skipping output hot-swap (device unchanged)")
 
 
 def _cmd_set_playback_speed(session, params):
@@ -396,6 +434,80 @@ def _cmd_set_vad_threshold(session, params):
 # Mode commands
 # ---------------------------------------------------------------------------
 
+def _audio_input_should_be_active(session) -> bool:
+    return bool(
+        getattr(session, 'is_listening', True)
+        and (
+            getattr(session, 'is_hands_free', False)
+            or getattr(session, 'ptt_active', False)
+            or getattr(session, 'is_dictating', False)
+        )
+    )
+
+
+def _set_audio_input_active(session, active: bool, reason: str):
+    transport = getattr(session, 'transport', None)
+    if not transport or not hasattr(transport, 'input'):
+        return
+
+    try:
+        input_transport = transport.input()
+    except Exception as exc:
+        session.logger.debug("Audio input power sync skipped (%s): %s", reason, exc)
+        return
+
+    method_name = 'resume_input' if active else 'pause_idle_input'
+    method = getattr(input_transport, method_name, None)
+    if method is None:
+        return
+
+    if active:
+        try:
+            health = input_transport.get_input_health()
+        except Exception:
+            health = {}
+        if (
+            health.get("enabled")
+            and health.get("stream_active")
+            and health.get("audio_task_alive")
+        ):
+            session.logger.debug("Audio input power sync: already active reason=%s", reason)
+            return
+
+    target_loop = getattr(getattr(session, 'runner', None), '_loop', None)
+    if target_loop is None:
+        target_loop = getattr(session, '_main_loop', None)
+
+    session.logger.debug("Audio input power sync: active=%s reason=%s", active, reason)
+    if target_loop and target_loop.is_running():
+        target_loop.call_soon_threadsafe(method)
+    else:
+        method()
+
+
+def _sync_audio_input_power(session, reason: str):
+    _set_audio_input_active(session, _audio_input_should_be_active(session), reason)
+
+
+def _schedule_audio_input_idle_pause(session, reason: str, delay: float = 1.0):
+    target_loop = getattr(getattr(session, 'runner', None), '_loop', None)
+    if target_loop is None:
+        target_loop = getattr(session, '_main_loop', None)
+
+    def pause_if_still_idle():
+        if not _audio_input_should_be_active(session):
+            _set_audio_input_active(session, False, reason)
+
+    if target_loop and target_loop.is_running():
+        async def delayed_pause():
+            await asyncio.sleep(delay)
+            pause_if_still_idle()
+
+        asyncio.run_coroutine_threadsafe(delayed_pause(), target_loop)
+    else:
+        pause_if_still_idle()
+
+
 def _cmd_set_listening(session, params):
     enabled = params.get('enabled', True)
     old_state = session.is_listening
@@ -405,6 +517,7 @@ def _cmd_set_listening(session, params):
         session.llm_service.set_listening(enabled)
     else:
         session.logger.debug("LLM service not yet available to update listening state (expected during startup)")
+    _sync_audio_input_power(session, "set_listening")
 
 
 def _cmd_set_hands_free(session, params):
@@ -420,11 +533,13 @@ def _cmd_set_hands_free(session, params):
         session.llm_service.set_hands_free(enabled)
     if hasattr(session, 'tts_service') and session.tts_service:
         session.tts_service.set_hands_free(enabled)
-    session.logger.debug("All services updated - VAD remains enabled, interruptions filtered by services")
+    _sync_audio_input_power(session, "set_hands_free")
+    session.logger.debug("All services updated - audio input power synced to active voice mode")
 
 
 def _cmd_set_dictating(session, params):
     enabled = params.get('enabled', False)
+    session.is_dictating = enabled
     session.logger.debug(f"Dictation mode changed: {enabled}")
     if hasattr(session, 'stt_service') and session.stt_service:
         if hasattr(session.stt_service, 'set_dictating'):
@@ -434,6 +549,7 @@ def _cmd_set_dictating(session, params):
             session.logger.warning("STT service does not support set_dictating()")
     else:
         session.logger.warning("STT service not available - cannot update dictation mode")
+    _sync_audio_input_power(session, "set_dictating")
 
 
 def _cmd_set_speaker_enabled(session, params):
@@ -547,6 +663,7 @@ def _cmd_process_text_input(session, params):
 def _cmd_push_to_talk_start(session, params):
     session.logger.debug("PTT: Push-to-talk START received")
     session.ptt_active = True
+    _set_audio_input_active(session, True, "push_to_talk_start")
 
     if hasattr(session, 'tts_service') and session.tts_service and hasattr(session.tts_service, 'set_ptt_active'):
         session.tts_service.set_ptt_active(True)
@@ -601,6 +718,14 @@ def _cmd_push_to_talk_stop(session, params):
         session.stt_service.set_ptt_active(False)
     else:
         session.logger.warning("PTT: STT service not available!")
+    try:
+        input_health = session.transport.input().get_input_health()
+        session.logger.info("PTT: Audio input health at stop: %s", input_health)
+    except Exception as exc:
+        session.logger.debug("PTT: Could not read audio input health at stop: %s", exc)
+    # Keep mic open longer after dictation so scheduled PTT flush can finish Whisper work
+    idle_delay = 2.5 if getattr(session, 'is_dictating', False) else 1.0
+    _schedule_audio_input_idle_pause(session, "push_to_talk_stop", delay=idle_delay)
 
 
 def _cmd_dictation_hotkey_pressed(session, params):
@@ -609,6 +734,12 @@ def _cmd_dictation_hotkey_pressed(session, params):
     GUI emits Qt signals; agent runs in a subprocess so we bridge via command_queue only.
     """
     session.logger.debug("Dictation hotkey: pressed")
+    # Coalesce rapid TTS teardown so dictation capture is not starved by interrupt storms
+    if hasattr(session, 'tts_service') and session.tts_service:
+        if hasattr(session.tts_service, '_cancelled'):
+            session.tts_service._cancelled = True
+        if hasattr(session.tts_service, '_text_buffer'):
+            session.tts_service._text_buffer = ""
     _cmd_push_to_talk_start(session, params)
     # Enable STT dictation flag immediately in-process. _start_dictation also queues
     # set_dictating for the main UI loop, but that round-trip can arrive after key-up,
@@ -655,7 +786,7 @@ def _cmd_dictation_hotkey_released(session, params):
     if loop and getattr(loop, 'is_running', lambda: False)():
 
         async def _delayed_cleanup():
-            await asyncio.sleep(60.0)
+            await asyncio.sleep(20.0)
             _clear_stuck_one_shot_dictation()
 
         try:

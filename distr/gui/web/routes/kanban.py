@@ -1642,6 +1642,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
     lanes = []
     board_name = ""
     board_url = ""
+    active_sprint = None
     local_config = {}
     with get_session() as s:
         local_board = s.query(KanbanBoard).filter(
@@ -1793,6 +1794,8 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                         continue
                     auth = HTTPBasicAuth(acct["email"], acct["api_token"])
                     base_url = f"https://{domain}" if not domain.startswith("http") else domain
+                    issue_url = f"{base_url}/rest/agile/1.0/board/{board_id}/issue"
+                    active_sprint = None
                     cr = requests.get(f"{base_url}/rest/agile/1.0/board/{board_id}/configuration",
                                       auth=auth, headers={"Accept": "application/json"}, timeout=10)
                     if cr.status_code == 200:
@@ -1804,7 +1807,7 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                             cfg = {}
                         board_name = cfg.get("name", "")
                         loc = cfg.get("location")
-                        project_key = loc.get("projectKey", "") if isinstance(loc, dict) else ""
+                        project_key = (loc.get("projectKey") or loc.get("key") or "") if isinstance(loc, dict) else ""
                         board_url = f"https://{domain}/jira/software/projects/{project_key}/boards/{board_id}"
                         for col in _jira_board_column_config_columns(cfg):
                             if not isinstance(col, dict):
@@ -1841,8 +1844,25 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
                                 create_issue = perms.get("CREATE_ISSUES", {}) if isinstance(perms, dict) else {}
                                 can_create = bool(create_issue.get("havePermission", True))
                         local_config["can_create_ticket"] = can_create
+                        if (cfg.get("type") or "").lower() == "scrum":
+                            sr = requests.get(
+                                f"{base_url}/rest/agile/1.0/board/{board_id}/sprint",
+                                auth=auth,
+                                headers={"Accept": "application/json"},
+                                params={"state": "active", "maxResults": 1},
+                                timeout=10,
+                            )
+                            if sr.status_code == 200:
+                                try:
+                                    sprint_body = sr.json()
+                                except Exception:
+                                    sprint_body = {}
+                                sprints = sprint_body.get("values", []) if isinstance(sprint_body, dict) else []
+                                if sprints and isinstance(sprints[0], dict) and sprints[0].get("id") is not None:
+                                    active_sprint = sprints[0]
+                                    issue_url = f"{base_url}/rest/agile/1.0/sprint/{active_sprint['id']}/issue"
                     ir = requests.get(
-                        f"{base_url}/rest/agile/1.0/board/{board_id}/issue",
+                        issue_url,
                         auth=auth,
                         headers={"Accept": "application/json"},
                         params={
@@ -1921,6 +1941,9 @@ def _build_external_board_detail_payload(provider: str, board_id: str) -> dict:
     except Exception as e:
         logger.warning("External board detail fetch error: %s", e)
     response_data = {"name": board_name, "url": board_url, "lanes": lanes, "can_create_ticket": True}
+    if active_sprint:
+        response_data["active_sprint_id"] = active_sprint.get("id")
+        response_data["active_sprint_name"] = active_sprint.get("name") or ""
     response_data.update(local_config)
     return response_data
 
@@ -3996,56 +4019,8 @@ def create_routes():
                 }
             )
 
-    @router.get("/kanban/external-boards/{provider}/{board_id}")
-    async def get_external_board_detail(
-        provider: str,
-        board_id: str,
-        force_refresh: bool = False,
-    ):
-        """Return cached external board immediately; refresh from Trello/Jira in a background thread when stale.
-
-        Set force_refresh=true (query) when the user hits Re-sync: drops the server-side detail cache so the
-        next response is a fresh fetch (UI polls until cache_ready).
-        """
-        if provider not in ("trello", "jira"):
-            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
-        key = _external_board_detail_cache_key(provider, board_id)
-        if force_refresh:
-            _invalidate_external_board_detail_cache(provider, board_id)
-        now = time.time()
-        with _BOARD_DETAIL_LOCK:
-            ent = _BOARD_DETAIL_CACHE.get(key)
-        if ent and ent.get("ready"):
-            out = dict(ent["body"])
-            lc_only = {}
-            with get_session() as s:
-                lb = (
-                    s.query(KanbanBoard)
-                    .filter(
-                        KanbanBoard.source == provider,
-                        KanbanBoard.external_board_id == board_id,
-                    )
-                    .first()
-                )
-                if lb:
-                    lc_only = {
-                        "local_id": lb.id,
-                        "default_project_id": lb.default_project_id,
-                        "default_workflow_id": lb.default_workflow_id,
-                        "color": lb.color,
-                        "agent_enabled": lb.agent_enabled or False,
-                        "whatsapp_checkin_enabled": lb.whatsapp_checkin_enabled or False,
-                    }
-            out.update(lc_only)
-            age = now - ent["t"]
-            out["cache_ready"] = True
-            out["cache_stale"] = age > _BOARD_DETAIL_STALE_AFTER_SEC
-            if out["cache_stale"]:
-                _schedule_external_board_detail_refresh(provider, board_id, key)
-            return JSONResponse(out)
-
-        _schedule_external_board_detail_refresh(provider, board_id, key)
-        lc_only = {}
+    def _merge_external_board_local_config(provider: str, board_id: str, body: dict) -> dict:
+        out = dict(body or {})
         with get_session() as s:
             lb = (
                 s.query(KanbanBoard)
@@ -4056,17 +4031,56 @@ def create_routes():
                 .first()
             )
             if lb:
-                lc_only = {
-                    "local_id": lb.id,
-                    "default_project_id": lb.default_project_id,
-                    "default_workflow_id": lb.default_workflow_id,
-                    "color": lb.color,
-                    "agent_enabled": lb.agent_enabled or False,
-                    "whatsapp_checkin_enabled": lb.whatsapp_checkin_enabled or False,
-                }
+                out.update(
+                    {
+                        "local_id": lb.id,
+                        "default_project_id": lb.default_project_id,
+                        "default_workflow_id": lb.default_workflow_id,
+                        "color": lb.color,
+                        "agent_enabled": lb.agent_enabled or False,
+                        "whatsapp_checkin_enabled": lb.whatsapp_checkin_enabled or False,
+                    }
+                )
+        return out
+
+    @router.get("/kanban/external-boards/{provider}/{board_id}")
+    async def get_external_board_detail(
+        provider: str,
+        board_id: str,
+        force_refresh: bool = False,
+    ):
+        """Return cached external board immediately; refresh from Trello/Jira in a background thread when stale.
+
+        Set force_refresh=true (query) when the user hits Re-sync: fetches and returns a fresh snapshot so
+        board counts/cards match the provider after the request completes.
+        """
+        if provider not in ("trello", "jira"):
+            raise HTTPException(400, "Provider must be 'trello' or 'jira'")
+        key = _external_board_detail_cache_key(provider, board_id)
+        if force_refresh:
+            _invalidate_external_board_detail_cache(provider, board_id)
+            body = await asyncio.to_thread(_build_external_board_detail_payload, provider, board_id)
+            with _BOARD_DETAIL_LOCK:
+                _BOARD_DETAIL_CACHE[key] = {"ready": True, "t": time.time(), "body": body}
+            out = _merge_external_board_local_config(provider, board_id, body)
+            out["cache_ready"] = True
+            out["cache_stale"] = False
+            return JSONResponse(out)
+        now = time.time()
+        with _BOARD_DETAIL_LOCK:
+            ent = _BOARD_DETAIL_CACHE.get(key)
+        if ent and ent.get("ready"):
+            out = _merge_external_board_local_config(provider, board_id, ent["body"])
+            age = now - ent["t"]
+            out["cache_ready"] = True
+            out["cache_stale"] = age > _BOARD_DETAIL_STALE_AFTER_SEC
+            if out["cache_stale"]:
+                _schedule_external_board_detail_refresh(provider, board_id, key)
+            return JSONResponse(out)
+
+        _schedule_external_board_detail_refresh(provider, board_id, key)
         loading = {"name": "", "url": "", "lanes": [], "can_create_ticket": True, "cache_ready": False}
-        loading.update(lc_only)
-        return JSONResponse(loading)
+        return JSONResponse(_merge_external_board_local_config(provider, board_id, loading))
 
     # ── Send ticket to project (.tickets folder) ──
 

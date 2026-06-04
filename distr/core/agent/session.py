@@ -196,6 +196,7 @@ class AgentSession:
         hands_free_setting = settings.get('hands_free_mode', False)
         self.is_hands_free = bool(hands_free_setting) if hands_free_setting is not None else False
         self.ptt_active = False  # Push-to-talk state
+        self.is_dictating = False
         
         # Log initial state for debugging
         self.logger.debug(f"AgentSession initialized: hands_free_mode={self.is_hands_free} (PTT mode: {not self.is_hands_free}, default: push-to-talk)")
@@ -1344,6 +1345,7 @@ class AgentSession:
             ),
             event_queue=self.event_queue,
             aec_reference_buffer=aec_ref_buf,
+            output_device_name=audio_config.get('output_device') or 'System Default',
         )
         
         # Give the STT service access to the AEC reference buffer so it can
@@ -1408,6 +1410,11 @@ class AgentSession:
 
             # Create pipeline (no loop needed - will use current running loop)
             self._create_pipeline()
+            try:
+                from .command_handler import _sync_audio_input_power
+                _sync_audio_input_power(self, "pipeline_start")
+            except Exception as e:
+                self.logger.debug("Initial audio input power sync failed: %s", e)
 
             # Flush any process_text_input that arrived before the loop was ready (e.g. from web send-to-agent)
             pending = getattr(self, '_pending_text_inputs', None)
