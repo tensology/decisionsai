@@ -76,10 +76,11 @@ def create_execution_session(
         session.add(event)
         session.commit()
         try:
-            from distr.core.hermes import emit_event, resolve_board_id_for_ticket
+            from distr.core.hermes import resolve_board_id_for_ticket
+            from distr.core.orchestration_events import emit_orchestration_event
 
-            emit_event(
-                source="executor",
+            emit_orchestration_event(
+                source=route_backend or "executor",
                 event_type="execution_session_created",
                 status="queued",
                 workflow_id=workflow_id,
@@ -132,10 +133,10 @@ def append_execution_event(
         ))
         session.commit()
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.orchestration_events import emit_orchestration_event
 
-            emit_event(
-                source="executor",
+            emit_orchestration_event(
+                source=row.route_backend or "executor",
                 event_type=f"execution_{event_type or 'event'}",
                 status=status,
                 workflow_id=row.workflow_id,
@@ -180,10 +181,10 @@ def complete_execution_session(
         ))
         session.commit()
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.orchestration_events import emit_orchestration_event
 
-            emit_event(
-                source="executor",
+            emit_orchestration_event(
+                source=row.route_backend or "executor",
                 event_type="execution_session_completed",
                 status=status,
                 workflow_id=row.workflow_id,

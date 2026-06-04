@@ -141,6 +141,15 @@ class AnthropicLLMService(BaseLLMService):
         except Exception:
             pass  # Template may already be resolved from .replace() calls above
 
+        try:
+            from distr.core.developer_context import build_developer_context
+
+            developer_context_text = build_developer_context(chat_id=current_chat_id).to_prompt_text(max_chars=2200)
+            if developer_context_text:
+                template += f"\n\n{developer_context_text}"
+        except Exception:
+            logger.warning("Could not build developer workflow context", exc_info=True)
+
         self.default_template = template
         self._persona = system_prompt if system_prompt else None
         self._system_prompt = f"{system_prompt}\n\n{template}" if system_prompt else template

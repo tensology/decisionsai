@@ -6,6 +6,7 @@ This server runs once when the app starts and serves all web UIs.
 import sys
 import threading
 import re
+import os
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -77,6 +78,7 @@ def create_app() -> FastAPI:
     """
     app = FastAPI(title="Decisions AI GUI Server", redirect_slashes=False)
     app.state.internal_api_token = get_internal_api_token()
+    os.environ.setdefault("DECISIONSAI_INTERNAL_API_TOKEN", app.state.internal_api_token)
     
     # Add CORS middleware to allow requests from QWebEngineView
     app.add_middleware(

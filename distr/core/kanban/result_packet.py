@@ -23,6 +23,26 @@ _CU_ACTION_RE = re.compile(
     r"^\s*(?P<step>\d+|ESC)\.\s*\[(?P<action_type>[^\]]+)\]\s*(?P<rest>.*)$",
     re.IGNORECASE,
 )
+_FLOW_SUMMARY_RE = re.compile(r"^\s*flow summary\s*:\s*(?P<summary>.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_LAYOUT_HIERARCHY_NOTES_RE = re.compile(
+    r"^\s*(?:layout/hierarchy notes|layout hierarchy notes|layout notes|hierarchy notes)\s*:\s*(?P<notes>.+?)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_BEFORE_SCREENSHOT_RE = re.compile(
+    r"^\s*before screenshot\s*:\s*(?P<path>.+?\.(?:png|jpe?g|webp|gif))\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_AFTER_SCREENSHOT_RE = re.compile(
+    r"^\s*after screenshot\s*:\s*(?P<path>.+?\.(?:png|jpe?g|webp|gif))\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
+_VISUAL_BASELINE_RE = re.compile(r"^\s*visual baseline\s*:\s*(?P<name>.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_VISUAL_BASELINE_ID_RE = re.compile(r"^\s*visual baseline id\s*:\s*(?P<id>\d+)\s*$", re.IGNORECASE | re.MULTILINE)
+_BASELINE_SCREEN_RE = re.compile(r"^\s*baseline screen\s*:\s*(?P<name>.+?)\s*$", re.IGNORECASE | re.MULTILINE)
+_VISUAL_DIFF_THRESHOLD_RE = re.compile(
+    r"^\s*visual diff threshold\s*:\s*(?P<threshold>[0-9]*\.?[0-9]+)\s*$",
+    re.IGNORECASE | re.MULTILINE,
+)
 
 
 def _append_unique(items: List[str], value: str, *, limit: int = 40) -> None:
@@ -43,6 +63,8 @@ def _merge_unique_artifacts(existing: Dict[str, Any], found: Dict[str, List[str]
         "diffs_or_patches": list(existing.get("diffs_or_patches") or []),
         "links": list(existing.get("links") or []),
     }
+    if isinstance(existing.get("ui_quality"), dict):
+        artifacts["ui_quality"] = dict(existing.get("ui_quality") or {})
     for key, values in found.items():
         bucket = artifacts.setdefault(key, [])
         for value in values:
@@ -155,6 +177,111 @@ def extract_action_trace_from_step_result(step_result: str) -> List[Dict[str, An
             }
         )
     return trace
+
+
+def _clean_artifact_path(value: str) -> str:
+    return (value or "").strip().strip("`\"'.,")
+
+
+def _extract_labeled_path(regex: re.Pattern[str], text: str) -> str:
+    match = regex.search(text or "")
+    return _clean_artifact_path(match.group("path")) if match else ""
+
+
+def _extract_flow_summary(text: str) -> str:
+    match = _FLOW_SUMMARY_RE.search(text or "")
+    return (match.group("summary") or "").strip() if match else ""
+
+
+def _extract_layout_hierarchy_notes(text: str) -> str:
+    match = _LAYOUT_HIERARCHY_NOTES_RE.search(text or "")
+    return (match.group("notes") or "").strip() if match else ""
+
+
+def _extract_named_value(regex: re.Pattern[str], text: str, group: str = "name") -> str:
+    match = regex.search(text or "")
+    return (match.group(group) or "").strip() if match else ""
+
+
+def _extract_visual_diff_threshold(text: str) -> float | None:
+    match = _VISUAL_DIFF_THRESHOLD_RE.search(text or "")
+    if not match:
+        return None
+    try:
+        return float(match.group("threshold"))
+    except Exception:
+        return None
+
+
+def _ui_quality_artifacts_from_step_result(
+    *,
+    step_result: str,
+    artifacts: Dict[str, Any],
+    action_trace: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    text = step_result or ""
+    existing = dict(artifacts.get("ui_quality") or {})
+    screenshots = list(artifacts.get("screenshots") or [])
+    before = _extract_labeled_path(_BEFORE_SCREENSHOT_RE, text) or existing.get("before_screenshot", "")
+    after = _extract_labeled_path(_AFTER_SCREENSHOT_RE, text) or existing.get("after_screenshot", "")
+    baseline_name = _extract_named_value(_VISUAL_BASELINE_RE, text) or existing.get("visual_baseline_name", "")
+    baseline_id = _extract_named_value(_VISUAL_BASELINE_ID_RE, text, group="id") or existing.get("visual_baseline_id", "")
+    baseline_screen = _extract_named_value(_BASELINE_SCREEN_RE, text) or existing.get("baseline_screen_name", "")
+    threshold = _extract_visual_diff_threshold(text)
+    if not after and screenshots:
+        after = screenshots[-1]
+    flow_summary = _extract_flow_summary(text) or existing.get("flow_summary", "")
+    layout_hierarchy_notes = (
+        _extract_layout_hierarchy_notes(text)
+        or existing.get("layout_hierarchy_notes")
+        or existing.get("layout_notes")
+        or existing.get("hierarchy_notes")
+        or ""
+    )
+    happy_path_steps = [
+        str(item.get("description") or "").strip()
+        for item in action_trace
+        if str(item.get("action_type") or "").strip().lower() not in {"esc", "escalation"}
+        and str(item.get("description") or "").strip()
+    ]
+    if not happy_path_steps:
+        happy_path_steps = list(existing.get("happy_path_steps") or [])
+    click_count = sum(
+        1 for item in action_trace
+        if str(item.get("action_type") or "").strip().lower() in {"click", "tap"}
+    )
+    if click_count <= 0 and existing.get("click_count") is not None:
+        click_count = int(existing.get("click_count") or 0)
+    ui_quality: Dict[str, Any] = dict(existing)
+    if before:
+        ui_quality["before_screenshot"] = before
+    elif after:
+        ui_quality.setdefault(
+            "before_unavailable_reason",
+            "No before screenshot was captured for this UI step.",
+        )
+    if after:
+        ui_quality["after_screenshot"] = after
+    if flow_summary:
+        ui_quality["flow_summary"] = flow_summary
+    if layout_hierarchy_notes:
+        ui_quality["layout_hierarchy_notes"] = layout_hierarchy_notes
+    if happy_path_steps:
+        ui_quality["happy_path_steps"] = happy_path_steps
+    if click_count:
+        ui_quality["click_count"] = click_count
+    if baseline_name:
+        ui_quality["visual_baseline_name"] = baseline_name
+    if baseline_id:
+        try:
+            ui_quality["visual_baseline_id"] = int(baseline_id)
+        except Exception:
+            ui_quality["visual_baseline_id"] = baseline_id
+    if baseline_screen:
+        ui_quality["baseline_screen_name"] = baseline_screen
+    if threshold is not None:
+        ui_quality["visual_diff_threshold"] = threshold
+    return ui_quality
 
 
 def build_result_packet(
@@ -318,15 +445,24 @@ def append_workflow_step_to_packet(
         change_summary = change_summary[-40:]
     changes["change_summary"] = change_summary
     updated["changes"] = changes
-    updated["artifacts"] = _merge_unique_artifacts(
+    merged_artifacts = _merge_unique_artifacts(
         dict(updated.get("artifacts") or {}),
         extract_artifacts_from_step_result(trimmed_result),
     )
+    updated["artifacts"] = merged_artifacts
     execution = dict(updated.get("execution") or {})
     execution["action_trace"] = _merge_action_trace(
         list(execution.get("action_trace") or []),
         extract_action_trace_from_step_result(trimmed_result),
     )
+    ui_quality = _ui_quality_artifacts_from_step_result(
+        step_result=trimmed_result,
+        artifacts=merged_artifacts,
+        action_trace=list(execution.get("action_trace") or []),
+    )
+    if ui_quality.get("after_screenshot") or ui_quality.get("flow_summary") or ui_quality.get("happy_path_steps"):
+        merged_artifacts["ui_quality"] = ui_quality
+        updated["artifacts"] = merged_artifacts
     if validation_snapshot:
         execution["validation_snapshots"] = _merge_validation_snapshots(
             list(execution.get("validation_snapshots") or []),

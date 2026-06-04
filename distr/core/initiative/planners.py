@@ -146,7 +146,7 @@ def _fallback_planner_markdown(
         attention_items.append(_first_nonempty(
             candidate.get("question"),
             candidate.get("title"),
-            default="Hermes triage candidate needs a decision.",
+            default="A work item needs a decision.",
         ))
     for task in bundle.stuck_tasks[:5]:
         attention_items.append(_first_nonempty(
@@ -197,9 +197,9 @@ def _fallback_planner_markdown(
 
     if scope == "morning":
         return "\n\n".join([
-            "## Standup Triage",
+            "## Morning Check-in",
             "\n".join(f"- {item}" for item in today_items),
-            "## Decisions I Need From You",
+            "## Needs Your Call",
             "\n".join(f"- {item}" for item in attention_items[:8]),
             "## Approvals & Blockers",
             "\n".join(f"- {item}" for item in blockers[:6]),
@@ -209,7 +209,6 @@ def _fallback_planner_markdown(
 
     return "\n\n".join([
         f"## {scope.title()} Plan",
-        f"- Task instruction: {_clip_text(task_instruction, 220)}",
         "\n".join(f"- {item}" for item in attention_items[:8]),
         "## Blockers",
         "\n".join(f"- {item}" for item in blockers[:6]),
@@ -261,18 +260,18 @@ def _system_prompt_for_scope(scope: str, date_info: dict) -> str:
     )
     if scope == "morning":
         return (
-            "You are Hermes, the daily standup triage orchestrator for a proactive desktop work agent. "
+            "You are the daily check-in orchestrator for a proactive desktop work agent. "
             "The user does not want a passive report. They need decisions: create tickets, update tickets, "
             "make bookings, draft replies, attach agent work back to tickets, or ignore noise.\n"
             + common
             + "Use these sections (## headings):\n"
-            "## Standup Triage — what changed across sources\n"
-            "## Decisions I Need From You — direct questions the user can approve/reject\n"
+            "## Morning Check-in — what changed across sources\n"
+            "## Needs Your Call — direct questions the user can approve/reject\n"
             "## Approvals & blockers\n"
             "## Suggested next action\n"
             "Rules:\n"
             "- Be concise and direct.\n"
-            "- Use work_scan.hermes_triage.candidates as the primary source of decisions.\n"
+            "- Use work_scan.hermes_triage.candidates as the primary source of decisions, but do not mention internal system names.\n"
             "- Ask concrete questions, e.g. 'Should I create a ticket from this WhatsApp thread?'\n"
             "- If source context is thin, say exactly which connector or permission is missing.\n"
             "- Do not say only that a proactive brief ran.\n"
@@ -443,6 +442,7 @@ def generate_planner_markdown(
 def tts_excerpt_from_markdown(markdown: str, max_len: int = 950) -> str:
     """Flatten markdown to a single spoken line, capped for TTS."""
     text = markdown or ""
+    text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
     text = re.sub(r"```[^`]*```", " ", text, flags=re.DOTALL)
     text = re.sub(r"`([^`]+)`", r"\1", text)
     text = re.sub(r"#+\s*", "", text)

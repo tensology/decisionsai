@@ -1,0 +1,232 @@
+from __future__ import annotations
+
+import contextlib
+import json
+from types import SimpleNamespace
+
+import distr.core.db.hermes  # noqa: F401
+import distr.core.db.kanban  # noqa: F401
+import distr.core.db.projects  # noqa: F401
+from distr.core.db import Base
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+
+def _factory(tmp_path):
+    db_path = tmp_path / "hermes_proactive.sqlite3"
+    engine = create_engine(f"sqlite:///{db_path}", connect_args={"check_same_thread": False})
+    Base.metadata.create_all(engine)
+    return sessionmaker(bind=engine, expire_on_commit=False)
+
+
+@contextlib.contextmanager
+def _session_ctx(factory):
+    session = factory()
+    try:
+        yield session
+        session.commit()
+    except Exception:
+        session.rollback()
+        raise
+    finally:
+        session.close()
+
+
+def _seed_work_signal(factory, tmp_path):
+    from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
+    from distr.core.db.projects import Project
+
+    with _session_ctx(factory) as session:
+        project = Project(
+            name="Merrypak",
+            folder_location=str(tmp_path / "www.merrypak.co.za"),
+            coding_backend="codex",
+            in_use=True,
+        )
+        session.add(project)
+        session.flush()
+
+        board = KanbanBoard(
+            name="Merrypak Board",
+            default_project_id=project.id,
+            in_use=True,
+            hermes_policy=json.dumps(
+                {
+                    "harness_preferences": {
+                        "frontend": {"backend": "cursor", "skills": ["react-frontend-expert"]}
+                    }
+                }
+            ),
+        )
+        session.add(board)
+        session.flush()
+
+        lane = KanbanLane(board_id=board.id, name="Inbox", position=0)
+        session.add(lane)
+        session.flush()
+
+        ticket = KanbanTicket(
+            lane_id=lane.id,
+            title="Client says checkout page is broken",
+            description="Urgent: Merrypak client says the React checkout page fails on submit. Please fix today.",
+            priority="critical",
+            complexity="high",
+            linked_project_id=project.id,
+            source_provider="gmail",
+            source_contact="client@example.com",
+            source_thread_id="gmail-thread-1",
+            source_label="Client email",
+            position=0,
+        )
+        session.add(ticket)
+        session.flush()
+        return SimpleNamespace(project_id=project.id, board_id=board.id, ticket_id=ticket.id)
+
+
+def test_proactive_scan_prioritizes_work_matches_project_and_emits_activity(tmp_path, monkeypatch):
+    from distr.core.db.hermes import HermesEvent
+    from distr.core.hermes_proactive import run_proactive_check
+
+    factory = _factory(tmp_path)
+    ids = _seed_work_signal(factory, tmp_path)
+    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.hermes_proactive.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr(
+        "distr.core.external_agent_context.build_external_agent_context",
+        lambda limit=8: {
+            "codex_threads": [
+                {
+                    "cwd": str(tmp_path / "www.merrypak.co.za"),
+                    "title": "Fix Merrypak checkout validation",
+                }
+            ],
+            "cursor_workspaces": [{"folder": str(tmp_path / "www.merrypak.co.za")}],
+        },
+    )
+
+    result = run_proactive_check(limit=5)
+
+    assert result["success"] is True
+    assert result["summary"]["total_candidates"] == 1
+    candidate = result["candidates"][0]
+    assert candidate["priority"] == "critical"
+    assert candidate["priority_score"] >= 90
+    assert candidate["project_id"] == ids.project_id
+    assert candidate["project_name"] == "Merrypak"
+    assert candidate["board_id"] == ids.board_id
+    assert candidate["source"] == "gmail"
+    assert candidate["recommended_action"] == "ask_approval_to_dispatch"
+    assert "Merrypak" in candidate["approval_question"]
+    assert "Codex" in candidate["developer_context"]["recent_surfaces"]
+    assert "Cursor" in candidate["developer_context"]["recent_surfaces"]
+    assert "Hermes" not in result["spoken_summary"]
+
+    with _session_ctx(factory) as session:
+        events = session.query(HermesEvent).filter(HermesEvent.event_type == "proactive_work_candidate").all()
+        assert len(events) == 1
+        payload = json.loads(events[0].payload)
+        assert payload["candidate"]["ticket_id"] == ids.ticket_id
+
+
+def test_dispatch_proactive_candidate_runs_project_backend_after_approval(tmp_path, monkeypatch):
+    from distr.core.db.hermes import HermesEvent
+    from distr.core.hermes_proactive import dispatch_proactive_candidate, run_proactive_check
+    from distr.core.project_cli_backends.base import BackendTaskResult
+
+    factory = _factory(tmp_path)
+    ids = _seed_work_signal(factory, tmp_path)
+    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.hermes_proactive.get_session", lambda: _session_ctx(factory))
+    monkeypatch.setattr("distr.core.external_agent_context.build_external_agent_context", lambda limit=8: {})
+
+    calls = []
+
+    async def fake_run_project_task(project, instruction, **kwargs):
+        calls.append({"project": project.name, "instruction": instruction, "kwargs": kwargs})
+        return BackendTaskResult(
+            True,
+            kwargs.get("backend_id_override") or "codex",
+            "codex",
+            output="Status: completed\nSummary: queued",
+            execution_session_id=123,
+        )
+
+    monkeypatch.setattr("distr.core.hermes_proactive.run_project_task", fake_run_project_task)
+
+    scan = run_proactive_check(limit=5)
+    candidate_id = scan["candidates"][0]["candidate_id"]
+    result = dispatch_proactive_candidate(candidate_id, approved_by="telegram")
+
+    assert result["success"] is True
+    assert result["backend_id"] == "cursor"
+    assert result["execution_session_id"] == 123
+    assert calls[0]["project"] == "Merrypak"
+    assert "checkout page is broken" in calls[0]["instruction"]
+    assert calls[0]["kwargs"]["ticket_id"] == ids.ticket_id
+    assert calls[0]["kwargs"]["origin"] == "proactive_orchestrator"
+    assert calls[0]["kwargs"]["backend_id_override"] == "cursor"
+
+    with _session_ctx(factory) as session:
+        event_types = [row.event_type for row in session.query(HermesEvent).order_by(HermesEvent.id).all()]
+        assert "proactive_work_dispatched" in event_types
+
+
+def test_proactive_orchestrator_tool_is_voice_first(monkeypatch):
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+    monkeypatch.setattr(
+        "distr.core.hermes_proactive.run_proactive_check",
+        lambda **kwargs: {
+            "success": True,
+            "spoken_summary": "I found one important work item for Merrypak and I would ask before dispatching it.",
+            "summary": {"total_candidates": 1},
+            "candidates": [{"candidate_id": 7, "title": "Checkout broken"}],
+        },
+    )
+
+    result = ProactiveOrchestratorTool()._run(action="scan")
+
+    assert result.startswith("I found one important work item for Merrypak")
+    assert "REFERENCE:" in result
+    assert "candidate_id" in result
+    assert "Hermes" not in result.split("REFERENCE:")[0]
+
+
+def test_project_activity_includes_project_events_validations_and_rules(tmp_path, monkeypatch):
+    from distr.core.hermes import (
+        emit_event,
+        list_project_activity,
+        record_learning_signal,
+        record_validation,
+    )
+
+    factory = _factory(tmp_path)
+    ids = _seed_work_signal(factory, tmp_path)
+    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+
+    emit_event(
+        source="proactive_orchestrator",
+        event_type="proactive_check_run",
+        status="completed",
+        project_id=ids.project_id,
+        board_id=ids.board_id,
+        summary="Checked project work sources.",
+    )
+    record_validation(
+        project_id=ids.project_id,
+        board_id=ids.board_id,
+        validation_snapshot={"verdict": "pass", "validation_type": "unit", "observed": "ok"},
+    )
+    record_learning_signal(
+        scope="project",
+        scope_id=ids.project_id,
+        rule_type="routing_hint",
+        summary="Frontend tickets for Merrypak are best reviewed in Cursor.",
+    )
+
+    activity = list_project_activity(ids.project_id)
+
+    assert activity["project_id"] == ids.project_id
+    assert any(event["event_type"] == "proactive_check_run" for event in activity["events"])
+    assert any(validation["validation_type"] == "unit" for validation in activity["validations"])
+    assert any(rule["rule_type"] == "routing_hint" for rule in activity["learned_rules"])

@@ -48,13 +48,32 @@ def test_codex_build_command_passes_config_overrides():
         codex_service_tier="flex",
     )
     cmd = backend._build_command("codex", task)
+    assert "--sandbox" in cmd
+    assert "workspace-write" in cmd
     assert "-c" in cmd
     assert 'model_reasoning_effort="medium"' in cmd
     assert 'service_tier="flex"' in cmd
 
 
+def test_codex_build_command_allows_sandbox_override(monkeypatch):
+    monkeypatch.setenv("DECISIONSAI_CODEX_SANDBOX", "danger-full-access")
+    backend = CodexBackend()
+    task = ProjectTask(
+        project_id=1,
+        project_name="demo",
+        folder="/tmp",
+        instruction="fix tests",
+    )
+
+    cmd = backend._build_command("codex", task)
+
+    assert "--sandbox" in cmd
+    assert "danger-full-access" in cmd
+
+
 def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     monkeypatch.setenv("DECISIONS_API_BASE", "http://127.0.0.1:8765")
+    monkeypatch.setenv("DECISIONSAI_INTERNAL_API_TOKEN", "test-internal-token")
     backend = CodexBackend()
     task = ProjectTask(
         project_id=4,
@@ -73,6 +92,7 @@ def test_codex_build_command_embeds_decisions_callback(monkeypatch):
 
     assert "[DECISIONS CODEX CALLBACK]" in instruction
     assert "/api/workflows/2/runs/9/codex-events" in instruction
+    assert "internal_token=test-internal-token" in instruction
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
     assert instruction.endswith("fix tests")

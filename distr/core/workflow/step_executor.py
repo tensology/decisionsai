@@ -9,10 +9,12 @@ import asyncio
 import json
 import logging
 import os
+import platform
 import re
 import subprocess
 import threading
 from datetime import datetime
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from distr.core.db import get_session
@@ -20,6 +22,30 @@ from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep, AutoWorkflowR
 from distr.core.kanban.result_packet import summarize_packet_for_step_context
 
 logger = logging.getLogger(__name__)
+
+
+def capture_ui_screenshot(*, step_id: int, run_id: Optional[int], label: str) -> Optional[str]:
+    """Capture a workflow UI screenshot to the local workflow screenshot folder."""
+    try:
+        from distr.core.paths import DB_DIR
+
+        screenshots_dir = Path(DB_DIR) / "workflow_screenshots"
+        screenshots_dir.mkdir(parents=True, exist_ok=True)
+        safe_label = re.sub(r"[^a-z0-9_-]+", "_", (label or "screen").strip().lower()).strip("_") or "screen"
+        run_part = f"run_{run_id}_" if run_id is not None else ""
+        path = screenshots_dir / f"{run_part}step_{step_id}_{safe_label}.png"
+        system = platform.system()
+        if system == "Darwin":
+            subprocess.run(["screencapture", "-x", str(path)], timeout=5, check=True)
+        else:
+            from PIL import ImageGrab
+
+            image = ImageGrab.grab()
+            image.save(path)
+        return str(path) if path.exists() else None
+    except Exception:
+        logger.debug("Could not capture workflow UI screenshot", exc_info=True)
+        return None
 
 
 def _agent_result_passed(result_text: str) -> bool:
@@ -64,7 +90,77 @@ class StepExecutorMixin:
         handler = handlers.get(action_type)
         if handler is None:
             return {"output": f"Unknown action type: {action_type}", "passed": False}
-        return handler()
+        wants_ui_capture = self._should_capture_ui_evidence(step_data, action_type, config=config)
+        before_path = None
+        if wants_ui_capture:
+            before_path = capture_ui_screenshot(
+                step_id=int(step_data.get("id") or 0),
+                run_id=run_id,
+                label="before",
+            )
+        result = handler()
+        if wants_ui_capture and not result.get("async"):
+            after_path = capture_ui_screenshot(
+                step_id=int(step_data.get("id") or 0),
+                run_id=run_id,
+                label="after",
+            )
+            result = self._with_ui_screenshot_evidence(
+                result=result,
+                before_path=before_path,
+                after_path=after_path,
+                config=config,
+            )
+        return result
+
+    def _should_capture_ui_evidence(
+        self,
+        step_data: Dict[str, Any],
+        action_type: str,
+        config: Optional[dict] = None,
+    ) -> bool:
+        if action_type in {"computer_use", "playwright"}:
+            return True
+        if action_type == "agent_instruction":
+            return self._is_computer_use_instruction(step_data.get("instruction") or "")
+        config = config if isinstance(config, dict) else {}
+        return bool(config.get("ui_quality_capture") or config.get("capture_ui_evidence"))
+
+    def _with_ui_screenshot_evidence(
+        self,
+        *,
+        result: Dict[str, Any],
+        before_path: Optional[str],
+        after_path: Optional[str],
+        config: Optional[dict] = None,
+    ) -> Dict[str, Any]:
+        config = config or {}
+        output = (result.get("output") or "").strip()
+        evidence_lines: List[str] = []
+        if before_path:
+            evidence_lines.append(f"Before screenshot: {before_path}")
+        else:
+            evidence_lines.append("Before screenshot unavailable: automatic capture failed before step execution.")
+        if after_path:
+            evidence_lines.append(f"After screenshot: {after_path}")
+        elif before_path:
+            evidence_lines.append("After screenshot unavailable: automatic capture failed after step execution.")
+        baseline_name = (config.get("visual_baseline_name") or config.get("baseline_name") or "").strip()
+        baseline_id = config.get("visual_baseline_id") or config.get("baseline_set_id")
+        baseline_screen = (config.get("baseline_screen_name") or config.get("visual_baseline_screen") or "").strip()
+        threshold = config.get("visual_diff_threshold")
+        if baseline_name:
+            evidence_lines.append(f"Visual baseline: {baseline_name}")
+        if baseline_id not in (None, ""):
+            evidence_lines.append(f"Visual baseline id: {baseline_id}")
+        if baseline_screen:
+            evidence_lines.append(f"Baseline screen: {baseline_screen}")
+        if threshold not in (None, ""):
+            evidence_lines.append(f"Visual diff threshold: {threshold}")
+        if evidence_lines:
+            result = dict(result)
+            result["output"] = "\n".join(evidence_lines + ([output] if output else [])).strip()
+        return result
 
     def _apply_pending_correction_context(
         self,
@@ -376,7 +472,7 @@ class StepExecutorMixin:
                                         backend_hint = override.get("backend") or route.get("backend") or "auto"
                                         return {
                                             "output": (
-                                                f"Hermes suggested route override to {backend_hint}. "
+                                                f"Route override suggested: {backend_hint}. "
                                                 "Waiting for human approval before dispatching."
                                             ),
                                             "passed": True,

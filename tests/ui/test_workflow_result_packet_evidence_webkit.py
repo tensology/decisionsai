@@ -11,6 +11,7 @@ import pytest
 from sqlalchemy.exc import OperationalError
 
 from distr.core.db import get_session
+from distr.core.db.hermes import HermesCorrectionAttempt, HermesValidationRecord
 from distr.core.db.workflow import AutoWorkflowRun
 from distr.core.workflow.service import add_step, create_workflow
 
@@ -80,6 +81,15 @@ def _seed_completed_run_with_evidence() -> tuple[int, str]:
                         "caller_passed": True,
                         "verified_passed": True,
                         "verdict": "pass",
+                    },
+                    {
+                        "step_id": step_id,
+                        "step_name": "Validate Evidence",
+                        "validation_type": "ui_quality",
+                        "expected": "UI work matches selected visual baseline.",
+                        "observed": "Visual baseline changed.",
+                        "verdict": "fail",
+                        "correction_attempt_id": None,
                     }
                 ],
             },
@@ -98,6 +108,36 @@ def _seed_completed_run_with_evidence() -> tuple[int, str]:
                 }),
             )
             s.add(run)
+            s.flush()
+            validation = HermesValidationRecord(
+                workflow_id=workflow_id,
+                run_id=run.id,
+                step_id=step_id,
+                validation_type="ui_quality",
+                verdict="fail",
+                expected="UI work matches selected visual baseline.",
+                observed="Visual baseline changed.",
+            )
+            s.add(validation)
+            s.flush()
+            attempt = HermesCorrectionAttempt(
+                validation_record_id=validation.id,
+                workflow_id=workflow_id,
+                run_id=run.id,
+                step_id=step_id,
+                status="dispatched",
+                attempt_number=1,
+                correction_packet=json.dumps({"failed_validation": {"validation_type": "ui_quality"}}),
+                dispatch_result=json.dumps({"auto_dispatch": True, "terminal_ui_quality_gate": True}),
+            )
+            s.add(attempt)
+            s.flush()
+            packet["execution"]["validation_snapshots"][-1]["correction_attempt_id"] = attempt.id
+            run.run_data = json.dumps({
+                "phase": "validation",
+                "source_type": "ui_evidence_test",
+                "result_packet": packet,
+            })
             s.commit()
         return workflow_id, workflow_name
 
@@ -127,14 +167,22 @@ def test_workflows_runs_tab_shows_result_packet_evidence(page):
 
     page.locator(".wf-tab[data-tab='runs']").click()
     page.wait_for_timeout(900)
+    page.locator(".wf-runs-subtab[data-runs-tab='recent']").click()
+    page.wait_for_timeout(900)
 
     evidence = page.locator('[data-testid="wf-run-evidence"]').first
     assert evidence.count() > 0
+    taste_controls = page.locator('[data-testid="wf-ui-taste-controls"]').first
+    assert taste_controls.count() > 0
     expect_text = page.locator("#wf-runs-list").inner_text()
     assert "Workflow result packet evidence rendered." in expect_text
     assert "Verdict: pass" in expect_text
     assert "click: open evidence panel" in expect_text
     assert "Validation" in expect_text
+    assert "Taste" in expect_text
+    assert "Approve" in expect_text
+    assert "Spacing" in expect_text
+    assert "Flow" in expect_text
     assert "Evidence panel is visible." in expect_text
     assert "/tmp/decisions/workflow_screenshots/evidence-step.png" in expect_text
     assert "/tmp/decisions/logs/evidence-run.log" in expect_text

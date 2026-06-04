@@ -73,6 +73,15 @@
         return String(s).replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
     }
 
+    function normalizeStepConfig(step) {
+        var config = step && step.config ? step.config : {};
+        if (typeof config === "string") {
+            try { config = JSON.parse(config); } catch (e) { config = {}; }
+        }
+        if (!config || typeof config !== "object" || Array.isArray(config)) return {};
+        return Object.assign({}, config);
+    }
+
     function boardSourceLabel(source) {
         source = (source || "database").toLowerCase();
         if (source === "database") return "Local";
@@ -238,7 +247,126 @@
         return items.slice(Math.max(0, items.length - limit));
     }
 
-    function renderRunPacketEvidence(packet) {
+    function renderUiTasteControls(packet, run, screenshots) {
+        run = run || {};
+        screenshots = Array.isArray(screenshots) ? screenshots : [];
+        var workflowId = run.workflow_id || currentWorkflowId || "";
+        var runId = run.id || "";
+        if (!workflowId || !runId) return "";
+        var metadata = {
+            ticket_id: run.ticket_id || null,
+            board_id: run.board_id || null,
+            project_id: run.project_id || null,
+            execution_session_id: run.execution_session_id || null
+        };
+        var screenshotAttr = esc(screenshots.join("\n"));
+        var metaAttr = esc(JSON.stringify(metadata));
+        return '' +
+            '<div class="mt-2 flex flex-wrap items-center gap-1.5" data-testid="wf-ui-taste-controls" data-screenshot-paths="' + screenshotAttr + '" data-ui-feedback-meta="' + metaAttr + '">' +
+                '<span class="text-[11px] text-gray-500 mr-1">Taste</span>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-[11px] text-green-200 hover:bg-green-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="approved">Approve</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-green-500/30 bg-green-500/10 text-[11px] text-green-200 hover:bg-green-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="approved" data-ui-save-baseline="true">Approve + baseline</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-[11px] text-red-200 hover:bg-red-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="spacing_off">Spacing</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-[11px] text-red-200 hover:bg-red-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="flow_bad">Flow</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-[11px] text-red-200 hover:bg-red-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="hierarchy_unclear">Hierarchy</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-[11px] text-red-200 hover:bg-red-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="inconsistent_styling">Style</button>' +
+                '<button type="button" class="wf-ui-feedback-btn px-1.5 py-0.5 rounded border border-red-500/30 bg-red-500/10 text-[11px] text-red-200 hover:bg-red-500/20" data-workflow-id="' + esc(workflowId) + '" data-run-id="' + esc(runId) + '" data-ui-feedback-label="too_many_clicks">Clicks</button>' +
+            '</div>';
+    }
+
+    function submitUiTasteFeedback(button) {
+        if (!button) return;
+        var workflowId = button.dataset.workflowId || currentWorkflowId;
+        var runId = button.dataset.runId || "";
+        var label = button.dataset.uiFeedbackLabel || "";
+        if (!workflowId || !runId || !label) return;
+        var wrap = button.closest ? button.closest("[data-testid='wf-ui-taste-controls']") : null;
+        var screenshotPaths = wrap && wrap.dataset.screenshotPaths ? wrap.dataset.screenshotPaths.split("\n").filter(Boolean) : [];
+        var metadata = {};
+        if (wrap && wrap.dataset.uiFeedbackMeta) {
+            try { metadata = JSON.parse(wrap.dataset.uiFeedbackMeta) || {}; } catch (e) { metadata = {}; }
+        }
+        var promptText = label === "approved" ? "Optional note for what worked:" : "What should change next time?";
+        var reason = window.prompt ? window.prompt(promptText, "") : "";
+        if (reason === null) return;
+        var saveAsBaseline = button.dataset.uiSaveBaseline === "true";
+        var visualBaselineName = "";
+        var baselineScreenName = "";
+        if (saveAsBaseline) {
+            visualBaselineName = window.prompt ? window.prompt("Baseline name:", "Approved UI") : "Approved UI";
+            if (visualBaselineName === null) return;
+            baselineScreenName = window.prompt ? window.prompt("Baseline screen name:", "Run " + runId) : "Run " + runId;
+            if (baselineScreenName === null) return;
+        }
+        button.disabled = true;
+        api("POST", "/workflows/" + workflowId + "/runs/" + runId + "/ui-feedback", {
+            label: label,
+            reason: reason || "",
+            ticket_id: metadata.ticket_id || null,
+            board_id: metadata.board_id || null,
+            project_id: metadata.project_id || null,
+            execution_session_id: metadata.execution_session_id || null,
+            screenshot_paths: screenshotPaths,
+            save_as_visual_baseline: saveAsBaseline,
+            visual_baseline_name: visualBaselineName || null,
+            baseline_screen_name: baselineScreenName || null
+        })
+            .then(function (data) {
+                snack(workflowFeedbackText(data, "UI feedback recorded"));
+                loadHermesTimeline({ quiet: true });
+                refreshBoardHermesViews({ quiet: true });
+                if (saveAsBaseline && data.visual_baseline_readiness) {
+                    loadVisualBaselines({ quiet: true });
+                }
+            })
+            .catch(function (e) {
+                snack(workflowErrorText(e, "Failed to record UI feedback"), "error");
+            })
+            .finally(function () { button.disabled = false; });
+    }
+
+    function renderCorrectionStatus(packet, run) {
+        packet = packet || {};
+        run = run || {};
+        var execution = packet.execution || {};
+        var snapshots = Array.isArray(execution.validation_snapshots) ? execution.validation_snapshots : [];
+        var attempts = Array.isArray(run.correction_attempts) ? run.correction_attempts.slice() : [];
+        var knownAttemptIds = {};
+        attempts.forEach(function (attempt) {
+            if (attempt && attempt.id != null) knownAttemptIds[String(attempt.id)] = true;
+        });
+        snapshots.forEach(function (snapshot) {
+            if (!snapshot || !snapshot.correction_attempt_id) return;
+            var id = String(snapshot.correction_attempt_id);
+            if (knownAttemptIds[id]) return;
+            attempts.push({
+                id: snapshot.correction_attempt_id,
+                validation_record_id: snapshot.record_id || snapshot.validation_record_id || null,
+                status: "queued",
+                attempt_number: null,
+                dispatch_result: {},
+                validation_type: snapshot.validation_type || ""
+            });
+            knownAttemptIds[id] = true;
+        });
+        attempts = attempts.filter(function (attempt) { return attempt && attempt.id != null; });
+        if (!attempts.length) return "";
+        var html = '<div class="mt-2 flex flex-wrap items-center gap-1.5" data-testid="wf-run-correction-status">';
+        attempts.slice(-3).forEach(function (attempt) {
+            var dispatch = attempt.dispatch_result || {};
+            var autoDispatched = dispatch.auto_dispatch === true || dispatch.terminal_ui_quality_gate === true || attempt.status === "dispatched";
+            var label = autoDispatched ? "Correction auto-dispatched" : "Correction queued";
+            var cls = autoDispatched ? "border-blue-500/30 bg-blue-500/10 text-blue-200" : "border-amber-500/30 bg-amber-500/10 text-amber-200";
+            html += '<span class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ' + cls + '">' +
+                esc(label) + ' #' + esc(attempt.id) +
+                (attempt.status ? ' <span class="text-gray-400">' + esc(attempt.status) + '</span>' : '') +
+                '</span>';
+        });
+        html += '</div>';
+        return html;
+    }
+
+    function renderRunPacketEvidence(packet, run) {
         if (!packet || typeof packet !== "object") return "";
         var artifacts = packet.artifacts || {};
         var execution = packet.execution || {};
@@ -249,7 +377,8 @@
         var logs = lastItems(artifacts.logs, 3);
         var patches = lastItems(artifacts.diffs_or_patches, 3);
         var links = lastItems(artifacts.links, 3);
-        var hasEvidence = packet.summary || audit.final_verdict || actionTrace.length || validations.length || screenshots.length || logs.length || patches.length || links.length;
+        var correctionStatus = renderCorrectionStatus(packet, run);
+        var hasEvidence = packet.summary || audit.final_verdict || actionTrace.length || validations.length || screenshots.length || logs.length || patches.length || links.length || correctionStatus;
         if (!hasEvidence) return "";
 
         var html = '<div class="wf-run-evidence mt-2 pt-2 border-t border-white/10" data-testid="wf-run-evidence">';
@@ -280,6 +409,7 @@
             });
             html += '</div>';
         }
+        html += correctionStatus;
 
         var artifactGroups = [
             ["Screenshots", screenshots],
@@ -298,6 +428,7 @@
             });
             html += '</div>';
         }
+        html += renderUiTasteControls(packet, run, screenshots);
         html += '</div>';
         return html;
     }
@@ -691,7 +822,7 @@
                     '<div class="flex gap-6 px-5 border-b border-white/10">' +
                         '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-white border-b-2 border-[#f97316]" data-tab="details">Details</button>' +
                         '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="advanced">Advanced</button>' +
-                        (opt.source === "database" ? '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="hermes">Hermes</button>' : '') +
+                        (opt.source === "database" ? '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="hermes">Routing</button>' : '') +
                     '</div>' +
                     '<div id="wf-board-edit-tab-details" class="wf-board-edit-pane p-5 space-y-3">' +
                         '<div>' +
@@ -744,7 +875,7 @@
                         '</div>' +
                     '</div>' +
                     '<div id="wf-board-edit-tab-hermes" class="wf-board-edit-pane hidden p-5 space-y-3">' +
-                        '<p class="text-xs text-gray-400">Hybrid routing: policy baseline with optional Hermes LLM override.</p>' +
+                        '<p class="text-xs text-gray-400">Hybrid routing: policy baseline with optional LLM advisory override.</p>' +
                         '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
                             '<label class="space-y-1"><span class="text-xs text-gray-500">Routing mode</span>' +
                                 '<select id="wf-board-hermes-routing-mode" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
@@ -757,7 +888,7 @@
                         '</div>' +
                         '<label class="flex items-center gap-2 text-sm text-gray-300">' +
                             '<input type="checkbox" id="wf-board-hermes-require-approval" class="accent-[#f97316]">' +
-                            '<span>Require approval before applying Hermes route overrides</span>' +
+                            '<span>Require approval before applying route overrides</span>' +
                         '</label>' +
                         '<div class="rounded border border-white/10 bg-[#152054]/40 p-3 space-y-2">' +
                             '<p class="text-xs text-gray-400 uppercase tracking-wide">Complexity routing overrides</p>' +
@@ -1933,7 +2064,7 @@
         if (!events.length && !rules.length) {
             list.innerHTML = "";
             empty.classList.remove("hidden");
-            empty.textContent = "No board activity yet. Run a ticket to populate Hermes events.";
+            empty.textContent = "No board activity yet. Run a ticket to populate activity.";
             return;
         }
         empty.classList.add("hidden");
@@ -2002,7 +2133,7 @@
             list.innerHTML = "";
             empty.classList.remove("hidden");
             empty.textContent = "No learned rules yet for this board.";
-            if (note) note.textContent = "Hermes will capture rules when validation fails or IDE iteration reports back.";
+            if (note) note.textContent = "Rules are captured when validation fails or IDE iteration reports back.";
             return;
         }
         empty.classList.add("hidden");
@@ -2049,7 +2180,7 @@
                 api("POST", "/kanban/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId) + "/promote", {
                     category: "general"
                 }).then(function () {
-                    snack("Learned rule promoted to board Hermes hints", "success");
+                    snack("Learned rule promoted to board hints", "success");
                     refreshBoardHermesViews({ quiet: true });
                 }).catch(function (e) {
                     snack(e.message || "Failed to promote learned rule", "error");
@@ -2078,10 +2209,299 @@
             });
     }
 
+    function renderVisualBaselineReadiness(readiness, boardId) {
+        var note = document.getElementById("wf-visual-baselines-note");
+        if (!note) return;
+        if (!boardId) {
+            note.textContent = "Reference screens used by UI validation for the selected board.";
+            note.className = "text-xs text-gray-500";
+            return;
+        }
+        readiness = readiness || {};
+        var baselineCount = Number(readiness.baseline_count || 0);
+        var missingCount = Number(readiness.missing_screen_count || 0);
+        if (!baselineCount) {
+            note.textContent = "No visual baselines yet. Save real screenshot paths before relying on baseline checks.";
+            note.className = "text-xs text-amber-300";
+        } else if (readiness.ready) {
+            note.textContent = "Visual baselines ready: all referenced screenshot files exist.";
+            note.className = "text-xs text-emerald-300";
+        } else {
+            note.textContent = "Visual baselines not ready: " + missingCount + " referenced screenshot file" + (missingCount === 1 ? " is" : "s are") + " missing.";
+            note.className = "text-xs text-amber-300";
+        }
+    }
+
+    function renderVisualBaselines(baselines, boardId, readiness) {
+        var list = document.getElementById("wf-visual-baselines-list");
+        var empty = document.getElementById("wf-visual-baselines-empty");
+        var note = document.getElementById("wf-visual-baselines-note");
+        if (!list || !empty) return;
+        baselines = Array.isArray(baselines) ? baselines : [];
+        readiness = readiness || {};
+        var missingByPath = {};
+        (Array.isArray(readiness.missing) ? readiness.missing : []).forEach(function (item) {
+            if (item && item.screenshot_path) missingByPath[item.screenshot_path] = true;
+        });
+        if (!boardId) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "Select a board to view visual baselines.";
+            renderVisualBaselineReadiness(null, "");
+            return;
+        }
+        if (!baselines.length) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "No visual baselines yet for this board.";
+            renderVisualBaselineReadiness(readiness, boardId);
+            return;
+        }
+        empty.classList.add("hidden");
+        renderVisualBaselineReadiness(readiness, boardId);
+        list.innerHTML = baselines.map(function (baseline) {
+            var screens = Array.isArray(baseline.screens) ? baseline.screens : [];
+            var missingScreens = 0;
+            var screenText = screens.map(function (screen) {
+                var missing = screen.screenshot_path && missingByPath[screen.screenshot_path];
+                if (missing) missingScreens += 1;
+                var screenStatus = missing ? "missing" : "ready";
+                var screenLabel = missing ? "Missing reference file" : "Ready for comparison";
+                var screenClass = missing
+                    ? "border-amber-400/30 bg-amber-500/10 text-amber-200"
+                    : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
+                return '<span data-visual-baseline-screen-status="' + esc(screenStatus) + '">' +
+                    esc(screen.screen_name || "Screen") +
+                    (screen.screenshot_path ? ' <span class="text-gray-600">·</span> <span class="font-mono break-all">' + esc(screen.screenshot_path) + '</span>' : "") +
+                    ' <span class="ml-1 rounded border ' + screenClass + ' px-1.5 py-0.5 text-[10px] uppercase tracking-wide">' + screenLabel + '</span>' +
+                    '</span>';
+            }).join("<br>");
+            var baselineStatus = screens.length && !missingScreens ? "ready" : "not_ready";
+            var baselineLabel = baselineStatus === "ready" ? "Ready" : "Needs reference files";
+            var baselineClass = baselineStatus === "ready"
+                ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
+                : "border-amber-400/30 bg-amber-500/10 text-amber-200";
+            return '' +
+                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-visual-baseline-id="' + esc(baseline.id) + '" data-visual-baseline-status="' + esc(baselineStatus) + '">' +
+                    '<div class="flex items-start justify-between gap-3">' +
+                        '<div class="min-w-0 flex-1">' +
+                            '<p class="text-sm font-medium text-gray-100">' + esc(baseline.name || "Visual baseline") + '</p>' +
+                            '<p class="mt-1 text-[11px] text-gray-500">' + esc(String(screens.length)) + ' reference screen' + (screens.length === 1 ? "" : "s") + (baseline.version ? " · " + esc(baseline.version) : "") + '</p>' +
+                            (screenText ? '<p class="mt-1 text-[11px] text-gray-400">' + screenText + '</p>' : '') +
+                        '</div>' +
+                        '<div class="flex flex-col items-end gap-1 flex-shrink-0">' +
+                            '<span class="rounded border ' + baselineClass + ' px-1.5 py-0.5 text-[10px] uppercase tracking-wide">' + baselineLabel + '</span>' +
+                            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + esc(baseline.scope || "global") + '</span>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+        }).join("");
+    }
+
+    function loadVisualBaselines(options) {
+        options = options || {};
+        var boardId = getSelectedBoardLocalId();
+        if (!boardId) {
+            renderVisualBaselines([], "");
+            return Promise.resolve([]);
+        }
+        return api("GET", "/workflows/visual-baselines?board_id=" + encodeURIComponent(boardId))
+            .then(function (data) {
+                var baselines = data && Array.isArray(data.visual_baselines) ? data.visual_baselines : [];
+                return api("GET", "/workflows/visual-baselines/readiness?board_id=" + encodeURIComponent(boardId))
+                    .then(function (readinessData) {
+                        var readiness = readinessData && readinessData.visual_baseline_readiness ? readinessData.visual_baseline_readiness : {};
+                        renderVisualBaselines(baselines, boardId, readiness);
+                        return baselines;
+                    })
+                    .catch(function () {
+                        renderVisualBaselines(baselines, boardId, {});
+                        return baselines;
+                    });
+            })
+            .catch(function (e) {
+                renderVisualBaselines([], boardId);
+                if (!options.quiet) snack(e.message || "Failed to load visual baselines", "error");
+                return [];
+            });
+    }
+
+    function scheduledActionWhenText(schedule) {
+        schedule = schedule || {};
+        if (schedule.kind === "once") return "once at " + (schedule.run_at || "?");
+        if (schedule.kind === "weekdays") return "weekdays at " + (schedule.time || "?");
+        if (schedule.kind === "daily") return "daily at " + (schedule.time || "?");
+        return "weekly at " + (schedule.time || "?");
+    }
+
+    function scheduledActionSummary(action) {
+        action = action || {};
+        if (action.type === "open_app") return "Open " + (action.app_name || "app");
+        if (action.type === "type_text") return "Type text" + (action.press_enter === false ? "" : " and press Enter");
+        if (action.type === "play_recording") return "Play recording " + (action.recording_name || "");
+        if (action.type === "keypress") return "Press " + (action.key || "key");
+        return action.type || "Desktop action";
+    }
+
+    function renderScheduledActions(actions) {
+        var list = document.getElementById("wf-scheduled-actions-list");
+        var empty = document.getElementById("wf-scheduled-actions-empty");
+        var note = document.getElementById("wf-scheduled-actions-note");
+        if (!list || !empty) return;
+        actions = Array.isArray(actions) ? actions : [];
+        if (note) note.textContent = actions.length ? "Queued one-time and recurring desktop actions." : "No scheduled desktop actions are queued.";
+        if (!actions.length) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            empty.textContent = "No scheduled desktop actions queued.";
+            return;
+        }
+        empty.classList.add("hidden");
+        list.innerHTML = actions.map(function (item) {
+            var title = item.title || "Scheduled action";
+            var enabled = item.enabled !== false;
+            var runLog = Array.isArray(item.run_log) && item.run_log.length ? item.run_log[0] : null;
+            var schedule = item.schedule || {};
+            var scheduleKind = schedule.kind === "weekdays" || schedule.kind === "weekly" || schedule.kind === "daily" ? schedule.kind : "daily";
+            var scheduleTime = schedule.time || "09:00";
+            return '' +
+                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-scheduled-action-title="' + esc(title) + '">' +
+                    '<div class="flex items-start justify-between gap-3">' +
+                        '<div class="min-w-0 flex-1">' +
+                            '<p class="text-sm font-medium text-gray-100">' + esc(title) + '</p>' +
+                            '<p class="mt-1 text-[11px] text-gray-500">' + esc(scheduledActionSummary(item.action)) + ' · ' + esc(scheduledActionWhenText(item.schedule)) + (item.next_run_at ? ' · next ' + esc(item.next_run_at) : '') + '</p>' +
+                            (runLog ? '<p class="mt-1 text-[11px] text-gray-400">Last run: ' + esc(runLog.status || "") + (runLog.result ? ' · ' + esc(runLog.result) : '') + '</p>' : '') +
+                            '<div class="mt-2 flex flex-wrap items-center gap-2">' +
+                                '<select class="wf-scheduled-action-kind rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-scheduled-action-title="' + esc(title) + '">' +
+                                    '<option value="daily"' + (scheduleKind === "daily" ? " selected" : "") + '>Daily</option>' +
+                                    '<option value="weekdays"' + (scheduleKind === "weekdays" ? " selected" : "") + '>Weekdays</option>' +
+                                    '<option value="weekly"' + (scheduleKind === "weekly" ? " selected" : "") + '>Weekly</option>' +
+                                '</select>' +
+                                '<input type="time" class="wf-scheduled-action-time rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-scheduled-action-title="' + esc(title) + '" value="' + esc(scheduleTime) + '">' +
+                                '<button type="button" class="wf-scheduled-action-reschedule px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-scheduled-action-title="' + esc(title) + '">Reschedule</button>' +
+                            '</div>' +
+                        '</div>' +
+                        '<div class="flex flex-shrink-0 items-center gap-2">' +
+                            '<span class="text-[10px] uppercase tracking-wide ' + (enabled ? 'text-emerald-300' : 'text-gray-500') + '">' + (enabled ? 'active' : 'disabled') + '</span>' +
+                            '<button type="button" class="wf-scheduled-action-toggle px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-scheduled-action-title="' + esc(title) + '" data-scheduled-action-enabled="' + (enabled ? "true" : "false") + '">' + (enabled ? "Disable" : "Enable") + '</button>' +
+                            '<button type="button" class="wf-scheduled-action-cancel px-2 py-1 rounded border border-red-500/40 text-red-200 text-[11px] hover:bg-red-500/15" data-scheduled-action-title="' + esc(title) + '">Cancel</button>' +
+                        '</div>' +
+                    '</div>' +
+                '</div>';
+        }).join("");
+    }
+
+    function loadScheduledActions(options) {
+        options = options || {};
+        return api("GET", "/workflows/scheduled-actions")
+            .then(function (data) {
+                var actions = data && Array.isArray(data.scheduled_actions) ? data.scheduled_actions : [];
+                renderScheduledActions(actions);
+                return actions;
+            })
+            .catch(function (e) {
+                renderScheduledActions([]);
+                if (!options.quiet) snack(e.message || "Failed to load scheduled actions", "error");
+                return [];
+            });
+    }
+
+    function disableScheduledActionByTitle(title, disable) {
+        title = (title || "").trim();
+        if (!title) return Promise.resolve();
+        return api("PATCH", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title), {
+            enabled: !disable
+        }).then(function () {
+            snack(disable ? "Scheduled action disabled" : "Scheduled action enabled", "success");
+            return loadScheduledActions({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to update scheduled action", "error");
+        });
+    }
+
+    function rescheduleScheduledActionByTitle(title, kind, time) {
+        title = (title || "").trim();
+        kind = (kind || "daily").trim();
+        time = (time || "").trim();
+        if (!title || !time) {
+            snack("Choose a time before rescheduling", "error");
+            return Promise.resolve();
+        }
+        return api("PATCH", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title), {
+            enabled: true,
+            schedule: {
+                kind: kind,
+                time: time
+            }
+        }).then(function () {
+            snack("Scheduled action rescheduled", "success");
+            return loadScheduledActions({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to reschedule scheduled action", "error");
+        });
+    }
+
+    function cancelScheduledActionByTitle(title) {
+        title = (title || "").trim();
+        if (!title) return Promise.resolve();
+        return api("DELETE", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title))
+            .then(function () {
+                snack("Scheduled action cancelled", "success");
+                return loadScheduledActions({ quiet: true });
+            })
+            .catch(function (e) {
+                snack(e.message || "Failed to cancel scheduled action", "error");
+            });
+    }
+
+    function createVisualBaseline() {
+        var boardId = getSelectedBoardLocalId();
+        if (!boardId) {
+            snack("Select a board before saving a visual baseline", "error");
+            return;
+        }
+        var nameEl = document.getElementById("wf-baseline-name");
+        var screenEl = document.getElementById("wf-baseline-screen-name");
+        var pathEl = document.getElementById("wf-baseline-screenshot-path");
+        var notesEl = document.getElementById("wf-baseline-notes");
+        var name = (nameEl && nameEl.value || "").trim();
+        var screenName = (screenEl && screenEl.value || "").trim();
+        var screenshotPath = (pathEl && pathEl.value || "").trim();
+        var notes = (notesEl && notesEl.value || "").trim();
+        if (!name || !screenName || !screenshotPath) {
+            snack("Baseline name, screen, and screenshot path are required", "error");
+            return;
+        }
+        var btn = document.getElementById("wf-save-visual-baseline");
+        if (btn) btn.disabled = true;
+        api("POST", "/workflows/visual-baselines", {
+            name: name,
+            board_id: parseInt(boardId, 10),
+            store_copy: true,
+            screens: [{
+                screen_name: screenName,
+                screenshot_path: screenshotPath,
+                notes: notes
+            }]
+        }).then(function () {
+            snack("Visual baseline saved", "success");
+            if (screenEl) screenEl.value = "";
+            if (pathEl) pathEl.value = "";
+            if (notesEl) notesEl.value = "";
+            loadVisualBaselines({ quiet: true });
+        }).catch(function (e) {
+            snack(e.message || "Failed to save visual baseline", "error");
+        }).finally(function () {
+            if (btn) btn.disabled = false;
+        });
+    }
+
     function refreshBoardHermesViews(options) {
         options = options || {};
         loadBoardActivity(options);
         loadLearnedRules(options);
+        loadVisualBaselines(options);
+        loadScheduledActions(options);
     }
 
     // Soft refresh — only update step statuses/results without rebuilding DOM
@@ -2848,7 +3268,7 @@
         var approvalHtml = "";
         if (hasPendingRoute && (run.waiting_kind === "route_approval" || run.status === "waiting")) {
             approvalHtml = '<div class="mt-3 rounded border border-amber-500/30 bg-amber-500/10 p-3">' +
-                '<p class="text-xs text-amber-200 font-medium">Hermes route override pending approval</p>' +
+                '<p class="text-xs text-amber-200 font-medium">Route override pending approval</p>' +
                 '<p class="mt-1 text-[11px] text-gray-300">Suggested: <span class="font-mono">' + esc(pendingBackend) + '</span>' +
                 (pendingModel ? ' / <span class="font-mono">' + esc(pendingModel) + '</span>' : '') + '</p>' +
                 (pendingRationale ? '<p class="mt-1 text-[11px] text-gray-400">' + esc(pendingRationale) + '</p>' : '') +
@@ -2872,6 +3292,17 @@
                     '<p class="mt-2 text-[11px] text-gray-500">Last steer (' + esc(run.last_harness_steer.method || "queued") + '): ' + esc(String(run.last_harness_steer.message).slice(0, 120)) + '</p>' : '') +
             '</div>';
         }
+        var handoff = run.latest_backend_handoff && typeof run.latest_backend_handoff === "object" ? run.latest_backend_handoff : {};
+        var humanHtml = "";
+        if ((run.human_intervention_state && run.human_intervention_state !== "none") || run.worker_question || handoff.backend_id) {
+            humanHtml = '<div class="mt-3 rounded border border-amber-500/25 bg-amber-500/10 p-3">' +
+                '<p class="text-xs text-amber-100 font-medium">Human intervention</p>' +
+                '<p class="mt-1 text-[11px] text-gray-300">State: <span class="font-mono">' + esc(run.human_intervention_state || "none") + '</span>' +
+                    (run.next_action ? ' · next: <span class="font-mono">' + esc(run.next_action) + '</span>' : '') + '</p>' +
+                (run.worker_question ? '<p class="mt-1 text-[11px] text-gray-300">Worker asks: ' + esc(String(run.worker_question).slice(0, 240)) + '</p>' : '') +
+                (handoff.backend_id ? '<p class="mt-1 text-[11px] text-gray-500">Handoff: ' + esc(handoff.backend_id || "") + (handoff.model ? " / " + esc(handoff.model) : "") + (handoff.handoff_event_id ? " · event #" + esc(handoff.handoff_event_id) : "") + '</p>' : '') +
+            '</div>';
+        }
         el.innerHTML = '<div class="flex items-start justify-between gap-3 mb-2">' +
                 '<div><p class="text-sm font-semibold text-white">Run command center</p>' +
                 '<p class="text-xs text-gray-400">Run #' + esc(run.id) + ' · ' + esc(run.status || "running") + '</p></div>' +
@@ -2879,6 +3310,7 @@
             '</div>' +
             renderRouteCard(route, { pendingApproval: hasPendingRoute }) +
             approvalHtml +
+            humanHtml +
             steerHtml +
             runtimeHtml;
         el.querySelectorAll(".wf-route-approve").forEach(function (btn) {
@@ -4031,6 +4463,7 @@
         var container = document.getElementById("step-body-" + step.id);
         if (!container) return;
         var tab = activeStepTab[step.id] || "action";
+        var stepConfig = normalizeStepConfig(step);
 
         // Routing options — default is now "End workflow"
         var routeOpts = '<option value="">End workflow (default)</option><option value="-1">End workflow (explicit)</option>';
@@ -4193,6 +4626,18 @@
             '<input type="file" class="sf-screenshot-file text-xs text-gray-400" accept="image/*">' +
             (step.screenshot_path ? '<span class="text-xs text-green-400">✓ Uploaded</span>' : '<span class="text-xs text-gray-600">No screenshot</span>') +
             '</div></div>';
+        html += '<div class="mt-3 border-t border-white/10 pt-3">';
+        html += '<label class="flex items-center gap-2 cursor-pointer">' +
+            '<input type="checkbox" class="sf-ui-capture rounded"' + ((stepConfig.ui_quality_capture || stepConfig.capture_ui_evidence) ? " checked" : "") + '>' +
+            '<span class="text-sm text-gray-300">Capture UI evidence and compare with visual baseline</span></label>';
+        html += '<div class="grid grid-cols-3 gap-3 mt-2">';
+        html += '<div><label class="block text-xs text-gray-500 mb-1">Visual Baseline</label>' +
+            '<input type="text" class="sf-visual-baseline-name w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" value="' + esc(stepConfig.visual_baseline_name || stepConfig.baseline_name || "") + '" placeholder="Gold Admin"></div>';
+        html += '<div><label class="block text-xs text-gray-500 mb-1">Baseline Screen</label>' +
+            '<input type="text" class="sf-baseline-screen-name w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" value="' + esc(stepConfig.baseline_screen_name || stepConfig.visual_baseline_screen || "") + '" placeholder="Dashboard"></div>';
+        html += '<div><label class="block text-xs text-gray-500 mb-1">Diff Threshold</label>' +
+            '<input type="number" min="0" max="1" step="0.01" class="sf-visual-diff-threshold w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-sm" value="' + esc(stepConfig.visual_diff_threshold == null ? "" : stepConfig.visual_diff_threshold) + '" placeholder="0.10"></div>';
+        html += '</div></div>';
         // Require approval
         html += '<div class="mt-3"><label class="flex items-center gap-2 cursor-pointer">' +
             '<input type="checkbox" class="sf-approval rounded"' + (step.require_approval ? " checked" : "") + '>' +
@@ -4511,7 +4956,7 @@
         }
 
         // Save
-        container.querySelector(".sf-save").addEventListener("click", function () { saveStep(step.id, container); });
+        container.querySelector(".sf-save").addEventListener("click", function () { saveStep(step.id, container, step); });
         // Delete
         container.querySelector(".sf-delete").addEventListener("click", function () { confirmDeleteStep(step.id); });
 
@@ -4577,7 +5022,7 @@
         }
     }
 
-    function saveStep(stepId, container) {
+    function saveStep(stepId, container, step) {
         var passVal = container.querySelector(".sf-pass").value;
         var failVal = container.querySelector(".sf-fail").value;
         var routingMode = container.querySelector(".sf-routing-mode") ? container.querySelector(".sf-routing-mode").value : "static";
@@ -4604,6 +5049,20 @@
             require_approval: container.querySelector(".sf-approval").checked,
             wait_for_continue: container.querySelector(".sf-wait-for-continue") ? container.querySelector(".sf-wait-for-continue").checked : false
         };
+        var config = normalizeStepConfig(step);
+        var uiCaptureEl = container.querySelector(".sf-ui-capture");
+        var baselineNameEl = container.querySelector(".sf-visual-baseline-name");
+        var baselineScreenEl = container.querySelector(".sf-baseline-screen-name");
+        var thresholdEl = container.querySelector(".sf-visual-diff-threshold");
+        config.ui_quality_capture = uiCaptureEl ? uiCaptureEl.checked : false;
+        config.visual_baseline_name = baselineNameEl ? baselineNameEl.value.trim() : "";
+        config.baseline_screen_name = baselineScreenEl ? baselineScreenEl.value.trim() : "";
+        if (thresholdEl && thresholdEl.value !== "") {
+            config.visual_diff_threshold = parseFloat(thresholdEl.value);
+        } else {
+            delete config.visual_diff_threshold;
+        }
+        body.config = config;
         if (isDecisionAction) {
             var actionSelect = container.querySelector(".sf-decision-action");
             body.action_id = actionSelect && actionSelect.value ? parseInt(actionSelect.value, 10) : null;
@@ -4862,13 +5321,94 @@
                     '<div><span class="text-gray-500">Project:</span> <span class="text-gray-200">' + esc(meta.projectText) + '</span></div>' +
                     '<div><span class="text-gray-500">Workflow:</span> <span class="text-gray-200">' + esc(meta.workflowText || (currentWorkflow && currentWorkflow.name) || "") + '</span></div>' +
                 '</div>' +
-                renderRunPacketEvidence(r.result_packet) +
+                renderRunPacketEvidence(r.result_packet, r) +
             '</div>';
         }).join('');
     }
 
+    function loadWorkflowRunHistory(options) {
+        options = options || {};
+        if (!currentWorkflowId) {
+            renderRuns([]);
+            return Promise.resolve([]);
+        }
+        return api("GET", "/workflows/" + currentWorkflowId + "/runs?limit=20")
+            .then(function (runs) {
+                renderRuns(runs || []);
+                return runs || [];
+            })
+            .catch(function (e) {
+                if (!options.quiet) snack(e.message || "Failed to load run history", "error");
+                return [];
+            });
+    }
+
+    function renderCorrections(corrections) {
+        var list = document.getElementById("wf-corrections-list");
+        var empty = document.getElementById("wf-corrections-empty");
+        if (!list || !empty) return;
+        corrections = Array.isArray(corrections) ? corrections : [];
+        if (!corrections.length) {
+            list.innerHTML = "";
+            empty.classList.remove("hidden");
+            return;
+        }
+        empty.classList.add("hidden");
+        list.innerHTML = corrections.map(function (attempt) {
+            var status = attempt.status || "queued";
+            var dispatch = attempt.dispatch_result || {};
+            var autoLabel = dispatch.auto_dispatch ? "Auto-dispatched" : "Queued";
+            var statusClass = status === "dispatched" ? "text-blue-300 border-blue-500/30 bg-blue-500/10" :
+                status === "completed" ? "text-green-300 border-green-500/30 bg-green-500/10" :
+                "text-amber-300 border-amber-500/30 bg-amber-500/10";
+            var packet = attempt.correction_packet || {};
+            var failed = packet.failed_validation || {};
+            var expected = failed.expected || "";
+            var observed = failed.observed || "";
+            return '' +
+                '<div class="rounded border border-white/10 bg-[#152054]/50 px-3 py-2" data-correction-id="' + esc(attempt.id) + '">' +
+                    '<div class="flex flex-wrap items-center gap-2">' +
+                        '<span class="text-xs text-gray-500">#' + esc(attempt.id) + '</span>' +
+                        '<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ' + statusClass + '">' + esc(status) + '</span>' +
+                        '<span class="text-xs text-gray-300">' + esc(autoLabel) + '</span>' +
+                        (attempt.run_id ? '<span class="text-xs text-gray-500">Run #' + esc(attempt.run_id) + '</span>' : '') +
+                        (attempt.step_id ? '<span class="text-xs text-gray-500">Step #' + esc(attempt.step_id) + '</span>' : '') +
+                        (attempt.attempt_number ? '<span class="text-xs text-gray-500">Attempt ' + esc(attempt.attempt_number) + '</span>' : '') +
+                    '</div>' +
+                    '<div class="mt-1 text-[11px] text-gray-400">' +
+                        '<span class="text-gray-500">' + esc(failed.validation_type || "validation") + '</span>' +
+                        (expected ? ' Expected: ' + esc(expected) : '') +
+                        (observed ? ' Observed: ' + esc(observed) : '') +
+                    '</div>' +
+                '</div>';
+        }).join("");
+    }
+
+    function loadWorkflowCorrections(options) {
+        options = options || {};
+        if (!currentWorkflowId) {
+            renderCorrections([]);
+            return Promise.resolve([]);
+        }
+        var filter = document.getElementById("wf-corrections-status-filter");
+        var status = filter && filter.value ? filter.value : "";
+        var endpoint = "/workflows/" + currentWorkflowId + "/corrections";
+        var query = endpoint + "?limit=50";
+        if (status) query += "&status=" + encodeURIComponent(status);
+        return api("GET", query)
+            .then(function (items) {
+                renderCorrections(items || []);
+                return items || [];
+            })
+            .catch(function (e) {
+                if (!options.quiet) snack(e.message || "Failed to load corrections", "error");
+                renderCorrections([]);
+                return [];
+            });
+    }
+
     function switchRunsSubtab(tab) {
-        workflowRunsSubtab = tab === "recent" || tab === "sessions" || tab === "timeline" ? tab : "active";
+        workflowRunsSubtab = tab === "recent" || tab === "sessions" || tab === "timeline" || tab === "corrections" ? tab : "active";
         document.querySelectorAll(".wf-runs-subtab").forEach(function (btn) {
             var active = (btn.dataset.runsTab || "active") === workflowRunsSubtab;
             btn.classList.toggle("text-white", active);
@@ -4881,6 +5421,8 @@
         var pane = document.getElementById("wf-runs-pane-" + workflowRunsSubtab);
         if (pane) pane.classList.remove("hidden");
         if (workflowRunsSubtab === "timeline") loadHermesTimeline({ quiet: true });
+        if (workflowRunsSubtab === "corrections") loadWorkflowCorrections({ quiet: true });
+        if (workflowRunsSubtab === "recent") loadWorkflowRunHistory({ quiet: true });
     }
 
     function clearWorkflowRunAudit() {
@@ -5209,6 +5751,13 @@
     // ── Event bindings ──
     function init() {
         document.addEventListener("click", function () { closeWorkflowContextMenu(); });
+        document.addEventListener("click", function (evt) {
+            var btn = evt.target && evt.target.closest ? evt.target.closest(".wf-ui-feedback-btn") : null;
+            if (!btn) return;
+            evt.preventDefault();
+            evt.stopPropagation();
+            submitUiTasteFeedback(btn);
+        });
         document.addEventListener("keydown", function (evt) {
             if (evt.key === "Escape") closeWorkflowContextMenu();
             if (evt.defaultPrevented) return;
@@ -5326,6 +5875,18 @@
                 refreshBoardHermesViews({ quiet: true });
             });
         }
+        var correctionsRefresh = document.getElementById("wf-refresh-corrections");
+        if (correctionsRefresh) {
+            correctionsRefresh.addEventListener("click", function () {
+                loadWorkflowCorrections();
+            });
+        }
+        var correctionsStatusFilter = document.getElementById("wf-corrections-status-filter");
+        if (correctionsStatusFilter) {
+            correctionsStatusFilter.addEventListener("change", function () {
+                loadWorkflowCorrections();
+            });
+        }
         var hermesSetupBtn = document.getElementById("wf-open-hermes-setup");
         if (hermesSetupBtn) {
             hermesSetupBtn.addEventListener("click", function () {
@@ -5353,7 +5914,7 @@
         if (workflowBoardSelect) {
             workflowBoardSelect.addEventListener("change", function () {
                 if (workflowBoardSelect.value) loadWorkflowBoardTickets(workflowBoardSelect.value);
-                loadLearnedRules({ quiet: true });
+                refreshBoardHermesViews({ quiet: true });
             });
         }
         var refreshBoardActivityBtn = document.getElementById("wf-refresh-board-activity");
@@ -5367,6 +5928,48 @@
             refreshLearnedRulesBtn.addEventListener("click", function () {
                 refreshBoardHermesViews();
             });
+        }
+        var refreshScheduledActionsBtn = document.getElementById("wf-refresh-scheduled-actions");
+        if (refreshScheduledActionsBtn) {
+            refreshScheduledActionsBtn.addEventListener("click", function () {
+                loadScheduledActions();
+            });
+        }
+        var scheduledActionsList = document.getElementById("wf-scheduled-actions-list");
+        if (scheduledActionsList) {
+            scheduledActionsList.addEventListener("click", function (evt) {
+                var toggle = evt.target.closest(".wf-scheduled-action-toggle");
+                if (toggle) {
+                    disableScheduledActionByTitle(toggle.dataset.scheduledActionTitle || "", toggle.dataset.scheduledActionEnabled === "true");
+                    return;
+                }
+                var cancel = evt.target.closest(".wf-scheduled-action-cancel");
+                if (cancel) {
+                    cancelScheduledActionByTitle(cancel.dataset.scheduledActionTitle || "");
+                    return;
+                }
+                var reschedule = evt.target.closest(".wf-scheduled-action-reschedule");
+                if (reschedule) {
+                    var card = reschedule.closest("[data-scheduled-action-title]");
+                    var kindEl = card ? card.querySelector(".wf-scheduled-action-kind") : null;
+                    var timeEl = card ? card.querySelector(".wf-scheduled-action-time") : null;
+                    rescheduleScheduledActionByTitle(
+                        reschedule.dataset.scheduledActionTitle || "",
+                        kindEl ? kindEl.value : "daily",
+                        timeEl ? timeEl.value : ""
+                    );
+                }
+            });
+        }
+        var refreshVisualBaselinesBtn = document.getElementById("wf-refresh-visual-baselines");
+        if (refreshVisualBaselinesBtn) {
+            refreshVisualBaselinesBtn.addEventListener("click", function () {
+                loadVisualBaselines();
+            });
+        }
+        var saveVisualBaselineBtn = document.getElementById("wf-save-visual-baseline");
+        if (saveVisualBaselineBtn) {
+            saveVisualBaselineBtn.addEventListener("click", createVisualBaseline);
         }
         var skillChainsSaveBtn = document.getElementById("wf-skill-chains-save");
         if (skillChainsSaveBtn) {

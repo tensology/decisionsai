@@ -745,6 +745,30 @@ def register_routes(router, templates):
             **get_backend_statuses("codex"),
         })
 
+    @router.get("/projects/{project_id}/orchestration-activity")
+    async def get_project_orchestration_activity(project_id: int, event_limit: int = 50, rule_limit: int = 20):
+        """Return recent orchestration activity for a project."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+        try:
+            from distr.core.hermes import list_project_activity
+
+            return JSONResponse(
+                list_project_activity(
+                    project_id,
+                    event_limit=event_limit,
+                    rule_limit=rule_limit,
+                )
+            )
+        except Exception as e:
+            logger.error("Project orchestration activity failed: %s", e, exc_info=True)
+            raise HTTPException(status_code=500, detail=str(e))
+
     @router.get("/projects/{project_id}")
     async def get_project_detail(project_id: int):
         """Get full project details including context items and files (matches desktop Projects UI)."""

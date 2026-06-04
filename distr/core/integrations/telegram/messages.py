@@ -307,6 +307,16 @@ class TelegramMessagesMixin:
             if self._handle_initiative_draft_command(text_lower):
                 return
 
+            try:
+                from distr.core.integrations.telegram.project_control import handle_project_control_message
+
+                if handle_project_control_message(self, text):
+                    return
+            except Exception as exc:
+                logger.error("[Telegram] Project control command failed: %s", exc, exc_info=True)
+                self.send_to_telegram(f"Project control failed: {exc}")
+                return
+
             # Detect mode-switch intent and persist to Settings_Store
             from distr.core.integrations.telegram.response_format import detect_mode_switch_intent
             from distr.core.services.settings_service import update_setting
@@ -729,7 +739,7 @@ class TelegramMessagesMixin:
         return True
 
     def _handle_hermes_triage_reply(self, queue_obj, entries, text_lower: str) -> bool:
-        """Make Hermes standup approvals conversational instead of ID-first."""
+        """Make work-scan approvals conversational instead of ID-first."""
         import re
 
         hermes_entries = [
@@ -748,7 +758,7 @@ class TelegramMessagesMixin:
 
         decision = _decision_word(text_lower)
         if not decision:
-            if re.search(r"\b(what|show|read|list).*\b(hermes|standup|triage|decision)", text_lower):
+            if re.search(r"\b(what|show|read|list).*\b(hermes|standup|triage|decision|approval|pending|work)\b", text_lower):
                 self.send_to_telegram(self._format_hermes_triage_entries(hermes_entries))
                 return True
             return False
@@ -766,21 +776,21 @@ class TelegramMessagesMixin:
                 elif queue_obj.remove(entry.id):
                     acted += 1
             verb = "Approved" if decision == "approve" else "Rejected"
-            self.send_to_telegram(f"{verb} {acted} Hermes standup decision(s).")
+            self.send_to_telegram(f"{verb} {acted} pending item(s).")
             return True
 
         if idx >= len(hermes_entries):
             self.send_to_telegram(
-                f"I only have {len(hermes_entries)} Hermes standup decision(s) waiting. "
-                "Reply 'show Hermes decisions' to see them."
+                f"I only have {len(hermes_entries)} pending item(s) waiting. "
+                "Reply 'show pending items' to see them."
             )
             return True
 
         entry = hermes_entries[idx]
         if len(hermes_entries) > 1 and not numbered:
-            # The standup message asks for a conversational reply. Treat a plain
-            # approve/reject as the first/current Hermes decision, then explain.
-            prefix = "I’ll apply that to the first Hermes standup decision."
+            # The check-in message asks for a conversational reply. Treat a plain
+            # approve/reject as the first/current pending item, then explain.
+            prefix = "I’ll apply that to the first pending item."
         else:
             prefix = ""
 
@@ -789,7 +799,7 @@ class TelegramMessagesMixin:
             self.send_to_telegram(
                 f"{prefix + ' ' if prefix else ''}Approved: {entry.description}"
                 if ok else
-                f"{prefix + ' ' if prefix else ''}I could not approve that Hermes decision. It may still be pending."
+                f"{prefix + ' ' if prefix else ''}I could not approve that item. It may still be pending."
             )
             return True
 
@@ -797,7 +807,7 @@ class TelegramMessagesMixin:
         self.send_to_telegram(
             f"{prefix + ' ' if prefix else ''}Rejected: {entry.description}"
             if removed else
-            "That Hermes decision was not found."
+            "That pending item was not found."
         )
         return True
 
@@ -807,7 +817,7 @@ class TelegramMessagesMixin:
         return bool(approve_draft_in_queue(queue_obj, entry.id))
 
     def _format_hermes_triage_entries(self, entries) -> str:
-        lines = ["Hermes standup decisions waiting:"]
+        lines = ["Pending items:"]
         for i, entry in enumerate(entries[:8], start=1):
             lines.append(f"{i}. {entry.description}")
         lines.append("\nReply approve 1, reject 1, approve all, or tell me what to turn into tickets.")

@@ -471,20 +471,78 @@ class FileConverterTool(BaseTool):
             
             with open(storage_file, 'r') as f:
                 data = json.load(f)
+
+            current_chat_id = None
+            if self.chat_manager:
+                try:
+                    current_chat_id = self.chat_manager.get_current_chat()
+                except Exception:
+                    current_chat_id = None
+            if current_chat_id is None:
+                try:
+                    from distr.core.db import get_session, Settings
+                    with get_session() as session:
+                        settings = session.query(Settings).first()
+                        if settings:
+                            current_chat_id = getattr(settings, "agent_current_chat_id", None) or getattr(settings, "last_chat_id", None)
+                except Exception:
+                    current_chat_id = None
             
             # Get all file types
             all_files = []
-            all_files.extend(data.get("audio_files", []))
-            all_files.extend(data.get("video_files", []))
-            all_files.extend(data.get("image_files", []))
-            all_files.extend(data.get("document_files", []))
-            all_files.extend(data.get("other_files", []))
+            dropped_folders = data.get("dropped_folders", [])
+            if current_chat_id is not None:
+                chat_bucket = data.get("chat_files_index", {}).get(str(current_chat_id), {})
+                if isinstance(chat_bucket, dict):
+                    bucket_files = []
+                    bucket_files.extend(chat_bucket.get("audio_files", []))
+                    bucket_files.extend(chat_bucket.get("video_files", []))
+                    bucket_files.extend(chat_bucket.get("image_files", []))
+                    bucket_files.extend(chat_bucket.get("document_files", []))
+                    bucket_files.extend(chat_bucket.get("other_files", []))
+                    bucket_files.extend(chat_bucket.get("files", []))
+                    bucket_folders = chat_bucket.get("dropped_folders", [])
+                    if bucket_files:
+                        all_files = bucket_files
+                    if bucket_folders:
+                        dropped_folders = bucket_folders
+
+            if not all_files:
+                all_files.extend(data.get("audio_files", []))
+                all_files.extend(data.get("video_files", []))
+                all_files.extend(data.get("image_files", []))
+                all_files.extend(data.get("document_files", []))
+                all_files.extend(data.get("other_files", []))
+                all_files.extend(data.get("files", []))
             
             if not all_files:
                 return []
             
-            # Filter to only existing files
-            existing_files = [f for f in all_files if os.path.exists(f)]
+            # Filter to only existing files and preserve order while removing duplicates.
+            seen = set()
+            existing_files = []
+            for file_name in all_files:
+                if file_name in seen or not os.path.exists(file_name):
+                    continue
+                seen.add(file_name)
+                existing_files.append(file_name)
+
+            if multiple and dropped_folders:
+                folder_timestamps = data.get("folder_timestamps", {})
+                existing_folders = [folder for folder in dropped_folders if os.path.isdir(folder)]
+                if existing_folders:
+                    latest_folder = max(existing_folders, key=lambda folder: folder_timestamps.get(folder, 0))
+                    latest_folder = os.path.abspath(latest_folder)
+                    scoped_files = []
+                    for file_name in existing_files:
+                        abs_file = os.path.abspath(file_name)
+                        try:
+                            if os.path.commonpath([latest_folder, abs_file]) == latest_folder:
+                                scoped_files.append(file_name)
+                        except ValueError:
+                            continue
+                    if scoped_files:
+                        existing_files = scoped_files
             
             if multiple:
                 return existing_files
@@ -833,6 +891,11 @@ class FileConverterTool(BaseTool):
             conversion_tasks.append((file_path, str(output_file_path), is_video, is_image))
         
         # Start conversions with ThreadPoolExecutor (max 3 concurrent)
+        file_status = {}
+
+        def update_progress(file_path: str, status: str):
+            file_status[file_path] = status
+
         with ThreadPoolExecutor(max_workers=3) as executor:
             futures = []
             for file_path, output_path, is_video, is_image in conversion_tasks:
@@ -843,7 +906,7 @@ class FileConverterTool(BaseTool):
                     target_format,
                     is_video,
                     is_image,
-                    None,  # No progress callback
+                    update_progress,
                     self.chat_manager,
                     chat_id
                 )
@@ -851,16 +914,38 @@ class FileConverterTool(BaseTool):
             
             # Wait for all to complete
             completed = 0
+            failed = 0
             for future in futures:
                 try:
-                    future.result()
-                    completed += 1
+                    success, _error_msg = future.result()
+                    if success:
+                        completed += 1
+                    else:
+                        failed += 1
                 except Exception as e:
+                    failed += 1
                     logger.error(f"FileConverter: Conversion failed: {e}")
         
-        return f"Started conversion of {len(conversion_tasks)} file(s) to {target_format}. Conversions running in background (max 3 at a time)."
+        try:
+            from distr.core.signals import speak_text_directly_event_queue
+            speak_text_directly_event_queue(f"Converted {completed} of {len(conversion_tasks)} files")
+        except Exception:
+            pass
+
+        if self.chat_manager and chat_id:
+            try:
+                summary = f"✅ Converted {completed} of {len(conversion_tasks)} file(s) to {target_format}"
+                if failed:
+                    summary += f" ({failed} failed)"
+                self.chat_manager.add_assistant_message(chat_id, summary)
+                from distr.core.signals import signal_manager
+                signal_manager.chat_message_added.emit(chat_id, "assistant", summary)
+                signal_manager.chat_updated.emit(chat_id)
+            except Exception as e:
+                logger.warning(f"FileConverter: Could not add message to chat: {e}")
+
+        return f"Converted {completed} of {len(conversion_tasks)} file(s) to {target_format}."
     
     async def _arun(self, file_path: Optional[str] = None, target_format: str = "", convert_all: bool = False, **kwargs) -> str:
         """Async version of _run."""
         return self._run(file_path, target_format, convert_all)
-

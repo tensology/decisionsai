@@ -24,6 +24,7 @@ def _make_step(**overrides):
     step.on_fail_goto = overrides.get("on_fail_goto", None)
     step.wait_before_next = overrides.get("wait_before_next", 0)
     step.wait_for_continue = overrides.get("wait_for_continue", False)
+    step.require_approval = overrides.get("require_approval", False)
     step.validation_type = overrides.get("validation_type", "none")
     step.validation_prompt = overrides.get("validation_prompt", None)
     step.status = overrides.get("status", "running")
@@ -41,6 +42,8 @@ def _make_run(**overrides):
     run.completed_at = overrides.get("completed_at", None)
     run.run_data = overrides.get("run_data", None)
     run.ticket_id = overrides.get("ticket_id", None)
+    run.board_id = overrides.get("board_id", None)
+    run.workflow = overrides.get("workflow", None)
     return run
 
 
@@ -322,7 +325,17 @@ class TestRouteIntegration:
     @patch("distr.core.workflow.router.increment_workflow_updated")
     @patch("distr.core.workflow.router.get_session")
     @patch("distr.core.workflow.router._run_verification", return_value=True)
-    def test_route_updates_result_packet_in_run_data(self, mock_verify, mock_get_session, mock_ws):
+    @patch(
+        "distr.core.workflow.standards_memory.build_standards_context",
+        return_value="[VISUAL TASTE MEMORY]\n- approved: Compact controls.",
+    )
+    def test_route_updates_result_packet_in_run_data(
+        self,
+        _mock_standards,
+        mock_verify,
+        mock_get_session,
+        mock_ws,
+    ):
         step = _make_step(
             id=1,
             name="Analyze",
@@ -332,6 +345,8 @@ class TestRouteIntegration:
         )
         run = _make_run(
             id=10,
+            board_id=7,
+            workflow=MagicMock(context_rules="Workflow context."),
             run_data=json.dumps(
                 {
                     "result_packet": {
@@ -348,7 +363,7 @@ class TestRouteIntegration:
         db = MagicMock()
         mock_get_session.return_value.__enter__ = MagicMock(return_value=db)
         mock_get_session.return_value.__exit__ = MagicMock(return_value=False)
-        db.query.return_value.filter.return_value.first.side_effect = [step, run, next_step]
+        db.query.return_value.filter.return_value.first.side_effect = [step, run, run, next_step]
         db.add = MagicMock()
 
         router = StepRouter()
@@ -365,6 +380,7 @@ class TestRouteIntegration:
         assert snapshots[-1]["validation_type"] == "text_match"
         assert snapshots[-1]["expected"] == "analysis passed"
         assert snapshots[-1]["verdict"] == "pass"
+        assert "[VISUAL TASTE MEMORY]" in snapshots[-1]["standards_context"]
 
     @patch("distr.core.workflow.router.append_ticket_audit_entry")
     @patch("distr.core.workflow.router.increment_workflow_updated")

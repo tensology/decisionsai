@@ -10,10 +10,34 @@ import subprocess
 import time
 from pathlib import Path
 from typing import Any, Optional
+from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
 from .base import BackendStatus, BackendTaskResult, EventCallback, ProjectCliBackend, ProjectTask
 
 DEFAULT_BACKEND_ID = "pi"
+
+
+def _decisions_api_base() -> str:
+    return (os.environ.get("DECISIONS_API_BASE") or "http://127.0.0.1:8765").rstrip("/")
+
+
+def _internal_api_token() -> str:
+    try:
+        from distr.gui.web.security import get_internal_api_token
+
+        return get_internal_api_token()
+    except Exception:
+        return (os.environ.get("DECISIONSAI_INTERNAL_API_TOKEN") or "").strip()
+
+
+def _with_internal_token(url: str) -> str:
+    token = _internal_api_token()
+    if not token:
+        return url
+    parts = urlsplit(url)
+    query = dict(parse_qsl(parts.query, keep_blank_values=True))
+    query.setdefault("internal_token", token)
+    return urlunsplit((parts.scheme, parts.netloc, parts.path, urlencode(query), parts.fragment))
 
 
 def _first_executable(candidates: list[str]) -> Optional[str]:
@@ -311,8 +335,8 @@ class CodexBackend(OneShotCliBackend):
     def _callback_instruction(self, task: ProjectTask) -> str:
         if not task.workflow_id or not task.run_id:
             return ""
-        api_base = (os.environ.get("DECISIONS_API_BASE") or "http://127.0.0.1:8765").rstrip("/")
-        callback_url = f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events"
+        api_base = _decisions_api_base()
+        callback_url = _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events")
         reporter = os.environ.get(
             "DECISIONS_CODEX_REPORTER",
             os.path.expanduser("~/plugins/decisions-codex/scripts/report_decisions_event.py"),
@@ -343,6 +367,9 @@ class CodexBackend(OneShotCliBackend):
 
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
+        sandbox = (os.environ.get("DECISIONSAI_CODEX_SANDBOX") or "workspace-write").strip()
+        if sandbox:
+            cmd += ["--sandbox", sandbox]
         if task.model and task.model not in ("auto", "default"):
             cmd += ["--model", task.model]
         effort = (task.codex_reasoning_effort or "").strip()
@@ -422,23 +449,26 @@ class EditorTicketBackend(ProjectCliBackend):
         return tickets_dir / f"decisionsai_{self.id}_{stamp}_{suffix}.md"
 
     def _ticket_body(self, task: ProjectTask) -> str:
-        api_base = (os.environ.get("DECISIONS_API_BASE") or "http://127.0.0.1:8765").rstrip("/")
+        api_base = _decisions_api_base()
         continue_url = ""
         bridge_url = ""
-        if task.workflow_id and task.run_id:
-            continue_url = f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/continue"
-            bridge_url = f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events"
+        workflow_id = getattr(task, "workflow_id", None)
+        run_id = getattr(task, "run_id", None)
+        if workflow_id and run_id:
+            continue_url = _with_internal_token(f"{api_base}/api/workflows/{int(workflow_id)}/runs/{int(run_id)}/continue")
+            bridge_url = _with_internal_token(f"{api_base}/api/workflows/{int(workflow_id)}/runs/{int(run_id)}/codex-events")
         meta = {
-            "project_id": task.project_id,
-            "project_name": task.project_name,
+            "project_id": getattr(task, "project_id", None),
+            "project_name": getattr(task, "project_name", ""),
             "backend": self.id,
-            "origin": task.origin,
-            "run_id": task.run_id,
-            "workflow_id": task.workflow_id,
-            "step_id": task.step_id or task.audit_id,
-            "ticket_id": task.ticket_id,
-            "board_id": task.board_id,
-            "execution_session_id": task.execution_session_id,
+            "origin": getattr(task, "origin", ""),
+            "run_id": run_id,
+            "workflow_id": workflow_id,
+            "step_id": getattr(task, "step_id", None) or getattr(task, "audit_id", None),
+            "ticket_id": getattr(task, "ticket_id", None),
+            "board_id": getattr(task, "board_id", None),
+            "execution_session_id": getattr(task, "execution_session_id", None),
+            "handoff_event_id": getattr(task, "handoff_event_id", None),
             "api_base": api_base,
             "callback_url": continue_url,
             "continue_url": continue_url,
@@ -459,10 +489,10 @@ class EditorTicketBackend(ProjectCliBackend):
             "callback_payload_type: workflow_continue\n"
             "---\n\n"
             f"# DecisionsAI Work Packet\n\n"
-            f"Project: {task.project_name} ({task.project_id})\n"
+            f"Project: {getattr(task, 'project_name', '')} ({getattr(task, 'project_id', '')})\n"
             f"Backend: {self.name}\n\n"
             "## Instruction\n\n"
-            f"{task.instruction.strip()}\n\n"
+            f"{str(getattr(task, 'instruction', '')).strip()}\n\n"
             "## Return Contract\n\n"
             "When finished, report back to DecisionsAI with:\n"
             "- Status: completed | failed | needs_input\n"
@@ -494,19 +524,19 @@ class EditorTicketBackend(ProjectCliBackend):
             return BackendTaskResult(False, self.id, "ide_ticket", error=msg, session_id=task.audit_id)
 
         try:
-            from distr.core.hermes import emit_event
+            from distr.core.orchestration_events import emit_orchestration_event
 
-            emit_event(
+            emit_orchestration_event(
                 source=self.id,
                 event_type="ide_work_packet_created",
                 status="waiting",
-                workflow_id=task.workflow_id,
-                run_id=task.run_id,
-                step_id=task.step_id or task.audit_id,
-                ticket_id=task.ticket_id,
-                board_id=task.board_id,
-                project_id=task.project_id,
-                execution_session_id=task.execution_session_id,
+                workflow_id=getattr(task, "workflow_id", None),
+                run_id=getattr(task, "run_id", None),
+                step_id=getattr(task, "step_id", None) or getattr(task, "audit_id", None),
+                ticket_id=getattr(task, "ticket_id", None),
+                board_id=getattr(task, "board_id", None),
+                project_id=getattr(task, "project_id", None),
+                execution_session_id=getattr(task, "execution_session_id", None),
                 summary=f"IDE work packet created for {self.editor_name}.",
                 payload={
                     "ticket_path": str(ticket_path),
@@ -648,6 +678,58 @@ def _compact_execution_event(event: dict[str, Any]) -> dict[str, Any]:
     return compact
 
 
+def _handoff_callback_metadata(task: ProjectTask) -> dict[str, Any]:
+    api_base = _decisions_api_base()
+    callback: dict[str, Any] = {"api_base": api_base}
+    if task.workflow_id and task.run_id:
+        callback.update({
+            "continue_url": _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/continue"),
+            "bridge_url": _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events"),
+        })
+    return callback
+
+
+def _update_run_handoff_state(
+    *,
+    run_id: int | None,
+    packet: dict[str, Any],
+    handoff_event_id: int | None = None,
+    state: str = "dispatched",
+    result: dict[str, Any] | None = None,
+) -> None:
+    if not run_id:
+        return
+    try:
+        from distr.core.db import get_session
+        from distr.core.db.workflow import AutoWorkflowRun
+
+        with get_session() as db:
+            run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
+            if not run:
+                return
+            try:
+                run_data = json.loads(run.run_data or "{}") or {}
+            except Exception:
+                run_data = {}
+            handoff = dict(packet or {})
+            if handoff_event_id:
+                handoff["handoff_event_id"] = int(handoff_event_id)
+            handoff["state"] = state
+            if result:
+                handoff["result"] = result
+            history = run_data.get("backend_handoffs") if isinstance(run_data.get("backend_handoffs"), list) else []
+            history.append(handoff)
+            run_data["backend_handoffs"] = history[-20:]
+            run_data["latest_backend_handoff"] = handoff
+            run_data["execution_session_id"] = packet.get("execution_session_id") or run_data.get("execution_session_id")
+            if state in {"needs_human_input", "human_took_over", "changes_requested"}:
+                run_data["human_intervention_state"] = state
+            run.run_data = json.dumps(run_data)
+            db.commit()
+    except Exception:
+        pass
+
+
 async def run_project_task(
     project: Any,
     instruction: str,
@@ -750,14 +832,55 @@ async def run_project_task(
         },
     )
     task.execution_session_id = execution_session_id
+    handoff_packet: dict[str, Any] = {}
+    handoff_event_id: int | None = None
+    try:
+        from distr.core.hermes import build_backend_handoff_packet, record_backend_handoff
+
+        handoff_packet = build_backend_handoff_packet(
+            backend_id=backend_id,
+            model=selected_model,
+            instruction=instruction,
+            project_id=task.project_id,
+            project_name=task.project_name,
+            project_folder=task.folder,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            execution_session_id=execution_session_id,
+            route_rationale=selection_reason,
+            selection_reason=selection_reason,
+            origin=origin,
+            complexity=ticket_complexity,
+            git_status_before=git_status_before,
+            runtime_snapshot=runtime_snapshot,
+            callback=_handoff_callback_metadata(task),
+        )
+        handoff_event_id = record_backend_handoff(
+            packet=handoff_packet,
+            status="dispatched",
+            summary=f"Sent work to {backend.name or backend_id}.",
+        )
+        setattr(task, "handoff_event_id", handoff_event_id)
+        _update_run_handoff_state(
+            run_id=run_id,
+            packet=handoff_packet,
+            handoff_event_id=handoff_event_id,
+            state="dispatched",
+        )
+    except Exception:
+        pass
     if runtime_snapshot:
         try:
-            from distr.core.hermes import emit_event, resolve_board_id_for_ticket
+            from distr.core.hermes import resolve_board_id_for_ticket
+            from distr.core.orchestration_events import emit_orchestration_event
 
             active_count = int(runtime_snapshot.get("active_terminal_count") or 0)
             urls = runtime_snapshot.get("urls") or []
             url_text = ", ".join(str(item.get("url")) for item in urls if isinstance(item, dict) and item.get("url"))
-            emit_event(
+            emit_orchestration_event(
                 source="project_runtime",
                 event_type="project_runtime_snapshot",
                 status="observed",
@@ -781,7 +904,13 @@ async def run_project_task(
         "executor_start",
         status="running",
         message=f"Starting {backend.name or backend_id}.",
-        payload={"backend_id": backend_id, "model": selected_model, "runtime_snapshot": runtime_snapshot},
+        payload={
+            "backend_id": backend_id,
+            "model": selected_model,
+            "runtime_snapshot": runtime_snapshot,
+            "backend_handoff": handoff_packet or {},
+            "handoff_event_id": handoff_event_id,
+        },
     )
 
     def _tracked_event(event: dict[str, Any]) -> None:
@@ -807,6 +936,42 @@ async def run_project_task(
 
     result.execution_session_id = execution_session_id
     git_status_after = _git_status_short(task.folder)
+    try:
+        from distr.core.hermes import record_backend_handoff
+
+        update_packet = {
+            **(handoff_packet or {}),
+            "git_status_after": git_status_after,
+        }
+        record_backend_handoff(
+            packet=update_packet,
+            status="completed" if result.success else "failed",
+            event_type="backend_handoff_updated",
+            summary=(
+                f"{backend.name or backend_id} completed the handoff."
+                if result.success
+                else f"{backend.name or backend_id} failed the handoff."
+            ),
+            evidence={
+                "output": (result.output or "")[:4000],
+                "error": (result.error or "")[:2000],
+                "engine": result.engine,
+            },
+        )
+        _update_run_handoff_state(
+            run_id=run_id,
+            packet=update_packet,
+            handoff_event_id=handoff_event_id,
+            state="completed" if result.success else "failed",
+            result={
+                "success": result.success,
+                "engine": result.engine,
+                "output": (result.output or "")[:4000],
+                "error": (result.error or "")[:2000],
+            },
+        )
+    except Exception:
+        pass
     complete_execution_session(
         execution_session_id,
         success=result.success,

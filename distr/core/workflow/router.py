@@ -106,6 +106,7 @@ class StepRouter:
                 step, result, passed, project_id=verify_project_id
             )
             hermes_overlay = None
+            standards_context = ""
             try:
                 from distr.core.db.kanban import KanbanTicket
                 from distr.core.hermes_validator import apply_hermes_validator_overlay
@@ -116,15 +117,16 @@ class StepRouter:
                     ticket = db.query(KanbanTicket).filter(KanbanTicket.id == int(run.ticket_id)).first()
                     if ticket:
                         ticket_context = f"{getattr(ticket, 'title', '')}\n{getattr(ticket, 'description', '')}".strip()
+                standards_context = build_standards_context(
+                    getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
+                    board_id=getattr(run, "board_id", None) if run else None,
+                )
                 hermes_overlay = apply_hermes_validator_overlay(
                     step=step,
                     result=result,
                     caller_passed=passed,
                     mechanical_passed=verified_passed,
-                    standards_context=build_standards_context(
-                        getattr(run.workflow, "context_rules", None) if run and run.workflow else None,
-                        board_id=getattr(run, "board_id", None) if run else None,
-                    ),
+                    standards_context=standards_context,
                     ticket_context=ticket_context,
                 )
                 if hermes_overlay is not None:
@@ -137,6 +139,8 @@ class StepRouter:
             )
             if hermes_overlay:
                 validation_snapshot["hermes_validator"] = hermes_overlay
+            if standards_context:
+                validation_snapshot["standards_context"] = standards_context
 
             # ── approval gate (after verify, before marking passed) ──
             if step.require_approval and verified_passed and not skip_approval:
@@ -201,7 +205,6 @@ class StepRouter:
                     create_correction_attempt,
                     record_validation,
                 )
-                from distr.core.workflow.standards_memory import build_standards_context
 
                 latest_execution = (
                     db.query(ProjectExecutionSession)
@@ -223,10 +226,7 @@ class StepRouter:
                     ),
                     execution_session_id=getattr(latest_execution, "id", None),
                     validation_snapshot=validation_snapshot,
-                    standards_context=build_standards_context(
-                        getattr(run.workflow, "context_rules", None),
-                        board_id=getattr(run, "board_id", None),
-                    ),
+                    standards_context=standards_context,
                     payload={
                         "step_name": step.name or f"Step {step_id}",
                         "action_type": step.action_type,

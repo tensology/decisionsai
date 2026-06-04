@@ -96,6 +96,10 @@ def _enrich_run_record(db, run: AutoWorkflowRun, run_data: Optional[Dict[str, An
         "pending_harness_steers": (run_data.get("pending_harness_steers") or [])[-5:],
         "last_harness_steer": run_data.get("last_harness_steer") or {},
         "last_codex_bridge_state": run_data.get("last_codex_bridge_state") or {},
+        "latest_backend_handoff": run_data.get("latest_backend_handoff") or {},
+        "human_intervention_state": run_data.get("human_intervention_state") or "none",
+        "worker_question": run_data.get("worker_question") or "",
+        "next_action": run_data.get("next_action") or decide_workflow_next_action(run_data=run_data).get("action"),
     }
 
 
@@ -108,6 +112,48 @@ def _run_is_steerable(run: AutoWorkflowRun, run_data: dict[str, Any]) -> bool:
     route = run_data.get("execution_route") if isinstance(run_data.get("execution_route"), dict) else {}
     backend = str(route.get("backend") or "pi")
     return run.status in ("running", "waiting") and is_steerable_backend(backend)
+
+
+def decide_workflow_next_action(
+    *,
+    run_data: dict[str, Any] | None = None,
+    result_packet: dict[str, Any] | None = None,
+    validation: dict[str, Any] | None = None,
+    worker_status: str = "",
+    confidence: float | None = None,
+) -> dict[str, Any]:
+    """Choose the workflow's next control-loop action from durable run evidence."""
+    data = run_data if isinstance(run_data, dict) else {}
+    packet = result_packet if isinstance(result_packet, dict) else data.get("result_packet") if isinstance(data.get("result_packet"), dict) else {}
+    artifacts = packet.get("artifacts") if isinstance(packet.get("artifacts"), dict) else {}
+    risk = data.get("risk_profile") if isinstance(data.get("risk_profile"), dict) else {}
+    risk_level = str(risk.get("level") or "").strip().lower()
+    waiting_kind = str(data.get("waiting_kind") or "").strip().lower()
+    human_state = str(data.get("human_intervention_state") or "").strip().lower()
+    last_bridge = data.get("last_codex_bridge_state") if isinstance(data.get("last_codex_bridge_state"), dict) else {}
+    bridge_type = str(last_bridge.get("event_type") or "").strip().lower()
+    status = (worker_status or bridge_type or str(last_bridge.get("status") or "")).strip().lower()
+    validation_data = validation if isinstance(validation, dict) else {}
+    validation_verdict = str(validation_data.get("verdict") or validation_data.get("status") or "").strip().lower()
+    missing = validation_data.get("missing") if isinstance(validation_data.get("missing"), list) else []
+
+    if waiting_kind in {"needs_human_input", "worker_needs_input"} or human_state == "needs_human_input":
+        return {"action": "needs_human_input", "reason": "Worker is waiting for human input."}
+    if status in {"needs_input", "worker_needs_input", "codex_needs_input", "codex_waiting"}:
+        return {"action": "needs_human_input", "reason": "Worker reported that input is needed."}
+    if confidence is not None and confidence < 0.55:
+        return {"action": "needs_human_input", "reason": "Decision confidence is low."}
+    if risk_level in {"high", "critical"} and validation_verdict not in {"pass", "passed"}:
+        return {"action": "validation_required", "reason": "High-risk work requires validation before continuing."}
+    if validation_verdict in {"fail", "failed"}:
+        return {"action": "correction_required", "reason": "Validation failed.", "missing": missing}
+    if missing:
+        return {"action": "needs_human_input", "reason": "Required evidence is missing.", "missing": missing}
+    if artifacts.get("ui_heavy") and not artifacts.get("after_screenshot"):
+        return {"action": "validation_required", "reason": "UI-heavy work needs screenshot validation."}
+    if data.get("ide_handoff_pending"):
+        return {"action": "needs_human_input", "reason": "IDE handoff is waiting for human review."}
+    return {"action": "continue", "reason": "No blocking human-input or validation requirement is present."}
 
 
 def _compact_result_packet_for_api(packet: Any) -> Dict[str, Any]:
@@ -138,6 +184,24 @@ def _compact_result_packet_for_api(packet: Any) -> Dict[str, Any]:
             "action_trace": list(execution.get("action_trace") or [])[-8:],
             "validation_snapshots": list(execution.get("validation_snapshots") or [])[-8:],
         },
+    }
+
+
+def _compact_correction_attempt_for_api(attempt: Dict[str, Any]) -> Dict[str, Any]:
+    """Return browser-safe correction attempt state for workflow run history."""
+    if not isinstance(attempt, dict):
+        return {}
+    return {
+        "id": attempt.get("id"),
+        "validation_record_id": attempt.get("validation_record_id"),
+        "step_id": attempt.get("step_id"),
+        "status": attempt.get("status") or "",
+        "attempt_number": attempt.get("attempt_number"),
+        "target_backend": attempt.get("target_backend") or "",
+        "target_model": attempt.get("target_model") or "",
+        "dispatch_result": attempt.get("dispatch_result") if isinstance(attempt.get("dispatch_result"), dict) else {},
+        "dispatched_at": attempt.get("dispatched_at"),
+        "completed_at": attempt.get("completed_at"),
     }
 
 
@@ -618,6 +682,7 @@ def update_step(step_id: int, **kwargs) -> bool:
         "max_retries", "timeout_seconds", "require_approval",
         "status", "result", "recording_filename", "action_id",
         "code", "validation_code", "linked_project_id", "wait_for_continue",
+        "config",
     }
     with get_session() as db:
         step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
@@ -625,6 +690,8 @@ def update_step(step_id: int, **kwargs) -> bool:
             return False
         for k, v in kwargs.items():
             if k in allowed:
+                if k == "config" and isinstance(v, (dict, list)):
+                    v = json.dumps(v)
                 setattr(step, k, v)
         db.commit()
         return True
@@ -858,6 +925,7 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
             "backend_id": steer_result.get("backend_id") or backend_id,
             "delivered": bool(steer_result.get("delivered")),
             "method": steer_result.get("method") or "queued",
+            "human_intervention_state": "steer_delivered" if steer_result.get("delivered") else "steer_queued",
         }
         history = run_data.get("pending_harness_steers") or []
         if not isinstance(history, list):
@@ -865,6 +933,16 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
         history.append(steer_entry)
         run_data["pending_harness_steers"] = history[-20:]
         run_data["last_harness_steer"] = steer_entry
+        run_data["human_intervention_state"] = steer_entry["human_intervention_state"]
+        run_data["next_action"] = "worker_continue"
+        latest_handoff = run_data.get("latest_backend_handoff") if isinstance(run_data.get("latest_backend_handoff"), dict) else {}
+        if latest_handoff:
+            latest_handoff["human_intervention"] = {
+                **(latest_handoff.get("human_intervention") if isinstance(latest_handoff.get("human_intervention"), dict) else {}),
+                "state": steer_entry["human_intervention_state"],
+                "latest_message": instruction[:4000],
+            }
+            run_data["latest_backend_handoff"] = latest_handoff
         run.run_data = json.dumps(run_data)
         db.commit()
 
@@ -892,7 +970,7 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
         logger.debug("Could not append harness steer execution event", exc_info=True)
 
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.hermes import emit_event, record_human_intervention_memory
 
         emit_event(
             source="hermes",
@@ -907,6 +985,22 @@ def apply_run_harness_steer(run_id: int, message: str) -> dict[str, Any]:
             execution_session_id=int(execution_session_id) if execution_session_id else None,
             summary=instruction[:240],
             payload=steer_entry,
+        )
+        record_human_intervention_memory(
+            label="manual_fix_applied" if "fix" in instruction.lower() else "ignored_instruction",
+            message=instruction[:4000],
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            project_id=int(project_id) if project_id else None,
+            execution_session_id=int(execution_session_id) if execution_session_id else None,
+            handoff_event_id=(
+                run_data.get("latest_backend_handoff", {}).get("handoff_event_id")
+                if isinstance(run_data.get("latest_backend_handoff"), dict)
+                else None
+            ),
         )
     except Exception:
         logger.debug("Could not emit harness_steer event", exc_info=True)
@@ -938,6 +1032,20 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
             .order_by(AutoWorkflowRun.started_at.desc())
             .limit(limit).all()
         )
+        run_ids = [r.id for r in rows if r.id is not None]
+        corrections_by_run: Dict[int, List[Dict[str, Any]]] = {}
+        if run_ids:
+            try:
+                from distr.core.hermes import list_correction_attempts
+
+                for attempt in list_correction_attempts(workflow_id=workflow_id, limit=500):
+                    run_id = attempt.get("run_id")
+                    if run_id in run_ids:
+                        corrections_by_run.setdefault(int(run_id), []).append(
+                            _compact_correction_attempt_for_api(attempt)
+                        )
+            except Exception:
+                corrections_by_run = {}
         out = []
         for r in rows:
             run_data = _safe_json_loads(r.run_data) or {}
@@ -951,6 +1059,7 @@ def get_run_history(workflow_id: int, limit: int = 10) -> List[Dict[str, Any]]:
                 **enriched,
                 "phase": run_data.get("phase"),
                 "result_packet": _compact_result_packet_for_api(run_data.get("result_packet")),
+                "correction_attempts": corrections_by_run.get(int(r.id), [])[-5:],
             })
         return out
 

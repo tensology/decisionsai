@@ -125,7 +125,8 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
     assert response.status_code == 200
     body = response.json()
     assert body["success"] is True
-    assert body["event_type"] == "user_steer"
+    assert body["event_type"] == "needs_input"
+    assert body["legacy_event_type"] == "user_steer"
     assert body["captured_standard"] is True
 
     append_execution_event.assert_called_once()
@@ -136,8 +137,11 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
         run_data = json.loads(run.run_data or "{}")
         assert run_data["last_codex_bridge_state"]["event_type"] == "user_steer"
         assert run_data["codex_bridge_events"][-1]["message"] == message
+        assert run_data["live_agent_context"]["latest_user_steer"] == message
+        assert run_data["live_agent_context"]["execution_session_id"] == 56
+        assert run_data["live_agent_context"]["recent_events"][-1]["event_type"] == "user_steer"
 
-        event = session.query(HermesEvent).filter(HermesEvent.event_type == "user_steer").one()
+        event = session.query(HermesEvent).filter(HermesEvent.event_type == "needs_input").one()
         assert event.source == "codex"
         assert event.status == "observed"
         assert event.workflow_id == workflow_id
@@ -146,6 +150,8 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
         assert event.ticket_id == 77
         assert event.board_id == 12
         assert event.project_id == 34
+        payload = json.loads(event.payload or "{}")
+        assert payload["orchestration"]["legacy_event_type"] == "user_steer"
 
         adaptive = (
             session.query(AutoWorkflowVariable)
@@ -154,3 +160,10 @@ def test_codex_bridge_user_steer_is_recorded_and_captured_as_standard(monkeypatc
             .one()
         )
         assert "browser validation evidence" in adaptive.default_value
+
+    timeline = client.get(f"/api/workflows/{workflow_id}/runs/{run_id}/timeline")
+    assert timeline.status_code == 200
+    events = timeline.json()["events"]
+    assert events[-1]["event_type"] == "needs_input"
+    assert events[-1]["legacy_event_type"] == "user_steer"
+    assert "Hermes" not in events[-1]["notification"]["text"]

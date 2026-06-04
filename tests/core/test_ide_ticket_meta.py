@@ -8,6 +8,7 @@ from distr.core.project_cli_backends.registry import VSCodeIdeBackend
 
 def test_vscode_ide_ticket_includes_extension_callback_meta(monkeypatch):
     monkeypatch.setenv("DECISIONS_API_BASE", "http://127.0.0.1:8765")
+    monkeypatch.setenv("DECISIONSAI_INTERNAL_API_TOKEN", "test-internal-token")
     backend = VSCodeIdeBackend()
     body = backend._ticket_body(
         ProjectTask(
@@ -30,4 +31,5 @@ def test_vscode_ide_ticket_includes_extension_callback_meta(monkeypatch):
     assert "callback_payload_type: workflow_continue" in body
     assert "http://127.0.0.1:8765/api/workflows/3/runs/9/continue" in body
     assert "http://127.0.0.1:8765/api/workflows/3/runs/9/codex-events" in body
+    assert "internal_token=test-internal-token" in body
     assert "Report Workflow Complete" in body

@@ -8,8 +8,9 @@ from typing import List, Dict, Optional
 
 logger = logging.getLogger(__name__)
 
-# Short phrase for chat + TTS when a raw filesystem path would have appeared.
-_PATH_REDACT_PLACEHOLDER = "I've saved a file on your computer."
+# Short neutral phrase for chat + TTS when a raw filesystem path would have
+# appeared. This must not imply that the agent created or saved anything.
+_PATH_REDACT_PLACEHOLDER = "a local path"
 
 
 def redact_filesystem_paths_for_conversation(text: str) -> str:

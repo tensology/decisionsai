@@ -17,6 +17,24 @@ except Exception:  # pragma: no cover - routing should never fail on import nois
 
 _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
     (
+        "codex_thread_context",
+        (
+            r"\b(codex|codecs)\b.*\b(conversations?|threads?|chats?|sessions?|transcripts?|history)\b",
+            r"\b(conversations?|threads?|chats?|sessions?|transcripts?|history)\b.*\b(codex|codecs)\b",
+            r"\b(codex|codecs)\b.*\b(work\s+with|bring\s+in|pull\s+in|load|summari[sz]e|turn\s+.*\b(ticket|plan|skill)|what\s+happened)\b",
+            r"\b(what\s+am\s+i\s+doing|where\s+am\s+i|workload|working\s+on)\b.*\b(codex|codecs)\b",
+        ),
+    ),
+    (
+        "proactive_orchestrator",
+        (
+            r"\b(proactive|morning|lunch|evening|check\s+work|work\s+coming\s+in|prioriti[sz]e|what\s+is\s+important)\b.*\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?|codex|codecs|cursor|project)\b",
+            r"\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?)\b.*\b(prioriti[sz]e|important|check|scan|work\s+coming\s+in|what\s+matters)\b",
+            r"\b(where\s+am\s+i|what\s+am\s+i\s+doing|workload|working\s+on)\b.*\b(cursor|codex|codecs)\b",
+            r"\b(cursor|codex|codecs)\b.*\b(workload|working\s+on|what\s+am\s+i\s+doing|where\s+am\s+i)\b",
+        ),
+    ),
+    (
         "clipboard_action",
         (
             r"\b(what'?s?|what\s+is|show|get|read|see)\s+(?:in|on)?\s*(?:my\s+|the\s+)?clipboard\b",
@@ -55,6 +73,24 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         "create_step_runner",
         (
             r"\b(create|build|make|generate)\s+(?:a\s+|an\s+)?(?:step\s+runner|automation|workflow)\b",
+        ),
+    ),
+    (
+        "scheduled_action",
+        (
+            r"\b(schedule|scheduled|recurring|every\s+(?:day|weekday|week|morning|evening))\b.*\b(action|desktop|keypress|key\s*press|type|open|recording|chrome|app|automation)\b",
+            r"\b(list|show|what|cancel|delete|disable|enable|reschedule|move)\b.*\bscheduled\s+(?:desktop\s+)?actions?\b",
+            r"\b(cancel|delete|disable|enable|reschedule|move)\b.*\baction\s+\d+\b",
+            r"\bopen\s+\w+\b.*\b(every\s+(?:day|weekday|week)|daily|weekly|weekdays?)\b",
+        ),
+    ),
+    (
+        "visual_baseline",
+        (
+            r"\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?|gold(?:en)?\s+standard)\b",
+            r"\b(save|capture|create|add)\b.*\b(screenshot|screen)\b.*\b(baseline|reference|gold(?:en)?\s+standard)\b",
+            r"\b(list|show|get|inspect|check|audit|ready|readiness)\b.*\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?)\b",
+            r"\b(visual\s+baselines?|baseline\s+sets?|reference\s+screens?)\b.*\b(ready|readiness|missing|exist|usable)\b",
         ),
     ),
     (

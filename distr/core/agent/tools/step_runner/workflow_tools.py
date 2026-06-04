@@ -2,6 +2,7 @@
 Workflow tools for the agent — CRUD and execution for AutoWorkflow definitions.
 """
 
+import json
 import logging
 from typing import Any, Optional, Type
 
@@ -175,6 +176,95 @@ def _reference_list_block(workflows: list) -> str:
     return "\n".join(lines)
 
 
+def _scheduled_schedule_from_workflow(wf: Any) -> dict[str, Any]:
+    preset = (getattr(wf, "schedule_preset", "") or "").strip().lower()
+    days = (getattr(wf, "schedule_days", "") or "").strip()
+    if preset == "once":
+        return {
+            "kind": "once",
+            "run_at": getattr(wf, "schedule_time", "") or "",
+            "timezone": getattr(wf, "schedule_timezone", "") or "",
+        }
+    if preset == "daily":
+        return {
+            "kind": "daily",
+            "time": getattr(wf, "schedule_time", "") or "",
+            "timezone": getattr(wf, "schedule_timezone", "") or "",
+        }
+    if preset == "weekly" and days == "1,2,3,4,5":
+        return {
+            "kind": "weekdays",
+            "time": getattr(wf, "schedule_time", "") or "",
+            "timezone": getattr(wf, "schedule_timezone", "") or "",
+        }
+    return {
+        "kind": "weekly",
+        "weekday": days or "1",
+        "time": getattr(wf, "schedule_time", "") or "",
+        "timezone": getattr(wf, "schedule_timezone", "") or "",
+    }
+
+
+def _scheduled_action_from_step(step: Any) -> dict[str, Any]:
+    if not step:
+        return {"type": "keypress", "key": "enter"}
+    if getattr(step, "action_type", "") == "play_recording":
+        return {"type": "play_recording", "recording_name": getattr(step, "recording_filename", "") or ""}
+    config = {}
+    raw_config = getattr(step, "config", None)
+    if isinstance(raw_config, dict):
+        config = raw_config
+    elif raw_config:
+        try:
+            config = json.loads(raw_config)
+        except Exception:
+            config = {}
+    action = config.get("scheduled_action")
+    if isinstance(action, dict) and action.get("type"):
+        return action
+    return {"type": "type_text", "text": getattr(step, "instruction", "") or ""}
+
+
+def _next_run_for_scheduled_workflow(workflow_data: dict[str, Any]) -> Any:
+    from distr.core.workflow.scheduler import _next_run_from_cron, schedule_to_cron
+
+    cron = schedule_to_cron(
+        workflow_data.get("schedule_preset"),
+        workflow_data.get("schedule_time"),
+        workflow_data.get("schedule_timezone"),
+        workflow_data.get("schedule_days"),
+    )
+    return (
+        _next_run_from_cron(
+            cron,
+            timezone=workflow_data.get("schedule_timezone"),
+            allow_current_minute=True,
+        )
+        if cron
+        else None
+    )
+
+
+def _scheduled_action_reference(items: list[dict[str, Any]]) -> str:
+    lines = ["Scheduled actions:"]
+    for item in items:
+        status = "enabled" if item.get("enabled") else "disabled"
+        schedule = item.get("schedule") or {}
+        if schedule.get("kind") == "once":
+            when = f"once at {schedule.get('run_at') or '?'}"
+        elif schedule.get("kind") == "weekdays":
+            when = f"weekdays at {schedule.get('time') or '?'}"
+        elif schedule.get("kind") == "daily":
+            when = f"daily at {schedule.get('time') or '?'}"
+        else:
+            when = f"{schedule.get('weekday') or 'weekly'} at {schedule.get('time') or '?'}"
+        lines.append(
+            f"- ID {item.get('workflow_id')}: {item.get('title')} — {status}, {when}, "
+            f"next_run_at={item.get('next_run_at') or 'none'}"
+        )
+    return "\n".join(lines)
+
+
 # --- List workflows ---
 class ListWorkflowsInput(BaseModel):
     limit: int = Field(default=20, description="Max workflows to return")
@@ -340,16 +430,26 @@ class GetProjectStatusTool(BaseTool):
 
             with get_session() as db:
                 # 1. Find the project
-                project = db.query(Project).filter(
-                    Project.name.ilike(f"%{project_name}%")
-                ).first()
+                requested_project = (project_name or "").strip()
+                if requested_project:
+                    project = db.query(Project).filter(
+                        Project.name.ilike(f"%{requested_project}%")
+                    ).first()
+                else:
+                    project = (
+                        db.query(Project)
+                        .filter(Project.in_use == True)  # noqa: E712 - SQLAlchemy comparison
+                        .order_by(Project.modified_date.desc())
+                        .first()
+                    )
                 if not project:
                     return voice_then_reference(
                         "I could not find a project with that name.",
                         f"Project '{project_name}' not found.",
                     )
 
-                sections.append(f"Project: {project.name}")
+                project_display_name = project.name or "the active project"
+                sections.append(f"Project: {project_display_name}")
                 if project.description:
                     sections.append(f"Description: {project.description}")
 
@@ -361,7 +461,7 @@ class GetProjectStatusTool(BaseTool):
                     .filter(
                         AutoWorkflow.workflow_type == "pi_agent",
                         AutoWorkflow.status == "in_progress",
-                        AutoWorkflow.name.ilike(f"%{project.name}%"),
+                        AutoWorkflow.name.ilike(f"%{project_display_name}%"),
                     )
                     .order_by(AutoWorkflow.modified_date.desc())
                     .all()
@@ -427,7 +527,7 @@ class GetProjectStatusTool(BaseTool):
                     db.query(AutoWorkflow)
                     .filter(
                         AutoWorkflow.workflow_type == "pi_agent",
-                        AutoWorkflow.name.ilike(f"%{project.name}%"),
+                        AutoWorkflow.name.ilike(f"%{project_display_name}%"),
                         AutoWorkflow.status != "in_progress",
                     )
                     .order_by(AutoWorkflow.modified_date.desc())
@@ -485,6 +585,7 @@ class GetProjectStatusTool(BaseTool):
 
                 # ── KANBAN TICKETS ────────────────────────────────
 
+                has_boards = bool(boards)
                 if boards:
                     for board in boards:
                         sections.append(f"\n--- Ticket Board: {board.name} ---")
@@ -501,14 +602,14 @@ class GetProjectStatusTool(BaseTool):
             body = "\n".join(sections)
             running_now = bool(active_cli or active_workflow_runs)
             spoken = (
-                f"I pulled status for {project.name}. "
+                f"I pulled status for {project_display_name}. "
                 + (
                     "Something is running right now, either on the project terminal or in a workflow."
                     if running_now
                     else "Nothing is actively running at the moment."
                 )
             )
-            if boards:
+            if has_boards:
                 spoken += " Ticket boards linked to this project are summarized below."
             return voice_then_reference(spoken.strip(), body)
         except Exception as e:
@@ -757,6 +858,485 @@ class CreateStepRunnerTool(BaseTool):
         if not description:
             return "Error: No automation instruction provided."
         return GenerateWorkflowTool()._run(description=description)
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+class ScheduledActionInput(BaseModel):
+    action: str = Field(
+        default="list",
+        description="Operation: preview, create, list, cancel, disable, enable, or reschedule.",
+    )
+    workflow_id: Optional[int] = Field(
+        default=None,
+        description="Scheduled action workflow ID for cancel, disable, enable, or reschedule.",
+    )
+    title: Optional[str] = Field(default=None, description="Scheduled action title for create or rename.")
+    schedule: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Schedule object. Examples: {'kind':'once','run_at':'2026-06-02T13:05:00+02:00'}, "
+            "{'kind':'daily','time':'09:00'}, {'kind':'weekdays','time':'08:30'}, "
+            "{'kind':'weekly','weekday':'monday','time':'10:15'}."
+        ),
+    )
+    desktop_action: Optional[dict[str, Any]] = Field(
+        default=None,
+        description=(
+            "Desktop action object. Examples: {'type':'keypress','key':'enter'}, "
+            "{'type':'type_text','text':'hello','press_enter':true}, "
+            "{'type':'open_app','app_name':'Chrome'}, {'type':'play_recording','recording_name':'login-flow'}."
+        ),
+    )
+    target_context: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional target context: {'app_name':'Chrome','window_title_hint':'Inbox'}.",
+    )
+    safety: Optional[dict[str, Any]] = Field(
+        default=None,
+        description="Optional safety flags: {'require_app_in_foreground':true,'bring_app_to_front':true}.",
+    )
+    limit: int = Field(default=20, description="Maximum scheduled actions to list.")
+
+
+class ScheduledActionTool(BaseTool):
+    name: str = "scheduled_action"
+    description: str = (
+        "Create, preview, list, cancel, disable, enable, and reschedule simple scheduled desktop actions. "
+        "Use for voice commands like 'schedule Chrome to open every weekday at eight thirty', "
+        "'list my scheduled actions', 'cancel scheduled action 12', 'disable action 12', "
+        "or 'reschedule action 12 for weekdays at ten fifteen'. "
+        "Supported desktop actions: keypress, type_text, open_app, and play_recording."
+    )
+    args_schema: Type[BaseModel] = ScheduledActionInput
+
+    def _list_payload(self, limit: int = 20) -> list[dict[str, Any]]:
+        from distr.core.db.workflow import AutoWorkflow
+        from distr.core.workflow import service as workflow_service
+
+        with workflow_service.get_session() as db:
+            rows = (
+                db.query(AutoWorkflow)
+                .filter(AutoWorkflow.workflow_type == "scheduled")
+                .order_by(AutoWorkflow.modified_date.desc())
+                .limit(max(1, min(int(limit or 20), 100)))
+                .all()
+            )
+            payload = []
+            for wf in rows:
+                step = sorted(list(wf.steps or []), key=lambda s: s.position or 0)[0] if wf.steps else None
+                payload.append({
+                    "workflow_id": wf.id,
+                    "title": wf.name or "Scheduled action",
+                    "description": wf.description or "",
+                    "enabled": bool(wf.schedule_enabled),
+                    "schedule": _scheduled_schedule_from_workflow(wf),
+                    "action": _scheduled_action_from_step(step),
+                    "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
+                    "last_run_at": wf.last_run_at.isoformat() if wf.last_run_at else None,
+                })
+            return payload
+
+    def _create(self, spec: dict[str, Any]) -> tuple[int, str]:
+        from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+        from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+        from distr.core.workflow import service as workflow_service
+
+        compiled = compile_scheduled_action_workflow(spec)
+        workflow_data = compiled["workflow"]
+        step_data = compiled["steps"][0]
+        next_run_at = _next_run_for_scheduled_workflow(workflow_data)
+        with workflow_service.get_session() as db:
+            wf = AutoWorkflow(
+                name=workflow_data["name"],
+                description=workflow_data.get("description", ""),
+                status=workflow_data.get("status", "active"),
+                workflow_type=workflow_data.get("workflow_type", "scheduled"),
+                schedule_enabled=bool(workflow_data.get("schedule_enabled", True)),
+                schedule_preset=workflow_data.get("schedule_preset"),
+                schedule_time=workflow_data.get("schedule_time"),
+                schedule_days=workflow_data.get("schedule_days"),
+                schedule_timezone=workflow_data.get("schedule_timezone"),
+                next_run_at=next_run_at,
+            )
+            db.add(wf)
+            db.flush()
+            db.add(AutoWorkflowStep(
+                workflow_id=wf.id,
+                position=int(step_data.get("position") or 0),
+                name=step_data.get("name") or workflow_data["name"],
+                action_type=step_data.get("action_type") or "computer_use",
+                step_type=step_data.get("step_type") or step_data.get("action_type") or "computer_use",
+                instruction=step_data.get("instruction") or "",
+                config=json.dumps(step_data.get("config") or {}),
+                validation_type=step_data.get("validation_type") or "none",
+                recording_filename=step_data.get("recording_filename"),
+            ))
+            db.commit()
+            workflow_id = int(wf.id)
+        return workflow_id, compiled["preview"]
+
+    def _resolve_workflow_id(self, workflow_id: Optional[int] = None, title: Optional[str] = None) -> Optional[dict[str, Any]]:
+        from distr.core.db.workflow import AutoWorkflow
+        from distr.core.workflow import service as workflow_service
+
+        title_query = (title or "").strip()
+        remembered_id = _get_remembered_workflow_id()
+        with workflow_service.get_session() as db:
+            query = db.query(AutoWorkflow).filter(AutoWorkflow.workflow_type == "scheduled")
+            wf = None
+            if workflow_id is not None:
+                wf = query.filter(AutoWorkflow.id == int(workflow_id)).first()
+            elif title_query:
+                wf = (
+                    query.filter(AutoWorkflow.name.ilike(f"%{title_query}%"))
+                    .order_by(AutoWorkflow.modified_date.desc(), AutoWorkflow.id.desc())
+                    .first()
+                )
+            elif remembered_id is not None:
+                wf = query.filter(AutoWorkflow.id == int(remembered_id)).first()
+            if not wf:
+                return None
+            return {"workflow_id": int(wf.id), "title": wf.name or "Scheduled action"}
+
+    def _update_existing(
+        self,
+        workflow_id: int,
+        *,
+        title: Optional[str] = None,
+        schedule: Optional[dict[str, Any]] = None,
+        desktop_action: Optional[dict[str, Any]] = None,
+        target_context: Optional[dict[str, Any]] = None,
+        safety: Optional[dict[str, Any]] = None,
+        enabled: Optional[bool] = None,
+    ) -> Optional[dict[str, Any]]:
+        from distr.core.db.workflow import AutoWorkflow
+        from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+        from distr.core.workflow import service as workflow_service
+
+        with workflow_service.get_session() as db:
+            wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+            if not wf or wf.workflow_type != "scheduled":
+                return None
+            step = sorted(list(wf.steps or []), key=lambda s: s.position or 0)[0] if wf.steps else None
+            spec = {
+                "title": title if title is not None else (wf.name or "Scheduled action"),
+                "schedule": schedule if schedule is not None else _scheduled_schedule_from_workflow(wf),
+                "action": desktop_action if desktop_action is not None else _scheduled_action_from_step(step),
+                "target_context": target_context or {},
+                "safety": safety or {},
+            }
+            compiled = compile_scheduled_action_workflow(spec)
+            workflow_data = compiled["workflow"]
+            step_data = compiled["steps"][0]
+            wf.name = workflow_data["name"]
+            wf.description = workflow_data.get("description", "")
+            wf.status = workflow_data.get("status", wf.status or "active")
+            if enabled is not None:
+                wf.schedule_enabled = bool(enabled)
+            else:
+                wf.schedule_enabled = bool(workflow_data.get("schedule_enabled", True))
+            wf.schedule_preset = workflow_data.get("schedule_preset")
+            wf.schedule_time = workflow_data.get("schedule_time")
+            wf.schedule_days = workflow_data.get("schedule_days")
+            wf.schedule_timezone = workflow_data.get("schedule_timezone")
+            wf.next_run_at = _next_run_for_scheduled_workflow(workflow_data) if wf.schedule_enabled else None
+            if step:
+                step.name = step_data.get("name") or wf.name
+                step.action_type = step_data.get("action_type") or "computer_use"
+                step.step_type = step_data.get("step_type") or step.action_type
+                step.instruction = step_data.get("instruction") or ""
+                step.config = json.dumps(step_data.get("config") or {})
+                step.validation_type = step_data.get("validation_type") or "none"
+                step.recording_filename = step_data.get("recording_filename")
+            db.commit()
+            db.refresh(wf)
+            return {
+                "workflow_id": wf.id,
+                "title": wf.name or "Scheduled action",
+                "enabled": bool(wf.schedule_enabled),
+                "schedule": _scheduled_schedule_from_workflow(wf),
+                "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
+                "preview": compiled["preview"],
+            }
+
+    def _run(
+        self,
+        action: str = "list",
+        workflow_id: Optional[int] = None,
+        title: Optional[str] = None,
+        schedule: Optional[dict[str, Any]] = None,
+        desktop_action: Optional[dict[str, Any]] = None,
+        target_context: Optional[dict[str, Any]] = None,
+        safety: Optional[dict[str, Any]] = None,
+        limit: int = 20,
+        **kwargs,
+    ) -> str:
+        try:
+            operation = (action or "list").strip().lower()
+            if operation in {"preview", "create"}:
+                spec = {
+                    "title": title or "Scheduled action",
+                    "schedule": schedule or {},
+                    "action": desktop_action or kwargs.get("desktop_action") or kwargs.get("scheduled_action") or {},
+                    "target_context": target_context or {},
+                    "safety": safety or {},
+                }
+                if operation == "preview":
+                    from distr.core.harness.scheduled_actions import preview_scheduled_action
+                    preview = preview_scheduled_action(spec)
+                    return voice_then_reference(
+                        f"Preview: {preview}",
+                        f"Scheduled action preview:\n{json.dumps(spec, indent=2, sort_keys=True)}",
+                    )
+                new_id, preview = self._create(spec)
+                _remember_workflow_context(workflow_id=new_id)
+                return voice_then_reference(
+                    f"Scheduled action {title or 'Scheduled action'} is saved. {preview}",
+                    f"Created scheduled action workflow ID {new_id}.\nPreview: {preview}",
+                )
+
+            if operation == "list":
+                items = self._list_payload(limit=limit)
+                if not items:
+                    return voice_then_reference(
+                        "You do not have any scheduled desktop actions saved yet.",
+                        "No scheduled actions found.",
+                    )
+                names = [str(item.get("title") or "Scheduled action") for item in items[:5]]
+                joined = ", ".join(names[:-1]) + f", and {names[-1]}" if len(names) > 1 else names[0]
+                return voice_then_reference(
+                    f"You have {_cardinal_word(len(items))} scheduled desktop actions: {joined}.",
+                    _scheduled_action_reference(items),
+                )
+
+            if operation == "cancel":
+                resolved = self._resolve_workflow_id(workflow_id=workflow_id, title=title)
+                if not resolved:
+                    return "Error: I could not find that scheduled action to cancel."
+                from distr.core.workflow import service as workflow_service
+                resolved_id = int(resolved["workflow_id"])
+                if workflow_service.delete_workflow(resolved_id):
+                    return f"Scheduled action {resolved.get('title') or resolved_id} cancelled."
+                return f"Scheduled action {resolved.get('title') or resolved_id} was not found."
+
+            if operation in {"disable", "enable", "reschedule"}:
+                resolved = self._resolve_workflow_id(workflow_id=workflow_id, title=title)
+                if not resolved:
+                    return f"Error: I could not find that scheduled action to {operation}."
+                resolved_id = int(resolved["workflow_id"])
+                enabled = False if operation == "disable" else True if operation == "enable" else None
+                updated = self._update_existing(
+                    resolved_id,
+                    title=title,
+                    schedule=schedule,
+                    desktop_action=desktop_action,
+                    target_context=target_context,
+                    safety=safety,
+                    enabled=enabled,
+                )
+                if not updated:
+                    return f"Scheduled action {resolved.get('title') or resolved_id} was not found."
+                verb = "rescheduled" if operation == "reschedule" else ("enabled" if updated["enabled"] else "disabled")
+                return voice_then_reference(
+                    f"Scheduled action {updated.get('title') or resolved.get('title') or resolved_id} {verb}.",
+                    f"Scheduled action {resolved_id} {verb}.\n{json.dumps(updated, indent=2, sort_keys=True)}",
+                )
+
+            return "Error: action must be preview, create, list, cancel, disable, enable, or reschedule."
+        except Exception as e:
+            logger.error("scheduled_action failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
+
+    async def _arun(self, **kwargs) -> str:
+        return self._run(**kwargs)
+
+
+class VisualBaselineInput(BaseModel):
+    action: str = Field(default="list", description="Operation: create, list, get, or readiness.")
+    name: Optional[str] = Field(default=None, description="Baseline set name for create or get.")
+    baseline_id: Optional[int] = Field(default=None, description="Baseline set ID for get.")
+    board_id: Optional[int] = Field(default=None, description="Optional board scope.")
+    project_id: Optional[int] = Field(default=None, description="Optional project scope.")
+    description: str = Field(default="", description="Optional baseline description.")
+    version: str = Field(default="v1", description="Baseline version label.")
+    screens: Optional[list[dict[str, Any]]] = Field(
+        default=None,
+        description=(
+            "Reference screens for create. Each requires screen_name and screenshot_path; "
+            "optional flow_name, notes, and metadata are preserved."
+        ),
+    )
+    copy_screenshots: bool = Field(
+        default=False,
+        description="When true, copy existing screenshot files into Hermes-owned visual baseline storage.",
+    )
+    storage_dir: Optional[str] = Field(
+        default=None,
+        description="Optional storage directory for copied baseline screenshot files.",
+    )
+    limit: int = Field(default=20, description="Maximum baselines to list.")
+
+
+def _reference_visual_baseline_block(baselines: list[dict[str, Any]]) -> str:
+    lines = ["Visual baselines:"]
+    for baseline in baselines:
+        screens = baseline.get("screens") or []
+        lines.append(
+            f"- ID {baseline.get('id')}: {baseline.get('name')} "
+            f"({baseline.get('scope') or 'global'}:{baseline.get('scope_id') or 'all'}, "
+            f"{len(screens)} screen(s), {baseline.get('version') or 'v1'})"
+        )
+        for screen in screens:
+            detail = f"  - {screen.get('screen_name')}: {screen.get('screenshot_path')}"
+            if screen.get("flow_name"):
+                detail += f" [{screen.get('flow_name')}]"
+            if screen.get("notes"):
+                detail += f" — {screen.get('notes')}"
+            lines.append(detail)
+    return "\n".join(lines)
+
+
+def _reference_visual_baseline_readiness_block(readiness: dict[str, Any]) -> str:
+    lines = [
+        "Visual baseline readiness:",
+        f"- Verdict: {readiness.get('verdict')}",
+        f"- Baselines checked: {readiness.get('baseline_count', 0)}",
+        f"- Screens checked: {readiness.get('screen_count', 0)}",
+        f"- Existing screenshot files: {readiness.get('existing_screen_count', 0)}",
+        f"- Missing screenshot files: {readiness.get('missing_screen_count', 0)}",
+    ]
+    missing = readiness.get("missing") or []
+    if missing:
+        lines.append("Missing screens:")
+        for item in missing:
+            lines.append(
+                f"- {item.get('baseline_name') or 'Visual baseline'} / "
+                f"{item.get('screen_name') or 'screen'}: {item.get('screenshot_path') or '(blank path)'}"
+            )
+    return "\n".join(lines)
+
+
+class VisualBaselineTool(BaseTool):
+    name: str = "visual_baseline"
+    description: str = (
+        "Create, list, retrieve, or readiness-check Hermes visual baseline sets used by UI quality validation. "
+        "Use when the user says to save a screenshot as a gold standard, create a visual baseline, "
+        "list visual baselines, inspect a baseline's reference screens, or check whether baselines are usable."
+    )
+    args_schema: Type[BaseModel] = VisualBaselineInput
+
+    def _run(
+        self,
+        action: str = "list",
+        name: Optional[str] = None,
+        baseline_id: Optional[int] = None,
+        board_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+        description: str = "",
+        version: str = "v1",
+        screens: Optional[list[dict[str, Any]]] = None,
+        copy_screenshots: bool = False,
+        storage_dir: Optional[str] = None,
+        limit: int = 20,
+        **kwargs,
+    ) -> str:
+        try:
+            operation = (action or "list").strip().lower()
+            if operation == "create":
+                if not name:
+                    return "Error: name is required to create a visual baseline."
+                if not screens:
+                    return "Error: at least one reference screen is required."
+                from distr.core.hermes import create_visual_baseline_set, get_visual_baseline_set
+
+                baseline_id = create_visual_baseline_set(
+                    name=name,
+                    screens=screens,
+                    board_id=board_id,
+                    project_id=project_id,
+                    description=description,
+                    version=version,
+                    copy_screenshots=copy_screenshots,
+                    storage_dir=storage_dir,
+                )
+                baseline = get_visual_baseline_set(baseline_set_id=baseline_id)
+                count = len((baseline or {}).get("screens") or [])
+                return voice_then_reference(
+                    f"Visual baseline {name} saved with {_cardinal_word(count)} reference screen{'s' if count != 1 else ''}.",
+                    _reference_visual_baseline_block([baseline or {"id": baseline_id, "name": name, "screens": screens or []}]),
+                )
+
+            if operation == "get":
+                from distr.core.hermes import get_visual_baseline_set
+
+                baseline = get_visual_baseline_set(
+                    baseline_set_id=baseline_id,
+                    name=name,
+                    board_id=board_id,
+                    project_id=project_id,
+                )
+                if not baseline:
+                    return "I could not find that visual baseline."
+                screens_count = len(baseline.get("screens") or [])
+                return voice_then_reference(
+                    f"Visual baseline {baseline.get('name')} has {_cardinal_word(screens_count)} reference screen{'s' if screens_count != 1 else ''}.",
+                    _reference_visual_baseline_block([baseline]),
+                )
+
+            if operation == "list":
+                from distr.core.hermes import list_visual_baseline_sets
+
+                baselines = list_visual_baseline_sets(
+                    board_id=board_id,
+                    project_id=project_id,
+                    include_global=True,
+                    limit=limit,
+                )
+                if not baselines:
+                    return voice_then_reference(
+                        "There are no visual baselines saved yet.",
+                        "No visual baselines found.",
+                    )
+                names = [str(item.get("name") or "Visual baseline") for item in baselines[:5]]
+                joined = ", ".join(names[:-1]) + f", and {names[-1]}" if len(names) > 1 else names[0]
+                return voice_then_reference(
+                    f"You have {_cardinal_word(len(baselines))} visual baseline sets: {joined}.",
+                    _reference_visual_baseline_block(baselines),
+                )
+
+            if operation in {"readiness", "ready", "audit", "check"}:
+                from distr.core.hermes import inspect_visual_baseline_readiness
+
+                readiness = inspect_visual_baseline_readiness(
+                    baseline_set_id=baseline_id,
+                    name=name,
+                    board_id=board_id,
+                    project_id=project_id,
+                    include_global=True,
+                    limit=limit,
+                )
+                if readiness.get("ready"):
+                    return voice_then_reference(
+                        "Your visual baselines are ready. Every referenced screenshot file exists.",
+                        _reference_visual_baseline_readiness_block(readiness),
+                    )
+                missing_count = int(readiness.get("missing_screen_count") or 0)
+                if int(readiness.get("baseline_count") or 0) == 0:
+                    voice = "No visual baselines are saved yet, so the UI quality harness is not ready for baseline comparison."
+                else:
+                    voice = (
+                        "Your visual baselines are not ready. "
+                        f"{_cardinal_word(missing_count)} referenced screenshot file"
+                        f"{' is' if missing_count == 1 else 's are'} missing."
+                    )
+                return voice_then_reference(voice, _reference_visual_baseline_readiness_block(readiness))
+
+            return "Error: action must be create, list, get, or readiness."
+        except Exception as e:
+            logger.error("visual_baseline failed: %s", e, exc_info=True)
+            return f"Error: {str(e)}"
 
     async def _arun(self, **kwargs) -> str:
         return self._run(**kwargs)

@@ -152,8 +152,41 @@ class CodexBridgeEventRequest(BaseModel):
     step_id: Optional[int] = None
     ticket_id: Optional[int] = None
     project_id: Optional[int] = None
+    mistake_label: Optional[str] = None
     payload: Optional[dict] = None
     evidence: Optional[dict] = None
+
+
+class UiFeedbackRequest(BaseModel):
+    label: str
+    reason: str = ""
+    step_id: Optional[int] = None
+    ticket_id: Optional[int] = None
+    board_id: Optional[int] = None
+    project_id: Optional[int] = None
+    execution_session_id: Optional[int] = None
+    screenshot_paths: Optional[List[str]] = None
+    save_as_visual_baseline: bool = False
+    visual_baseline_name: Optional[str] = None
+    baseline_screen_name: Optional[str] = None
+
+
+class VisualBaselineScreenRequest(BaseModel):
+    screen_name: str
+    screenshot_path: str
+    flow_name: Optional[str] = None
+    notes: Optional[str] = None
+    metadata: Optional[dict] = None
+
+
+class VisualBaselineRequest(BaseModel):
+    name: str
+    screens: List[VisualBaselineScreenRequest]
+    board_id: Optional[int] = None
+    project_id: Optional[int] = None
+    description: str = ""
+    version: str = "v1"
+    store_copy: bool = False
 
 
 class StepCreateRequest(BaseModel):
@@ -213,6 +246,23 @@ class WorkflowPurgeAllRequest(BaseModel):
     include_audit: bool = False
 
 
+class ScheduledActionRequest(BaseModel):
+    title: str = "Scheduled action"
+    schedule: dict
+    action: dict
+    target_context: Optional[dict] = None
+    safety: Optional[dict] = None
+
+
+class ScheduledActionUpdateRequest(BaseModel):
+    title: Optional[str] = None
+    enabled: Optional[bool] = None
+    schedule: Optional[dict] = None
+    action: Optional[dict] = None
+    target_context: Optional[dict] = None
+    safety: Optional[dict] = None
+
+
 class ContextItemCreateRequest(BaseModel):
     title: str
     content: str = ""
@@ -231,6 +281,102 @@ def register_routes(router, templates):
         """Return True if the workflow exists and has workflow_type='audit'."""
         from distr.core.workflow.service import get_workflow_type
         return get_workflow_type(workflow_id) == "audit"
+
+    def _json_config(text: str | None) -> dict:
+        try:
+            data = json.loads(text or "{}")
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _schedule_from_workflow(wf) -> dict:
+        preset = str(wf.schedule_preset or "").strip().lower()
+        days = str(wf.schedule_days or "").strip()
+        if preset == "once":
+            return {
+                "kind": "once",
+                "run_at": wf.schedule_time or "",
+                "timezone": wf.schedule_timezone or "",
+            }
+        if preset == "daily":
+            return {
+                "kind": "daily",
+                "time": wf.schedule_time or "",
+                "timezone": wf.schedule_timezone or "",
+            }
+        if preset == "weekly" and days == "1,2,3,4,5":
+            return {
+                "kind": "weekdays",
+                "time": wf.schedule_time or "",
+                "timezone": wf.schedule_timezone or "",
+            }
+        return {
+            "kind": "weekly",
+            "time": wf.schedule_time or "",
+            "weekday": days or "1",
+            "timezone": wf.schedule_timezone or "",
+        }
+
+    def _action_from_step(step) -> dict:
+        if not step:
+            return {"type": "keypress", "key": "enter"}
+        if step.action_type == "play_recording":
+            return {
+                "type": "play_recording",
+                "recording_name": step.recording_filename or "",
+            }
+        config = _json_config(step.config)
+        action = config.get("scheduled_action")
+        if isinstance(action, dict) and action.get("type"):
+            return action
+        instruction = step.instruction or ""
+        return {"type": "type_text", "text": instruction}
+
+    def _scheduled_action_payload(wf) -> dict:
+        step = sorted(list(wf.steps or []), key=lambda s: s.position or 0)[0] if wf.steps else None
+        run_log = []
+        for run in sorted(list(wf.runs or []), key=lambda r: r.started_at or r.id, reverse=True)[:5]:
+            run_data = _json_config(run.run_data)
+            packet = run_data.get("result_packet") if isinstance(run_data.get("result_packet"), dict) else {}
+            result_note = packet.get("summary") or run_data.get("message") or run_data.get("phase") or ""
+            run_log.append({
+                "run_id": run.id,
+                "status": run.status or "",
+                "started_at": run.started_at.isoformat() if run.started_at else None,
+                "completed_at": run.completed_at.isoformat() if run.completed_at else None,
+                "result": str(result_note or "")[:500],
+            })
+        return {
+            "id": wf.id,
+            "workflow_id": wf.id,
+            "workflow_type": wf.workflow_type or "scheduled",
+            "title": wf.name or "Scheduled action",
+            "description": wf.description or "",
+            "enabled": bool(wf.schedule_enabled),
+            "status": wf.status or "",
+            "schedule": _schedule_from_workflow(wf),
+            "action": _action_from_step(step),
+            "next_run_at": wf.next_run_at.isoformat() if wf.next_run_at else None,
+            "last_run_at": wf.last_run_at.isoformat() if wf.last_run_at else None,
+            "step_id": step.id if step else None,
+            "step_action_type": step.action_type if step else None,
+            "run_log": run_log,
+        }
+
+    def _next_run_for_schedule(workflow_data: dict) -> object | None:
+        from distr.core.workflow.scheduler import _next_run_from_cron, schedule_to_cron
+
+        cron = schedule_to_cron(
+            workflow_data.get("schedule_preset"),
+            workflow_data.get("schedule_time"),
+            workflow_data.get("schedule_timezone"),
+            workflow_data.get("schedule_days"),
+        )
+        return _next_run_from_cron(
+            cron,
+            timezone=workflow_data.get("schedule_timezone"),
+            allow_current_minute=True,
+        ) if cron else None
 
     @router.get("/workflows")
     async def workflow_list(limit: int = 50, search: Optional[str] = None, type: Optional[str] = None):
@@ -280,6 +426,368 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=422)
         except Exception as e:
             logger.error("Workflow create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/visual-baselines")
+    async def workflow_visual_baseline_create(data: VisualBaselineRequest):
+        """Create a named visual baseline set for UI quality validation."""
+        try:
+            from distr.core.hermes import create_visual_baseline_set, get_visual_baseline_set
+
+            baseline_id = create_visual_baseline_set(
+                name=data.name,
+                board_id=data.board_id,
+                project_id=data.project_id,
+                description=data.description,
+                version=data.version,
+                screens=[screen.model_dump() for screen in data.screens],
+                copy_screenshots=data.store_copy,
+            )
+            baseline = get_visual_baseline_set(baseline_set_id=baseline_id)
+            return JSONResponse({"success": True, "visual_baseline": baseline})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
+        except Exception as e:
+            logger.error("Workflow visual baseline create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/visual-baselines")
+    async def workflow_visual_baseline_list(
+        board_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+        include_global: bool = False,
+        limit: int = 50,
+    ):
+        """List named visual baselines for board/project UI validation."""
+        try:
+            from distr.core.hermes import list_visual_baseline_sets
+
+            baselines = list_visual_baseline_sets(
+                board_id=board_id,
+                project_id=project_id,
+                include_global=include_global,
+                limit=limit,
+            )
+            return JSONResponse({"success": True, "visual_baselines": baselines})
+        except Exception as e:
+            logger.error("Workflow visual baseline list failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/visual-baselines/readiness")
+    async def workflow_visual_baseline_readiness(
+        board_id: Optional[int] = None,
+        project_id: Optional[int] = None,
+        baseline_set_id: Optional[int] = None,
+        name: Optional[str] = None,
+        include_global: bool = False,
+        limit: int = 50,
+    ):
+        """Check whether visual baseline screenshot files are present on disk."""
+        try:
+            from distr.core.hermes import inspect_visual_baseline_readiness
+
+            readiness = inspect_visual_baseline_readiness(
+                board_id=board_id,
+                project_id=project_id,
+                baseline_set_id=baseline_set_id,
+                name=name,
+                include_global=include_global,
+                limit=limit,
+            )
+            return JSONResponse({"success": True, "visual_baseline_readiness": readiness})
+        except Exception as e:
+            logger.error("Workflow visual baseline readiness failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/visual-baselines/{baseline_set_id}")
+    async def workflow_visual_baseline_get(baseline_set_id: int):
+        """Return one named visual baseline set and its reference screens."""
+        try:
+            from distr.core.hermes import get_visual_baseline_set
+
+            baseline = get_visual_baseline_set(baseline_set_id=baseline_set_id)
+            if not baseline:
+                return JSONResponse({"detail": "Visual baseline not found"}, status_code=404)
+            return JSONResponse({"success": True, "visual_baseline": baseline})
+        except Exception as e:
+            logger.error("Workflow visual baseline get failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/scheduled-actions/preview")
+    async def workflow_scheduled_action_preview(data: ScheduledActionRequest):
+        """Preview the workflow payload for a simple scheduled desktop action."""
+        try:
+            from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+
+            compiled = compile_scheduled_action_workflow(data.model_dump())
+            return JSONResponse({"success": True, **compiled})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
+        except Exception as e:
+            logger.error("Scheduled action preview failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.post("/workflows/scheduled-actions")
+    async def workflow_scheduled_action_create(data: ScheduledActionRequest):
+        """Create a scheduled workflow from a simple desktop action spec."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+            from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+            from distr.core.workflow.service import get_session
+
+            compiled = compile_scheduled_action_workflow(data.model_dump())
+            workflow_data = compiled["workflow"]
+            step_data = compiled["steps"][0]
+            next_run_at = _next_run_for_schedule(workflow_data)
+            with get_session() as db:
+                wf = AutoWorkflow(
+                    name=workflow_data["name"],
+                    description=workflow_data.get("description", ""),
+                    status=workflow_data.get("status", "active"),
+                    workflow_type=workflow_data.get("workflow_type", "scheduled"),
+                    schedule_enabled=bool(workflow_data.get("schedule_enabled", True)),
+                    schedule_preset=workflow_data.get("schedule_preset"),
+                    schedule_time=workflow_data.get("schedule_time"),
+                    schedule_days=workflow_data.get("schedule_days"),
+                    schedule_timezone=workflow_data.get("schedule_timezone"),
+                    next_run_at=next_run_at,
+                )
+                db.add(wf)
+                db.flush()
+                step = AutoWorkflowStep(
+                    workflow_id=wf.id,
+                    position=int(step_data.get("position") or 0),
+                    name=step_data.get("name") or workflow_data["name"],
+                    action_type=step_data.get("action_type") or "computer_use",
+                    step_type=step_data.get("step_type") or step_data.get("action_type") or "computer_use",
+                    instruction=step_data.get("instruction") or "",
+                    config=json.dumps(step_data.get("config") or {}),
+                    validation_type=step_data.get("validation_type") or "none",
+                    recording_filename=step_data.get("recording_filename"),
+                )
+                db.add(step)
+                db.commit()
+                workflow_id = int(wf.id)
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                **compiled,
+            })
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
+        except Exception as e:
+            logger.error("Scheduled action create failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.get("/workflows/scheduled-actions")
+    async def workflow_scheduled_action_list(limit: int = 50):
+        """List scheduled workflows through the simple scheduled-action API."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.workflow.service import get_session
+
+            with get_session() as db:
+                rows = (
+                    db.query(AutoWorkflow)
+                    .filter(AutoWorkflow.workflow_type == "scheduled")
+                    .order_by(AutoWorkflow.modified_date.desc())
+                    .limit(max(1, min(int(limit or 50), 200)))
+                    .all()
+                )
+                payload = [_scheduled_action_payload(wf) for wf in rows]
+            return JSONResponse({"success": True, "scheduled_actions": payload})
+        except Exception as e:
+            logger.error("Scheduled action list failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.patch("/workflows/scheduled-actions/by-title")
+    async def workflow_scheduled_action_update_by_title(title: str, data: ScheduledActionUpdateRequest):
+        """Update a scheduled action by title substring for voice-style management."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+            from distr.core.workflow.service import get_session
+
+            title_query = (title or "").strip()
+            if not title_query:
+                return JSONResponse({"detail": "title is required"}, status_code=422)
+            with get_session() as db:
+                wf = (
+                    db.query(AutoWorkflow)
+                    .filter(AutoWorkflow.workflow_type == "scheduled")
+                    .filter(AutoWorkflow.name.ilike(f"%{title_query}%"))
+                    .order_by(AutoWorkflow.modified_date.desc(), AutoWorkflow.id.desc())
+                    .first()
+                )
+                if not wf:
+                    return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+                step = sorted(list(wf.steps or []), key=lambda s: s.position or 0)[0] if wf.steps else None
+                existing = {
+                    "title": wf.name or "Scheduled action",
+                    "schedule": _schedule_from_workflow(wf),
+                    "action": _action_from_step(step),
+                    "target_context": data.target_context or {},
+                    "safety": data.safety or {},
+                }
+                if data.title is not None:
+                    existing["title"] = data.title
+                if data.schedule is not None:
+                    existing["schedule"] = data.schedule
+                if data.action is not None:
+                    existing["action"] = data.action
+                if data.target_context is not None:
+                    existing["target_context"] = data.target_context
+                if data.safety is not None:
+                    existing["safety"] = data.safety
+
+                compiled = compile_scheduled_action_workflow(existing)
+                workflow_data = compiled["workflow"]
+                step_data = compiled["steps"][0]
+                wf.name = workflow_data["name"]
+                wf.description = workflow_data.get("description", "")
+                wf.status = workflow_data.get("status", wf.status or "active")
+                wf.schedule_enabled = bool(data.enabled) if data.enabled is not None else bool(workflow_data.get("schedule_enabled", True))
+                wf.schedule_preset = workflow_data.get("schedule_preset")
+                wf.schedule_time = workflow_data.get("schedule_time")
+                wf.schedule_days = workflow_data.get("schedule_days")
+                wf.schedule_timezone = workflow_data.get("schedule_timezone")
+                wf.next_run_at = _next_run_for_schedule(workflow_data) if wf.schedule_enabled else None
+                if step:
+                    step.name = step_data.get("name") or wf.name
+                    step.action_type = step_data.get("action_type") or "computer_use"
+                    step.step_type = step_data.get("step_type") or step.action_type
+                    step.instruction = step_data.get("instruction") or ""
+                    step.config = json.dumps(step_data.get("config") or {})
+                    step.validation_type = step_data.get("validation_type") or "none"
+                    step.recording_filename = step_data.get("recording_filename")
+                db.commit()
+                db.refresh(wf)
+                payload = _scheduled_action_payload(wf)
+            return JSONResponse({"success": True, **compiled, "scheduled_action": payload})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
+        except Exception as e:
+            logger.error("Scheduled action update by title failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.delete("/workflows/scheduled-actions/by-title")
+    async def workflow_scheduled_action_delete_by_title(title: str):
+        """Cancel a scheduled action by title substring."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.workflow.service import delete_workflow, get_session
+
+            title_query = (title or "").strip()
+            if not title_query:
+                return JSONResponse({"detail": "title is required"}, status_code=422)
+            with get_session() as db:
+                wf = (
+                    db.query(AutoWorkflow)
+                    .filter(AutoWorkflow.workflow_type == "scheduled")
+                    .filter(AutoWorkflow.name.ilike(f"%{title_query}%"))
+                    .order_by(AutoWorkflow.modified_date.desc(), AutoWorkflow.id.desc())
+                    .first()
+                )
+                if not wf:
+                    return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+                workflow_id = int(wf.id)
+                action_title = wf.name or "Scheduled action"
+            if not delete_workflow(workflow_id):
+                return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+            return JSONResponse({
+                "success": True,
+                "message": f"Scheduled action {action_title} cancelled.",
+                "next_action": "Create a new scheduled action if this should run again.",
+            })
+        except Exception as e:
+            logger.error("Scheduled action delete by title failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.patch("/workflows/scheduled-actions/{workflow_id}")
+    async def workflow_scheduled_action_update(workflow_id: int, data: ScheduledActionUpdateRequest):
+        """Update enablement, schedule, or action details for a scheduled workflow."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.harness.scheduled_actions import compile_scheduled_action_workflow
+            from distr.core.workflow.service import get_session
+
+            with get_session() as db:
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+                if not wf or wf.workflow_type != "scheduled":
+                    return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+                step = sorted(list(wf.steps or []), key=lambda s: s.position or 0)[0] if wf.steps else None
+                existing = {
+                    "title": wf.name or "Scheduled action",
+                    "schedule": _schedule_from_workflow(wf),
+                    "action": _action_from_step(step),
+                    "target_context": data.target_context or {},
+                    "safety": data.safety or {},
+                }
+                if data.title is not None:
+                    existing["title"] = data.title
+                if data.schedule is not None:
+                    existing["schedule"] = data.schedule
+                if data.action is not None:
+                    existing["action"] = data.action
+                if data.target_context is not None:
+                    existing["target_context"] = data.target_context
+                if data.safety is not None:
+                    existing["safety"] = data.safety
+
+                compiled = compile_scheduled_action_workflow(existing)
+                workflow_data = compiled["workflow"]
+                step_data = compiled["steps"][0]
+                wf.name = workflow_data["name"]
+                wf.description = workflow_data.get("description", "")
+                wf.status = workflow_data.get("status", wf.status or "active")
+                if data.enabled is not None:
+                    wf.schedule_enabled = bool(data.enabled)
+                else:
+                    wf.schedule_enabled = bool(workflow_data.get("schedule_enabled", True))
+                wf.schedule_preset = workflow_data.get("schedule_preset")
+                wf.schedule_time = workflow_data.get("schedule_time")
+                wf.schedule_days = workflow_data.get("schedule_days")
+                wf.schedule_timezone = workflow_data.get("schedule_timezone")
+                wf.next_run_at = _next_run_for_schedule(workflow_data) if wf.schedule_enabled else None
+
+                if step:
+                    step.name = step_data.get("name") or wf.name
+                    step.action_type = step_data.get("action_type") or "computer_use"
+                    step.step_type = step_data.get("step_type") or step.action_type
+                    step.instruction = step_data.get("instruction") or ""
+                    step.config = json.dumps(step_data.get("config") or {})
+                    step.validation_type = step_data.get("validation_type") or "none"
+                    step.recording_filename = step_data.get("recording_filename")
+                db.commit()
+                db.refresh(wf)
+                payload = _scheduled_action_payload(wf)
+            return JSONResponse({"success": True, **compiled, "scheduled_action": payload})
+        except ValueError as e:
+            return JSONResponse({"detail": str(e)}, status_code=422)
+        except Exception as e:
+            logger.error("Scheduled action update failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
+    @router.delete("/workflows/scheduled-actions/{workflow_id}")
+    async def workflow_scheduled_action_delete(workflow_id: int):
+        """Cancel a scheduled action by deleting its backing scheduled workflow."""
+        try:
+            from distr.core.db.workflow import AutoWorkflow
+            from distr.core.workflow.service import delete_workflow, get_session
+
+            with get_session() as db:
+                wf = db.query(AutoWorkflow).filter(AutoWorkflow.id == workflow_id).first()
+                if not wf or wf.workflow_type != "scheduled":
+                    return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+            if not delete_workflow(workflow_id):
+                return JSONResponse({"detail": "Scheduled action not found"}, status_code=404)
+            return JSONResponse({
+                "success": True,
+                "message": "Scheduled action cancelled.",
+                "next_action": "Create a new scheduled action if this should run again.",
+            })
+        except Exception as e:
+            logger.error("Scheduled action delete failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.post("/workflows/purge-all")
@@ -864,7 +1372,7 @@ def register_routes(router, templates):
             return JSONResponse({"detail": str(e)}, status_code=500)
 
     @router.get("/workflows/{workflow_id}/corrections")
-    async def workflow_corrections(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, validation_record_id: Optional[int] = None):
+    async def workflow_corrections(workflow_id: int, limit: int = 100, ticket_id: Optional[int] = None, run_id: Optional[int] = None, validation_record_id: Optional[int] = None, status: Optional[str] = None):
         try:
             from distr.core.hermes import list_correction_attempts
 
@@ -873,6 +1381,7 @@ def register_routes(router, templates):
                 ticket_id=ticket_id,
                 run_id=run_id,
                 validation_record_id=validation_record_id,
+                status=status,
                 limit=limit,
             ))
         except Exception as e:
@@ -1072,6 +1581,77 @@ def register_routes(router, templates):
             logger.error("Workflow harness steer failed: %s", e, exc_info=True)
             return JSONResponse({"detail": str(e)}, status_code=500)
 
+    @router.post("/workflows/{workflow_id}/runs/{run_id}/ui-feedback")
+    async def workflow_ui_feedback(workflow_id: int, run_id: int, payload: UiFeedbackRequest):
+        """Record Paul's UI approval/rejection label for a run outcome."""
+        try:
+            from distr.core.hermes import (
+                get_visual_baseline_set,
+                inspect_visual_baseline_readiness,
+                record_ui_feedback_label,
+                upsert_visual_baseline_screens,
+            )
+
+            event_id = record_ui_feedback_label(
+                label=payload.label,
+                reason=payload.reason,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=payload.step_id,
+                ticket_id=payload.ticket_id,
+                board_id=payload.board_id,
+                project_id=payload.project_id,
+                execution_session_id=payload.execution_session_id,
+                screenshot_paths=payload.screenshot_paths or [],
+            )
+            response = {
+                "success": True,
+                "event_id": event_id,
+                "message": "UI feedback recorded.",
+                "next_action": "Refresh the workflow timeline or learned rules to see the new signal.",
+            }
+            if payload.save_as_visual_baseline:
+                if str(payload.label or "").strip().lower() != "approved":
+                    return JSONResponse(
+                        {"detail": "Only approved UI feedback can be accepted as a visual baseline."},
+                        status_code=422,
+                    )
+                screenshot_path = next((str(path or "").strip() for path in (payload.screenshot_paths or []) if str(path or "").strip()), "")
+                if not screenshot_path:
+                    return JSONResponse({"detail": "At least one screenshot path is required to save a visual baseline."}, status_code=422)
+                baseline_name = (payload.visual_baseline_name or "").strip() or f"Approved workflow {workflow_id}"
+                screen_name = (payload.baseline_screen_name or "").strip() or f"Run {run_id}"
+                baseline_id = upsert_visual_baseline_screens(
+                    name=baseline_name,
+                    board_id=payload.board_id,
+                    project_id=payload.project_id,
+                    description=f"Accepted from workflow {workflow_id} run {run_id} approval.",
+                    screens=[{
+                        "screen_name": screen_name,
+                        "screenshot_path": screenshot_path,
+                        "notes": payload.reason or "Approved UI screenshot.",
+                        "metadata": {
+                            "workflow_id": workflow_id,
+                            "run_id": run_id,
+                            "feedback_event_id": event_id,
+                        },
+                    }],
+                    copy_screenshots=True,
+                )
+                response["visual_baseline"] = get_visual_baseline_set(baseline_set_id=baseline_id)
+                response["message"] = "UI feedback recorded and visual baseline saved."
+                readiness = inspect_visual_baseline_readiness(baseline_set_id=baseline_id)
+                response["visual_baseline_readiness"] = readiness
+                response["next_action"] = (
+                    "Visual baseline is ready for UI validation."
+                    if readiness.get("ready")
+                    else "Visual baseline saved, but reference screenshot readiness failed."
+                )
+            return JSONResponse(response)
+        except Exception as e:
+            logger.error("Workflow UI feedback failed: %s", e, exc_info=True)
+            return JSONResponse({"detail": str(e)}, status_code=500)
+
     @router.post("/workflows/{workflow_id}/runs/{run_id}/continue")
     async def workflow_continue_run(workflow_id: int, run_id: int, request: Request):
         """Resume a waiting workflow run.
@@ -1118,10 +1698,14 @@ def register_routes(router, templates):
         """
         try:
             from distr.core.db import get_session
-            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.db.workflow import AutoWorkflowRun, AutoWorkflowStep
             from distr.core.kanban.project_execution import append_execution_event
             from distr.core.workflow.standards_memory import capture_feedback_as_standard
-            from distr.core.hermes import emit_event
+            from distr.core.hermes import record_human_intervention_memory
+            from distr.core.orchestration_events import (
+                emit_orchestration_event,
+                normalize_orchestration_event_type,
+            )
             from distr.gui.web.workflow_events import increment_workflow_updated
 
             event_type = (event.event_type or "codex_event").strip() or "codex_event"
@@ -1132,6 +1716,8 @@ def register_routes(router, templates):
                 payload["input"] = event.input
             if event.output:
                 payload["output"] = event.output
+            if event.mistake_label:
+                payload["mistake_label"] = event.mistake_label
             payload.setdefault("bridge", "codex")
 
             with get_session() as db:
@@ -1153,19 +1739,64 @@ def register_routes(router, templates):
                 board_id = run.board_id
                 project_id = event.project_id or run_data.get("project_id")
                 execution_session_id = event.execution_session_id or payload.get("execution_session_id")
+                latest_handoff = (
+                    run_data.get("latest_backend_handoff")
+                    if isinstance(run_data.get("latest_backend_handoff"), dict)
+                    else {}
+                )
+                lower_event_type = event_type.lower().replace("-", "_").replace(" ", "_")
+                needs_human = lower_event_type in {
+                    "needs_input",
+                    "worker_needs_input",
+                    "codex_needs_input",
+                    "codex_waiting",
+                    "human_takeover",
+                    "manual_fix",
+                    "changes_requested",
+                }
+                worker_terminal = lower_event_type in {
+                    "completed",
+                    "worker_completed",
+                    "codex_completed",
+                    "failed",
+                    "worker_failed",
+                    "codex_failed",
+                }
 
                 history = run_data.get("codex_bridge_events") or []
                 history.append({
                     "event_type": event_type,
                     "status": status,
                     "message": message,
+                    "input": event.input or "",
+                    "output": event.output or "",
                     "step_id": step_id,
                     "ticket_id": ticket_id,
                     "project_id": project_id,
                     "execution_session_id": execution_session_id,
+                    "human_intervention_state": "needs_human_input" if needs_human else run_data.get("human_intervention_state", "none"),
                     "ts": time.time(),
                 })
                 run_data["codex_bridge_events"] = history[-50:]
+                live_context = run_data.get("live_agent_context") if isinstance(run_data.get("live_agent_context"), dict) else {}
+                live_context.update({
+                    "last_event_type": event_type,
+                    "last_status": status,
+                    "last_message": message,
+                    "last_input": event.input or live_context.get("last_input", ""),
+                    "last_output": event.output or live_context.get("last_output", ""),
+                    "step_id": step_id,
+                    "ticket_id": ticket_id,
+                    "project_id": project_id,
+                    "execution_session_id": execution_session_id,
+                    "updated_at": history[-1]["ts"],
+                    "recent_events": history[-10:],
+                })
+                if event_type == "user_steer" and message:
+                    live_context["latest_user_steer"] = message
+                if event_type in {"codex_completed", "codex_failed"} and message:
+                    live_context["latest_terminal_summary"] = message
+                run_data["live_agent_context"] = live_context
                 if event_type in {"user_steer", "codex_interrupted", "codex_waiting", "codex_needs_input"}:
                     run_data["last_codex_bridge_state"] = {
                         "event_type": event_type,
@@ -1174,6 +1805,60 @@ def register_routes(router, templates):
                         "step_id": step_id,
                         "execution_session_id": execution_session_id,
                     }
+                if needs_human:
+                    run.status = "waiting"
+                    if step_id:
+                        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+                        if step:
+                            step.status = "waiting"
+                    run_data["waiting_kind"] = "needs_human_input"
+                    run_data["human_intervention_state"] = "needs_human_input"
+                    run_data["next_action"] = "needs_human_input"
+                    run_data["worker_question"] = message
+                    if latest_handoff:
+                        latest_handoff["human_intervention"] = {
+                            **(
+                                latest_handoff.get("human_intervention")
+                                if isinstance(latest_handoff.get("human_intervention"), dict)
+                                else {}
+                            ),
+                            "state": "needs_human_input",
+                            "latest_message": message,
+                            "latest_label": event.mistake_label or "",
+                        }
+                        run_data["latest_backend_handoff"] = latest_handoff
+                elif worker_terminal:
+                    if run.status == "waiting":
+                        run.status = "running"
+                    if step_id:
+                        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == int(step_id)).first()
+                        if step and step.status == "waiting":
+                            step.status = "running"
+                    if run_data.get("waiting_kind") in {"needs_human_input", "worker_needs_input"}:
+                        run_data.pop("waiting_kind", None)
+                    if run_data.get("next_action") == "needs_human_input":
+                        run_data.pop("next_action", None)
+                    run_data["human_intervention_state"] = "resolved"
+                    run_data["worker_status"] = "failed" if "failed" in lower_event_type else "completed"
+                    run_data["last_codex_bridge_state"] = {
+                        "event_type": event_type,
+                        "status": status,
+                        "message": message,
+                        "step_id": step_id,
+                        "execution_session_id": execution_session_id,
+                    }
+                    if latest_handoff:
+                        latest_handoff["state"] = "failed" if "failed" in lower_event_type else "completed"
+                        latest_handoff["human_intervention"] = {
+                            **(
+                                latest_handoff.get("human_intervention")
+                                if isinstance(latest_handoff.get("human_intervention"), dict)
+                                else {}
+                            ),
+                            "state": "resolved",
+                            "latest_message": message,
+                        }
+                        run_data["latest_backend_handoff"] = latest_handoff
                 run.run_data = json.dumps(run_data)
                 db.commit()
 
@@ -1185,7 +1870,36 @@ def register_routes(router, templates):
                 payload=payload,
             )
 
-            hermes_event_id = emit_event(
+            standard_event_type = normalize_orchestration_event_type(
+                event_type,
+                source="codex",
+                status=status,
+            )
+            captured_standard = False
+            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input"} and message:
+                captured_standard = capture_feedback_as_standard(workflow_id, message)
+            mistake_event_id = None
+            if message and (
+                event.mistake_label
+                or event_type in {"user_steer", "codex_interrupted", "codex_needs_input", "manual_fix", "changes_requested"}
+            ):
+                mistake_event_id = record_human_intervention_memory(
+                    label=event.mistake_label or ("manual_fix_applied" if event_type == "manual_fix" else "ignored_instruction"),
+                    message=message,
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    step_id=int(step_id) if step_id else None,
+                    ticket_id=int(ticket_id) if ticket_id else None,
+                    board_id=int(board_id) if board_id else None,
+                    project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                    execution_session_id=int(execution_session_id) if execution_session_id else None,
+                    handoff_event_id=(
+                        latest_handoff.get("handoff_event_id")
+                        if isinstance(latest_handoff, dict)
+                        else None
+                    ),
+                )
+            hermes_event_id = emit_orchestration_event(
                 source="codex",
                 event_type=event_type,
                 status=status,
@@ -1201,22 +1915,52 @@ def register_routes(router, templates):
                 evidence=event.evidence or {},
             )
 
-            captured_standard = False
-            if event_type in {"user_steer", "codex_interrupted", "codex_needs_input"} and message:
-                captured_standard = capture_feedback_as_standard(workflow_id, message)
-
             increment_workflow_updated()
             return JSONResponse({
                 "success": True,
                 "workflow_id": workflow_id,
                 "run_id": run_id,
-                "event_type": event_type,
+                "event_type": standard_event_type,
+                "legacy_event_type": event_type if event_type != standard_event_type else "",
+                "event_id": hermes_event_id,
                 "hermes_event_id": hermes_event_id,
+                "human_intervention_event_id": mistake_event_id,
                 "captured_standard": captured_standard,
             })
         except Exception as e:
             logger.error("Workflow Codex bridge event failed: %s", e, exc_info=True)
             return JSONResponse(_workflow_error_payload(str(e), "codex_event"), status_code=500)
+
+    @router.get("/workflows/{workflow_id}/runs/{run_id}/timeline")
+    async def workflow_run_timeline(workflow_id: int, run_id: int, limit: int = 100):
+        """Return the normalized orchestration conversation timeline for a run."""
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflowRun
+            from distr.core.orchestration_events import list_orchestration_timeline
+
+            with get_session() as db:
+                run = (
+                    db.query(AutoWorkflowRun)
+                    .filter(AutoWorkflowRun.id == int(run_id))
+                    .filter(AutoWorkflowRun.workflow_id == int(workflow_id))
+                    .first()
+                )
+                if not run:
+                    return JSONResponse(_workflow_error_payload("Run not found", "timeline"), status_code=404)
+            return JSONResponse({
+                "success": True,
+                "workflow_id": workflow_id,
+                "run_id": run_id,
+                "events": list_orchestration_timeline(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    limit=limit,
+                ),
+            })
+        except Exception as e:
+            logger.error("Workflow timeline failed: %s", e, exc_info=True)
+            return JSONResponse(_workflow_error_payload(str(e), "timeline"), status_code=500)
 
     @router.get("/workflows/{workflow_id}/active-run")
     async def workflow_active_run(workflow_id: int):

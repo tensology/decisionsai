@@ -469,6 +469,16 @@ async function reportWorkflowComplete(outputChannel) {
 	}
 
 	outputChannel.appendLine('Reporting workflow completion...');
+	await callBridgeEvent(meta, {
+		event_type: 'ide_iteration_completed',
+		status: 'completed',
+		step_id: meta.step_id,
+		ticket_id: meta.ticket_id,
+		project_id: meta.project_id,
+		execution_session_id: meta.execution_session_id,
+		message: summary.trim(),
+		input: summary.trim(),
+	}, outputChannel);
 	const result = await callTicketCallback(meta, {
 		event_type: 'ide_iteration_completed',
 		status: 'completed',

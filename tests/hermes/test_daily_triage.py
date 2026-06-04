@@ -36,7 +36,7 @@ def test_build_daily_triage_turns_messages_into_decision_candidates():
     triage = build_daily_triage(work_scan=scan)
 
     assert triage["mode"] == "daily_standup_triage"
-    assert "decision candidate" in triage["summary"]
+    assert "need your call" in triage["summary"]
     assert any(c["action_type"] == "create_ticket" for c in triage["candidates"])
     assert triage["buckets"]["make_ticket"]
     assert any(s["provider"] == "clickup" and not s["connected"] for s in triage["source_health"])
@@ -58,10 +58,11 @@ def test_format_triage_markdown_asks_for_decisions():
 
     markdown = format_triage_markdown(triage)
 
-    assert "## Standup Triage" in markdown
+    assert "## Quick Check-in" in markdown
     assert "## Intake Buckets" in markdown
-    assert "## Decisions I Need From You" in markdown
-    assert "Should I promote" in markdown
+    assert "## Needs Your Call" in markdown
+    assert "Want me to move these forward" in markdown
+    assert "Hermes" not in markdown
 
 
 def test_enqueue_triage_candidates_dedupes(tmp_path):

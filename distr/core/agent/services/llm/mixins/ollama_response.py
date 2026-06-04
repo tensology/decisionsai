@@ -113,9 +113,17 @@ class OllamaResponseMixin:
         """
         try:
             dropped_files_context = self._get_dropped_files_context(chat_id=chat_id)
+            developer_context_text = ""
+            try:
+                from distr.core.developer_context import build_developer_context
+
+                developer_context_text = build_developer_context(chat_id=chat_id).to_prompt_text(max_chars=2200)
+            except Exception:
+                logger.warning("Could not build developer workflow context", exc_info=True)
+
             # Include the tools flag in the cache key so switching between
             # tools-in-prompt vs tools-via-API correctly invalidates the cache.
-            ctx_hash = hash((dropped_files_context, include_tools_description))
+            ctx_hash = hash((dropped_files_context, developer_context_text, include_tools_description))
 
             if (hasattr(self, '_cached_prompt_hash')
                     and self._cached_prompt_hash == ctx_hash
@@ -156,6 +164,9 @@ class OllamaResponseMixin:
                     self.default_template += f"\n\n{project_context}"
             except Exception as e:
                 logger.warning("Could not inject project context: %s", e)
+
+            if developer_context_text:
+                self.default_template += f"\n\n{developer_context_text}"
 
             self._cached_prompt_hash = ctx_hash
 

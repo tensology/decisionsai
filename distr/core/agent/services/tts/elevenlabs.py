@@ -167,10 +167,10 @@ class ElevenLabsTTSService(TTSService):
         
         for attempt in range(max_retries + 1):
             try:
-                # ElevenLabs API supports 'speed' parameter (range 0.7-1.2).
-                # Respect user-selected 1.0 exactly; do not silently remap to 0.90.
+                # Keep provider synthesis neutral; playback speed is applied once
+                # in the transport so we do not time-stretch already-sped audio.
                 # Generate audio using text_to_speech.convert
-                api_speed = max(0.7, min(1.2, float(self.playback_speed)))
+                api_speed = 1.0
                 audio_stream = self.client.text_to_speech.convert(
                     text=text,
                     voice_id=self.voice_id,

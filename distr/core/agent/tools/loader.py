@@ -106,6 +106,8 @@ def _get_tool_definitions(
         ("CancelWorkflowRunTool", {}),
         ("GetActiveWorkflowRunsTool", {}),
         ("GetProjectStatusTool", {}),
+        ("ScheduledActionTool", {}),
+        ("VisualBaselineTool", {}),
         ("AddWorkflowStepTool", {}),
         ("UpdateWorkflowStepTool", {}),
         ("GenerateWorkflowTool", {}),
@@ -159,6 +161,8 @@ def _get_tool_definitions(
         # System Information
         ("SystemInfoTool", dict(chat_manager=chat_manager)),
         ("DeveloperContextTool", {}),
+        ("CodexThreadContextTool", {}),
+        ("ProactiveOrchestratorTool", {}),
         ("MemorySearchTool", {}),
         ("MemoryReadTool", {}),
         (
@@ -458,6 +462,8 @@ TOOL_REGISTRY = {
     "CancelWorkflowRunTool":      ("step_runner.workflow_tools", "CancelWorkflowRunTool"),
     "GetActiveWorkflowRunsTool":  ("step_runner.workflow_tools", "GetActiveWorkflowRunsTool"),
     "GetProjectStatusTool":       ("step_runner.workflow_tools", "GetProjectStatusTool"),
+    "ScheduledActionTool":        ("step_runner.workflow_tools", "ScheduledActionTool"),
+    "VisualBaselineTool":         ("step_runner.workflow_tools", "VisualBaselineTool"),
     "AddWorkflowStepTool":        ("step_runner.workflow_tools", "AddWorkflowStepTool"),
     "UpdateWorkflowStepTool":     ("step_runner.workflow_tools", "UpdateWorkflowStepTool"),
     "GenerateWorkflowTool":       ("step_runner.workflow_tools", "GenerateWorkflowTool"),
@@ -480,6 +486,8 @@ TOOL_REGISTRY = {
     # system/
     "SystemInfoTool":          ("system.system_info", "SystemInfoTool"),
     "DeveloperContextTool":    ("system.developer_context", "DeveloperContextTool"),
+    "CodexThreadContextTool":  ("system.codex_thread_context", "CodexThreadContextTool"),
+    "ProactiveOrchestratorTool": ("system.proactive_orchestrator", "ProactiveOrchestratorTool"),
     "MemorySearchTool":        ("system.memory_tools", "MemorySearchTool"),
     "MemoryReadTool":          ("system.memory_tools", "MemoryReadTool"),
     "MemoryAddTool":           ("system.memory_tools", "MemoryAddTool"),
@@ -587,6 +595,8 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CancelWorkflowRunTool": "Cancel an in-progress workflow run by its run ID.",
     "GetActiveWorkflowRunsTool": "List active workflow runs with run IDs, statuses, and current step names so the agent can recover workflow context before continue or status actions.",
     "GetProjectStatusTool": "Get the current status, recent activity, and health summary of a project.",
+    "ScheduledActionTool": "Create, preview, list, cancel, disable, enable, or reschedule simple scheduled desktop actions.",
+    "VisualBaselineTool": "Create, list, or retrieve Hermes visual baseline sets and reference screens for UI quality validation.",
     "AddWorkflowStepTool": "Add a new step to an existing workflow at a specified position.",
     "UpdateWorkflowStepTool": "Update the configuration of an existing workflow step.",
     "GenerateWorkflowTool": "Auto-generate a complete workflow from a natural language description of the desired process.",
@@ -609,6 +619,12 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     # system/
     "SystemInfoTool": "Retrieve system information such as OS version, CPU, memory, disk usage, and running processes.",
     "DeveloperContextTool": "Inspect the active developer workflow context: current project, board, tickets, workflow runs, and skill recommendations before ticket/workflow/delegation decisions.",
+    "CodexThreadContextTool": "Load a matching local Codex conversation transcript for project context, ticket creation, plans, skill handoffs, or follow-up replies instead of asking the user to paste the thread.",
+    "ProactiveOrchestratorTool": (
+        "Scan Gmail, Slack, WhatsApp, Telegram, Trello, Jira, and board-derived work signals, "
+        "prioritize important items, match them to projects and recent Codex/Cursor context, "
+        "and dispatch approved work to Codex, Cursor, Pi, or the configured project backend."
+    ),
     "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",
     "MemoryReadTool": "Read line ranges from cross-chat AGENT.md, USER.md, MEMORY.md, or EVENTS.md persistent files.",
     "MemoryAddTool": "Append a new section to MEMORY.md or USER.md with confirmation when file-change prompts are enabled.",

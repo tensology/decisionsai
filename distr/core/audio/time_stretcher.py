@@ -20,8 +20,13 @@ class TimeStretcher:
         
         # Buffer for overlap-add (tail of the previous processed block)
         self.overlap_buffer = np.zeros(self.overlap_size, dtype=np.float32)
+        self._last_speed = 1.0
         
         logger.info(f"TimeStretcher initialized: Buffer={self.buffer_size}, Overlap={self.overlap_size}")
+
+    @staticmethod
+    def _is_unity_speed(speed: float) -> bool:
+        return abs(float(speed) - 1.0) < 0.01
 
     def process(self, chunk: np.ndarray, speed: float) -> np.ndarray:
         """
@@ -30,6 +35,18 @@ class TimeStretcher:
         """
         if len(chunk) == 0:
             return np.array([], dtype=np.float32)
+
+        self._last_speed = float(speed)
+
+        # At 1.0x, do not accumulate 100ms blocks — hard block boundaries cause crackling.
+        if self._is_unity_speed(speed):
+            pending = self.input_buffer
+            self.input_buffer = np.array([], dtype=np.float32)
+            self.overlap_buffer = np.zeros(self.overlap_size, dtype=np.float32)
+            chunk = chunk.astype(np.float32, copy=False)
+            if len(pending) == 0:
+                return chunk
+            return np.concatenate((pending, chunk))
             
         # Optimization: If speed is 1.0, bypass processing to avoid artifacts
         # But we must still buffer if we have leftover overlap from previous operations?
@@ -59,16 +76,7 @@ class TimeStretcher:
             
             # Time-stretch the block
             # We assume pitch_preserving_time_stretch handles the core DSP
-            if abs(speed - 1.0) < 0.01:
-                # Bypass DSP if speed is 1.0, just use the block as is
-                # Also bypass OLA logic to avoid duration loss/speedup
-                # Just append the block and output what we have, keeping buffer logic for consistency
-                output_audio = np.concatenate((output_audio, block))
-                # Reset overlap buffer since we broke continuity of OLA
-                self.overlap_buffer = np.zeros(self.overlap_size, dtype=np.float32)
-                continue
-            else:
-                stretched_block = pitch_preserving_time_stretch(block, speed, self.sample_rate)
+            stretched_block = pitch_preserving_time_stretch(block, speed, self.sample_rate)
             
             # 3. Overlap-Add Logic
             if len(stretched_block) < self.overlap_size:
@@ -121,9 +129,15 @@ class TimeStretcher:
         """
         if len(self.input_buffer) == 0:
             return np.array([], dtype=np.float32)
+
+        if self._is_unity_speed(self._last_speed):
+            remaining = self.input_buffer
+            self.input_buffer = np.array([], dtype=np.float32)
+            self.overlap_buffer = np.zeros(self.overlap_size, dtype=np.float32)
+            return remaining
             
         # Process whatever is left
-        stretched_block = pitch_preserving_time_stretch(self.input_buffer, 1.0, self.sample_rate)
+        stretched_block = pitch_preserving_time_stretch(self.input_buffer, self._last_speed, self.sample_rate)
         self.input_buffer = np.array([], dtype=np.float32)
         
         # Apply overlap if possible

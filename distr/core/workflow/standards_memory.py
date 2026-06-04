@@ -68,13 +68,17 @@ def build_standards_context(context_rules: Optional[str] = None, board_id: int |
 
     if board_id:
         try:
-            from distr.core.hermes import build_learned_rules_context
+            from distr.core.hermes import build_learned_rules_context, build_visual_taste_context
 
+            additions = []
             learned = build_learned_rules_context(int(board_id))
-            if learned:
-                if "[BOARD LEARNED RULES]" in base:
-                    return base
-                return base + "\n\n" + learned
+            if learned and "[BOARD LEARNED RULES]" not in base:
+                additions.append(learned)
+            taste = build_visual_taste_context(board_id=int(board_id))
+            if taste and "[VISUAL TASTE MEMORY]" not in base:
+                additions.append(taste)
+            if additions:
+                return base + "\n\n" + "\n\n".join(additions)
         except Exception:
             pass
     return base

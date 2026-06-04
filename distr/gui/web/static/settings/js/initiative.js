@@ -53,10 +53,10 @@
         var el = document.getElementById('initiative-posture-summary');
         if (!el) return;
         var copy = {
-            observe: 'Hermes stays quiet and only responds when you ask.',
-            assist: 'Hermes watches context and suggests useful next steps during conversation.',
-            operate: 'Hermes runs daily standup triage, sends gated decisions to Telegram, and runs approved routines.',
-            own: 'Hermes follows through on defined outcomes and only pulls you in for sensitive or unclear decisions.',
+            observe: 'The agent stays quiet and only responds when you ask.',
+            assist: 'The agent watches context and suggests useful next steps during conversation.',
+            operate: 'The agent runs daily check-ins, sends gated decisions to Telegram, and runs approved routines.',
+            own: 'The agent follows through on defined outcomes and only pulls you in for sensitive or unclear decisions.',
         };
         el.textContent = copy[level] || copy.assist;
     }

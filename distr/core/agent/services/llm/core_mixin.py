@@ -35,7 +35,15 @@ logger = logging.getLogger(__name__)
 
 # Fast-tool matcher runs tools immediately (before the LLM). These tools return
 # user-facing prose — show the real result instead of the generic "Done" stub.
-_FAST_MATCH_TOOLS_SHOW_FULL_RESULT = frozenset({"open_page", "system_info"})
+_FAST_MATCH_TOOLS_SHOW_FULL_RESULT = frozenset({
+    "developer_context",
+    "get_project_status",
+    "list_projects",
+    "open_page",
+    "query_current_project",
+    "switch_project",
+    "system_info",
+})
 
 
 class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, TelegramMixin):

@@ -236,10 +236,11 @@ def _call_orchestrator_llm(
                 {
                     "role": "system",
                     "content": (
-                        "You are Hermes, the workflow orchestrator. "
+                        "You are the workflow orchestrator. "
                         "Suggest the best coding harness and which bundled skills to push into the project "
                         "before execution (use skill ids from available_skills). "
-                        "Only override baseline when clearly beneficial. Respond with valid JSON only."
+                        "Only override baseline when clearly beneficial. Respond with valid JSON only. "
+                        "Do not mention internal system names."
                     ),
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
@@ -293,18 +294,26 @@ def resolve_execution_route(
 ) -> RouteDecision:
     """Resolve the execution harness for a ticket using hybrid Hermes routing."""
     from distr.core.kanban.ticket_policy import normalize_ticket_complexity, resolve_ticket_cli_route
+    from distr.core.harness.intake import classify_intake
     from distr.core.project_cli_backends import get_backend, normalize_backend_id
     from distr.core.skills.catalog import filter_known_skill_ids, infer_skills_for_ticket
     from distr.core.hermes import (
         build_learned_rules_context,
+        build_visual_taste_context,
         emit_event as hermes_emit,
+        inspect_visual_baseline_readiness,
         normalize_board_hermes_policy,
+        record_routing_override,
         resolve_board_id_for_ticket,
     )
 
+    ticket_text = _ticket_text(ticket)
+    intake_profile = classify_intake(ticket_text)
     level = normalize_ticket_complexity(
         complexity or (getattr(ticket, "complexity", None) if ticket else None)
     )
+    if intake_profile.get("route_pressure") == "codex" and level == "low":
+        level = "medium"
     board_id = getattr(board, "id", None) if board else None
     if board_id is None and ticket is not None:
         board_id = resolve_board_id_for_ticket(getattr(ticket, "id", None))
@@ -326,7 +335,7 @@ def resolve_execution_route(
     if pref_skills:
         skills.extend(pref_skills)
 
-    inferred_skills = infer_skills_for_ticket(_ticket_text(ticket))
+    inferred_skills = infer_skills_for_ticket(ticket_text)
     if inferred_skills:
         skills.extend(inferred_skills)
 
@@ -336,11 +345,53 @@ def resolve_execution_route(
         pref_rationale = pref_rationale or ide_rationale
         source_hint = "board_override"
 
+    visual_baseline_readiness: dict[str, Any] | None = None
+    if intake_profile.get("ui_heavy") and board_id:
+        try:
+            visual_baseline_readiness = inspect_visual_baseline_readiness(
+                board_id=board_id,
+                project_id=getattr(project, "id", None) if project else None,
+                include_global=True,
+            )
+        except Exception:
+            visual_baseline_readiness = None
+
+    intake_override = str(intake_profile.get("override") or "").strip()
+    override_requested_backend = ""
+    if intake_override in {"promote_to_codex", "ui_critical"}:
+        override_requested_backend = "codex"
+    elif intake_override == "demote_to_cursor":
+        override_requested_backend = "cursor"
+
+    override_original_backend = normalize_backend_id(route.get("backend") or "")
+    override_applied = False
+    if override_requested_backend:
+        may_apply_override = intake_override != "demote_to_cursor" or intake_profile.get("route_pressure") == "cursor"
+        if may_apply_override:
+            route["backend"] = normalize_backend_id(override_requested_backend)
+            route["model"] = str(route.get("model") or "auto").strip()
+            pref_rationale = f"Intake override '{intake_override.replace('_', ' ')}' requested {route['backend']}"
+            source_hint = "harness_preference"
+            override_applied = True
+
     override_payload: dict[str, Any] | None = None
     rationale = pref_rationale or f"Policy route for {level} complexity"
+    if visual_baseline_readiness and not visual_baseline_readiness.get("ready"):
+        missing_count = int(visual_baseline_readiness.get("missing_screen_count") or 0)
+        rationale = (
+            f"{rationale}; visual baseline not ready"
+            + (f" ({missing_count} missing reference screen{'s' if missing_count != 1 else ''})" if missing_count else "")
+        )
+        if normalize_backend_id(route.get("backend") or "") == "cursor" and intake_override != "demote_to_cursor":
+            route["backend"] = "codex"
+            route["model"] = str(route.get("model") or "auto").strip()
+            source_hint = "harness_preference"
 
     if allow_hermes_override:
         learned = build_learned_rules_context(board_id)
+        visual_taste = build_visual_taste_context(board_id=board_id) if board_id else ""
+        if visual_taste:
+            learned = (learned + "\n\n" + visual_taste).strip() if learned else visual_taste
         advisory = _call_orchestrator_llm(
             ticket=ticket,
             complexity=level,
@@ -367,7 +418,7 @@ def resolve_execution_route(
                             break
                     except Exception:
                         continue
-            if suggested_backend and (
+            if not override_applied and suggested_backend and (
                 suggested_backend != route.get("backend")
                 or suggested_model != route.get("model")
             ):
@@ -410,7 +461,7 @@ def resolve_execution_route(
         model = str(route.get("model") or "").strip()
         source = _determine_source(baseline, baseline, board)
         rationale = (
-            f"Policy route pending Hermes override approval: "
+            f"Route override pending approval: "
             f"{override_payload.get('rationale') if override_payload else ''}"
         ).strip()
 
@@ -427,6 +478,25 @@ def resolve_execution_route(
         override_route=override_payload,
         skills=filter_known_skill_ids(skills),
     )
+
+    if override_requested_backend:
+        try:
+            record_routing_override(
+                override=intake_override,
+                requested_backend=override_requested_backend,
+                original_backend=override_original_backend,
+                final_backend=backend_id,
+                applied=backend_id == normalize_backend_id(override_requested_backend),
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=step_id,
+                ticket_id=getattr(ticket, "id", None) if ticket else None,
+                board_id=board_id,
+                project_id=getattr(project, "id", None) if project else None,
+                reasons=list(intake_profile.get("reasons") or []),
+            )
+        except Exception:
+            logger.debug("Could not record routing override", exc_info=True)
 
     if emit_event:
         try:
@@ -445,6 +515,8 @@ def resolve_execution_route(
                     "decision": decision.to_route_dict(),
                     "policy_route": baseline,
                     "override": override_payload,
+                    "intake_profile": intake_profile,
+                    "visual_baseline_readiness": visual_baseline_readiness,
                 },
             )
         except Exception:

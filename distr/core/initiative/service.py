@@ -88,6 +88,25 @@ def _initiative_update_text(text: str) -> str:
     return f"Quick update: {clean}"
 
 
+def _planner_telegram_excerpt(markdown: str, max_len: int = 320) -> str:
+    """Keep scheduled planner notifications readable in chat previews."""
+    clean = re.sub(r"<!--.*?-->", " ", str(markdown or ""), flags=re.DOTALL)
+    clean = re.sub(r"#+\s*", "", clean)
+    clean = re.sub(r"[-*]\s+", "", clean)
+    clean = re.sub(r"\bTask instruction:\s*", "", clean, flags=re.IGNORECASE)
+    clean = re.sub(r"\bHermes\b", "I", clean)
+    clean = " ".join(clean.split())
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "…"
+
+
+def _planner_ready_text(scope_label: str, excerpt: str) -> str:
+    if excerpt:
+        return f"Your {scope_label} is ready in the app.\n\n{excerpt}"
+    return f"Your {scope_label} is ready in the app."
+
+
 def build_initiative_boundaries(settings: dict) -> dict:
     """Extract policy boundary flags from persisted Initiative settings."""
     return {
@@ -787,6 +806,7 @@ class InitiativeService:
         self._log_planner_to_chat(chat_body)
 
         excerpt = tts_excerpt_from_markdown(markdown, max_len=700)
+        telegram_excerpt = _planner_telegram_excerpt(markdown)
         if scope == "morning":
             if triage_candidate_count:
                 tg_body = (
@@ -794,12 +814,9 @@ class InitiativeService:
                     "Reply approve 1, reject 1, approve all, or tell me what to turn into tickets."
                 )
             else:
-                tg_body = excerpt or triage_summary or "Hermes found no standup triage decisions yet."
+                tg_body = telegram_excerpt or triage_summary or "Nothing needs your review right now."
         else:
-            tg_body = (
-                f"I’ve prepared your {scope_label} in the app."
-                + (f"\n\n{excerpt}" if excerpt else "")
-            )
+            tg_body = _planner_ready_text(scope_label, telegram_excerpt)
         self._send_telegram_if_allowed(tg_body, settings)
 
         if settings.get("chat_voice_enabled", True):

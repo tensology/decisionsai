@@ -6,6 +6,7 @@ import contextlib
 import json
 from unittest.mock import MagicMock, patch
 
+from PIL import Image
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.pool import StaticPool
@@ -167,3 +168,327 @@ def test_complete_run_persists_terminal_packet_ticket_note_and_audit_entry():
         assert terminal.run_id == ids["run_id"]
         assert terminal.status == "completed"
         assert terminal.final_verdict == "pass"
+
+
+def test_complete_run_allows_ui_heavy_packet_with_taste_aware_validation():
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        run_data["risk_profile"] = {
+            "level": "high",
+            "signals": ["ui", "flow"],
+            "risk_type": "product_conversion",
+        }
+        packet = run_data["result_packet"]
+        packet["artifacts"] = {
+            "logs": [],
+            "screenshots": ["/tmp/decisions/workflow_screenshots/ui-after.png"],
+            "diffs_or_patches": [],
+            "links": [],
+            "ui_quality": {
+                "before_unavailable_reason": "Terminal run did not provide a before screenshot slot.",
+                "after_screenshot": "/tmp/decisions/workflow_screenshots/ui-after.png",
+                "flow_summary": "Opened settings and saved the compact form.",
+                "happy_path_steps": ["Save"],
+                "click_count": 1,
+                "layout_hierarchy_notes": "Kept the compact form hierarchy clear and the save action primary.",
+            },
+        }
+        packet["execution"] = {
+            "action_trace": [{"action_type": "click", "description": "Save"}],
+            "validation_snapshots": [
+                {
+                    "validation_type": "ui_quality",
+                    "verdict": "pass",
+                    "expected": "UI work includes screenshots and flow evidence before completion.",
+                    "observed": "Flow summary: opened settings and saved the compact form.",
+                    "standards_context": "[VISUAL TASTE MEMORY]\n- approved: Compact operational controls.",
+                }
+            ],
+        }
+        packet["tests_and_checks"] = {
+            "tests_run": ["lint", "typecheck", "build", "tests"],
+            "results": [],
+        }
+        run.run_data = json.dumps(run_data)
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()):
+        assert complete_run(ids["run_id"], "completed") is True
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_status = run.status
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+
+    assert run_status == "completed"
+    assert packet["status"] == "completed"
+    assert packet["audit"]["final_verdict"] == "pass"
+    assert "workflow_run:" + str(ids["run_id"]) in packet["artifacts"]["logs"]
+    assert packet["execution"]["validation_snapshots"][0]["validation_type"] == "ui_quality"
+
+
+def test_complete_run_records_ui_quality_validation_from_visual_baseline_artifacts(tmp_path):
+    from distr.core.db.hermes import HermesValidationRecord, HermesVisualBaselineScreen, HermesVisualBaselineSet
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+    baseline_path = tmp_path / "baseline.png"
+    candidate_path = tmp_path / "candidate.png"
+    Image.new("RGB", (4, 4), color=(34, 92, 160)).save(baseline_path)
+    Image.new("RGB", (4, 4), color=(34, 92, 160)).save(candidate_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        baseline = HermesVisualBaselineSet(
+            name="Gold Admin",
+            scope="board",
+            scope_id=ids["board_id"],
+            description="Reference dashboard.",
+        )
+        session.add(baseline)
+        session.flush()
+        session.add(
+            HermesVisualBaselineScreen(
+                baseline_set_id=baseline.id,
+                screen_name="Dashboard",
+                screenshot_path=str(baseline_path),
+            )
+        )
+
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+        packet["artifacts"]["screenshots"] = [str(candidate_path)]
+        packet["artifacts"]["ui_quality"] = {
+            "before_unavailable_reason": "No before screenshot was captured for this UI step.",
+            "after_screenshot": str(candidate_path),
+            "flow_summary": "Opened the dashboard and confirmed the dense admin overview.",
+            "happy_path_steps": ["Open dashboard"],
+            "click_count": 1,
+            "layout_hierarchy_notes": "Kept the dense admin overview hierarchy aligned to the reference dashboard.",
+            "visual_baseline_name": "Gold Admin",
+            "baseline_screen_name": "Dashboard",
+            "visual_diff_threshold": 0.01,
+        }
+        packet["execution"]["validation_snapshots"] = []
+        run.run_data = json.dumps(run_data)
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.hermes.get_session", get_session
+    ), patch("distr.core.db.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()):
+        assert complete_run(ids["run_id"], "completed") is True
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+        validations = session.query(HermesValidationRecord).all()
+        validation_types = [row.validation_type for row in validations]
+
+    assert len(validations) == 1
+    assert validation_types == ["ui_quality"]
+    snapshot = packet["execution"]["validation_snapshots"][0]
+    assert snapshot["validation_type"] == "ui_quality"
+    assert snapshot["verdict"] == "pass"
+    assert snapshot["visual_baseline"]["baseline_name"] == "Gold Admin"
+    assert snapshot["visual_baseline"]["screen_results"][0]["status"] == "pass"
+
+
+def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tmp_path):
+    from distr.core.db.hermes import (
+        HermesCorrectionAttempt,
+        HermesValidationRecord,
+        HermesVisualBaselineScreen,
+        HermesVisualBaselineSet,
+    )
+    from distr.core.db.workflow import AutoWorkflowRun
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+    baseline_path = tmp_path / "baseline.png"
+    candidate_path = tmp_path / "candidate.png"
+    Image.new("RGB", (4, 4), color=(34, 92, 160)).save(baseline_path)
+    Image.new("RGB", (4, 4), color=(210, 64, 64)).save(candidate_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        baseline = HermesVisualBaselineSet(
+            name="Gold Admin",
+            scope="board",
+            scope_id=ids["board_id"],
+            description="Reference dashboard.",
+        )
+        session.add(baseline)
+        session.flush()
+        session.add(
+            HermesVisualBaselineScreen(
+                baseline_set_id=baseline.id,
+                screen_name="Dashboard",
+                screenshot_path=str(baseline_path),
+            )
+        )
+
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+        packet["artifacts"]["screenshots"] = [str(candidate_path)]
+        packet["artifacts"]["ui_quality"] = {
+            "before_unavailable_reason": "No before screenshot was captured for this UI step.",
+            "after_screenshot": str(candidate_path),
+            "flow_summary": "Opened the dashboard and confirmed the overview.",
+            "happy_path_steps": ["Open dashboard"],
+            "click_count": 1,
+            "visual_baseline_name": "Gold Admin",
+            "baseline_screen_name": "Dashboard",
+            "visual_diff_threshold": 0.01,
+        }
+        packet["execution"]["validation_snapshots"] = []
+        run.run_data = json.dumps(run_data)
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.hermes.get_session", get_session
+    ), patch("distr.core.db.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()):
+        assert complete_run(ids["run_id"], "completed") is True
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_status = run.status
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+        validations = session.query(HermesValidationRecord).all()
+        attempts = session.query(HermesCorrectionAttempt).all()
+        attempt_ids = [row.id for row in attempts]
+        attempt_statuses = [row.status for row in attempts]
+        correction_packets = [json.loads(row.correction_packet or "{}") for row in attempts]
+
+    assert run_status == "failed"
+    assert packet["audit"]["final_verdict"] == "needs_changes"
+    snapshot = packet["execution"]["validation_snapshots"][0]
+    assert snapshot["validation_type"] == "ui_quality"
+    assert snapshot["verdict"] == "fail"
+    assert snapshot["visual_baseline"]["baseline_name"] == "Gold Admin"
+    assert snapshot["visual_baseline"]["screen_results"][0]["status"] == "fail"
+    assert len(validations) == 1
+    assert len(attempts) == 1
+    assert attempt_statuses == ["queued"]
+    assert snapshot["correction_attempt_id"] == attempt_ids[0]
+    assert correction_packets[0]["failed_validation"]["validation_type"] == "ui_quality"
+    assert "visual baseline" in correction_packets[0]["failed_validation"]["correction_hint"].lower()
+
+
+def test_complete_run_auto_dispatches_failed_visual_baseline_correction_when_enabled(tmp_path):
+    from distr.core.db.hermes import (
+        HermesCorrectionAttempt,
+        HermesVisualBaselineScreen,
+        HermesVisualBaselineSet,
+    )
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+    from distr.core.workflow.dispatcher import complete_run
+
+    factory = _make_factory()
+    ids = _seed_terminal_run(factory)
+    baseline_path = tmp_path / "baseline.png"
+    candidate_path = tmp_path / "candidate.png"
+    Image.new("RGB", (4, 4), color=(34, 92, 160)).save(baseline_path)
+    Image.new("RGB", (4, 4), color=(210, 64, 64)).save(candidate_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with get_session() as session:
+        workflow = session.query(AutoWorkflow).filter(AutoWorkflow.id == ids["workflow_id"]).one()
+        workflow.run_settings = json.dumps({
+            "auto_dispatch_corrections": True,
+            "max_correction_attempts": 2,
+        })
+        baseline = HermesVisualBaselineSet(
+            name="Gold Admin",
+            scope="board",
+            scope_id=ids["board_id"],
+            description="Reference dashboard.",
+        )
+        session.add(baseline)
+        session.flush()
+        session.add(
+            HermesVisualBaselineScreen(
+                baseline_set_id=baseline.id,
+                screen_name="Dashboard",
+                screenshot_path=str(baseline_path),
+            )
+        )
+
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_data = json.loads(run.run_data or "{}")
+        packet = run_data["result_packet"]
+        packet["artifacts"]["screenshots"] = [str(candidate_path)]
+        packet["artifacts"]["ui_quality"] = {
+            "before_unavailable_reason": "No before screenshot was captured for this UI step.",
+            "after_screenshot": str(candidate_path),
+            "flow_summary": "Opened the dashboard and confirmed the overview.",
+            "happy_path_steps": ["Open dashboard"],
+            "click_count": 1,
+            "visual_baseline_name": "Gold Admin",
+            "baseline_screen_name": "Dashboard",
+            "visual_diff_threshold": 0.01,
+        }
+        packet["execution"]["validation_snapshots"] = []
+        run.run_data = json.dumps(run_data)
+
+    with patch("distr.core.workflow.dispatcher.get_session", get_session), patch(
+        "distr.core.hermes.get_session", get_session
+    ), patch("distr.core.db.get_session", get_session), patch(
+        "distr.core.workflow.dispatcher.increment_workflow_updated", MagicMock()
+    ), patch("distr.core.workflow.dispatcher.record_workflow_chat_event", MagicMock()), patch(
+        "distr.gui.web.kanban_events.increment_kanban_updated", MagicMock()
+    ), patch("distr.core.workflow_engine.agent_bridge.WorkflowAgentBridge", MagicMock()), patch(
+        "distr.core.workflow.dispatcher.StepDispatcher.run_in_workflow",
+        return_value={"success": True},
+    ) as dispatch:
+        assert complete_run(ids["run_id"], "completed") is True
+
+    with get_session() as session:
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == ids["run_id"]).one()
+        run_status = run.status
+        completed_at = run.completed_at
+        run_data = json.loads(run.run_data or "{}")
+        attempts = session.query(HermesCorrectionAttempt).all()
+        attempt_ids = [row.id for row in attempts]
+        attempt_statuses = [row.status for row in attempts]
+        dispatch_results = [json.loads(row.dispatch_result or "{}") for row in attempts]
+
+    assert run_status == "running"
+    assert completed_at is None
+    assert run_data["pending_correction"]["step_id"] == ids["step_id"]
+    assert run_data["pending_correction"]["correction_attempt_id"] == attempt_ids[0]
+    assert attempt_statuses == ["dispatched"]
+    assert dispatch_results[0]["auto_dispatch"] is True
+    dispatch.assert_called_once_with(ids["step_id"], ids["run_id"])

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import json
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
@@ -64,6 +65,106 @@ def test_build_learned_rules_context_includes_enabled_board_rules(tmp_path):
     assert "files changed" in context
 
 
+def test_record_routing_override_emits_event_and_learning_signal(tmp_path):
+    from unittest.mock import patch
+
+    from distr.core.db.hermes import HermesEvent, HermesLearnedRule
+    from distr.core.hermes import build_learned_rules_context, record_routing_override
+
+    factory = _factory(tmp_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with patch("distr.core.hermes.get_session", get_session), patch("distr.core.db.get_session", get_session):
+        event_id = record_routing_override(
+            override="promote_to_codex",
+            requested_backend="codex",
+            original_backend="cursor",
+            final_backend="codex",
+            board_id=7,
+            project_id=3,
+            ticket_id=12,
+            reasons=["Detected override phrase: promote to codex."],
+        )
+
+        with get_session() as session:
+            event = session.query(HermesEvent).filter(HermesEvent.id == event_id).one()
+            rule = session.query(HermesLearnedRule).filter(HermesLearnedRule.scope_id == 7).one()
+        context = build_learned_rules_context(7)
+
+    assert event.event_type == "routing_override_applied"
+    assert event.status == "applied"
+    assert json.loads(event.payload)["override"] == "promote_to_codex"
+    assert rule.rule_type == "routing_override"
+    assert "codex" in rule.summary.lower()
+    assert "promote to codex" in context.lower()
+
+
+def test_backend_handoff_redacts_secrets_and_records_memory(tmp_path):
+    from unittest.mock import patch
+
+    from distr.core.db.hermes import HermesEvent, HermesLearnedRule
+    from distr.core.hermes import (
+        build_backend_handoff_packet,
+        record_backend_handoff,
+        record_human_intervention_memory,
+    )
+
+    factory = _factory(tmp_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    with patch("distr.core.hermes.get_session", get_session), patch("distr.core.db.get_session", get_session):
+        packet = build_backend_handoff_packet(
+            backend_id="codex",
+            model="gpt-test",
+            instruction="Use Authorization: Bearer sk-testsecret1234567890 and fix the UI.",
+            project_id=3,
+            workflow_id=4,
+            run_id=5,
+            step_id=6,
+            ticket_id=7,
+            board_id=8,
+            execution_session_id=9,
+            callback={
+                "api_key": "super-secret",
+                "bridge_url": "http://127.0.0.1/codex-events?internal_token=short-proof-token",
+            },
+        )
+        handoff_id = record_backend_handoff(packet=packet, status="dispatched")
+        intervention_id = record_human_intervention_memory(
+            label="missed requirement",
+            message="The worker skipped the required visual check.",
+            workflow_id=4,
+            run_id=5,
+            step_id=6,
+            ticket_id=7,
+            board_id=8,
+            project_id=3,
+            execution_session_id=9,
+            handoff_event_id=handoff_id,
+        )
+
+        with get_session() as session:
+            handoff = session.query(HermesEvent).filter(HermesEvent.id == handoff_id).one()
+            intervention = session.query(HermesEvent).filter(HermesEvent.id == intervention_id).one()
+            learned = session.query(HermesLearnedRule).filter(HermesLearnedRule.rule_type == "human_intervention").one()
+
+    payload = json.loads(handoff.payload)
+    assert handoff.event_type == "backend_handoff_created"
+    assert payload["payload_hash"]
+    assert "sk-testsecret" not in json.dumps(payload)
+    assert "short-proof-token" not in json.dumps(payload)
+    assert payload["callback"]["api_key"] == "[redacted]"
+    assert payload["callback"]["bridge_url"].endswith("internal_token=[redacted]")
+    assert intervention.event_type == "human_intervention_recorded"
+    assert json.loads(intervention.payload)["label"] == "missed_requirement"
+    assert learned.scope == "board"
+    assert "visual check" in learned.summary
+
+
 def test_build_standards_context_appends_board_rules(tmp_path):
     from distr.core.hermes import record_learning_signal
     from distr.core.workflow.standards_memory import build_standards_context
@@ -87,3 +188,26 @@ def test_build_standards_context_appends_board_rules(tmp_path):
     assert "Follow ticket instructions carefully." in context
     assert "[UNIVERSAL WORKFLOW QUALITY STANDARDS]" in context
     assert "browser validation" in context
+
+
+def test_build_standards_context_appends_visual_taste_memory(tmp_path):
+    from distr.core.hermes import record_ui_feedback_label
+    from distr.core.workflow.standards_memory import build_standards_context
+
+    factory = _factory(tmp_path)
+
+    def get_session():
+        return _session_ctx(factory)
+
+    from unittest.mock import patch
+
+    with patch("distr.core.hermes.get_session", get_session), patch("distr.core.db.get_session", get_session):
+        record_ui_feedback_label(
+            label="approved",
+            reason="Dense operational layouts with clear hierarchy.",
+            board_id=3,
+        )
+        context = build_standards_context("Follow ticket instructions carefully.", board_id=3)
+
+    assert "[VISUAL TASTE MEMORY]" in context
+    assert "Dense operational layouts" in context

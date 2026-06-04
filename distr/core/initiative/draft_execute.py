@@ -103,7 +103,7 @@ def run_execute_payload(payload: dict[str, Any]) -> None:
             source="hermes",
             event_type="daily_triage_candidate_approved",
             status="approved",
-            summary=str(candidate.get("question") or candidate.get("title") or "Hermes triage candidate approved"),
+            summary=str(candidate.get("question") or candidate.get("title") or "Work-scan item approved"),
             payload={"candidate": candidate, "execution_result": execution_result},
         )
         return
@@ -135,7 +135,7 @@ def _execute_hermes_triage_candidate(candidate: dict[str, Any]) -> dict[str, Any
 
     return {
         "status": "acknowledged",
-        "reason": f"{action_type or 'decision'} approval recorded for Hermes/orchestrator follow-up",
+        "reason": f"{action_type or 'decision'} approval recorded for follow-up",
     }
 
 
@@ -183,7 +183,7 @@ def _create_whatsapp_snapshot_ticket(
         if not title or len(title) > 120:
             title = f"WhatsApp follow-up: {contact}"
         lines = [
-            str(candidate.get("question") or candidate.get("title") or "Approved Hermes WhatsApp triage."),
+            str(candidate.get("question") or candidate.get("title") or "Approved WhatsApp follow-up."),
             "",
             "Source messages:",
         ]

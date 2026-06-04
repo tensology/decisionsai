@@ -55,3 +55,12 @@ def test_clean_text_for_tts_replaces_urls_before_slash_spacing():
     out = clean_text_for_tts("Open https://example.com/docs/api now.", spoken_prose=True)
 
     assert out == "Open a web link now."
+
+
+def test_path_redaction_does_not_claim_a_file_was_saved():
+    raw = "Active project: Tensology (/Users/paul/development/TENSOLOGY/www.tensology.com)."
+
+    out = clean_text_for_tts(raw, spoken_prose=True)
+
+    assert "saved a file" not in out.lower()
+    assert "a local path" in out

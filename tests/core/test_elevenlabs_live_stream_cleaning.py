@@ -51,7 +51,8 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     service.run_tts = run_tts
 
     start = LLMFullResponseStartFrame()
-    text = TextFrame("The answer is <tool_call>{bad}</tool_call> ahhhhh stable.")
+    text = TextFrame()
+    text.text = "The answer is <tool_call>{bad}</tool_call> ahhhhh stable."
 
     asyncio.run(service.process_frame(start, None))
     asyncio.run(service.process_frame(text, None))
@@ -59,3 +60,43 @@ def test_elevenlabs_live_textframes_are_cleaned_before_sentence_synthesis():
     assert synthesized == ["The answer is stable."]
     assert any(isinstance(frame, TTSStartedFrame) for frame in pushed)
     assert any(isinstance(frame, TTSStoppedFrame) for frame in pushed)
+
+
+def test_elevenlabs_provider_speed_stays_unity_when_transport_handles_playback_speed(monkeypatch):
+    service = object.__new__(ElevenLabsTTSService)
+    service.playback_speed = 1.2
+    service.voice_id = "voice-id"
+    service._stability = 0.5
+    service._similarity_boost = 0.6
+    service._style = 0.25
+    service._use_speaker_boost = True
+
+    captured_voice_settings = {}
+
+    class FakeTextToSpeech:
+        def convert(self, **kwargs):
+            captured_voice_settings.update(kwargs["voice_settings"])
+            return [b"fake mp3"]
+
+    class FakeClient:
+        text_to_speech = FakeTextToSpeech()
+
+    class FakeAudioSegment:
+        channels = 1
+        frame_rate = 44100
+
+        def get_array_of_samples(self):
+            return [0, 1000, -1000, 0]
+
+    service.client = FakeClient()
+    monkeypatch.setattr(
+        "distr.core.agent.services.tts.elevenlabs.AudioSegment",
+        type("FakeAudioSegmentModule", (), {"from_mp3": staticmethod(lambda _: FakeAudioSegment())}),
+    )
+    monkeypatch.setattr("distr.core.agent.services.tts.elevenlabs.PYDUB_AVAILABLE", True)
+
+    audio, sample_rate = service._generate_audio("Testing speed.")
+
+    assert sample_rate == 44100
+    assert len(audio) == 4
+    assert captured_voice_settings["speed"] == 1.0

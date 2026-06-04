@@ -469,7 +469,11 @@ class OpenAIWhisperSTTService(BaseSTTService):
                 self._pending_interruption = True
         
         # Process pending PTT buffer
-        if self._pending_ptt_process and self._ptt_buffer_accumulator:
+        if (
+            self._pending_ptt_process
+            and self._ptt_buffer_accumulator
+            and not getattr(self, "_ptt_flush_scheduled", False)
+        ):
             self._pending_ptt_process = False
             await self._process_ptt_buffer_immediate(direction)
         

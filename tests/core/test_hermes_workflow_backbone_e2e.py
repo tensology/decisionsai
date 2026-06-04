@@ -267,6 +267,10 @@ def test_ticket_workflow_uses_hermes_as_backbone(tmp_path):
                 )
 
             event_types = [event.event_type for event in events]
+            legacy_event_types = [
+                (json.loads(event.payload or "{}").get("orchestration") or {}).get("legacy_event_type")
+                for event in events
+            ]
 
             assert run.status == "completed"
             assert run.ticket_id == ids["ticket_id"]
@@ -294,16 +298,24 @@ def test_ticket_workflow_uses_hermes_as_backbone(tmp_path):
             assert validations[0].verdict == "pass"
             assert validations[0].validation_type == "text_match"
 
-            assert "workflow_run_started" in event_types
+            assert "run_started" in event_types
             assert "route_decided" in event_types
-            assert "execution_session_created" in event_types
-            assert "execution_executor_start" in event_types
-            assert "execution_executor_message" in event_types
-            assert "execution_session_completed" in event_types
+            assert event_types.count("worker_dispatched") >= 2
+            assert "worker_progress" in event_types
+            assert "worker_completed" in event_types
+            assert "workflow_run_started" in legacy_event_types
+            assert "execution_session_created" in legacy_event_types
+            assert "execution_executor_start" in legacy_event_types
+            assert "execution_executor_message" in legacy_event_types
+            assert "execution_session_completed" in legacy_event_types
             assert "validation_recorded" in event_types
             assert "workflow_step_completed" in event_types
-            assert "workflow_run_completed" in event_types
-            assert all(event.ticket_id == ids["ticket_id"] for event in events if event.event_type != "workflow_run_completed")
+            assert "workflow_run_completed" in legacy_event_types
+            assert all(
+                event.ticket_id == ids["ticket_id"]
+                for event in events
+                if not (event.event_type == "worker_completed" and event.source == "workflow")
+            )
 
             with _runs_lock:
                 ctx = _active_runs.pop(run_id, None)

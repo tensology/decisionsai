@@ -121,8 +121,9 @@ def test_morning_brief_prompt_demands_specific_next_action():
     assert "Standup Triage" in md
     assert date_info.get("period") == "morning"
     messages = fake_litellm.completion.call_args.kwargs["messages"]
-    assert "daily standup triage orchestrator" in messages[0]["content"].lower()
-    assert "Decisions I Need From You" in messages[0]["content"]
+    assert "daily check-in orchestrator" in messages[0]["content"].lower()
+    assert "Needs Your Call" in messages[0]["content"]
+    assert "Hermes" not in messages[0]["content"]
     assert "work_scan" in messages[1]["content"]
 
 
@@ -158,7 +159,7 @@ def test_generate_planner_markdown_falls_back_when_llms_fail():
             "morning", settings, bundle, "Produce a concise morning brief."
         )
     assert date_info.get("period") == "morning"
-    assert "## Standup Triage" in md
+    assert "## Morning Check-in" in md
     assert "Telegram" in md
     assert "ClickUp" in md
     assert "Promote the ready ticket" in md

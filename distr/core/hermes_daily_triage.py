@@ -106,9 +106,9 @@ def enqueue_triage_candidates(
             DraftEntry(
                 id=f"hermes-{cid[:18]}",
                 action_type="hermes_triage_candidate",
-                description=str(candidate.get("question") or candidate.get("title") or "Hermes triage decision"),
+                description=str(candidate.get("question") or candidate.get("title") or "Decision needs review"),
                 draft=_candidate_draft(candidate),
-                reason="Hermes daily triage found a decision candidate across your work sources.",
+                reason="A work scan found something that needs your review.",
                 created_at=now.isoformat(),
                 expires_at=expires.isoformat(),
                 permission_tier=PermissionTier.APPROVE,
@@ -121,14 +121,14 @@ def enqueue_triage_candidates(
 
 
 def format_triage_markdown(triage: dict[str, Any], *, max_candidates: int = 8) -> str:
-    """Render a concise standup-style markdown summary."""
+    """Render a concise user-facing summary for chat/Telegram."""
     candidates = _list(triage.get("candidates"))[:max_candidates]
     buckets = triage.get("buckets") if isinstance(triage.get("buckets"), dict) else {}
     source_health = _list(triage.get("source_health"))
     connected = [s.get("label") for s in source_health if s.get("connected")]
     missing = [s.get("label") for s in source_health if not s.get("connected")]
     lines = [
-        "## Standup Triage",
+        "## Quick Check-in",
         f"- {triage.get('summary') or 'No decisions found yet.'}",
     ]
     if connected:
@@ -143,14 +143,14 @@ def format_triage_markdown(triage: dict[str, Any], *, max_candidates: int = 8) -
                 items = _list(buckets.get(key))
                 if items:
                     lines.append(f"- {label}: {len(items)}")
-        lines.extend(["", "## Decisions I Need From You"])
+        lines.extend(["", "## Needs Your Call"])
         for idx, candidate in enumerate(candidates, start=1):
             lines.append(f"{idx}. {candidate.get('question') or candidate.get('title')}")
             evidence = candidate.get("evidence") or []
             if evidence:
                 lines.append(f"   Evidence: {str(evidence[0])[:220]}")
     else:
-        lines.extend(["", "## Decisions I Need From You", "- Nothing actionable found yet."])
+        lines.extend(["", "## Needs Your Call", "- Nothing actionable found yet."])
 
     return "\n".join(lines)
 
@@ -172,7 +172,7 @@ def _candidate_from_proposal(proposal: dict[str, Any]) -> dict[str, Any] | None:
             question = f"{description} Should I create or update a ticket from this?"
     elif action_type == "ticket_lane_move":
         suggested = "update_ticket"
-        question = f"{description} Should I promote these ticket(s)?"
+        question = f"{description} Want me to move these forward?"
     elif action_type in {"workflow_start", "project_cli_task"}:
         suggested = "execute_work"
         question = f"{description} Should I run the linked workflow/agent?"
@@ -368,14 +368,14 @@ def _priority(candidate: dict[str, Any]) -> int:
 
 def _summary(candidates: list[dict[str, Any]], source_health: list[dict[str, Any]]) -> str:
     if not candidates:
-        return "Hermes did not find any cross-source decisions yet."
+        return "I did not find anything that needs a decision yet."
     counts: dict[str, int] = {}
     for candidate in candidates:
         key = str(candidate.get("action_type") or "decision")
         counts[key] = counts.get(key, 0) + 1
     parts = [f"{count} {key.replace('_', ' ')}" for key, count in sorted(counts.items())]
     connected = sum(1 for s in source_health if s.get("connected"))
-    return f"Hermes found {len(candidates)} decision candidate(s) across {connected} connected source(s): {', '.join(parts)}."
+    return f"I found {len(candidates)} thing(s) that may need your call across {connected} connected source(s): {', '.join(parts)}."
 
 
 def _candidate_draft(candidate: dict[str, Any]) -> str:

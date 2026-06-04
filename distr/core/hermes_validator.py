@@ -82,9 +82,9 @@ def run_hermes_validator_judgment(
                 {
                     "role": "system",
                     "content": (
-                        "You are Hermes, the workflow validation judge. "
+                        "You are the workflow validation judge. "
                         "Be strict about acceptance criteria and evidence. "
-                        "Do not pass vague or incomplete work."
+                        "Do not pass vague or incomplete work. Do not mention internal system names."
                     ),
                 },
                 {"role": "user", "content": json.dumps(prompt, ensure_ascii=False)},
@@ -154,7 +154,7 @@ def apply_hermes_validator_overlay(
             event_type="validation_second_pass",
             status="pass" if verdict.get("passed") else "fail",
             step_id=getattr(step, "id", None),
-            summary=(verdict.get("rationale") or "Hermes validator second pass")[:240],
+            summary=(verdict.get("rationale") or "Validator second pass")[:240],
             payload=verdict,
         )
     except Exception:

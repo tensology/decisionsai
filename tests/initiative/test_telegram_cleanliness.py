@@ -189,5 +189,6 @@ def test_hermes_triage_reply_can_show_numbered_decisions(monkeypatch, tmp_path):
 
     assert handled is True
     sent = handler.send_to_telegram.call_args.args[0]
-    assert "Hermes standup decisions waiting" in sent
+    assert "Pending items:" in sent
+    assert "Hermes" not in sent
     assert "1. Create a ticket from Telegram?" in sent

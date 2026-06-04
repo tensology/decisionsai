@@ -11,8 +11,11 @@ import logging
 import time
 import re
 
-import pyautogui
-pyautogui.FAILSAFE = False
+try:
+    import pyautogui
+    pyautogui.FAILSAFE = False
+except Exception:
+    pyautogui = None
 
 from fuzzywuzzy import fuzz
 
@@ -42,6 +45,7 @@ APP_ALIASES = {
     "terminal": "Terminal", "iterm": "iTerm", "item": "iTerm", "i term": "iTerm",
     "finder": "Finder", "notes": "Notes", "reminders": "Reminders", "calendar": "Calendar",
     "music": "Music", "spotify": "Spotify", "slack": "Slack", "discord": "Discord",
+    "calculator": "Calculator", "textedit": "TextEdit", "text edit": "TextEdit",
     "zoom": "zoom.us", "teams": "Microsoft Teams", "outlook": "Microsoft Outlook",
     "mail": "Mail", "email": "Mail", "my email": "Mail", "messages": "Messages",
     "imessage": "Messages", "facetime": "FaceTime", "photos": "Photos", "preview": "Preview",
@@ -146,10 +150,49 @@ def open_url(url: str):
 
 def open_file_menu():
     """Open the application's File menu."""
+    if pyautogui is None:
+        raise RuntimeError("pyautogui is required for keyboard menu shortcuts.")
     if platform.system() == 'Darwin':
         pyautogui.hotkey('command', 'shift', 'f')
     else:
         pyautogui.hotkey('alt', 'f')
+
+
+def get_frontmost_app_name() -> str | None:
+    """Return the current foreground app name when the platform supports it."""
+    system = platform.system()
+    if system == 'Darwin' and APPKIT_AVAILABLE:
+        app = NSWorkspace.sharedWorkspace().frontmostApplication()
+        return app.localizedName() if app else None
+    if system == 'Windows':
+        try:
+            import win32gui
+            hwnd = win32gui.GetForegroundWindow()
+            return win32gui.GetWindowText(hwnd) or None
+        except Exception:
+            return None
+    try:
+        result = subprocess.run(
+            ["xdotool", "getactivewindow", "getwindowname"],
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        return result.stdout.strip() or None if result.returncode == 0 else None
+    except Exception:
+        return None
+
+
+def is_app_frontmost(app_name: str) -> bool | None:
+    """Best-effort foreground app check used by scheduled-action safety gates."""
+    expected = (app_name or "").strip().lower()
+    if not expected:
+        return None
+    actual = (get_frontmost_app_name() or "").strip().lower()
+    if not actual:
+        return None
+    resolved = (_resolve_app_name(expected) or expected).strip().lower()
+    return expected in actual or resolved in actual or actual in resolved
 
 
 # ---------------------------------------------------------------------------
@@ -157,6 +200,8 @@ def open_file_menu():
 # ---------------------------------------------------------------------------
 
 def _open_spotlight():
+    if pyautogui is None:
+        raise RuntimeError("pyautogui is required to open Spotlight.")
     system = platform.system()
     if system == 'Darwin':
         pyautogui.hotkey('command', 'space')
@@ -228,7 +273,7 @@ def _fuzzy_match_installed(speech: str, threshold=70):
     apps = []
 
     if system == 'Darwin':
-        for d in ["/Applications", os.path.expanduser("~/Applications")]:
+        for d in ["/Applications", "/System/Applications", "/System/Applications/Utilities", os.path.expanduser("~/Applications")]:
             if not os.path.isdir(d):
                 continue
             for f in os.listdir(d):
@@ -267,6 +312,8 @@ def _fuzzy_match_installed(speech: str, threshold=70):
 
 def _center_mouse_on_app(app_name: str):
     """Move mouse to center of the named app's frontmost window."""
+    if pyautogui is None:
+        return
     if platform.system() != 'Darwin' or not APPKIT_AVAILABLE:
         screen = pyautogui.size()
         pyautogui.moveTo(screen.width // 2, screen.height // 2)
@@ -302,31 +349,33 @@ def _platform_open(app_name: str):
     """Open or focus *app_name* using platform-native methods."""
     system = platform.system()
 
-    if system == 'Darwin' and APPKIT_AVAILABLE:
+    if system == 'Darwin':
         app_name = (app_name or "").strip()
         if not app_name:
             logger.warning("_platform_open: empty app_name on macOS")
             return
-        ws = NSWorkspace.sharedWorkspace()
-        target_name = app_name.lower()
-        target = next(
-            (
-                a
-                for a in ws.runningApplications()
-                if (a.localizedName() or "").lower() == target_name
-            ),
-            None,
-        )
-        if target:
-            target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
-            _center_mouse_on_app(app_name)
-            return
-        # Not running — try to launch
-        for method in [
-            lambda: ws.launchApplication_(app_name),
+        methods = []
+        if APPKIT_AVAILABLE:
+            ws = NSWorkspace.sharedWorkspace()
+            target_name = app_name.lower()
+            target = next(
+                (
+                    a
+                    for a in ws.runningApplications()
+                    if (a.localizedName() or "").lower() == target_name
+                ),
+                None,
+            )
+            if target:
+                target.activateWithOptions_(NSApplicationActivateIgnoringOtherApps)
+                _center_mouse_on_app(app_name)
+                return
+            methods.append(lambda: ws.launchApplication_(app_name))
+        methods.extend([
             lambda: subprocess.run(["open", "-a", app_name], check=True),
             lambda: subprocess.run(["open", "-a", f"{app_name}.app"], check=True),
-        ]:
+        ])
+        for method in methods:
             try:
                 method()
                 time.sleep(1)

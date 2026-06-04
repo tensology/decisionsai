@@ -121,6 +121,105 @@ def test_append_workflow_step_to_packet_merges_artifacts_without_duplicates():
     assert packet["artifacts"]["logs"] == ["/tmp/decisions/logs/workflow_9.log"]
 
 
+def test_append_workflow_step_to_packet_populates_ui_quality_artifacts():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Main",
+        project_id="4",
+        project_name="DecisionsAI",
+        execution_lane="codex",
+    )
+    step_result = (
+        "Before screenshot: /tmp/decisions/workflow_screenshots/settings-before.png\n"
+        "After screenshot: /tmp/decisions/workflow_screenshots/settings-after.png\n"
+        "Flow summary: Open settings, change theme, save.\n"
+        "Layout/hierarchy notes: Kept the primary save control visually dominant and grouped theme options under one compact settings section.\n"
+        "Steps taken:\n"
+        "  1. [click] open settings -> Clicked at (0.10, 0.20): True\n"
+        "  2. [click] save theme -> Clicked at (0.80, 0.90): True\n"
+    )
+
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Validate UI",
+        step_status="passed",
+        step_result=step_result,
+        run_status="running",
+    )
+
+    ui_quality = packet["artifacts"]["ui_quality"]
+    assert ui_quality["before_screenshot"] == "/tmp/decisions/workflow_screenshots/settings-before.png"
+    assert ui_quality["after_screenshot"] == "/tmp/decisions/workflow_screenshots/settings-after.png"
+    assert ui_quality["flow_summary"] == "Open settings, change theme, save."
+    assert ui_quality["layout_hierarchy_notes"] == (
+        "Kept the primary save control visually dominant and grouped theme options under one compact settings section."
+    )
+    assert ui_quality["click_count"] == 2
+    assert ui_quality["happy_path_steps"] == [
+        "open settings",
+        "save theme",
+    ]
+
+
+def test_append_workflow_step_to_packet_parses_visual_baseline_selection():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Main",
+        project_id="4",
+        project_name="DecisionsAI",
+        execution_lane="codex",
+    )
+
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Validate UI",
+        step_status="passed",
+        step_result=(
+            "After screenshot: /tmp/decisions/workflow_screenshots/dashboard-after.png\n"
+            "Visual baseline: Gold Admin\n"
+            "Baseline screen: Dashboard\n"
+            "Visual diff threshold: 0.10\n"
+            "Flow summary: Open dashboard and verify cards.\n"
+        ),
+        run_status="running",
+    )
+
+    ui_quality = packet["artifacts"]["ui_quality"]
+    assert ui_quality["visual_baseline_name"] == "Gold Admin"
+    assert ui_quality["baseline_screen_name"] == "Dashboard"
+    assert ui_quality["visual_diff_threshold"] == 0.10
+
+
+def test_append_workflow_step_to_packet_uses_single_screenshot_as_after_evidence():
+    packet = create_initial_result_packet_for_run(
+        ticket_id="9",
+        board_id="2",
+        board_name="Main",
+        project_id="4",
+        project_name="DecisionsAI",
+        execution_lane="codex",
+    )
+
+    packet = append_workflow_step_to_packet(
+        packet,
+        step_name="Validate UI",
+        step_status="passed",
+        step_result=(
+            "Captured screenshot at /tmp/decisions/workflow_screenshots/settings-after.png\n"
+            "Flow summary: Open settings and save.\n"
+            "1. [click] save -> Clicked at (0.80, 0.90): True\n"
+        ),
+        run_status="running",
+    )
+
+    ui_quality = packet["artifacts"]["ui_quality"]
+    assert ui_quality["after_screenshot"] == "/tmp/decisions/workflow_screenshots/settings-after.png"
+    assert ui_quality["before_unavailable_reason"] == "No before screenshot was captured for this UI step."
+    assert ui_quality["click_count"] == 1
+
+
 def test_extract_action_trace_from_computer_use_summary():
     trace = extract_action_trace_from_step_result(
         """

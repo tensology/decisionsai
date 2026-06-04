@@ -66,6 +66,7 @@ class ActionType(Enum):
     AUDIO_TRANSCRIBE = "audio_transcribe"      # Transcribe audio files
     WEB_SEARCH = "web_search"                  # Search the web for current info
     WORKFLOW_CONTINUE = "workflow_continue"    # Continue waiting workflow run
+    DEVELOPER_CONTEXT = "developer_context"    # Inspect recorded developer/Codex/Cursor context
     CONVERSATIONAL = "conversational"         # Pass to LLM for response
     UNKNOWN = "unknown"                       # Need LLM to determine
 
@@ -103,6 +104,14 @@ class FastActionDetector:
         
         # Action patterns - ordered by specificity (most specific first)
         self.action_patterns = [
+            # === DEVELOPER / CODEX / CURSOR CONTEXT QUESTIONS ===
+            (re.compile(r'\b(can|do|could)\s+you\b.*\b(see|know|tell|answer|access)\b.*\b(working|work|doing|inside|in)\b.*\b(codex|codecs|cursor)\b', re.IGNORECASE),
+             ActionType.DEVELOPER_CONTEXT, "developer_context", {"user_request": "__ORIGINAL_TEXT__", "format": "summary"}, False, "developer_context"),
+            (re.compile(r'\b(can|do|could)\s+you\b.*\b(see|know|tell|answer|access)\b.*\b(codex|codecs|cursor)\b.*\b(working|work|doing|inside|in|running)\b', re.IGNORECASE),
+             ActionType.DEVELOPER_CONTEXT, "developer_context", {"user_request": "__ORIGINAL_TEXT__", "format": "summary"}, False, "developer_context"),
+            (re.compile(r'\b(where\s+am\s+i|what\s+am\s+i\s+working\s+on|what\'?s?\s+running|what\'?s?\s+active)\b.*\b(codex|codecs|cursor|workload|project\s+work)\b', re.IGNORECASE),
+             ActionType.DEVELOPER_CONTEXT, "developer_context", {"user_request": "__ORIGINAL_TEXT__", "format": "summary"}, False, "developer_context"),
+
             # === CURSOR TICKET ACTIONS ===
             # Clipboard variants (more specific, must come first)
             (re.compile(r'\btell\s+cursor\s+(what\'?s?\s+in\s+the\s+clipboard|what\s+is\s+in\s+the\s+clipboard|whats\s+in\s+the\s+clipboard|from\s+the\s+clipboard|from\s+clipboard|clipboard\s+content|the\s+clipboard)', re.IGNORECASE),

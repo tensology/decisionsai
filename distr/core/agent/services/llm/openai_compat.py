@@ -1094,6 +1094,52 @@ class OpenAICompatibleLLMService(BaseLLMService):
 
         return not end_frame_sent
 
+    def _extract_chat_completion_text(self, response, *, log_context: str = "") -> str:
+        """Return assistant text from a non-streaming chat completion, or '' if missing."""
+        choices = getattr(response, "choices", None) or []
+        if not choices:
+            if log_context:
+                logger.warning(
+                    "%s via %s: empty choices (model=%s)",
+                    log_context,
+                    self.SERVICE_NAME,
+                    self._model_name,
+                )
+            return ""
+
+        choice = choices[0]
+        message = getattr(choice, "message", None)
+        if message is None:
+            if log_context:
+                logger.warning(
+                    "%s via %s: missing message (model=%s, finish_reason=%s)",
+                    log_context,
+                    self.SERVICE_NAME,
+                    self._model_name,
+                    getattr(choice, "finish_reason", None),
+                )
+            return ""
+
+        content = getattr(message, "content", None)
+        if content is not None:
+            text = str(content).strip()
+            if text:
+                return text
+
+        refusal = getattr(message, "refusal", None)
+        if refusal:
+            return str(refusal).strip()
+
+        if log_context:
+            logger.warning(
+                "%s via %s: null message content (model=%s, finish_reason=%s)",
+                log_context,
+                self.SERVICE_NAME,
+                self._model_name,
+                getattr(choice, "finish_reason", None),
+            )
+        return ""
+
     async def _generate_conversation_summary(self, conversation_messages: list) -> str:
         """Generate conversation summary using the OpenAI-compatible client."""
         if not conversation_messages:
@@ -1127,7 +1173,9 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 messages=[{"role": "user", "content": summary_prompt}],
                 max_tokens=200,
             )
-            summary = response.choices[0].message.content.strip()
+            summary = self._extract_chat_completion_text(
+                response, log_context="Conversation summary"
+            )
             bad_words = ['tools', 'functions', 'actions', 'capabilities', 'features',
                          'f1-f12', 'function keys', 'oracle/globe', 'chatbot system']
             if summary and not any(w in summary.lower() for w in bad_words):
@@ -1152,6 +1200,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
             f"Provide a brief, natural summary (max 2 sentences). Just the summary:"
         )
         try:
+            used_max_completion_tokens = True
             try:
                 response = await self.client.chat.completions.create(
                     model=self._model_name,
@@ -1160,6 +1209,7 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 )
             except Exception as e:
                 if "max_completion_tokens" in str(e) or "unsupported_parameter" in str(e):
+                    used_max_completion_tokens = False
                     response = await self.client.chat.completions.create(
                         model=self._model_name,
                         messages=[{"role": "user", "content": summary_prompt}],
@@ -1167,7 +1217,17 @@ class OpenAICompatibleLLMService(BaseLLMService):
                     )
                 else:
                     raise
-            return response.choices[0].message.content.strip()
+            summary = self._extract_chat_completion_text(
+                response, log_context="Welcome summary"
+            )
+            if not summary and used_max_completion_tokens:
+                response = await self.client.chat.completions.create(
+                    model=self._model_name,
+                    messages=[{"role": "user", "content": summary_prompt}],
+                    max_tokens=200,
+                )
+                summary = self._extract_chat_completion_text(response)
+            return summary
         except Exception as e:
             logger.error("Error generating welcome summary via %s: %s", self.SERVICE_NAME, e, exc_info=True)
             return ""

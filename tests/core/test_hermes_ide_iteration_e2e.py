@@ -248,7 +248,7 @@ def test_ide_workflow_handoff_learns_from_iteration(tmp_path):
                 )
                 event_types = [row.event_type for row in events]
                 assert "ide_work_packet_created" in event_types
-                assert "execution_session_created" in event_types
+                assert "worker_dispatched" in event_types
 
             feedback = "IDE iteration complete with tests passing."
             continue_result = continue_waiting_step(run_id, feedback)
@@ -268,8 +268,13 @@ def test_ide_workflow_handoff_learns_from_iteration(tmp_path):
                     .all()
                 )
                 event_types = [row.event_type for row in events]
-                assert "ide_iteration_completed" in event_types
+                assert "worker_completed" in event_types
                 assert "validation_recorded" in event_types
+                legacy_event_types = [
+                    (json.loads(row.payload or "{}").get("orchestration") or {}).get("legacy_event_type")
+                    for row in events
+                ]
+                assert "ide_iteration_completed" in legacy_event_types
 
                 rules = (
                     session.query(HermesLearnedRule)

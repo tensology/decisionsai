@@ -234,6 +234,194 @@ def _finalize_result_packet_for_terminal_run(
     audit.setdefault("rationale", "Workflow terminal status mapped to canonical result packet.")
     updated["audit"] = audit
     return updated
+
+
+def _record_packet_ui_quality_validation(
+    packet: Dict[str, Any],
+    *,
+    workflow_id: Optional[int],
+    run_id: int,
+    step_id: Optional[int],
+    ticket_id: Optional[int],
+    board_id: Optional[int],
+    project_id: Optional[int],
+    execution_session_id: Optional[int],
+) -> Dict[str, Any]:
+    """Record packet UI artifacts as Hermes validation and merge the snapshot."""
+    updated = dict(packet or {})
+    artifacts = dict(updated.get("artifacts") or {})
+    ui_quality = dict(artifacts.get("ui_quality") or {})
+    if not ui_quality:
+        return updated
+    execution = dict(updated.get("execution") or {})
+    snapshots = list(execution.get("validation_snapshots") or [])
+    if any(str(item.get("validation_type") or "").strip().lower() == "ui_quality" for item in snapshots if isinstance(item, dict)):
+        return updated
+    try:
+        from distr.core.hermes import (
+            build_correction_packet,
+            create_correction_attempt,
+            list_validation_records,
+            record_ui_quality_validation,
+        )
+
+        record_id = record_ui_quality_validation(
+            artifacts=ui_quality,
+            workflow_id=workflow_id,
+            run_id=run_id,
+            step_id=step_id,
+            ticket_id=ticket_id,
+            board_id=board_id,
+            project_id=project_id,
+            execution_session_id=execution_session_id,
+        )
+        if not record_id:
+            return updated
+        records = list_validation_records(run_id=run_id, limit=10)
+        record = next((item for item in records if item.get("id") == record_id), None)
+        payload = dict((record or {}).get("payload") or {})
+        snapshot = dict(payload.get("snapshot") or {})
+        if snapshot:
+            snapshot["record_id"] = record_id
+            if str(snapshot.get("verdict") or "").strip().lower() == "fail":
+                correction_packet = build_correction_packet(
+                    validation_record=record or {
+                        "id": record_id,
+                        "workflow_id": workflow_id,
+                        "run_id": run_id,
+                        "step_id": step_id,
+                        "ticket_id": ticket_id,
+                        "validation_type": snapshot.get("validation_type"),
+                        "expected": snapshot.get("expected"),
+                        "observed": snapshot.get("observed"),
+                        "verdict": snapshot.get("verdict"),
+                        "correction_hint": snapshot.get("correction_hint"),
+                        "payload": {"snapshot": snapshot},
+                    },
+                    step_name="Terminal UI quality gate",
+                )
+                attempt_id = create_correction_attempt(
+                    validation_record_id=record_id,
+                    correction_packet=correction_packet,
+                    status="queued",
+                )
+                if attempt_id:
+                    snapshot["correction_attempt_id"] = attempt_id
+                audit = dict(updated.get("audit") or {})
+                audit["final_verdict"] = "needs_changes"
+                audit["rationale"] = snapshot.get("observed") or "UI quality validation failed."
+                updated["audit"] = audit
+                updated["status"] = "partial_success"
+                next_actions = dict(updated.get("next_actions") or {})
+                recommended = list(next_actions.get("recommended") or [])
+                recommended.append("Correct the failed UI quality validation and rerun the visual baseline check.")
+                next_actions["recommended"] = recommended
+                updated["next_actions"] = next_actions
+            snapshots.append(snapshot)
+            execution["validation_snapshots"] = snapshots
+            updated["execution"] = execution
+    except Exception:
+        logger.debug("Could not record packet UI quality validation for run %s", run_id, exc_info=True)
+    return updated
+
+
+def _packet_has_failed_ui_quality_validation(packet: Dict[str, Any]) -> bool:
+    execution = dict((packet or {}).get("execution") or {})
+    for snapshot in execution.get("validation_snapshots") or []:
+        if not isinstance(snapshot, dict):
+            continue
+        if str(snapshot.get("validation_type") or "").strip().lower() != "ui_quality":
+            continue
+        if str(snapshot.get("verdict") or "").strip().lower() == "fail":
+            return True
+    return False
+
+
+def _terminal_ui_correction_snapshot(packet: Dict[str, Any]) -> Dict[str, Any]:
+    execution = dict((packet or {}).get("execution") or {})
+    snapshots = [
+        item for item in (execution.get("validation_snapshots") or [])
+        if isinstance(item, dict)
+        and str(item.get("validation_type") or "").strip().lower() == "ui_quality"
+        and str(item.get("verdict") or "").strip().lower() == "fail"
+        and item.get("correction_attempt_id")
+    ]
+    return dict(snapshots[-1]) if snapshots else {}
+
+
+def _maybe_auto_dispatch_terminal_ui_correction(
+    db,
+    *,
+    run: AutoWorkflowRun,
+    packet: Dict[str, Any],
+    run_data: Dict[str, Any],
+) -> Dict[str, Any] | None:
+    """Prepare a failed terminal UI validation for immediate correction retry."""
+    snapshot = _terminal_ui_correction_snapshot(packet)
+    if not snapshot:
+        return None
+    try:
+        from distr.core.db.hermes import HermesCorrectionAttempt
+        from distr.core.hermes import (
+            count_correction_attempts,
+            get_hermes_role_model,
+            mark_correction_dispatched,
+        )
+
+        settings = _workflow_run_settings(run.workflow)
+        if not settings.get("auto_dispatch_corrections"):
+            return None
+        step_id = int(getattr(run, "current_step_id", None) or 0)
+        if not step_id:
+            return None
+        max_attempts = int(settings.get("max_correction_attempts") or 1)
+        attempt_count = count_correction_attempts(run_id=int(run.id), step_id=step_id)
+        if attempt_count > max_attempts:
+            return None
+        attempt_id = int(snapshot.get("correction_attempt_id"))
+        attempt = (
+            db.query(HermesCorrectionAttempt)
+            .filter(HermesCorrectionAttempt.id == attempt_id)
+            .first()
+        )
+        if not attempt:
+            return None
+        try:
+            correction_packet = json.loads(attempt.correction_packet or "{}") or {}
+        except Exception:
+            correction_packet = {}
+        correction_provider, correction_model = get_hermes_role_model("correction")
+        target_backend = correction_provider or correction_packet.get("target_backend") or ""
+        target_model = correction_model or correction_packet.get("target_model") or ""
+        mark_correction_dispatched(
+            attempt_id,
+            dispatch_result={
+                "auto_dispatch": True,
+                "terminal_ui_quality_gate": True,
+                "attempt_count": attempt_count,
+                "max_attempts": max_attempts,
+                "target_backend": target_backend,
+                "target_model": target_model,
+            },
+        )
+        run_data["pending_correction"] = {
+            "step_id": step_id,
+            "correction_attempt_id": attempt_id,
+            "packet": correction_packet,
+            "target_backend": target_backend,
+            "target_model": target_model,
+        }
+        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        if step:
+            step.status = "pending"
+            step.result = (step.result or "") + "\n\n[Auto-correction dispatched]"
+        return {
+            "step_id": step_id,
+            "correction_attempt_id": attempt_id,
+        }
+    except Exception:
+        logger.debug("Could not auto-dispatch terminal UI correction", exc_info=True)
+        return None
 _isolated_step_lock = threading.Lock()
 _isolated_steps_in_progress: set[int] = set()
 
@@ -621,9 +809,9 @@ def start_workflow_run(
         phase="planning",
     )
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestration_events import emit_orchestration_event
 
-        emit_event(
+        emit_orchestration_event(
             source="workflow",
             event_type="workflow_run_started",
             status="running",
@@ -706,9 +894,9 @@ def cancel_run(run_id: int) -> bool:
         summary="Workflow run cancelled.",
     )
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestration_events import emit_orchestration_event
 
-        emit_event(
+        emit_orchestration_event(
             source="workflow",
             event_type="workflow_run_cancelled",
             status="cancelled",
@@ -773,9 +961,9 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
         summary="Workflow resumed with user input." if optional_input else "Workflow resumed.",
     )
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestration_events import emit_orchestration_event
 
-        emit_event(
+        emit_orchestration_event(
             source="workflow",
             event_type="workflow_run_resumed",
             status="running",
@@ -789,12 +977,14 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
 
     if waiting_kind == "approval":
         try:
-            from distr.core.hermes import emit_approval_event
+            from distr.core.orchestration_events import emit_orchestration_event
 
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-            emit_approval_event(
-                event_type="approval_granted",
+            emit_orchestration_event(
+                source="approval",
+                event_type="route_approval_granted",
+                status="granted",
                 run_id=run_id,
                 step_id=step_id,
                 workflow_id=getattr(run, "workflow_id", None) if run else None,
@@ -807,12 +997,13 @@ def continue_waiting_step(run_id: int, optional_input: str = "") -> Dict[str, An
             logger.debug("Could not emit approval_granted event", exc_info=True)
     elif waiting_kind == "ide_handoff" and optional_input:
         try:
-            from distr.core.hermes import emit_event, record_learning_signal
+            from distr.core.hermes import record_learning_signal
+            from distr.core.orchestration_events import emit_orchestration_event
 
             with get_session() as db:
                 run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
             board_id = getattr(run, "board_id", None) if run else None
-            emit_event(
+            emit_orchestration_event(
                 source="ide",
                 event_type="ide_iteration_completed",
                 status="completed",
@@ -881,6 +1072,12 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_data = {}
         packet = dict(run_data.get("result_packet") or {})
         risk_profile = dict(run_data.get("risk_profile") or {})
+        workflow_id = run.workflow_id
+        board_id = run.board_id
+        ticket_id = run.ticket_id
+        project_id = run_data.get("project_id")
+        execution_session_id = run_data.get("execution_session_id")
+        auto_retry: Dict[str, Any] | None = None
         if packet:
             packet = _finalize_result_packet_for_terminal_run(
                 packet,
@@ -888,6 +1085,26 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
                 status=status,
                 risk_profile=risk_profile,
             )
+            packet = _record_packet_ui_quality_validation(
+                packet,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                step_id=getattr(run, "current_step_id", None),
+                ticket_id=ticket_id,
+                board_id=board_id,
+                project_id=int(project_id) if str(project_id or "").isdigit() else None,
+                execution_session_id=int(execution_session_id) if str(execution_session_id or "").isdigit() else None,
+            )
+            if status == "completed" and _packet_has_failed_ui_quality_validation(packet):
+                status = "failed"
+                auto_retry = _maybe_auto_dispatch_terminal_ui_correction(
+                    db,
+                    run=run,
+                    packet=packet,
+                    run_data=run_data,
+                )
+                if auto_retry:
+                    status = "running"
             enforced_status, updated_packet, missing_checks = enforce_validation_requirements(
                 packet=packet,
                 run_status=status,
@@ -903,12 +1120,22 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
             run_data["result_packet"] = updated_packet
             run.run_data = json.dumps(run_data)
         run.status = status
-        run.completed_at = datetime.utcnow()
-        workflow_id = run.workflow_id
-        board_id = run.board_id
-        ticket_id = run.ticket_id
+        run.completed_at = None if auto_retry else datetime.utcnow()
         db.commit()
     increment_workflow_updated()
+    if auto_retry:
+        try:
+            os.environ["DECISIONS_WORKFLOW_STEP_ID"] = str(auto_retry["step_id"])
+            _update_workflow_thread_step(int(auto_retry["step_id"]))
+            dispatcher = StepDispatcher()
+            dispatcher.run_in_workflow(int(auto_retry["step_id"]), int(run_id))
+        except Exception:
+            logger.error("Auto-dispatched terminal correction failed for run %s", run_id, exc_info=True)
+            try:
+                complete_run(run_id, "failed")
+            except Exception:
+                pass
+        return True
     try:
         if workflow_id and isinstance(run_data, dict):
             from distr.core.db.projects import Project
@@ -944,9 +1171,9 @@ def complete_run(run_id: int, status: str = "completed") -> bool:
         summary=f"Workflow run finished with status: {status}.",
     )
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestration_events import emit_orchestration_event
 
-        emit_event(
+        emit_orchestration_event(
             source="workflow",
             event_type="workflow_run_completed",
             status=status,

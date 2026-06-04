@@ -50,6 +50,12 @@ def test_prompt_text_includes_project_board_tickets_workflows_and_skills():
                 current_step_id=31,
                 current_step_name="Run tests",
                 ticket_id=11,
+                live_agent_context={
+                    "last_event_type": "user_steer",
+                    "last_status": "observed",
+                    "latest_user_steer": "Use browser validation before marking this done.",
+                    "execution_session_id": 55,
+                },
             )
         ],
         recommended_skills=[
@@ -66,6 +72,8 @@ def test_prompt_text_includes_project_board_tickets_workflows_and_skills():
     assert "active_board: #3 Main Board" in text
     assert "#11 Fix workflow routing" in text
     assert "Ticket implementation" in text
+    assert "live_agent_context" in text
+    assert "browser validation" in text
     assert "webapp-testing" in text
 
 
@@ -141,7 +149,28 @@ def test_format_developer_context_dict_for_prompt_uses_stored_context():
             {"id": 8, "title": "Run ticket workflow", "lane": "Current", "priority": "high"}
         ],
         "active_workflows": [
-            {"id": 14, "name": "Implementation", "status": "running", "ticket_id": 8}
+            {
+                "id": 14,
+                "name": "Implementation",
+                "status": "running",
+                "ticket_id": 8,
+                "live_agent_context": {
+                    "last_event_type": "ide_iteration_completed",
+                    "last_status": "completed",
+                    "latest_terminal_summary": "Cursor updated the panel and ran tests.",
+                },
+            }
+        ],
+        "active_executions": [
+            {
+                "id": 21,
+                "status": "running",
+                "backend": "cursor_ide",
+                "project_id": 2,
+                "project_name": "DecisionsAI",
+                "origin": "telegram",
+                "instruction_preview": "Update the settings panel from Telegram.",
+            }
         ],
     }
 
@@ -151,3 +180,7 @@ def test_format_developer_context_dict_for_prompt_uses_stored_context():
     assert "active_board: #4 Workflow Board" in text
     assert "workflow=9" in text
     assert "#8 Run ticket workflow" in text
+    assert "ide_iteration_completed" in text
+    assert "Cursor updated the panel" in text
+    assert "active_project_executions" in text
+    assert "Update the settings panel from Telegram" in text

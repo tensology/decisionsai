@@ -15,6 +15,27 @@ def test_forces_file_convert_automation_and_exit_tools():
     assert "exit_app" in forced_tool_names_for_text("exit the app")
 
 
+def test_forces_codex_thread_context_for_codex_conversation_requests():
+    assert "codex_thread_context" in forced_tool_names_for_text(
+        "If I ask you to work with one of my conversations inside of codecs, can you do that?"
+    )
+    assert "codex_thread_context" in forced_tool_names_for_text(
+        "Bring in the Codex thread and turn it into a ticket"
+    )
+    assert "codex_thread_context" in forced_tool_names_for_text(
+        "What am I doing inside Codex right now?"
+    )
+
+
+def test_forces_proactive_orchestrator_for_workload_and_source_triage():
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "Check Gmail, Slack, WhatsApp, Trello and Jira and tell me what is important."
+    )
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "Where am I with the workload in Cursor and Codex?"
+    )
+
+
 def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):
     monkeypatch.setenv("DEBUG", "False")
 

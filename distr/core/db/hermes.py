@@ -83,6 +83,37 @@ class HermesValidationRecord(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class HermesVisualBaselineSet(Base):
+    """Named reference set of gold-standard UI screens for visual validation."""
+
+    __tablename__ = "hermes_visual_baseline_sets"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String, nullable=False)
+    scope = Column(String, nullable=False, default="global")  # global | board | project
+    scope_id = Column(Integer, nullable=True)
+    description = Column(Text, nullable=True)
+    version = Column(String, nullable=False, default="v1")
+    enabled = Column(Integer, nullable=False, default=1)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HermesVisualBaselineScreen(Base):
+    """One reference screen inside a Hermes visual baseline set."""
+
+    __tablename__ = "hermes_visual_baseline_screens"
+
+    id = Column(Integer, primary_key=True)
+    baseline_set_id = Column(Integer, ForeignKey("hermes_visual_baseline_sets.id"), nullable=False)
+    screen_name = Column(String, nullable=False)
+    screenshot_path = Column(Text, nullable=False)
+    flow_name = Column(String, nullable=True)
+    notes = Column(Text, nullable=True)
+    metadata_json = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
 class HermesCorrectionAttempt(Base):
     """A bounded correction packet created after failed validation."""
 
@@ -119,6 +150,9 @@ Index("ix_project_runtime_sessions_terminal_id", ProjectRuntimeSession.terminal_
 Index("ix_hermes_validation_records_workflow_run", HermesValidationRecord.workflow_id, HermesValidationRecord.run_id)
 Index("ix_hermes_validation_records_ticket_id", HermesValidationRecord.ticket_id)
 Index("ix_hermes_validation_records_verdict", HermesValidationRecord.verdict)
+Index("ix_hermes_visual_baseline_sets_scope", HermesVisualBaselineSet.scope, HermesVisualBaselineSet.scope_id)
+Index("ix_hermes_visual_baseline_sets_name", HermesVisualBaselineSet.name)
+Index("ix_hermes_visual_baseline_screens_set", HermesVisualBaselineScreen.baseline_set_id)
 Index("ix_hermes_correction_attempts_validation", HermesCorrectionAttempt.validation_record_id)
 Index("ix_hermes_correction_attempts_workflow_run", HermesCorrectionAttempt.workflow_id, HermesCorrectionAttempt.run_id)
 Index("ix_hermes_correction_attempts_status", HermesCorrectionAttempt.status)

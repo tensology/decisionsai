@@ -84,9 +84,9 @@ async def dispatch_harness(context: HarnessContext) -> HarnessHandle:
         },
     )
     try:
-        from distr.core.hermes import emit_event
+        from distr.core.orchestration_events import emit_orchestration_event
 
-        emit_event(
+        emit_orchestration_event(
             source=context.backend_id,
             event_type="execution_dispatched",
             status=status.value,

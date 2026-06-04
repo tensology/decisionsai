@@ -93,6 +93,7 @@ class FastActionMixin:
                 "tts":             self._fa_handle_tts,
                 "tts_clipboard":   self._fa_handle_tts_clipboard,
                 "llm_response":    self._fa_handle_llm_response,
+                "developer_context": self._fa_handle_developer_context,
             }.get(fast_action.response_type)
 
             if handler:
@@ -222,6 +223,19 @@ class FastActionMixin:
         else:
             await self._fa_push_tts(response_text)
         self._fa_save_to_history(chat_id, response_text)
+        return True
+
+    async def _fa_handle_developer_context(self, fast_action, chat_id, result, tool) -> bool:
+        try:
+            from distr.core.external_agent_context import build_agent_visibility_answer
+
+            response_text = build_agent_visibility_answer(fast_action.original_text)
+        except Exception:
+            response_text = str(result or "").strip() or "I could not read the developer context right now."
+        if not self._cancelled:
+            await self._fa_push_tts(response_text)
+        self._fa_save_to_history(chat_id, response_text, emit_signals=True)
+        self._messages.append({"role": "assistant", "content": response_text})
         return True
 
     async def _fa_handle_tts(self, fast_action, chat_id, result, tool) -> bool:

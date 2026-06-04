@@ -73,6 +73,49 @@ def required_validation_checks(risk_level: str) -> List[str]:
     return ["lint", "typecheck", "build", "tests"]
 
 
+def _requires_ui_quality_gate(risk_profile: Dict[str, Any]) -> bool:
+    signals = [str(item).strip().lower() for item in (risk_profile or {}).get("signals", [])]
+    risk_type = str((risk_profile or {}).get("risk_type") or "").strip().lower()
+    return risk_type == "product_conversion" or any(signal in PRODUCT_RISK_TERMS for signal in signals)
+
+
+def _ui_artifacts_from_packet(packet: Dict[str, Any]) -> Dict[str, Any]:
+    artifacts = dict((packet or {}).get("artifacts") or {})
+    ui_quality = dict(artifacts.get("ui_quality") or {})
+    execution = dict((packet or {}).get("execution") or {})
+    validation_snapshots = list(execution.get("validation_snapshots") or [])
+    ui_snapshots = [
+        item for item in validation_snapshots
+        if str(item.get("validation_type") or "").strip().lower() == "ui_quality"
+    ]
+    passing_ui_snapshot = next(
+        (item for item in ui_snapshots if str(item.get("verdict") or "").strip().lower() == "pass"),
+        {},
+    )
+    standards_context = str(passing_ui_snapshot.get("standards_context") or "").strip()
+    screenshots = list(artifacts.get("screenshots") or [])
+    action_trace = list(execution.get("action_trace") or [])
+    observed = str(passing_ui_snapshot.get("observed") or "").strip()
+    return {
+        "before_screenshot": ui_quality.get("before_screenshot", ""),
+        "before_unavailable_reason": ui_quality.get(
+            "before_unavailable_reason",
+            "Terminal run did not provide a before screenshot slot.",
+        ),
+        "after_screenshot": ui_quality.get("after_screenshot") or (screenshots[0] if screenshots else ""),
+        "flow_summary": ui_quality.get("flow_summary") or observed,
+        "happy_path_steps": ui_quality.get("happy_path_steps") or action_trace,
+        "click_count": ui_quality.get("click_count") or (len(action_trace) if action_trace else None),
+        "layout_hierarchy_notes": (
+            ui_quality.get("layout_hierarchy_notes")
+            or ui_quality.get("layout_notes")
+            or ui_quality.get("hierarchy_notes")
+        ),
+        "has_passing_ui_quality_validation": bool(passing_ui_snapshot),
+        "has_visual_taste_context": "[VISUAL TASTE MEMORY]" in standards_context,
+    }
+
+
 def enforce_validation_requirements(
     *,
     packet: Dict[str, Any],
@@ -90,25 +133,40 @@ def enforce_validation_requirements(
     observed = [str(item).strip().lower() for item in (tests_and_checks.get("tests_run") or []) if str(item).strip()]
     missing = [name for name in required if name not in observed]
 
+    if _requires_ui_quality_gate(risk_profile):
+        try:
+            from distr.core.harness.ui_quality import evaluate_ui_artifacts
+
+            ui_artifacts = _ui_artifacts_from_packet(updated)
+            ui_evaluation = evaluate_ui_artifacts(ui_artifacts)
+            missing.extend(f"ui_{name}" for name in ui_evaluation.get("missing", []))
+            if not ui_artifacts.get("has_passing_ui_quality_validation"):
+                missing.append("ui_quality_validation")
+            if not ui_artifacts.get("has_visual_taste_context"):
+                missing.append("ui_visual_taste_context")
+        except Exception:
+            missing.append("ui_quality_artifacts")
+
     audit = dict(updated.get("audit") or {})
     audits_run = list(audit.get("audits_run") or [])
     if missing:
+        missing_label = ", ".join(missing)
         audits_run.append(
             {
                 "gate": "V",
                 "name": "required_validation_enforcement",
                 "model": "rule-engine",
                 "outcome": "needs_changes",
-                "rationale": f"Missing required checks for high risk: {', '.join(missing)}",
+                "rationale": f"Missing required completion evidence: {missing_label}",
             }
         )
         audit["final_verdict"] = "needs_changes"
-        audit["rationale"] = f"High-risk validation missing required checks: {', '.join(missing)}"
+        audit["rationale"] = f"Completion evidence missing: {missing_label}"
         updated["status"] = "partial_success"
         next_actions = dict(updated.get("next_actions") or {})
         recommended = list(next_actions.get("recommended") or [])
         recommended.append(
-            f"Run required validation checks before sign-off: {', '.join(missing)}."
+            f"Provide required completion evidence before sign-off: {missing_label}."
         )
         next_actions["recommended"] = recommended
         updated["next_actions"] = next_actions

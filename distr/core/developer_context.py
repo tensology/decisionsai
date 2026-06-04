@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
+import json
 import logging
 import os
 from typing import Any
@@ -78,6 +79,23 @@ class DeveloperWorkflowContext:
     parent_run_id: int | None = None
     started_at: str = ""
     modified_date: str = ""
+    live_agent_context: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class DeveloperExecutionContext:
+    id: int
+    status: str
+    backend: str = ""
+    project_id: int | None = None
+    project_name: str = ""
+    origin: str = ""
+    instruction_preview: str = ""
+    output_preview: str = ""
+    error_preview: str = ""
+    started_at: str = ""
+    updated_at: str = ""
+    completed_at: str = ""
 
 
 @dataclass(frozen=True)
@@ -101,6 +119,8 @@ class DeveloperWorkContext:
     active_board: DeveloperBoardContext | None = None
     active_tickets: list[DeveloperTicketContext] = field(default_factory=list)
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
+    active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
+    external_agent_context: dict[str, Any] = field(default_factory=dict)
     recommended_skills: list[DeveloperSkillContext] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -157,6 +177,30 @@ class DeveloperWorkContext:
                     f"  - run/workflow #{workflow.id} {workflow.name} "
                     f"({workflow.status}{step}{ticket})"
                 )
+                live = workflow.live_agent_context or {}
+                live_summary = _live_agent_context_line(live)
+                if live_summary:
+                    lines.append(f"    live_agent_context: {live_summary}")
+
+        if self.active_executions:
+            lines.append("- active_project_executions:")
+            for execution in self.active_executions[:6]:
+                detail = execution.instruction_preview or execution.output_preview or execution.error_preview
+                suffix = f": {_one_line(detail, 180)}" if detail else ""
+                lines.append(
+                    f"  - session #{execution.id} {execution.backend} "
+                    f"({execution.status}, origin={execution.origin or 'unknown'}, project={execution.project_name or execution.project_id}){suffix}"
+                )
+
+        if self.external_agent_context:
+            try:
+                from distr.core.external_agent_context import format_external_agent_context_for_prompt
+
+                external_text = format_external_agent_context_for_prompt(self.external_agent_context, max_chars=1400)
+                if external_text:
+                    lines.append(external_text)
+            except Exception:
+                logger.warning("Could not render external agent context", exc_info=True)
 
         if self.recommended_skills:
             lines.append("- recommended_skills:")
@@ -199,6 +243,8 @@ class DeveloperContextAssembler:
         active_board = _safe_call("active board", warnings, self._fetch_active_board, active_project)
         active_tickets = _safe_call("active tickets", warnings, self._fetch_active_tickets, active_board, current_chat_id) or []
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
+        active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
+        external_agent_context = _safe_call("external agent context", warnings, self._fetch_external_agent_context) or {}
         recommended_skills = _safe_call("skill recommendations", warnings, self._recommend_skills, user_request) or []
 
         return DeveloperWorkContext(
@@ -207,6 +253,8 @@ class DeveloperContextAssembler:
             active_board=active_board,
             active_tickets=active_tickets,
             active_workflows=active_workflows,
+            active_executions=active_executions,
+            external_agent_context=external_agent_context,
             recommended_skills=recommended_skills,
             warnings=warnings,
         )
@@ -424,9 +472,59 @@ class DeveloperContextAssembler:
                     parent_run_id=run.parent_run_id,
                     started_at=run.started_at.isoformat() if run.started_at else "",
                     modified_date=workflow.modified_date.isoformat() if workflow.modified_date else "",
+                    live_agent_context=_live_context_from_run_data(run.run_data),
                 )
                 for run, workflow in rows
             ]
+
+    def _fetch_active_executions(
+        self,
+        active_project: DeveloperProjectContext | None = None,
+    ) -> list[DeveloperExecutionContext]:
+        from distr.core.db import get_session
+        from distr.core.db.kanban import ProjectExecutionSession
+        from distr.core.db.projects import Project
+
+        with get_session() as session:
+            query = (
+                session.query(ProjectExecutionSession, Project)
+                .outerjoin(Project, Project.id == ProjectExecutionSession.project_id)
+            )
+            if active_project:
+                query = query.filter(ProjectExecutionSession.project_id == int(active_project.id))
+            rows = (
+                query.order_by(ProjectExecutionSession.updated_at.desc(), ProjectExecutionSession.started_at.desc())
+                .limit(8)
+                .all()
+            )
+            contexts: list[DeveloperExecutionContext] = []
+            for row, project in rows:
+                input_packet = _json_obj(row.input_packet)
+                output_packet = _json_obj(row.output_packet)
+                instruction = input_packet.get("instruction", "") if isinstance(input_packet, dict) else ""
+                output = output_packet.get("output", "") if isinstance(output_packet, dict) else ""
+                contexts.append(
+                    DeveloperExecutionContext(
+                        id=row.id,
+                        status=row.status or "",
+                        backend=row.route_backend or "",
+                        project_id=row.project_id,
+                        project_name=getattr(project, "name", "") or "",
+                        origin=row.origin or "",
+                        instruction_preview=_one_line(instruction, 220),
+                        output_preview=_one_line(output, 220),
+                        error_preview=_one_line(row.error or "", 220),
+                        started_at=row.started_at.isoformat() if row.started_at else "",
+                        updated_at=row.updated_at.isoformat() if row.updated_at else "",
+                        completed_at=row.completed_at.isoformat() if row.completed_at else "",
+                    )
+                )
+            return contexts
+
+    def _fetch_external_agent_context(self) -> dict[str, Any]:
+        from distr.core.external_agent_context import build_external_agent_context
+
+        return build_external_agent_context(limit=8)
 
     def _recommend_skills(self, user_request: str) -> list[DeveloperSkillContext]:
         if not (user_request or "").strip():
@@ -460,6 +558,8 @@ def format_developer_context_dict_for_prompt(
     board = context.get("active_board") or {}
     tickets = context.get("active_tickets") or []
     workflows = context.get("active_workflows") or []
+    executions = context.get("active_executions") or []
+    external_agent_context = context.get("external_agent_context") or {}
     skills = context.get("recommended_skills") or []
 
     lines: list[str] = ["Developer workflow context:"]
@@ -509,6 +609,30 @@ def format_developer_context_dict_for_prompt(
                 f"  - run #{workflow.get('id')} {workflow.get('name', '')} "
                 f"({workflow.get('status', '')}{step}{ticket})"
             )
+            live_summary = _live_agent_context_line(workflow.get("live_agent_context") or {})
+            if live_summary:
+                lines.append(f"    live_agent_context: {live_summary}")
+
+    if executions:
+        lines.append("- active_project_executions:")
+        for execution in [e for e in executions if isinstance(e, dict)][:6]:
+            detail = execution.get("instruction_preview") or execution.get("output_preview") or execution.get("error_preview") or ""
+            suffix = f": {_one_line(detail, 180)}" if detail else ""
+            lines.append(
+                f"  - session #{execution.get('id')} {execution.get('backend', '')} "
+                f"({execution.get('status', '')}, origin={execution.get('origin') or 'unknown'}, "
+                f"project={execution.get('project_name') or execution.get('project_id')}){suffix}"
+            )
+
+    if external_agent_context:
+        try:
+            from distr.core.external_agent_context import format_external_agent_context_for_prompt
+
+            external_text = format_external_agent_context_for_prompt(external_agent_context, max_chars=1400)
+            if external_text:
+                lines.append(external_text)
+        except Exception:
+            pass
 
     if skills:
         lines.append("- recommended_skills:")
@@ -528,6 +652,67 @@ def _safe_call(label: str, warnings: list[str], func, *args):
         logger.warning("DeveloperContextAssembler: failed to fetch %s", label, exc_info=True)
         warnings.append(f"{label} unavailable")
         return None
+
+
+def _live_context_from_run_data(raw: str | None) -> dict[str, Any]:
+    try:
+        data = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    live = data.get("live_agent_context")
+    if isinstance(live, dict) and live:
+        return live
+    last = data.get("last_codex_bridge_state")
+    if isinstance(last, dict) and last:
+        return last
+    events = data.get("codex_bridge_events")
+    if isinstance(events, list) and events:
+        tail = [event for event in events if isinstance(event, dict)][-10:]
+        if tail:
+            return {"recent_events": tail, **tail[-1]}
+    return {}
+
+
+def _json_obj(raw: str | None) -> dict[str, Any]:
+    try:
+        value = json.loads(raw or "{}")
+    except Exception:
+        return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _live_agent_context_line(live: dict[str, Any] | None, max_chars: int = 360) -> str:
+    if not isinstance(live, dict) or not live:
+        return ""
+    parts: list[str] = []
+    event_type = live.get("last_event_type") or live.get("event_type")
+    status = live.get("last_status") or live.get("status")
+    if event_type:
+        parts.append(f"event={event_type}")
+    if status:
+        parts.append(f"status={status}")
+    steer = live.get("latest_user_steer")
+    if steer:
+        parts.append(f"user_steer={_one_line(steer, 140)}")
+    terminal = live.get("latest_terminal_summary")
+    if terminal:
+        parts.append(f"summary={_one_line(terminal, 140)}")
+    message = live.get("last_message") or live.get("message")
+    if message and not steer and not terminal:
+        parts.append(f"message={_one_line(message, 160)}")
+    execution_session_id = live.get("execution_session_id")
+    if execution_session_id:
+        parts.append(f"execution_session={execution_session_id}")
+    if not parts:
+        recent = live.get("recent_events")
+        if isinstance(recent, list) and recent:
+            last = next((event for event in reversed(recent) if isinstance(event, dict)), None)
+            if last:
+                return _live_agent_context_line(last, max_chars=max_chars)
+    text = "; ".join(parts)
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1].rstrip() + "…"
 
 
 def _coerce_int(value: Any) -> int | None:

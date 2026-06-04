@@ -7,7 +7,12 @@ execution, CLI/IDE sessions, validation, and channel intake.
 from __future__ import annotations
 
 from datetime import datetime
+import hashlib
 import json
+import os
+from pathlib import Path
+import re
+import shutil
 import uuid
 from typing import Any
 
@@ -17,6 +22,8 @@ from distr.core.db.hermes import (
     HermesEvent,
     HermesLearnedRule,
     HermesValidationRecord,
+    HermesVisualBaselineScreen,
+    HermesVisualBaselineSet,
     ProjectRuntimeSession,
 )
 
@@ -34,6 +41,197 @@ def _json_loads(value: str | None) -> Any:
         return value
 
 
+_HANDOFF_SECRET_KEY_RE = re.compile(
+    r"(api[_-]?key|token|secret|password|authorization|bearer|credential|client[_-]?secret)",
+    re.IGNORECASE,
+)
+_HANDOFF_SECRET_VALUE_RE = re.compile(
+    r"(?i)((?:internal_token|api[_-]?key|token|secret|password)=)[^&\s\"']+|(bearer\s+)[a-z0-9._\-+/=]{12,}|(sk-[a-z0-9_\-]{12,})|(?<![/\w.-])([a-z0-9_\-]{32,})(?![/\w.-])"
+)
+
+
+def _redact_handoff_text(value: str) -> str:
+    return _HANDOFF_SECRET_VALUE_RE.sub(lambda m: (m.group(1) or m.group(2) or "") + "[redacted]", value or "")
+
+
+def redact_handoff_payload(value: Any) -> Any:
+    """Return a JSON-safe handoff payload with obvious secrets removed."""
+    if isinstance(value, dict):
+        redacted: dict[str, Any] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _HANDOFF_SECRET_KEY_RE.search(key_text):
+                redacted[key_text] = "[redacted]"
+            else:
+                redacted[key_text] = redact_handoff_payload(item)
+        return redacted
+    if isinstance(value, list):
+        return [redact_handoff_payload(item) for item in value]
+    if isinstance(value, tuple):
+        return [redact_handoff_payload(item) for item in value]
+    if isinstance(value, str):
+        return _redact_handoff_text(value)
+    return value
+
+
+def handoff_payload_hash(value: Any) -> str:
+    raw = json.dumps(value or {}, ensure_ascii=False, sort_keys=True, default=str)
+    return hashlib.sha256(raw.encode("utf-8")).hexdigest()
+
+
+def build_backend_handoff_packet(
+    *,
+    backend_id: str,
+    model: str = "",
+    instruction: str = "",
+    project_id: int | None = None,
+    project_name: str = "",
+    project_folder: str = "",
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    execution_session_id: int | None = None,
+    route_rationale: str = "",
+    selection_reason: str = "",
+    origin: str = "",
+    complexity: str = "",
+    git_status_before: str = "",
+    runtime_snapshot: dict[str, Any] | None = None,
+    callback: dict[str, Any] | None = None,
+    extra: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the durable Decisions-to-worker handoff packet stored by Hermes."""
+    raw = {
+        "backend_id": backend_id,
+        "model": model or "auto",
+        "instruction": instruction,
+        "project_id": project_id,
+        "project_name": project_name,
+        "project_folder": project_folder,
+        "workflow_id": workflow_id,
+        "run_id": run_id,
+        "step_id": step_id,
+        "ticket_id": ticket_id,
+        "board_id": board_id,
+        "execution_session_id": execution_session_id,
+        "route_rationale": route_rationale,
+        "selection_reason": selection_reason,
+        "origin": origin,
+        "complexity": complexity,
+        "git_status_before": git_status_before,
+        "runtime_snapshot": runtime_snapshot or {},
+        "callback": callback or {},
+        "human_intervention": {
+            "state": "none",
+            "latest_message": "",
+            "latest_label": "",
+        },
+        **(extra or {}),
+    }
+    packet = redact_handoff_payload(raw)
+    if isinstance(packet, dict):
+        packet["payload_hash"] = handoff_payload_hash(raw)
+    return packet
+
+
+def record_backend_handoff(
+    *,
+    packet: dict[str, Any],
+    status: str = "created",
+    event_type: str = "backend_handoff_created",
+    summary: str = "",
+    evidence: dict[str, Any] | None = None,
+) -> int | None:
+    """Record a backend/IDE handoff as a first-class Hermes event."""
+    data = dict(packet or {})
+    backend_id = str(data.get("backend_id") or "worker")
+    message = summary or f"Backend handoff {status}: {backend_id}."
+    return emit_event(
+        source=backend_id,
+        event_type=event_type,
+        status=status,
+        workflow_id=data.get("workflow_id"),
+        run_id=data.get("run_id"),
+        step_id=data.get("step_id"),
+        ticket_id=data.get("ticket_id"),
+        board_id=data.get("board_id"),
+        project_id=data.get("project_id"),
+        execution_session_id=data.get("execution_session_id"),
+        summary=message,
+        payload=data,
+        evidence=evidence or {},
+    )
+
+
+MISTAKE_LABELS = {
+    "missed_requirement",
+    "wrong_scope",
+    "bad_ui_flow",
+    "insufficient_tests",
+    "ignored_instruction",
+    "wrong_backend",
+    "unclear_requirement",
+    "manual_fix_applied",
+    "needs_visual_check",
+    "rejected_other",
+}
+
+
+def normalize_mistake_label(label: str) -> str:
+    raw = (label or "").strip().lower().replace("-", "_").replace(" ", "_")
+    return raw if raw in MISTAKE_LABELS else "rejected_other"
+
+
+def record_human_intervention_memory(
+    *,
+    label: str,
+    message: str = "",
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    execution_session_id: int | None = None,
+    handoff_event_id: int | None = None,
+) -> int | None:
+    """Persist Paul's/user steering or corrections as durable mistake memory."""
+    normalized = normalize_mistake_label(label)
+    summary = (
+        f"Human intervention recorded: {normalized.replace('_', ' ')}"
+        + (f". {message.strip()}" if message.strip() else ".")
+    )
+    payload = {
+        "label": normalized,
+        "message": message or "",
+        "handoff_event_id": handoff_event_id,
+    }
+    event_id = emit_event(
+        source="human_intervention",
+        event_type="human_intervention_recorded",
+        status="recorded",
+        workflow_id=workflow_id,
+        run_id=run_id,
+        step_id=step_id,
+        ticket_id=ticket_id,
+        board_id=board_id,
+        project_id=project_id,
+        execution_session_id=execution_session_id,
+        summary=summary,
+        payload=payload,
+    )
+    record_learning_signal(
+        scope="board" if board_id else "project" if project_id else "global",
+        scope_id=board_id or project_id,
+        rule_type="human_intervention",
+        summary=summary,
+        payload=payload,
+    )
+    return event_id
+
+
 def ensure_hermes_tables() -> None:
     Base.metadata.create_all(engine, tables=[
         HermesEvent.__table__,
@@ -41,6 +239,8 @@ def ensure_hermes_tables() -> None:
         HermesValidationRecord.__table__,
         HermesCorrectionAttempt.__table__,
         HermesLearnedRule.__table__,
+        HermesVisualBaselineSet.__table__,
+        HermesVisualBaselineScreen.__table__,
     ])
 
 
@@ -183,6 +383,7 @@ def list_events(
     run_id: int | None = None,
     ticket_id: int | None = None,
     board_id: int | None = None,
+    project_id: int | None = None,
     execution_session_id: int | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -197,6 +398,8 @@ def list_events(
             query = query.filter(HermesEvent.ticket_id == int(ticket_id))
         if board_id is not None:
             query = query.filter(HermesEvent.board_id == int(board_id))
+        if project_id is not None:
+            query = query.filter(HermesEvent.project_id == int(project_id))
         if execution_session_id is not None:
             query = query.filter(HermesEvent.execution_session_id == int(execution_session_id))
         rows = (
@@ -612,6 +815,7 @@ def list_validation_records(
     run_id: int | None = None,
     ticket_id: int | None = None,
     board_id: int | None = None,
+    project_id: int | None = None,
     verdict: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
@@ -626,6 +830,8 @@ def list_validation_records(
             query = query.filter(HermesValidationRecord.ticket_id == int(ticket_id))
         if board_id is not None:
             query = query.filter(HermesValidationRecord.board_id == int(board_id))
+        if project_id is not None:
+            query = query.filter(HermesValidationRecord.project_id == int(project_id))
         if verdict:
             query = query.filter(HermesValidationRecord.verdict == str(verdict).lower())
         rows = (
@@ -776,6 +982,7 @@ def list_correction_attempts(
     run_id: int | None = None,
     ticket_id: int | None = None,
     validation_record_id: int | None = None,
+    status: str | None = None,
     limit: int = 100,
 ) -> list[dict[str, Any]]:
     ensure_hermes_tables()
@@ -789,6 +996,8 @@ def list_correction_attempts(
             query = query.filter(HermesCorrectionAttempt.ticket_id == int(ticket_id))
         if validation_record_id is not None:
             query = query.filter(HermesCorrectionAttempt.validation_record_id == int(validation_record_id))
+        if status:
+            query = query.filter(HermesCorrectionAttempt.status == str(status).strip().lower())
         rows = (
             query.order_by(HermesCorrectionAttempt.created_at.desc(), HermesCorrectionAttempt.id.desc())
             .limit(max(1, min(int(limit or 100), 500)))
@@ -895,6 +1104,589 @@ def record_learning_signal(
     return rule_id
 
 
+def record_ui_feedback_label(
+    *,
+    label: str,
+    reason: str = "",
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    execution_session_id: int | None = None,
+    screenshot_paths: list[str] | None = None,
+) -> int | None:
+    """Record Paul's UI approval/rejection label as Hermes event and memory."""
+    from distr.core.harness.ui_quality import build_feedback_summary, normalize_feedback_label
+
+    normalized = normalize_feedback_label(label)
+    approved = normalized == "approved"
+    summary = build_feedback_summary(normalized, reason)
+    payload = {
+        "label": normalized,
+        "approved": approved,
+        "reason": reason or "",
+        "screenshot_paths": screenshot_paths or [],
+    }
+    event_id = emit_event(
+        source="ui_harness",
+        event_type="ui_feedback_labeled",
+        status="approved" if approved else "rejected",
+        workflow_id=workflow_id,
+        run_id=run_id,
+        step_id=step_id,
+        ticket_id=ticket_id,
+        board_id=board_id,
+        project_id=project_id,
+        execution_session_id=execution_session_id,
+        summary=summary,
+        payload=payload,
+        evidence={"screenshots": screenshot_paths or []},
+    )
+    record_learning_signal(
+        scope="board" if board_id else "project" if project_id else "global",
+        scope_id=board_id or project_id,
+        rule_type="ui_feedback",
+        summary=summary,
+        payload=payload,
+    )
+    return event_id
+
+
+def record_routing_override(
+    *,
+    override: str,
+    requested_backend: str,
+    original_backend: str = "",
+    final_backend: str = "",
+    applied: bool | None = None,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    reasons: list[str] | None = None,
+) -> int | None:
+    """Record an explicit routing override phrase as audit evidence and memory."""
+    normalized = (override or "").strip().lower()
+    requested = (requested_backend or "").strip().lower()
+    original = (original_backend or "").strip().lower()
+    final = (final_backend or "").strip().lower()
+    if not normalized or not requested:
+        return None
+
+    was_applied = bool(final == requested) if applied is None else bool(applied)
+    readable = normalized.replace("_", " ")
+    summary = (
+        f"Routing override '{readable}' requested {requested}"
+        + (f" instead of {original}" if original else "")
+        + (f"; final route {final}" if final else "")
+        + "."
+    )
+    payload = {
+        "override": normalized,
+        "requested_backend": requested,
+        "original_backend": original,
+        "final_backend": final,
+        "applied": was_applied,
+        "reasons": reasons or [],
+    }
+    event_id = emit_event(
+        source="harness_routing",
+        event_type="routing_override_applied" if was_applied else "routing_override_ignored",
+        status="applied" if was_applied else "ignored",
+        workflow_id=workflow_id,
+        run_id=run_id,
+        step_id=step_id,
+        ticket_id=ticket_id,
+        board_id=board_id,
+        project_id=project_id,
+        summary=summary,
+        payload=payload,
+    )
+    record_learning_signal(
+        scope="board" if board_id else "project" if project_id else "global",
+        scope_id=board_id or project_id,
+        rule_type="routing_override",
+        summary=summary,
+        payload=payload,
+    )
+    return event_id
+
+
+def record_ui_quality_validation(
+    *,
+    artifacts: dict[str, Any] | None = None,
+    workflow_id: int | None = None,
+    run_id: int | None = None,
+    step_id: int | None = None,
+    step_result_id: int | None = None,
+    ticket_id: int | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    execution_session_id: int | None = None,
+    standards_context: str = "",
+    baseline_set_id: int | None = None,
+    baseline_name: str | None = None,
+) -> int | None:
+    """Record the UI screenshot and flow definition-of-done gate."""
+    from distr.core.harness.ui_quality import compare_ui_artifacts_to_baseline, evaluate_ui_artifacts
+
+    artifact_data = artifacts or {}
+    selected_baseline_id = baseline_set_id
+    if selected_baseline_id is None:
+        raw_baseline_id = (
+            artifact_data.get("visual_baseline_id")
+            or artifact_data.get("baseline_set_id")
+            or artifact_data.get("visual_baseline_set_id")
+        )
+        try:
+            selected_baseline_id = int(raw_baseline_id) if raw_baseline_id not in (None, "") else None
+        except Exception:
+            selected_baseline_id = None
+    selected_baseline_name = (
+        baseline_name
+        or artifact_data.get("visual_baseline_name")
+        or artifact_data.get("baseline_name")
+    )
+    taste_summary = build_visual_taste_summary(board_id=board_id, project_id=project_id)
+    evaluation = evaluate_ui_artifacts(artifacts, taste_summary=taste_summary)
+    baseline = get_visual_baseline_set(
+        baseline_set_id=selected_baseline_id,
+        name=selected_baseline_name,
+        board_id=board_id,
+        project_id=project_id,
+    ) if selected_baseline_id or selected_baseline_name else None
+    baseline_comparison = (
+        compare_ui_artifacts_to_baseline(artifacts or {}, baseline)
+        if baseline
+        else None
+    )
+    missing = evaluation.get("missing") or []
+    verdict = str(evaluation.get("verdict") or "fail")
+    if baseline_comparison and baseline_comparison.get("verdict") != "pass":
+        verdict = "fail"
+    observed = (
+        "All required UI quality artifacts are present."
+        if verdict == "pass"
+        else f"Missing UI quality artifacts: {', '.join(str(item) for item in missing)}"
+    )
+    if baseline_comparison and baseline_comparison.get("verdict") != "pass":
+        explanation = baseline_comparison.get("explanation") or "Visual baseline comparison failed."
+        observed = f"{observed} {explanation}".strip()
+    snapshot = {
+        "validation_type": "ui_quality",
+        "expected": "UI work includes screenshots and flow evidence before completion.",
+        "observed": observed,
+        "caller_passed": verdict == "pass",
+        "verified_passed": verdict == "pass",
+        "verdict": verdict,
+        "artifacts": artifacts or {},
+        "missing": missing,
+    }
+    if baseline_comparison:
+        snapshot["visual_baseline"] = baseline_comparison
+    enriched_standards_context = standards_context or ""
+    taste_context = build_visual_taste_context(board_id=board_id, project_id=project_id)
+    if taste_context and "[VISUAL TASTE MEMORY]" not in enriched_standards_context:
+        enriched_standards_context = (
+            enriched_standards_context.rstrip() + "\n\n" + taste_context
+        ).strip()
+    return record_validation(
+        workflow_id=workflow_id,
+        run_id=run_id,
+        step_id=step_id,
+        step_result_id=step_result_id,
+        ticket_id=ticket_id,
+        board_id=board_id,
+        project_id=project_id,
+        execution_session_id=execution_session_id,
+        validation_snapshot=snapshot,
+        standards_context=enriched_standards_context,
+        correction_hint=(
+            ""
+            if verdict == "pass"
+            else "Attach before/after screenshots, compare against the selected visual baseline, and include a concise happy-path flow summary before marking UI work complete."
+        ),
+        payload={
+            "ui_quality": evaluation,
+            "visual_baseline": baseline_comparison,
+            "visual_taste": taste_summary,
+        },
+    )
+
+
+def _baseline_scope(board_id: int | None = None, project_id: int | None = None) -> tuple[str, int | None]:
+    if board_id is not None:
+        return "board", int(board_id)
+    if project_id is not None:
+        return "project", int(project_id)
+    return "global", None
+
+
+def _baseline_storage_slug(value: str, fallback: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(value or "").strip().lower()).strip("-._")
+    return slug or fallback
+
+
+def _store_visual_baseline_screenshot(
+    *,
+    source_path: str,
+    storage_dir: str | Path | None,
+    baseline_id: int,
+    baseline_name: str,
+    screen_name: str,
+    screen_index: int,
+) -> str:
+    source = Path(source_path).expanduser()
+    if not source.exists() or not source.is_file():
+        raise ValueError(f"baseline screenshot file not found: {source_path}")
+    root = Path(storage_dir or os.getenv("HERMES_VISUAL_BASELINE_DIR") or "data/hermes/visual_baselines").expanduser()
+    baseline_slug = _baseline_storage_slug(baseline_name, f"baseline-{baseline_id}")
+    screen_slug = _baseline_storage_slug(screen_name, f"screen-{screen_index + 1}")
+    extension = source.suffix.lower() or ".png"
+    destination_dir = root / f"{baseline_id}-{baseline_slug}"
+    destination_dir.mkdir(parents=True, exist_ok=True)
+    destination = destination_dir / f"{screen_index + 1:02d}-{screen_slug}{extension}"
+    if source.resolve() != destination.resolve():
+        shutil.copy2(source, destination)
+    return str(destination)
+
+
+def create_visual_baseline_set(
+    *,
+    name: str,
+    screens: list[dict[str, Any]],
+    board_id: int | None = None,
+    project_id: int | None = None,
+    description: str = "",
+    version: str = "v1",
+    copy_screenshots: bool = False,
+    storage_dir: str | Path | None = None,
+) -> int:
+    """Create a named Hermes visual baseline set with reference screenshots."""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("baseline name is required")
+    if not screens:
+        raise ValueError("at least one baseline screen is required")
+    scope, scope_id = _baseline_scope(board_id=board_id, project_id=project_id)
+    ensure_hermes_tables()
+    with get_session() as session:
+        row = HermesVisualBaselineSet(
+            name=clean_name,
+            scope=scope,
+            scope_id=scope_id,
+            description=description or "",
+            version=(version or "v1").strip() or "v1",
+            enabled=1,
+        )
+        session.add(row)
+        session.flush()
+        for index, screen in enumerate(screens):
+            screen_name = str(screen.get("screen_name") or screen.get("name") or "").strip()
+            screenshot_path = str(screen.get("screenshot_path") or screen.get("path") or "").strip()
+            if not screen_name or not screenshot_path:
+                raise ValueError("baseline screens require screen_name and screenshot_path")
+            metadata = screen.get("metadata") or {}
+            if copy_screenshots:
+                metadata = {**metadata, "source_screenshot_path": screenshot_path}
+                screenshot_path = _store_visual_baseline_screenshot(
+                    source_path=screenshot_path,
+                    storage_dir=storage_dir,
+                    baseline_id=int(row.id),
+                    baseline_name=clean_name,
+                    screen_name=screen_name,
+                    screen_index=index,
+                )
+            session.add(HermesVisualBaselineScreen(
+                baseline_set_id=int(row.id),
+                screen_name=screen_name,
+                screenshot_path=screenshot_path,
+                flow_name=str(screen.get("flow_name") or "").strip() or None,
+                notes=str(screen.get("notes") or "").strip() or None,
+                metadata_json=_json_dumps(metadata),
+            ))
+        session.commit()
+        baseline_id = int(row.id)
+    emit_event(
+        source="ui_harness",
+        event_type="visual_baseline_created",
+        status="created",
+        board_id=board_id,
+        project_id=project_id,
+        summary=f"Visual baseline '{clean_name}' created with {len(screens)} reference screen(s).",
+        payload={"baseline_set_id": baseline_id, "name": clean_name, "screen_count": len(screens)},
+    )
+    return baseline_id
+
+
+def upsert_visual_baseline_screens(
+    *,
+    name: str,
+    screens: list[dict[str, Any]],
+    board_id: int | None = None,
+    project_id: int | None = None,
+    description: str = "",
+    version: str = "v1",
+    copy_screenshots: bool = False,
+    storage_dir: str | Path | None = None,
+) -> int:
+    """Create a visual baseline set or add/replace screens in an existing named set."""
+    clean_name = (name or "").strip()
+    if not clean_name:
+        raise ValueError("baseline name is required")
+    if not screens:
+        raise ValueError("at least one baseline screen is required")
+    scope, scope_id = _baseline_scope(board_id=board_id, project_id=project_id)
+    ensure_hermes_tables()
+    with get_session() as session:
+        query = (
+            session.query(HermesVisualBaselineSet)
+            .filter(HermesVisualBaselineSet.enabled == 1)
+            .filter(HermesVisualBaselineSet.name == clean_name)
+            .filter(HermesVisualBaselineSet.scope == scope)
+        )
+        if scope_id is None:
+            query = query.filter(HermesVisualBaselineSet.scope_id.is_(None))
+        else:
+            query = query.filter(HermesVisualBaselineSet.scope_id == scope_id)
+        row = query.order_by(HermesVisualBaselineSet.updated_at.desc(), HermesVisualBaselineSet.id.desc()).first()
+        if not row:
+            row = HermesVisualBaselineSet(
+                name=clean_name,
+                scope=scope,
+                scope_id=scope_id,
+                description=description or "",
+                version=(version or "v1").strip() or "v1",
+                enabled=1,
+            )
+            session.add(row)
+            session.flush()
+        else:
+            if description:
+                row.description = description
+            row.version = (version or row.version or "v1").strip() or "v1"
+
+        baseline_id = int(row.id)
+        existing_by_name = {
+            str(screen.screen_name or "").strip().lower(): screen
+            for screen in session.query(HermesVisualBaselineScreen)
+            .filter(HermesVisualBaselineScreen.baseline_set_id == baseline_id)
+            .all()
+        }
+        existing_count = len(existing_by_name)
+        upserted = 0
+        for index, screen in enumerate(screens):
+            screen_name = str(screen.get("screen_name") or screen.get("name") or "").strip()
+            screenshot_path = str(screen.get("screenshot_path") or screen.get("path") or "").strip()
+            if not screen_name or not screenshot_path:
+                raise ValueError("baseline screens require screen_name and screenshot_path")
+            metadata = screen.get("metadata") or {}
+            if copy_screenshots:
+                metadata = {**metadata, "source_screenshot_path": screenshot_path}
+                screenshot_path = _store_visual_baseline_screenshot(
+                    source_path=screenshot_path,
+                    storage_dir=storage_dir,
+                    baseline_id=baseline_id,
+                    baseline_name=clean_name,
+                    screen_name=screen_name,
+                    screen_index=existing_count + index,
+                )
+            existing = existing_by_name.get(screen_name.lower())
+            if existing:
+                existing.screenshot_path = screenshot_path
+                existing.flow_name = str(screen.get("flow_name") or "").strip() or None
+                existing.notes = str(screen.get("notes") or "").strip() or None
+                existing.metadata_json = _json_dumps(metadata)
+            else:
+                session.add(HermesVisualBaselineScreen(
+                    baseline_set_id=baseline_id,
+                    screen_name=screen_name,
+                    screenshot_path=screenshot_path,
+                    flow_name=str(screen.get("flow_name") or "").strip() or None,
+                    notes=str(screen.get("notes") or "").strip() or None,
+                    metadata_json=_json_dumps(metadata),
+                ))
+            upserted += 1
+        session.commit()
+    emit_event(
+        source="ui_harness",
+        event_type="visual_baseline_upserted",
+        status="updated",
+        board_id=board_id,
+        project_id=project_id,
+        summary=f"Visual baseline '{clean_name}' updated with {upserted} reference screen(s).",
+        payload={"baseline_set_id": baseline_id, "name": clean_name, "screen_count": upserted},
+    )
+    return baseline_id
+
+
+def serialize_visual_baseline_set(row: HermesVisualBaselineSet, screens: list[HermesVisualBaselineScreen]) -> dict[str, Any]:
+    return {
+        "id": int(row.id),
+        "name": row.name,
+        "scope": row.scope,
+        "scope_id": row.scope_id,
+        "description": row.description or "",
+        "version": row.version or "v1",
+        "enabled": bool(row.enabled),
+        "created_at": row.created_at.isoformat() if row.created_at else None,
+        "updated_at": row.updated_at.isoformat() if row.updated_at else None,
+        "screens": [
+            {
+                "id": int(screen.id),
+                "screen_name": screen.screen_name,
+                "screenshot_path": screen.screenshot_path,
+                "flow_name": screen.flow_name,
+                "notes": screen.notes or "",
+                "metadata": _json_loads(screen.metadata_json) or {},
+            }
+            for screen in screens
+        ],
+    }
+
+
+def get_visual_baseline_set(
+    *,
+    baseline_set_id: int | None = None,
+    name: str | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+) -> dict[str, Any] | None:
+    """Return one visual baseline set, preferring an explicit id."""
+    ensure_hermes_tables()
+    with get_session() as session:
+        query = session.query(HermesVisualBaselineSet).filter(HermesVisualBaselineSet.enabled == 1)
+        if baseline_set_id is not None:
+            query = query.filter(HermesVisualBaselineSet.id == int(baseline_set_id))
+        else:
+            scope, scope_id = _baseline_scope(board_id=board_id, project_id=project_id)
+            query = query.filter(HermesVisualBaselineSet.scope == scope)
+            if scope_id is None:
+                query = query.filter(HermesVisualBaselineSet.scope_id.is_(None))
+            else:
+                query = query.filter(HermesVisualBaselineSet.scope_id == scope_id)
+            if name:
+                query = query.filter(HermesVisualBaselineSet.name == str(name).strip())
+        row = query.order_by(HermesVisualBaselineSet.updated_at.desc(), HermesVisualBaselineSet.id.desc()).first()
+        if not row:
+            return None
+        screens = (
+            session.query(HermesVisualBaselineScreen)
+            .filter(HermesVisualBaselineScreen.baseline_set_id == int(row.id))
+            .order_by(HermesVisualBaselineScreen.id.asc())
+            .all()
+        )
+        return serialize_visual_baseline_set(row, screens)
+
+
+def list_visual_baseline_sets(
+    *,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    include_global: bool = True,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """List enabled visual baseline sets for a scope."""
+    ensure_hermes_tables()
+    scope, scope_id = _baseline_scope(board_id=board_id, project_id=project_id)
+    with get_session() as session:
+        query = session.query(HermesVisualBaselineSet).filter(HermesVisualBaselineSet.enabled == 1)
+        if include_global and scope != "global":
+            query = query.filter(
+                (HermesVisualBaselineSet.scope == scope) & (HermesVisualBaselineSet.scope_id == scope_id)
+                | ((HermesVisualBaselineSet.scope == "global") & HermesVisualBaselineSet.scope_id.is_(None))
+            )
+        else:
+            query = query.filter(HermesVisualBaselineSet.scope == scope)
+            if scope_id is None:
+                query = query.filter(HermesVisualBaselineSet.scope_id.is_(None))
+            else:
+                query = query.filter(HermesVisualBaselineSet.scope_id == scope_id)
+        rows = (
+            query.order_by(HermesVisualBaselineSet.updated_at.desc(), HermesVisualBaselineSet.id.desc())
+            .limit(max(1, min(int(limit or 50), 200)))
+            .all()
+        )
+        result = []
+        for row in rows:
+            screens = (
+                session.query(HermesVisualBaselineScreen)
+                .filter(HermesVisualBaselineScreen.baseline_set_id == int(row.id))
+                .order_by(HermesVisualBaselineScreen.id.asc())
+                .all()
+            )
+            result.append(serialize_visual_baseline_set(row, screens))
+        return result
+
+
+def inspect_visual_baseline_readiness(
+    *,
+    baseline_set_id: int | None = None,
+    name: str | None = None,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    include_global: bool = True,
+    limit: int = 50,
+) -> dict[str, Any]:
+    """Report whether enabled visual baseline screenshot paths are present on disk."""
+    if baseline_set_id is not None or name:
+        baseline = get_visual_baseline_set(
+            baseline_set_id=baseline_set_id,
+            name=name,
+            board_id=board_id,
+            project_id=project_id,
+        )
+        baselines = [baseline] if baseline else []
+    else:
+        baselines = list_visual_baseline_sets(
+            board_id=board_id,
+            project_id=project_id,
+            include_global=include_global,
+            limit=limit,
+        )
+
+    checked_baselines: list[dict[str, Any]] = []
+    missing: list[dict[str, Any]] = []
+    screen_count = 0
+    existing_screen_count = 0
+
+    for baseline in baselines:
+        checked_screens: list[dict[str, Any]] = []
+        for screen in baseline.get("screens") or []:
+            screen_count += 1
+            screenshot_path = str(screen.get("screenshot_path") or "").strip()
+            exists = bool(screenshot_path and Path(screenshot_path).exists())
+            if exists:
+                existing_screen_count += 1
+            checked = {
+                "baseline_set_id": baseline.get("id"),
+                "baseline_name": baseline.get("name"),
+                "screen_name": screen.get("screen_name"),
+                "screenshot_path": screenshot_path,
+                "exists": exists,
+            }
+            checked_screens.append({**screen, "exists": exists})
+            if not exists:
+                missing.append(checked)
+        checked_baselines.append({**baseline, "screens": checked_screens})
+
+    ready = bool(baselines) and screen_count > 0 and not missing
+    return {
+        "verdict": "pass" if ready else "fail",
+        "ready": ready,
+        "baseline_count": len(baselines),
+        "screen_count": screen_count,
+        "existing_screen_count": existing_screen_count,
+        "missing_screen_count": len(missing),
+        "missing": missing,
+        "baselines": checked_baselines,
+    }
+
+
 def list_learned_rules(
     *,
     scope: str | None = None,
@@ -924,6 +1716,101 @@ def list_learned_rules(
         return [serialize_learned_rule(row) for row in rows]
 
 
+def build_visual_taste_summary(
+    *,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    limit: int = 100,
+) -> dict[str, Any]:
+    """Aggregate approved/rejected UI feedback labels into reusable taste memory."""
+    scope = "board" if board_id is not None else "project" if project_id is not None else "global"
+    scope_id = int(board_id if board_id is not None else project_id) if (board_id is not None or project_id is not None) else None
+    rules = list_learned_rules(
+        board_id=int(board_id) if board_id is not None else None,
+        scope="project" if project_id is not None and board_id is None else ("global" if scope == "global" else None),
+        scope_id=scope_id if scope != "board" else None,
+        enabled_only=True,
+        limit=limit,
+    )
+    labels: dict[str, dict[str, Any]] = {}
+    approval_count = 0
+    rejection_count = 0
+    total_feedback = 0
+
+    for rule in rules:
+        if str(rule.get("rule_type") or "") != "ui_feedback":
+            continue
+        payload = rule.get("payload") if isinstance(rule.get("payload"), dict) else {}
+        latest = payload.get("latest") if isinstance(payload.get("latest"), dict) else {}
+        if not latest and payload.get("label"):
+            latest = payload
+        label = str(latest.get("label") or "").strip() or "rejected_other"
+        count = max(1, int(rule.get("evidence_count") or 1))
+        approved = bool(latest.get("approved")) or label == "approved"
+        total_feedback += count
+        if approved:
+            approval_count += count
+        else:
+            rejection_count += count
+        bucket = labels.setdefault(
+            label,
+            {
+                "count": 0,
+                "approved": approved,
+                "recent_reasons": [],
+                "screenshot_paths": [],
+            },
+        )
+        bucket["count"] = int(bucket.get("count") or 0) + count
+        reason = str(latest.get("reason") or "").strip()
+        if reason and reason not in bucket["recent_reasons"]:
+            bucket["recent_reasons"].append(reason)
+        for path in latest.get("screenshot_paths") or []:
+            path_text = str(path or "").strip()
+            if path_text and path_text not in bucket["screenshot_paths"]:
+                bucket["screenshot_paths"].append(path_text)
+
+    for bucket in labels.values():
+        bucket["recent_reasons"] = bucket["recent_reasons"][:5]
+        bucket["screenshot_paths"] = bucket["screenshot_paths"][:5]
+
+    return {
+        "scope": scope,
+        "scope_id": scope_id,
+        "total_feedback": total_feedback,
+        "approval_count": approval_count,
+        "rejection_count": rejection_count,
+        "labels": labels,
+    }
+
+
+def build_visual_taste_context(
+    *,
+    board_id: int | None = None,
+    project_id: int | None = None,
+    limit: int = 100,
+) -> str:
+    """Format visual taste memory for future UI planning and validation prompts."""
+    summary = build_visual_taste_summary(board_id=board_id, project_id=project_id, limit=limit)
+    if not summary.get("total_feedback"):
+        return ""
+    lines = [
+        "[VISUAL TASTE MEMORY]",
+        f"- Feedback seen: {summary['total_feedback']} labels ({summary['approval_count']} approved, {summary['rejection_count']} rejected).",
+    ]
+    labels = sorted(
+        summary.get("labels", {}).items(),
+        key=lambda item: (-int(item[1].get("count") or 0), item[0]),
+    )
+    for label, data in labels[:8]:
+        status = "approved" if data.get("approved") else "rejected"
+        readable_label = str(label).replace("_", " ")
+        lines.append(f"- {readable_label} ({status}, seen {int(data.get('count') or 0)}x)")
+        for reason in (data.get("recent_reasons") or [])[:2]:
+            lines.append(f"  - {str(reason)[:240]}")
+    return "\n".join(lines).strip()
+
+
 def serialize_learned_rule(row: HermesLearnedRule) -> dict[str, Any]:
     return {
         "id": row.id,
@@ -951,6 +1838,25 @@ def list_board_activity(
         "events": list_events(board_id=int(board_id), limit=event_limit),
         "validations": list_validation_records(board_id=int(board_id), limit=min(event_limit, 30)),
         "learned_rules": list_learned_rules(board_id=int(board_id), limit=rule_limit),
+        "visual_taste": build_visual_taste_summary(board_id=int(board_id), limit=200),
+    }
+
+
+def list_project_activity(
+    project_id: int,
+    *,
+    event_limit: int = 50,
+    rule_limit: int = 20,
+) -> dict[str, Any]:
+    """Return the orchestration activity bundle for a project."""
+    pid = int(project_id)
+    return {
+        "project_id": pid,
+        "events": list_events(project_id=pid, limit=event_limit),
+        "validations": list_validation_records(project_id=pid, limit=min(event_limit, 30)),
+        "learned_rules": list_learned_rules(scope="project", scope_id=pid, limit=rule_limit),
+        "visual_taste": build_visual_taste_summary(project_id=pid, limit=200),
+        "runtime_sessions": list_project_runtime_sessions(project_id=pid, limit=10),
     }
 
 

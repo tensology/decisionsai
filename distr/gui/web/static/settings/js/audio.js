@@ -143,28 +143,18 @@ function populateAudioDevicesFromData(data) {
         });
     }
 
-    if (prevInput && inputSelect) {
-        inputSelect.value = prevInput;
-        if (inputSelect.value !== prevInput) {
-            for (var i = 0; i < inputSelect.options.length; i++) {
-                var o = inputSelect.options[i];
-                if (o.value && (o.value === prevInput || o.value.indexOf(prevInput) !== -1 || prevInput.indexOf(o.value) !== -1)) {
-                    inputSelect.value = o.value;
-                    break;
-                }
-            }
+    if (inputSelect) {
+        var targetInput = prevInput || _lastLoadedInputDevice;
+        _setSelectValueIfPossible(inputSelect, targetInput);
+        if (inputSelect.value && inputSelect.value !== 'System Default') {
+            _lastLoadedInputDevice = inputSelect.value;
         }
     }
-    if (prevOutput && outputSelect) {
-        outputSelect.value = prevOutput;
-        if (outputSelect.value !== prevOutput) {
-            for (var j = 0; j < outputSelect.options.length; j++) {
-                var o2 = outputSelect.options[j];
-                if (o2.value && (o2.value === prevOutput || o2.value.indexOf(prevOutput) !== -1 || prevOutput.indexOf(o2.value) !== -1)) {
-                    outputSelect.value = o2.value;
-                    break;
-                }
-            }
+    if (outputSelect) {
+        var targetOutput = prevOutput || _lastLoadedOutputDevice;
+        _setSelectValueIfPossible(outputSelect, targetOutput);
+        if (outputSelect.value && outputSelect.value !== 'System Default') {
+            _lastLoadedOutputDevice = outputSelect.value;
         }
     }
 
@@ -393,7 +383,8 @@ function _startAudioDevicesVersionPolling() {
             var v = data.version || 0;
             if (v !== _lastAudioDevicesVersion && _lastAudioDevicesVersion > 0) {
                 await loadAudioDevices();
-                await loadAudioSettings();
+                _highlightSavedDevice('audio_output_tbody', _lastLoadedOutputDevice);
+                _highlightSavedDevice('audio_input_tbody', _lastLoadedInputDevice);
                 if (typeof showNotification === 'function') showNotification('Audio devices updated', 'info');
             }
             _lastAudioDevicesVersion = v;

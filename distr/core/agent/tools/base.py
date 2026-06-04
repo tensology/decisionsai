@@ -194,6 +194,21 @@ def fast_tool_matcher(transcription: str, tools: List[BaseTool], tools_dict: Dic
     if _FAST_MATCH_SKIP_META.search(transcription_lower):
         logger.debug("Fast matcher: skipping meta question: '%s'", transcription[:80])
         return None
+
+    # Codex/Cursor visibility questions are informational, not project-switch
+    # commands. Let the dedicated developer-context fast action or the LLM handle
+    # them instead of matching the embedded phrase "I'm working on".
+    _DEVELOPER_CONTEXT_QUESTION = re.compile(
+        r"\b(codex|codecs|cursor)\b.*\b(see|working|work|running|inside|doing|where\s+am|what\s+am|what'?s)\b"
+        r"|\b(see|working|work|running|inside|doing|where\s+am|what\s+am|what'?s)\b.*\b(codex|codecs|cursor)\b",
+        re.IGNORECASE,
+    )
+    if (
+        _DEVELOPER_CONTEXT_QUESTION.search(transcription_lower)
+        and not re.search(r"\b(tell|send|ask)\s+cursor\b", transcription_lower)
+    ):
+        logger.debug("Fast matcher: skipping developer-context question: '%s'", transcription[:80])
+        return None
     
     # Pre-calculate word set for faster lookup
     transcription_words = set(re.findall(r'\w+', transcription_norm))

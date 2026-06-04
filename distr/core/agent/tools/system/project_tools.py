@@ -760,6 +760,17 @@ class SwitchProjectTool(BaseTool):
     def _run(self, project_name: str = "", **kwargs) -> str:
         """Execute switch project action."""
         try:
+            search_name = project_name.strip() if project_name else ""
+            raw_request = search_name or str(kwargs.get("text") or kwargs.get("transcription") or "")
+            if re.search(r"\b(codex|codecs|cursor)\b", raw_request, flags=re.IGNORECASE) and re.search(
+                r"\b(see|working|work|running|inside|doing|where\s+am|what\s+am|what'?s)\b",
+                raw_request,
+                flags=re.IGNORECASE,
+            ):
+                from distr.core.external_agent_context import build_agent_visibility_answer
+
+                return build_agent_visibility_answer(f"switch_project misroute: {raw_request}")
+
             from distr.core.db import get_session
             from distr.core.db.projects import Project
             from distr.core.agent.services.rag.project import activate_project
@@ -770,7 +781,6 @@ class SwitchProjectTool(BaseTool):
                 return SequenceMatcher(None, a.lower(), b.lower()).ratio()
 
             # Use project_name directly - LLM should have extracted it
-            search_name = project_name.strip() if project_name else ""
             logger.info("SwitchProject called with project_name='%s'", project_name)
 
             session = get_session()

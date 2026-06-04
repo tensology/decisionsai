@@ -65,10 +65,13 @@ distr/core/agent/models/
 
 # --- Dev scratch & utility scripts (local only) ---
 playground/
-scripts/
+scripts/*
+!scripts/
+!scripts/harness_live_proof.py
 
 # --- Databases ---
 db/*
+db/backups/
 db/whatsapp_media/
 
 # --- Docs (auto-generated / to be rewritten) ---

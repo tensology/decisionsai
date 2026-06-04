@@ -514,8 +514,8 @@ class VoskSTTService(BaseSTTService):
             else:
                 logger.debug("STT: Passing InterruptionFrame through (hands-free mode)")
         
-        # Handle pending PTT buffer processing
-        if self._pending_ptt_process:
+        # Handle pending PTT buffer processing (backup if immediate flush could not run)
+        if self._pending_ptt_process and not getattr(self, "_ptt_flush_scheduled", False):
             self._pending_ptt_process = False
             await self._process_ptt_buffer_immediate(direction)
         

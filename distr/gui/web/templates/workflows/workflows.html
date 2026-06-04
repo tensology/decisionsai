@@ -147,7 +147,7 @@
                 <div class="mb-2 flex items-center justify-between gap-2">
                     <div>
                         <p class="text-xs uppercase tracking-wide text-gray-500">Board activity</p>
-                        <p class="text-[11px] text-gray-600">Hermes events and learned rules for the selected board.</p>
+                        <p class="text-[11px] text-gray-600">Run events and learned rules for the selected board.</p>
                     </div>
                     <button type="button" id="wf-refresh-board-activity" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
                 </div>
@@ -273,7 +273,7 @@
                             </div>
                             <datalist id="wf-skills-datalist"></datalist>
                             <div id="wf-skills-catalog" class="mt-3 max-h-40 overflow-y-auto rounded border border-white/10 bg-[#0d1333]/60 p-2 text-xs text-gray-400 hidden"></div>
-                            <p id="wf-skills-catalog-note" class="mt-2 text-[11px] text-gray-500">Hermes auto-transfers matching skills from ticket text; pre-chain skills push before each harness run.</p>
+                            <p id="wf-skills-catalog-note" class="mt-2 text-[11px] text-gray-500">Matching skills transfer from ticket text; pre-chain skills push before each harness run.</p>
                         </div>
                         <div id="wf-learned-rules-panel" class="w-full">
                             <div class="flex items-center justify-between gap-3 mb-2">
@@ -286,6 +286,46 @@
                             <div id="wf-learned-rules-list" class="space-y-2"></div>
                             <p id="wf-learned-rules-empty" class="text-sm text-gray-500">Select a board to view learned rules.</p>
                         </div>
+                        <div id="wf-scheduled-actions-panel" class="w-full">
+                            <div class="flex items-center justify-between gap-3 mb-2">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Scheduled actions</p>
+                                    <p id="wf-scheduled-actions-note" class="text-xs text-gray-500">Queued one-time and recurring desktop actions.</p>
+                                </div>
+                                <button type="button" id="wf-refresh-scheduled-actions" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                            </div>
+                            <div id="wf-scheduled-actions-list" class="space-y-2"></div>
+                            <p id="wf-scheduled-actions-empty" class="text-sm text-gray-500">No scheduled desktop actions loaded.</p>
+                        </div>
+                        <div id="wf-visual-baselines-panel" class="w-full">
+                            <div class="flex items-center justify-between gap-3 mb-2">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Visual baselines</p>
+                                    <p id="wf-visual-baselines-note" class="text-xs text-gray-500">Reference screens used by UI validation for the selected board.</p>
+                                </div>
+                                <button type="button" id="wf-refresh-visual-baselines" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                            </div>
+                            <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Baseline</span>
+                                    <input id="wf-baseline-name" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Gold Admin">
+                                </label>
+                                <label class="space-y-1">
+                                    <span class="text-xs text-gray-400">Screen</span>
+                                    <input id="wf-baseline-screen-name" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Dashboard">
+                                </label>
+                                <label class="space-y-1 md:col-span-2">
+                                    <span class="text-xs text-gray-400">Screenshot path</span>
+                                    <input id="wf-baseline-screenshot-path" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="/path/to/reference.png">
+                                </label>
+                            </div>
+                            <div class="mb-3 flex items-center justify-between gap-3">
+                                <input id="wf-baseline-notes" type="text" class="flex-1 px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Notes about layout, hierarchy, or flow">
+                                <button type="button" id="wf-save-visual-baseline" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save baseline</button>
+                            </div>
+                            <div id="wf-visual-baselines-list" class="space-y-2"></div>
+                            <p id="wf-visual-baselines-empty" class="text-sm text-gray-500">Select a board to view visual baselines.</p>
+                        </div>
                     </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">
@@ -294,6 +334,7 @@
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-white border-b-2 border-[#f97316]" data-runs-tab="active">Active</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="sessions">Executor</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="timeline">Events</button>
+                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="corrections">Corrections</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="recent">History</button>
                             </div>
                         </div>
@@ -340,6 +381,25 @@
                             </div>
                             <div id="wf-hermes-events-list" class="space-y-2"></div>
                             <p id="wf-hermes-events-empty" class="text-sm text-gray-500">No run events yet. Start a ticket run to populate the timeline.</p>
+                        </div>
+                        <div id="wf-runs-pane-corrections" class="wf-runs-pane hidden">
+                            <div class="mb-3 flex items-center justify-between gap-3">
+                                <div>
+                                    <p class="text-sm font-semibold text-white">Correction history</p>
+                                    <p class="text-xs text-gray-500">Queued and dispatched retries created from failed validation gates.</p>
+                                </div>
+                                <div class="flex items-center gap-2">
+                                    <select id="wf-corrections-status-filter" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs">
+                                        <option value="">All corrections</option>
+                                        <option value="queued">Queued</option>
+                                        <option value="dispatched">Dispatched</option>
+                                        <option value="completed">Completed</option>
+                                    </select>
+                                    <button type="button" id="wf-refresh-corrections" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
+                                </div>
+                            </div>
+                            <div id="wf-corrections-list" class="space-y-2"></div>
+                            <p id="wf-corrections-empty" class="text-sm text-gray-500">No correction attempts yet.</p>
                         </div>
                         <div id="wf-runs-pane-recent" class="wf-runs-pane hidden">
                             <div class="mb-2 flex items-center justify-between gap-3">
