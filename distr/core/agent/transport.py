@@ -148,10 +148,9 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
                 logger.error(f"Error closing input stream: {e}")
 
     def pause_idle_input(self):
-        """Release the mic/CoreAudio input stream while no voice capture mode is active."""
+        """Stop forwarding mic frames while keeping CoreAudio warm for instant capture."""
         self._params.audio_in_enabled = False
-        self._close_input_stream()
-        logger.info("Audio input stream paused while idle: %s", self.get_input_health())
+        logger.info("Audio input forwarding paused while idle: %s", self.get_input_health())
 
     def resume_input(self):
         """Ensure the mic/CoreAudio input stream is ready for capture."""
@@ -185,8 +184,6 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
 
     async def process_frame(self, frame, direction):
         await super().process_frame(frame, direction)
-        if not getattr(self._params, "audio_in_enabled", True) and self._in_stream:
-            self._close_input_stream()
 
     def set_device(self, device_index: int):
         """Switch the input device on the fly."""

@@ -70,6 +70,19 @@ def test_resume_input_recreates_audio_task_after_idle_pause(monkeypatch):
     assert transport.get_input_health()["audio_task_alive"] is True
 
 
+def test_pause_idle_input_keeps_existing_stream_warm():
+    transport = _transport()
+    transport._open_input_stream()
+    stream = transport._in_stream
+
+    transport.pause_idle_input()
+
+    assert transport._params.audio_in_enabled is False
+    assert transport._in_stream is stream
+    assert transport._in_stream.is_active()
+    assert transport.get_input_health()["stream_active"] is True
+
+
 def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
     transport = _transport()
     received = []
