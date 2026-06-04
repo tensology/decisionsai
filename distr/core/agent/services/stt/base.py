@@ -2,6 +2,7 @@
 import asyncio
 import logging
 import string
+import time
 import numpy as np
 from collections import deque
 
@@ -74,6 +75,7 @@ class BaseSTTService(STTService):
         self._stt_cancelled: bool = False
         self._pending_interruption: bool = False
         self._pending_ptt_process: bool = False
+        self._ptt_flush_scheduled: bool = False
 
         # AEC reference buffer — used to gate VAD interruptions during TTS playback.
         # When TTS is playing (ref_buf.is_active), VAD may fire on residual echo
@@ -202,6 +204,9 @@ class BaseSTTService(STTService):
         if active:
             # --- PTT just activated ---
             logger.debug("STT: PTT ACTIVATED - interrupting current response, capturing audio")
+            self._ptt_buffer_accumulator = []
+            self._ptt_flush_scheduled = False
+            self._pending_ptt_process = False
             self._stt_cancelled = True
             self._audio_buffer = []
             self._pending_interruption = True
@@ -235,14 +240,104 @@ class BaseSTTService(STTService):
             except Exception as e:
                 logger.debug(f"Could not emit stt_capture_stopped: {e}")
 
+            self._merge_pre_buffer_into_ptt_on_release()
+
             if self._ptt_buffer_accumulator:
                 self._pending_ptt_process = True
                 n = len(self._ptt_buffer_accumulator)
                 total = sum(len(c) for c in self._ptt_buffer_accumulator)
                 dur = (total / (16000 * 2)) * 1000
-                logger.debug(f"STT: PTT released, buffer has {n} chunks (~{dur:.0f}ms) - will process on next frame")
+                logger.info(
+                    "STT: PTT released, buffer has %s chunks (~%.0fms) — flushing immediately",
+                    n,
+                    dur,
+                )
+                self._schedule_immediate_ptt_buffer_flush()
             else:
-                logger.debug("STT: PTT released but buffer empty - no audio was captured")
+                logger.warning(
+                    "STT: PTT released but buffer empty — no audio captured "
+                    "(dictating=%s, hands_free=%s)",
+                    self._is_dictating,
+                    self._is_hands_free,
+                )
+                if self._is_dictating:
+                    self._schedule_dictation_empty_transcription_unblock()
+
+    def _merge_pre_buffer_into_ptt_on_release(self):
+        """Fold rolling pre-buffer frames collected during dictation/PTT hand-off."""
+        if not self._pre_buffer:
+            return
+        merged = len(self._pre_buffer)
+        self._ptt_buffer_accumulator.extend(self._pre_buffer)
+        self._pre_buffer.clear()
+        logger.info("STT: Merged %s pre-buffer chunk(s) into PTT buffer on release", merged)
+
+    def _schedule_immediate_ptt_buffer_flush(self):
+        """Run PTT transcription on the pipeline loop (do not wait for another mic frame)."""
+        direction = self._pipeline_direction
+        loop = self._event_loop
+        if direction is None:
+            logger.warning(
+                "STT: PTT buffer flush deferred — pipeline_direction not set yet "
+                "(will retry on next frame)"
+            )
+            return
+        if loop is None or not getattr(loop, "is_running", lambda: False)():
+            logger.warning(
+                "STT: PTT buffer flush deferred — event loop not running "
+                "(will retry on next frame)"
+            )
+            return
+        if not hasattr(self, "_process_ptt_buffer_immediate"):
+            return
+        if self._ptt_flush_scheduled:
+            return
+
+        self._ptt_flush_scheduled = True
+
+        async def _flush_ptt_buffer():
+            self._ptt_flush_scheduled = False
+            if not self._ptt_buffer_accumulator:
+                self._pending_ptt_process = False
+                return
+            self._pending_ptt_process = False
+            try:
+                await self._process_ptt_buffer_immediate(direction)
+            except Exception as exc:
+                logger.error("STT: PTT buffer flush failed: %s", exc, exc_info=True)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_flush_ptt_buffer(), loop)
+        except Exception as exc:
+            self._ptt_flush_scheduled = False
+            logger.warning("STT: Could not schedule PTT buffer flush: %s", exc)
+
+    def _schedule_dictation_empty_transcription_unblock(self):
+        """Unblock one-shot dictation when capture produced no audio (avoids 60s stuck state)."""
+        direction = self._pipeline_direction
+        loop = self._event_loop
+        if direction is None or loop is None or not getattr(loop, "is_running", lambda: False)():
+            logger.warning(
+                "STT: Dictation stuck-unblock skipped — pipeline not ready "
+                "(dictation may time out after 60s)"
+            )
+            return
+
+        async def _emit_empty():
+            try:
+                frame = TranscriptionFrame(text="", user_id="", timestamp=time.time())
+                await self.push_frame(frame, direction)
+                logger.info(
+                    "STT: Sent empty TranscriptionFrame to end one-shot dictation "
+                    "(no mic audio captured)"
+                )
+            except Exception as exc:
+                logger.warning("STT: Could not unblock dictation with empty transcript: %s", exc)
+
+        try:
+            asyncio.run_coroutine_threadsafe(_emit_empty(), loop)
+        except Exception as exc:
+            logger.warning("STT: Could not schedule dictation unblock: %s", exc)
 
     # ------------------------------------------------------------------
     # Interruption helper

@@ -1491,6 +1491,11 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
         self._dictation_hotkey_active = True
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.dictation_hotkey_pressed.emit()
+        except Exception:
+            pass
         self._dismiss_tts_player_for_capture("dictation_hotkey_press")
         if not getattr(self, "is_dictating", False):
             self.is_dictating = True
@@ -1499,16 +1504,16 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._event_dispatcher.fire_hook("dictation", trigger="oracle:dictation_hotkey_press")
         except Exception as exc:
             logging.debug("[ORACLE] dictation hook fire failed: %s", exc)
-        try:
-            from distr.core.signals import signal_manager
-            signal_manager.dictation_hotkey_pressed.emit()
-        except Exception:
-            pass
 
     def _on_ticket_dictation_hotkey_pressed(self):
         self._dictation_hotkey_active = True
         self._dictation_started_from_hotkey = True
         self._dictation_started_from_hotkey_deadline = time.monotonic() + 3.0
+        try:
+            from distr.core.signals import signal_manager
+            signal_manager.ticket_dictation_hotkey_pressed.emit()
+        except Exception:
+            pass
         self._dismiss_tts_player_for_capture("ticket_dictation_hotkey_press")
         if not getattr(self, "is_dictating", False):
             self.is_dictating = True
@@ -1517,11 +1522,6 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
             self._event_dispatcher.fire_hook("ticket_dictation", trigger="oracle:ticket_dictation_hotkey_press")
         except Exception as exc:
             logging.debug("[ORACLE] ticket dictation hook fire failed: %s", exc)
-        try:
-            from distr.core.signals import signal_manager
-            signal_manager.ticket_dictation_hotkey_pressed.emit()
-        except Exception:
-            pass
 
     def _on_dictation_hotkey_released(self):
         """Stop dictation via hold-to-dictate hotkey release.

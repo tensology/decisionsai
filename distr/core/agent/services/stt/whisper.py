@@ -278,8 +278,12 @@ class WhisperSTTService(BaseSTTService):
         await self._handle_pending_interruption(direction)
         self._store_pipeline_context(direction)
 
-        # Process PTT buffer if PTT was just deactivated
-        if self._pending_ptt_process and self._ptt_buffer_accumulator:
+        # Backup flush if immediate schedule from set_ptt_active(False) could not run
+        if (
+            self._pending_ptt_process
+            and self._ptt_buffer_accumulator
+            and not getattr(self, "_ptt_flush_scheduled", False)
+        ):
             self._pending_ptt_process = False
             await self._process_ptt_buffer_immediate(direction)
 

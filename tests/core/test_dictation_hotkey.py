@@ -3,6 +3,7 @@
 from unittest.mock import MagicMock, patch
 
 import pytest
+from pathlib import Path
 
 
 # ---------------------------------------------------------------------------
@@ -18,6 +19,30 @@ def test_dictation_hotkey_defaults_in_hotkeys_py():
     assert DEFAULTS["ticket_dictation_hotkey_modifier"] == "control_shift"
     assert "dictation_hotkey_key" in DEFAULTS
     assert DEFAULTS["dictation_hotkey_key"] == ""
+
+
+def test_oracle_emits_dictation_signal_before_player_dismissal():
+    source = Path("distr/gui/oracle/window.py").read_text()
+    method = source[
+        source.index("    def _on_dictation_hotkey_pressed"):
+        source.index("    def _on_ticket_dictation_hotkey_pressed")
+    ]
+
+    assert method.index("signal_manager.dictation_hotkey_pressed.emit()") < method.index(
+        'self._dismiss_tts_player_for_capture("dictation_hotkey_press")'
+    )
+
+
+def test_oracle_emits_ticket_dictation_signal_before_player_dismissal():
+    source = Path("distr/gui/oracle/window.py").read_text()
+    method = source[
+        source.index("    def _on_ticket_dictation_hotkey_pressed"):
+        source.index("    def _on_dictation_hotkey_released")
+    ]
+
+    assert method.index("signal_manager.ticket_dictation_hotkey_pressed.emit()") < method.index(
+        'self._dismiss_tts_player_for_capture("ticket_dictation_hotkey_press")'
+    )
 
 
 # ---------------------------------------------------------------------------
