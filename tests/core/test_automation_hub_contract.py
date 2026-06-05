@@ -111,11 +111,8 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
     client = TestClient(app)
     dispatched = []
 
-    def fake_start_workflow_run(workflow_id, context="", run_metadata=None, **kwargs):
-        dispatched.append((workflow_id, context, run_metadata or {}))
-        return {"run_id": 4040, "workflow_id": workflow_id, "status": "running"}
-
-    monkeypatch.setattr("distr.core.workflow.dispatcher.start_workflow_run", fake_start_workflow_run)
+    monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 404)
+    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
 
     create_resp = client.post(
         "/api/automations",
@@ -168,6 +165,9 @@ def test_automations_api_create_list_and_run_smoke(monkeypatch):
     assert body["success"] is True
     assert body["run"]["workflow_id"] == workflow_id
     assert body["run"]["automation_id"] == automation["id"]
+    assert dispatched
+    assert dispatched[0][0] == 404
+    assert "Create a planning note." in dispatched[0][1]
 
     delete_resp = client.delete(f"/api/automations/{automation['id']}")
     assert delete_resp.status_code == 200
@@ -236,11 +236,12 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
     emitted_events = []
     dispatched = []
 
-    def fake_start_workflow_run(workflow_id, context="", run_metadata=None, **kwargs):
-        dispatched.append((workflow_id, context, run_metadata or {}))
-        return {"run_id": 909, "workflow_id": workflow_id, "status": "running"}
+    def fail_if_workflow_agent_path_is_used(*args, **kwargs):
+        raise AssertionError("automation instructions must dispatch to the live chat orchestrator")
 
-    monkeypatch.setattr("distr.core.workflow.dispatcher.start_workflow_run", fake_start_workflow_run)
+    monkeypatch.setattr("distr.core.workflow.dispatcher.start_workflow_run", fail_if_workflow_agent_path_is_used)
+    monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 77)
+    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
     monkeypatch.setattr(
         automations_routes,
         "_emit_automation_event",
@@ -271,11 +272,68 @@ def test_run_now_dispatches_instruction_to_orchestrator(monkeypatch):
     assert run_resp.status_code == 200
     run = run_resp.json()["run"]
     assert run["status"] == "dispatched"
-    assert run["workflow_run_id"] == 909
+    assert run["workflow_run_id"]
     assert run["summary"] == "Automation instruction sent to the orchestrator."
     assert dispatched
+    assert dispatched[0][0] == 77
     assert dispatched[0][1].startswith("[Multi-Action Intake]")
     assert "screen 3" in dispatched[0][1]
-    assert dispatched[0][2]["source_type"] == "automation"
-    assert dispatched[0][2]["is_workflow_attached"] is True
+    assert dispatched[0][2] is True
     assert [event["event_type"] for event in emitted_events] == ["run_started", "worker_dispatched"]
+
+
+def test_scheduled_automation_dispatches_to_current_chat_not_workflow_agent(monkeypatch):
+    import json
+    from datetime import datetime, timedelta
+
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
+    from distr.core.workflow.scheduler import run_scheduled_workflow
+    from distr.gui.web.routes.automations import _automation_marker
+
+    dispatched = []
+
+    def fail_if_workflow_agent_path_is_used(*args, **kwargs):
+        raise AssertionError("scheduled automations must dispatch to the live chat orchestrator")
+
+    monkeypatch.setattr("distr.core.workflow.service.start_workflow_run", fail_if_workflow_agent_path_is_used)
+    monkeypatch.setattr("distr.core.automation_orchestrator.resolve_current_agent_chat_id", lambda settings=None: 88)
+    monkeypatch.setattr("distr.core.automation_orchestrator.emit_to_agent_chat", lambda *args: dispatched.append(args))
+
+    with get_session() as session:
+        workflow = AutoWorkflow(
+            name="Daily Plan Automation",
+            status="active",
+            workflow_type="scheduled",
+            context_rules=_automation_marker({"kind": "daily", "time": "09:00"}),
+            schedule_enabled=True,
+            schedule_preset="daily",
+            schedule_time="09:00",
+            next_run_at=datetime.utcnow() - timedelta(minutes=1),
+        )
+        session.add(workflow)
+        session.flush()
+        session.add(AutoWorkflowStep(
+            workflow_id=workflow.id,
+            position=0,
+            name="Automation Instruction",
+            action_type="agent_instruction",
+            step_type="agent_instruction",
+            instruction="Tell me my daily plan from tickets and messages.",
+            config=json.dumps({"source": "automation"}),
+        ))
+        workflow_id = workflow.id
+        session.commit()
+
+    assert run_scheduled_workflow(workflow_id) is True
+    assert dispatched
+    assert dispatched[0][0] == 88
+    assert "Tell me my daily plan" in dispatched[0][1]
+
+    with get_session() as session:
+        runs = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.workflow_id == workflow_id).all()
+        assert len(runs) == 1
+        assert runs[0].status == "dispatched"
+        data = json.loads(runs[0].run_data)
+        assert data["execution_mode"] == "agent_chat_orchestrator"
+        assert data["phase"] == "scheduled_automation"

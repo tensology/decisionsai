@@ -8,11 +8,16 @@ Cost: a few ``sys.modules`` assignments once per pytest process (negligible).
 
 from __future__ import annotations
 
+import os
 import sys
+import tempfile
 import types
 from unittest.mock import MagicMock
 
 import pytest
+
+os.environ.setdefault("DECISIONS_DB_DIR", tempfile.mkdtemp(prefix="decisions-test-db-"))
+os.environ.setdefault("DECISIONS_TEST_MODE", "1")
 
 # ---------------------------------------------------------------------------
 # Settings — many tests import code that touches DB-backed settings first.

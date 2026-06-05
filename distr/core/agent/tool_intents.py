@@ -30,6 +30,8 @@ _RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
         (
             r"\b(proactive|morning|lunch|evening|check\s+work|work\s+coming\s+in|prioriti[sz]e|what\s+is\s+important)\b.*\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?|codex|codecs|cursor|project)\b",
             r"\b(gmail|slack|whats\s*app|telegram|trello|jira|boards?)\b.*\b(prioriti[sz]e|important|check|scan|work\s+coming\s+in|what\s+matters)\b",
+            r"\b(daily\s+plan|day\s+plan|today'?s\s+plan|plan\s+my\s+day|morning\s+brief|what\s+should\s+i\s+do\s+today|what'?s\s+my\s+plan)\b",
+            r"\b(plan|prioriti[sz]e)\b.*\b(today|my\s+day|daily|emails?|gmail|whats\s*app|tickets?|boards?|projects?|workflows?)\b",
             r"\b(where\s+am\s+i|what\s+am\s+i\s+doing|workload|working\s+on)\b.*\b(cursor|codex|codecs)\b",
             r"\b(cursor|codex|codecs)\b.*\b(workload|working\s+on|what\s+am\s+i\s+doing|where\s+am\s+i)\b",
         ),

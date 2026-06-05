@@ -48,8 +48,8 @@
 | 🔀 | **Workflows + automations** | Multi-step workflows with validation, agent routing, recording, presets, scheduling, and itemized automations |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
-| 🧭 | **Hermes orchestration** | Tie chat, ticket boards, workflows, automations, browser evidence, and IDE handoffs into one project-aware ledger |
-| 🔧 | **IDE + coding agents** | Work with Codex, Cursor, Claude, and coding backends from project and ticket context without losing the thread |
+| 🧭 | **Hermes orchestration** | Integrated orchestration ledger for chat, ticket boards, workflows, automations, browser evidence, IDE handoffs, planning, and long-running work memory |
+| 🔧 | **IDE + coding agents** | Work with Codex, Cursor, Claude, and coding backends through local plugins and harness reporting so project context does not disappear |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
 
@@ -213,6 +213,8 @@ cd decisionsai
 
 The launcher handles dependency checks, Python setup, model downloads, and launch automatically.
 
+When Codex, Cursor, or Claude are available on the machine, setup also verifies the DecisionsAI harness wiring for them. Codex and Cursor receive local DecisionsAI plugin/reporting files so IDE conversations and project work can speak back to Hermes; Claude receives the compatible harness surface. If an IDE is not installed or DecisionsAI is not running, those checks fail quietly instead of blocking launch.
+
 ### Manual installation
 
 ```bash
@@ -298,7 +300,11 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 
 ### IDE Integration
 
-Codex, Cursor, Claude, and other coding backends can be wired through project context so ticket-board work, free-form IDE chats, workflow runs, and orchestrator updates all stay attached to the right project where possible. The CLI path still exists, but the product is moving toward IDE-first handoff and feedback.
+Codex, Cursor, Claude, and other coding backends are wired through project context so ticket-board work, free-form IDE chats, workflow runs, automation runs, and orchestrator updates can stay attached to the right project where possible. The CLI path still exists, but DecisionsAI now treats the IDEs as first-class development surfaces.
+
+The local Codex and Cursor plugins are installed or repaired during setup when those tools are detected. They report project/session events back into Hermes, which lets the main orchestrator continue a thread, see whether a project is moving, attach browser or workflow evidence, and speak to you from the right channel instead of losing the work inside a separate editor chat.
+
+Hermes acts as the shared harness for that loop: tickets, boards, automations, workflows, browser runs, local project folders, and IDE conversations all feed the same project-aware ledger. That is what lets DecisionsAI answer questions like "what is my daily plan?", "what is stuck?", or "what happened in Codex on this project?" using more than the last chat message.
 
 ---
 

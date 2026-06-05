@@ -108,6 +108,36 @@ def test_low_value_status_update_is_silent_even_without_response_requirement():
     assert decision.suppress_reason == "low_value_status"
 
 
+def test_terminal_execution_status_is_deduped_without_response_requirement():
+    from distr.core.human_engagement import (
+        EngagementIntent,
+        HumanEngagementService,
+        reset_engagement_ledger,
+    )
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+    service = HumanEngagementService(telegram_manager=DummyTelegram(), now=lambda: 120)
+    intent = EngagementIntent(
+        source="initiative",
+        surface="telegram",
+        kind="execution_terminal",
+        priority="normal",
+        subject_type="ide_session",
+        subject_id="codex-42",
+        state_fingerprint="completed",
+        body="Codex finished DecisionsAI. Result: complete.",
+    )
+
+    first = service.decide(intent)
+    second = HumanEngagementService(telegram_manager=DummyTelegram(), now=lambda: 180).decide(intent)
+
+    assert first.should_send is True
+    assert second.should_send is False
+    assert second.suppress_reason == "duplicate_state"
+
+
 def test_low_value_status_can_send_only_with_explicit_notification_intent():
     from distr.core.human_engagement import (
         EngagementIntent,
@@ -150,6 +180,39 @@ def test_sanitized_copy_removes_markdown_links_and_raw_provider_errors():
     assert "https://" not in clean
     assert "##" not in clean
     assert "quota" not in clean.lower()
+
+
+def test_remote_control_link_is_preserved_and_sent_as_text():
+    from distr.core.human_engagement import (
+        EngagementIntent,
+        HumanEngagementService,
+        sanitize_engagement_text,
+        reset_engagement_ledger,
+    )
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+    text = "Remote Control:\nhttps://www.decisionsai.net/api/remote/?channel=abc123\nDo not share this link."
+
+    assert "https://www.decisionsai.net/api/remote/" in sanitize_engagement_text(text, preserve_links=True)
+
+    decision = HumanEngagementService(telegram_manager=DummyTelegram(), now=lambda: 120).decide(EngagementIntent(
+        source="telegram",
+        surface="telegram",
+        kind="remote_link",
+        priority="normal",
+        subject_type="remote",
+        subject_id="telegram",
+        state_fingerprint="abc123",
+        body=text,
+        voice_body=text,
+        explicit_notification_intent=True,
+    ))
+
+    assert decision.should_send is True
+    assert decision.format == "text"
+    assert decision.final_text and "https://www.decisionsai.net/api/remote/" in decision.final_text
 
 
 def test_placeholder_project_labels_use_workspace_or_neutral_label():

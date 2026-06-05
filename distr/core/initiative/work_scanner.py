@@ -7,6 +7,8 @@ proposal is surfaced, queued for approval, or executed.
 
 from __future__ import annotations
 
+import os
+import time
 from datetime import datetime, timedelta
 from typing import Any
 
@@ -29,6 +31,14 @@ WORK_KEYWORDS = {
     "app",
     "workflow",
     "board",
+    "task",
+    "approval",
+    "blocker",
+    "blocked",
+    "follow up",
+    "follow-up",
+    "meeting",
+    "standup",
 }
 
 
@@ -36,7 +46,8 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
     scan = {
         "boards": [],
         "proposals": [],
-        "messages": {"whatsapp": [], "telegram": [], "email": []},
+        "messages": {"whatsapp": [], "telegram": [], "email": [], "slack": [], "discord": []},
+        "tasks": {"clickup": [], "monday": []},
         "connected_sources": [],
         "unavailable_sources": [],
     }
@@ -72,10 +83,15 @@ def build_work_scan(settings: dict[str, Any]) -> dict[str, Any]:
             scan["unavailable_sources"].append({"source": "telegram", "reason": str(exc)})
 
     if settings.get("initiative_scan_email", False):
-        # Email scanning is connector/sub-agent territory. Until a mailbox source
-        # is wired into the local runtime, Initiative should stay quiet here
-        # instead of surfacing a false "broken" source on every cycle.
-        pass
+        try:
+            _scan_email(scan)
+        except Exception as exc:
+            scan["unavailable_sources"].append({"source": "email", "reason": str(exc)})
+
+    try:
+        _scan_advanced_work_connectors(scan, settings)
+    except Exception as exc:
+        scan["unavailable_sources"].append({"source": "advanced_connectors", "reason": str(exc)})
 
     return scan
 
@@ -96,10 +112,13 @@ def _connected_work_sources(settings: dict[str, Any]) -> list[dict[str, Any]]:
         "jira": "Jira",
         "trello": "Trello",
         "slack_app": "Slack",
+        "discord_bot": "Discord",
         "clickup": "ClickUp",
         "monday": "Monday",
         "whatsapp": "WhatsApp",
         "telegram": "Telegram",
+        "google": "Gmail",
+        "gmail": "Gmail",
     }
     sources = []
     for account in raw:
@@ -118,6 +137,7 @@ def _connected_work_sources(settings: dict[str, Any]) -> list[dict[str, Any]]:
                 or account.get("access_token")
                 or account.get("user_id")
                 or account.get("app_user_id")
+                or (provider == "google" and account.get("access_token"))
                 or provider in {"jira", "trello"}
             )
         )
@@ -501,6 +521,366 @@ def _scan_telegram(scan: dict[str, Any]) -> None:
                     "risk_level": "medium",
                 },
             })
+
+
+def _scan_email(scan: dict[str, Any]) -> None:
+    from distr.core.agent.services.integrations.google_workspace import GoogleWorkspaceConnector
+
+    connector = GoogleWorkspaceConnector()
+    if not connector.is_connected():
+        scan["unavailable_sources"].append({"source": "email", "reason": "Google/Gmail is not connected"})
+        return
+
+    messages = connector.check_inbox(max_results=10, query="in:inbox newer_than:7d") or []
+    work_like = []
+    for msg in messages:
+        subject = str(msg.get("subject") or "").strip()
+        snippet = str(msg.get("snippet") or msg.get("body") or "").strip()
+        combined = f"{subject}\n{snippet}".strip()
+        item = {
+            "id": msg.get("id") or "",
+            "thread_id": msg.get("threadId") or "",
+            "from": msg.get("from") or "",
+            "subject": subject,
+            "snippet": snippet[:240],
+            "date": msg.get("date") or "",
+            "labels": msg.get("labels") or [],
+            "work_related": _looks_work_related(combined),
+        }
+        if item["work_related"]:
+            work_like.append(item)
+
+    scan["messages"]["email"] = work_like
+    if work_like:
+        chosen = work_like[0]
+        scan["proposals"].append({
+            "action_type": "message_triage",
+            "description": (
+                f"{len(work_like)} recent email(s) look work-related. "
+                f"Top email: {chosen['subject'] or chosen['snippet']}"
+            ),
+            "payload": {
+                "source": "email",
+                "message_ids": [m["id"] for m in work_like[:5] if m.get("id")],
+                "thread_ids": [m["thread_id"] for m in work_like[:5] if m.get("thread_id")],
+                "confidence": 0.66,
+                "risk_level": "medium",
+            },
+        })
+
+
+def _scan_advanced_work_connectors(scan: dict[str, Any], settings: dict[str, Any]) -> None:
+    accounts = _connected_work_accounts(settings)
+    if _account_token(accounts, "slack_app", "bot_token") or os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN"):
+        try:
+            _scan_slack(scan, accounts)
+        except Exception as exc:
+            scan["unavailable_sources"].append({"source": "slack", "reason": str(exc)})
+
+    if _account_token(accounts, "discord_bot", "bot_token") or os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN"):
+        try:
+            _scan_discord(scan, accounts)
+        except Exception as exc:
+            scan["unavailable_sources"].append({"source": "discord", "reason": str(exc)})
+
+    if _account_token(accounts, "clickup", "api_token"):
+        try:
+            _scan_clickup(scan, accounts)
+        except Exception as exc:
+            scan["unavailable_sources"].append({"source": "clickup", "reason": str(exc)})
+
+    if _account_token(accounts, "monday", "api_token"):
+        try:
+            _scan_monday(scan, accounts)
+        except Exception as exc:
+            scan["unavailable_sources"].append({"source": "monday", "reason": str(exc)})
+
+
+def _connected_work_accounts(settings: dict[str, Any]) -> list[dict[str, Any]]:
+    import json
+
+    raw = settings.get("connected_accounts") or []
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            raw = []
+    if not isinstance(raw, list):
+        return []
+    return [account for account in raw if isinstance(account, dict)]
+
+
+def _account_token(accounts: list[dict[str, Any]], provider: str, key: str) -> str:
+    for account in accounts:
+        if str(account.get("provider") or "").strip().lower() == provider:
+            return str(account.get(key) or "").strip()
+    return ""
+
+
+def _http_get_json(url: str, *, headers: dict[str, str] | None = None, params: dict[str, Any] | None = None, timeout: float = 6.0) -> Any:
+    import requests
+
+    response = requests.get(url, headers=headers or {}, params=params or {}, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, (dict, list)) else {}
+
+
+def _http_post_json(url: str, *, headers: dict[str, str] | None = None, json_payload: dict[str, Any] | None = None, timeout: float = 8.0) -> dict[str, Any]:
+    import requests
+
+    response = requests.post(url, headers=headers or {}, json=json_payload or {}, timeout=timeout)
+    response.raise_for_status()
+    payload = response.json()
+    return payload if isinstance(payload, dict) else {}
+
+
+def _scan_slack(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    token = os.environ.get("DECISIONSAI_SLACK_BOT_TOKEN") or _account_token(accounts, "slack_app", "bot_token")
+    if not token:
+        return
+    headers = {"Authorization": f"Bearer {token}"}
+    channel_payload = _http_get_json(
+        "https://slack.com/api/conversations.list",
+        headers=headers,
+        params={"types": "public_channel,private_channel,mpim,im", "limit": 20, "exclude_archived": "true"},
+    )
+    if channel_payload.get("ok") is False:
+        raise RuntimeError(str(channel_payload.get("error") or "slack_api_error"))
+    oldest = str(int(time.time() - (7 * 24 * 60 * 60)))
+    work_like = []
+    for channel in (channel_payload.get("channels") or [])[:6]:
+        channel_id = str(channel.get("id") or "")
+        if not channel_id:
+            continue
+        history = _http_get_json(
+            "https://slack.com/api/conversations.history",
+            headers=headers,
+            params={"channel": channel_id, "limit": 8, "oldest": oldest},
+        )
+        if history.get("ok") is False:
+            continue
+        for msg in history.get("messages") or []:
+            text = str(msg.get("text") or "").strip()
+            if not _looks_work_related(text):
+                continue
+            work_like.append({
+                "channel_id": channel_id,
+                "channel_name": channel.get("name") or channel_id,
+                "user": msg.get("user") or "",
+                "ts": msg.get("ts") or "",
+                "text_preview": text[:240],
+                "work_related": True,
+            })
+            if len(work_like) >= 12:
+                break
+        if len(work_like) >= 12:
+            break
+    scan["messages"]["slack"] = work_like
+    if work_like:
+        chosen = work_like[0]
+        scan["proposals"].append({
+            "action_type": "message_triage",
+            "description": (
+                f"{len(work_like)} recent Slack message(s) look work-related. "
+                f"Top channel: {chosen['channel_name']}."
+            ),
+            "payload": {
+                "source": "slack",
+                "channel_ids": sorted({m["channel_id"] for m in work_like if m.get("channel_id")})[:5],
+                "confidence": 0.62,
+                "risk_level": "medium",
+            },
+        })
+
+
+def _scan_clickup(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    token = _account_token(accounts, "clickup", "api_token")
+    if not token:
+        return
+    headers = {"Authorization": token}
+    teams_payload = _http_get_json("https://api.clickup.com/api/v2/team", headers=headers)
+    teams = teams_payload.get("teams") or []
+    tasks = []
+    for team in teams[:3]:
+        team_id = str(team.get("id") or "")
+        if not team_id:
+            continue
+        payload = _http_get_json(
+            f"https://api.clickup.com/api/v2/team/{team_id}/task",
+            headers=headers,
+            params={"include_closed": "false", "subtasks": "true", "page": 0, "order_by": "updated", "reverse": "true"},
+        )
+        for task in payload.get("tasks") or []:
+            name = str(task.get("name") or "").strip()
+            text = f"{name}\n{task.get('text_content') or task.get('description') or ''}"
+            if not _looks_work_related(text) and str(task.get("priority") or "") not in {"1", "urgent", "high"}:
+                continue
+            status = task.get("status") or {}
+            priority = task.get("priority") or {}
+            tasks.append({
+                "id": task.get("id") or "",
+                "name": name,
+                "status": status.get("status") if isinstance(status, dict) else str(status or ""),
+                "priority": priority.get("priority") if isinstance(priority, dict) else str(priority or ""),
+                "url": task.get("url") or "",
+                "team": team.get("name") or team_id,
+                "updated": task.get("date_updated") or "",
+            })
+            if len(tasks) >= 15:
+                break
+        if len(tasks) >= 15:
+            break
+    scan["tasks"]["clickup"] = tasks
+    if tasks:
+        scan["proposals"].append({
+            "action_type": "task_triage",
+            "description": f"{len(tasks)} ClickUp task(s) look active or important. Top task: {tasks[0]['name']}",
+            "payload": {
+                "source": "clickup",
+                "task_ids": [task["id"] for task in tasks[:8] if task.get("id")],
+                "confidence": 0.64,
+                "risk_level": "medium",
+            },
+        })
+
+
+def _scan_discord(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    token = os.environ.get("DECISIONSAI_DISCORD_BOT_TOKEN") or _account_token(accounts, "discord_bot", "bot_token")
+    if not token:
+        return
+    headers = {"Authorization": f"Bot {token}"}
+    guilds_payload = _http_get_json("https://discord.com/api/v10/users/@me/guilds", headers=headers)
+    guilds = guilds_payload if isinstance(guilds_payload, list) else guilds_payload.get("guilds") or []
+    work_like = []
+    for guild in guilds[:3]:
+        guild_id = str(guild.get("id") or "")
+        if not guild_id:
+            continue
+        channels_payload = _http_get_json(
+            f"https://discord.com/api/v10/guilds/{guild_id}/channels",
+            headers=headers,
+        )
+        channels = channels_payload if isinstance(channels_payload, list) else channels_payload.get("channels") or []
+        for channel in channels[:8]:
+            channel_type = int(channel.get("type") or 0)
+            if channel_type not in {0, 5, 10, 11, 12}:
+                continue
+            channel_id = str(channel.get("id") or "")
+            if not channel_id:
+                continue
+            messages_payload = _http_get_json(
+                f"https://discord.com/api/v10/channels/{channel_id}/messages",
+                headers=headers,
+                params={"limit": 8},
+            )
+            messages = messages_payload if isinstance(messages_payload, list) else messages_payload.get("messages") or []
+            for msg in messages:
+                text = str(msg.get("content") or "").strip()
+                if not _looks_work_related(text):
+                    continue
+                author = msg.get("author") or {}
+                work_like.append({
+                    "guild_id": guild_id,
+                    "guild_name": guild.get("name") or guild_id,
+                    "channel_id": channel_id,
+                    "channel_name": channel.get("name") or channel_id,
+                    "author": author.get("username") if isinstance(author, dict) else "",
+                    "id": msg.get("id") or "",
+                    "text_preview": text[:240],
+                    "created_date": msg.get("timestamp") or "",
+                    "work_related": True,
+                })
+                if len(work_like) >= 12:
+                    break
+            if len(work_like) >= 12:
+                break
+        if len(work_like) >= 12:
+            break
+    scan["messages"]["discord"] = work_like
+    if work_like:
+        chosen = work_like[0]
+        scan["proposals"].append({
+            "action_type": "message_triage",
+            "description": (
+                f"{len(work_like)} recent Discord message(s) look work-related. "
+                f"Top channel: {chosen['channel_name']}."
+            ),
+            "payload": {
+                "source": "discord",
+                "channel_ids": sorted({m["channel_id"] for m in work_like if m.get("channel_id")})[:5],
+                "confidence": 0.6,
+                "risk_level": "medium",
+            },
+        })
+
+
+def _scan_monday(scan: dict[str, Any], accounts: list[dict[str, Any]]) -> None:
+    token = _account_token(accounts, "monday", "api_token")
+    if not token:
+        return
+    headers = {"Authorization": token, "Content-Type": "application/json"}
+    query = """
+    query DecisionsDailyPlan {
+      boards(limit: 10) {
+        id
+        name
+        items_page(limit: 8) {
+          items {
+            id
+            name
+            updated_at
+            group { title }
+            column_values { text }
+          }
+        }
+      }
+    }
+    """
+    payload = _http_post_json(
+        "https://api.monday.com/v2",
+        headers=headers,
+        json_payload={"query": query},
+    )
+    if payload.get("errors"):
+        raise RuntimeError("monday_api_error")
+    items = []
+    for board in ((payload.get("data") or {}).get("boards") or []):
+        for item in (((board.get("items_page") or {}).get("items")) or []):
+            col_text = " ".join(
+                str(col.get("text") or "")
+                for col in (item.get("column_values") or [])
+                if isinstance(col, dict)
+            )
+            text = f"{item.get('name') or ''}\n{col_text}"
+            if not _looks_work_related(text):
+                continue
+            group = item.get("group") or {}
+            items.append({
+                "id": item.get("id") or "",
+                "name": item.get("name") or "",
+                "board_id": board.get("id") or "",
+                "board_name": board.get("name") or "",
+                "group": group.get("title") if isinstance(group, dict) else "",
+                "updated_at": item.get("updated_at") or "",
+            })
+            if len(items) >= 15:
+                break
+        if len(items) >= 15:
+            break
+    scan["tasks"]["monday"] = items
+    if items:
+        scan["proposals"].append({
+            "action_type": "task_triage",
+            "description": f"{len(items)} Monday item(s) look work-related. Top item: {items[0]['name']}",
+            "payload": {
+                "source": "monday",
+                "item_ids": [item["id"] for item in items[:8] if item.get("id")],
+                "board_ids": sorted({item["board_id"] for item in items if item.get("board_id")})[:5],
+                "confidence": 0.62,
+                "risk_level": "medium",
+            },
+        })
 
 
 def _looks_work_related(text: str) -> bool:

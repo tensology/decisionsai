@@ -700,6 +700,49 @@ def get_session():
     Or directly for backward compatibility: session = get_session() (remember to call session.close())"""
     return SessionContext()
 
+
+def _cleanup_orphaned_test_ide_sessions() -> None:
+    """Remove orphaned IDE-bridge rows from the real runtime DB.
+
+    Older builds and tests created ProjectExecutionSession rows against projects
+    that no longer exist. Those rows look like real idle Cursor/Codex sessions at
+    startup, which makes Initiative send confusing placeholder nudges. Keep the
+    cleanup narrow: only IDE bridge rows with a non-null missing project id go.
+    """
+    if os.environ.get("DECISIONS_TEST_MODE") == "1":
+        return
+    try:
+        with engine.connect() as conn:
+            table_exists = conn.execute(sa_text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='project_execution_sessions'"
+            )).fetchone()
+            if not table_exists:
+                return
+            event_table_exists = conn.execute(sa_text(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='project_execution_events'"
+            )).fetchone()
+            where_clause = """
+                route_type = 'ide_bridge'
+                AND project_id IS NOT NULL
+                AND project_id NOT IN (SELECT id FROM projects)
+            """
+            if event_table_exists:
+                conn.execute(sa_text(f"""
+                    DELETE FROM project_execution_events
+                    WHERE session_id IN (
+                        SELECT id FROM project_execution_sessions WHERE {where_clause}
+                    )
+                """))
+            conn.execute(sa_text(f"DELETE FROM project_execution_sessions WHERE {where_clause}"))
+            conn.commit()
+    except Exception as exc:
+        logging.getLogger(__name__).debug(
+            "Orphaned test IDE session cleanup skipped: %s",
+            exc,
+            exc_info=True,
+        )
+
+
 def init_db():
     """Initialize the database by creating all tables and adding default settings"""
     # Import project models to ensure they're registered with Base
@@ -718,6 +761,8 @@ def init_db():
     # Run all database migrations
     from distr.core.db.migrations import run_migrations
     run_migrations()
+
+    _cleanup_orphaned_test_ide_sessions()
 
     try:
         from distr.core.db.proactive import ensure_system_proactive_tasks

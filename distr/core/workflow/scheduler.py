@@ -466,6 +466,7 @@ def run_scheduled_workflow(
     workflow_id: int,
     on_start_orchestration: Optional[Callable] = None,
     event_queue: Optional[Any] = None,
+    on_scheduled_automation: Optional[Callable[[dict[str, Any]], Any]] = None,
 ) -> bool:
     """
     Trigger a scheduled workflow run and advance next_run_at.
@@ -488,6 +489,17 @@ def run_scheduled_workflow(
 
         due_at = wf.next_run_at
         timing_metadata = _scheduled_timing_metadata(due_at)
+        scheduled_automation = None
+        try:
+            from distr.core.automation_orchestrator import (
+                is_automation_workflow,
+                serialize_automation_workflow,
+            )
+
+            if is_automation_workflow(wf):
+                scheduled_automation = serialize_automation_workflow(wf)
+        except Exception:
+            logger.debug("Workflow scheduler: automation detection failed for workflow %d", workflow_id, exc_info=True)
         skip_message = _scheduled_action_preflight(wf)
         if skip_message:
             logger.warning("Workflow scheduler: %s", skip_message)
@@ -512,6 +524,48 @@ def run_scheduled_workflow(
             session.commit()
             return True
         session.commit()
+
+    if scheduled_automation is not None:
+        try:
+            if on_scheduled_automation is not None:
+                result = on_scheduled_automation({
+                    "automation": scheduled_automation,
+                    "timing": timing_metadata,
+                    "workflow_id": workflow_id,
+                })
+            else:
+                from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
+
+                result = dispatch_automation_to_current_chat(
+                    scheduled_automation,
+                    manual=False,
+                    schedule_metadata={
+                        "source_type": "scheduled",
+                        "source_label": "Scheduled",
+                        "phase": "scheduled_automation",
+                        **timing_metadata,
+                    },
+                )
+            if isinstance(result, dict) and result.get("status") == "failed":
+                logger.warning(
+                    "Workflow scheduler: scheduled automation %d dispatch failed: %s",
+                    workflow_id,
+                    result.get("summary"),
+                )
+                return False
+            logger.info(
+                "Workflow scheduler: dispatched automation %d to orchestrator chat",
+                workflow_id,
+            )
+            return True
+        except Exception as exc:
+            logger.error(
+                "Workflow scheduler: scheduled automation %d dispatch errored: %s",
+                workflow_id,
+                exc,
+                exc_info=True,
+            )
+            return False
 
     # Start the workflow run via the unified service
     result = start_workflow_run(

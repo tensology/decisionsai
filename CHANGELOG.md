@@ -10,6 +10,10 @@ The next phase is deliberately not about piling on another large feature surface
 
 That means more work on orchestration quality, ticket parsing, tool selection, workflow validation, board-to-project context, remote board parity for Trello/Jira, clearer chat activity traces, stronger regression tests, better initiative communication, and fewer places where the agent quietly does the wrong thing. The goal is for DecisionsAI to reliably receive work, understand where it belongs, create the right ticket or workflow, execute with visible progress, recover when stuck, and communicate what happened without noise.
 
+The bigger direction is daily planning and advanced connected intelligence. Hermes should be able to look across Telegram, WhatsApp, Gmail, boards, projects, Codex/Cursor activity, browser evidence, and the enabled Advanced integrations such as Slack, Monday, ClickUp, Jira, and Trello, then turn that into a useful plan instead of a noisy dump. The aim is an agent that can quietly notice what is moving, what is blocked, what is stale, and what deserves your attention, while still asking before it takes meaningful action.
+
+The IDE harness is also becoming a first-class part of the product. Codex and Cursor should feel like live development surfaces attached to DecisionsAI, not separate places where context disappears. Setup should keep the local plugins and harness reporting repaired, skills should stay deduped across ECC and local packs, and the orchestrator should know how to continue a thread whether the work started in chat, a board, an automation, a workflow, or an IDE.
+
 ---
 
 ## [2.7.17] - 2026-06-05
@@ -26,9 +30,15 @@ That means more work on orchestration quality, ticket parsing, tool selection, w
 
 **ECC and skill setup moved into a cleaner registry model.** The ECC surface is vendored with provenance, skills are deduped instead of blindly copied, and setup can repair Codex, Cursor, and Claude wiring without spraying duplicate skills everywhere.
 
+**Codex and Cursor plugin setup is now part of the harness story.** Local setup can verify and repair the DecisionsAI IDE plugins when Codex or Cursor is present, while Claude receives the compatible harness surface. That gives the IDEs a way to report back into Hermes instead of acting like disconnected command-line helpers.
+
 **Browser and Playwright work is less isolated.** Browser runs can keep per-session evidence, including screenshots and console/network context, and tie that evidence back to the same project, workflow, automation, or IDE conversation that started it.
 
 **The assistant got a quieter, more human engagement layer.** Telegram and desktop responses now route through a central policy so low-value status gets logged instead of spammed, voice is preferred when it is useful, repeated idle nudges are suppressed, raw provider errors are summarized, and lifecycle messages are shorter.
+
+**Telegram and automation delivery were hardened.** Inbound Telegram messages wait for the agent bridge during startup instead of being dropped, outbound rate limits defer messages instead of losing them, remote-control link requests stay intact, and scheduled automation reports no longer create noisy secondary chat or Telegram summaries.
+
+**Internal project and workflow records stopped leaking into user surfaces.** Orphaned IDE bridge sessions are cleaned up, placeholder project labels are replaced with real workspace names or neutral labels, and internal audit/project-execution workflows stay out of the normal workflow list.
 
 **Hermes memory started separating conversation history from durable preferences.** The memory layer can keep useful long-term style and taste signals while letting old chat transcripts be removed or compacted, with weekly compaction groundwork added so the system does not slowly bloat.
 

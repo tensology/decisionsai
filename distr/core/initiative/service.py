@@ -1673,16 +1673,16 @@ class InitiativeService:
         return f"idle:{status}:{started}:{instruction_hash}"
 
     def _execution_idle_text(self, backend_label: str, project_name: str, minutes: int, instruction: str) -> str:
-        prefix = f"{backend_label} for {project_name} has not shown new movement for {minutes} minutes."
+        prefix = f"{backend_label} has been quiet on {project_name} for {minutes} minutes."
         if instruction:
             prefix += f" It was working on: {instruction}."
-        return f"{prefix} I can check it if you ask."
+        return f"{prefix} Ask me to check it when you want me to step in."
 
     def _execution_waiting_text(self, backend_label: str, project_name: str, instruction: str) -> str:
         prefix = f"{backend_label} for {project_name} is waiting for input."
         if instruction:
             prefix += f" It was working on: {instruction}."
-        return f"{prefix} I saved the current state in Decisions."
+        return f"{prefix} Tell me what you want it to do next."
 
     def _execution_terminal_text(
         self,
@@ -1700,8 +1700,44 @@ class InitiativeService:
             text += f" It was working on: {instruction}."
         if result:
             text += f" Result: {result}."
-        text += " I saved the details in Decisions."
         return text
+
+    def _looks_like_test_runtime_artifact(self, *values: Any) -> bool:
+        raw = " ".join(str(value or "") for value in values).lower()
+        return any(
+            marker in raw
+            for marker in (
+                "pytest-of-",
+                "/pytest-",
+                "\\pytest-",
+                "pytest-current",
+            )
+        )
+
+    def _skip_execution_nudge_row(self, row, input_packet: dict, project) -> bool:
+        route_type = str(getattr(row, "route_type", "") or "").strip().lower()
+        workspace_path = (
+            input_packet.get("folder")
+            or input_packet.get("cwd")
+            or getattr(project, "folder_location", "")
+            or getattr(project, "path", "")
+            or ""
+        )
+        if self._looks_like_test_runtime_artifact(
+            workspace_path,
+            getattr(row, "input_packet", ""),
+            getattr(row, "output_packet", ""),
+        ):
+            return True
+        if route_type == "ide_bridge" and project is None:
+            return True
+        return False
+
+    def _workflow_is_quiet_surface(self, workflow) -> bool:
+        marker = self._packet(getattr(workflow, "context_rules", None))
+        surface = str(marker.get("decisions_surface") or "").strip().lower()
+        workflow_type = str(getattr(workflow, "workflow_type", "") or "").strip().lower()
+        return surface == "automation" or workflow_type == "audit"
 
     def _maybe_send_execution_nudges(self, settings: dict) -> None:
         if not settings.get("initiative_allow_telegram", False):
@@ -1740,6 +1776,8 @@ class InitiativeService:
                     status = (row.status or "").strip().lower()
                     input_packet = self._packet(getattr(row, "input_packet", None))
                     output_packet = self._packet(getattr(row, "output_packet", None))
+                    if self._skip_execution_nudge_row(row, input_packet, project):
+                        continue
                     backend_label, backend_surface = self._execution_backend_label(row, input_packet, project)
                     project_name = self._execution_project_label(row, input_packet, project, backend_surface)
                     instruction = self._execution_instruction_summary(row, input_packet)
@@ -1807,6 +1845,8 @@ class InitiativeService:
                                     return
 
                 for run, workflow in workflow_rows:
+                    if workflow is not None and self._workflow_is_quiet_surface(workflow):
+                        continue
                     status = (run.status or "").strip().lower()
                     workflow_name = self._short_label(getattr(workflow, "name", "") or f"workflow {run.workflow_id}")
                     if status in {"completed", "failed", "cancelled"}:
@@ -1816,11 +1856,11 @@ class InitiativeService:
                         key = f"workflow:{run.id}:{status}"
                         if self._notice_allowed(key):
                             if status == "completed":
-                                workflow_text = f"{workflow_name} finished successfully. I saved the details in Decisions."
+                                workflow_text = f"{workflow_name} finished successfully."
                             elif status == "cancelled":
-                                workflow_text = f"{workflow_name} was cancelled. I saved the details in Decisions."
+                                workflow_text = f"{workflow_name} was cancelled."
                             else:
-                                workflow_text = f"{workflow_name} ran into an issue. I saved the details in Decisions."
+                                workflow_text = f"{workflow_name} ran into an issue."
                             self._send_telegram_if_allowed(
                                 workflow_text,
                                 settings,
@@ -1836,7 +1876,7 @@ class InitiativeService:
                         key = f"workflow:{run.id}:waiting"
                         if self._notice_allowed(key):
                             self._send_telegram_if_allowed(
-                                f"{workflow_name} is waiting for input. I saved the current state in Decisions.",
+                                f"{workflow_name} is waiting for input.",
                                 settings,
                                 kind="workflow_waiting",
                                 subject_type="workflow_run",

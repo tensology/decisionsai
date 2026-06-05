@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from distr.core.agent.services.llm.bulk_instruction import augment_bulk_instruction
+from distr.core.automation_orchestrator import dispatch_automation_to_current_chat
 from distr.core.db import get_session
 from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun, AutoWorkflowStep
 
@@ -173,6 +173,7 @@ def _serialize_automation(workflow: AutoWorkflow) -> dict[str, Any]:
     return {
         "id": _automation_id(workflow.id),
         "workflow_id": workflow.id,
+        "step_id": step.id if step else None,
         "name": workflow.name or "Untitled Automation",
         "automation_type": marker.get("automation_type") or "scheduled_instruction",
         "status": workflow.status or "active",
@@ -275,70 +276,11 @@ def _serialize_run(run: AutoWorkflowRun, automation_id: str) -> dict[str, Any]:
 
 
 def _dispatch_to_orchestrator(automation: Dict[str, Any]) -> Dict[str, Any]:
-    instruction = str(automation.get("instruction") or "").strip()
-    if not instruction:
-        return {
-            "status": "failed",
-            "summary": "Automation has no instruction to run.",
-            "workflow_run_id": None,
-            "event_ids": [],
-        }
-
-    event_ids: list[int] = []
-    started_event_id = _emit_automation_event(
-        automation=automation,
-        event_type="run_started",
-        status="running",
-        summary=f"Automation started: {automation.get('name') or 'Untitled Automation'}",
-        payload={"instruction": instruction},
+    return dispatch_automation_to_current_chat(
+        automation,
+        manual=True,
+        emit_event=_emit_automation_event,
     )
-    if started_event_id is not None:
-        event_ids.append(started_event_id)
-
-    prompt = augment_bulk_instruction(_automation_prompt(automation), source="automation")
-    try:
-        from distr.core.workflow.dispatcher import start_workflow_run
-
-        result = start_workflow_run(
-            int(automation["workflow_id"]),
-            context=prompt,
-            run_metadata={
-                "source_type": "automation",
-                "source_label": "Automation",
-                "automation_id": automation.get("id"),
-                "automation_name": automation.get("name"),
-                "instruction": instruction,
-                "manual": True,
-                "is_workflow_attached": True,
-                "orchestration_event_ids": event_ids,
-            },
-        )
-        if "error" in result:
-            raise RuntimeError(str(result["error"]))
-        status = "dispatched"
-        summary = "Automation instruction sent to the orchestrator."
-        workflow_run_id = result.get("run_id")
-    except Exception as exc:
-        status = "failed"
-        summary = f"Automation could not reach the orchestrator: {exc}"
-        workflow_run_id = None
-
-    dispatched_event_id = _emit_automation_event(
-        automation=automation,
-        event_type="worker_dispatched" if status == "dispatched" else "worker_failed",
-        status=status,
-        summary=summary,
-        payload={"instruction": instruction, "workflow_run_id": workflow_run_id},
-    )
-    if dispatched_event_id is not None:
-        event_ids.append(dispatched_event_id)
-
-    return {
-        "status": status,
-        "summary": summary,
-        "workflow_run_id": workflow_run_id,
-        "event_ids": event_ids,
-    }
 
 
 def create_routes() -> APIRouter:

@@ -28,7 +28,7 @@ def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
     try:
         from distr.core.human_engagement import sanitize_engagement_text
 
-        return sanitize_engagement_text(clean)
+        return sanitize_engagement_text(clean, preserve_links="/api/remote/" in clean)
     except Exception:
         pass
 
@@ -181,11 +181,15 @@ class TelegramSenderMixin:
             else:
                 logger.debug(f"[Telegram] Queuing message: '{text[:50]}...'")
 
-        # Rate Limiting Check
+        # Rate limiting should delay real user-facing messages, not drop them.
         now = time.time()
+        not_before = 0.0
         if now - self._last_send_time < self._min_send_interval:
-            logger.warning("Rate limit hit, dropping message")
-            return False
+            not_before = self._last_send_time + self._min_send_interval
+            logger.debug(
+                "[Telegram] Rate limit active; deferring message for %.2fs",
+                max(0.0, not_before - now),
+            )
 
         # Outgoing Deduplication
         import hashlib
@@ -216,6 +220,8 @@ class TelegramSenderMixin:
 
         # Build Message Payload
         msg = {"type": "send_message"}
+        if not_before:
+            msg["_not_before"] = not_before
 
         if text:
             msg["text"] = text
@@ -566,6 +572,12 @@ class TelegramSenderMixin:
         try:
             while not self._message_queue.empty():
                 msg = self._message_queue.get_nowait()
+                not_before = float(msg.get("_not_before") or 0)
+                now = time.time()
+                if not_before and now < not_before:
+                    self._message_queue.put(msg)
+                    break
+                msg.pop("_not_before", None)
                 json_str = json.dumps(msg)
 
                 # Log what we're sending and to which chat_id

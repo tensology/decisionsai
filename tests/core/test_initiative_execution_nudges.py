@@ -99,7 +99,7 @@ def test_initiative_sends_one_human_stale_ide_session_nudge_without_placeholder_
     assert "customer-portal" in manager.sent[0]
     assert "looks idle" not in manager.sent[0]
     assert "I will not keep reminding you" not in manager.sent[0]
-    assert "I can check it if you ask" in manager.sent[0]
+    assert "Ask me to check it" in manager.sent[0]
 
 
 def test_initiative_does_not_repeat_idle_nudge_when_only_updated_at_changes(monkeypatch):
@@ -316,6 +316,79 @@ def test_initiative_does_not_repeat_workflow_stale_nudge(monkeypatch):
     assert "I'll leave it alone" not in manager.sent[0]
     assert "I will not keep reminding you" not in manager.sent[0]
     assert "I can inspect it if you ask" in manager.sent[0]
+
+
+def test_initiative_skips_orphaned_ide_bridge_fixture_rows(monkeypatch):
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+
+    row = SimpleNamespace(
+        id=7451,
+        project_id=9999,
+        route_type="ide_bridge",
+        route_backend="codex",
+        status="running",
+        started_at=datetime.utcnow() - timedelta(minutes=16),
+        updated_at=datetime.utcnow() - timedelta(minutes=16),
+        completed_at=None,
+        input_packet='{"project_name": "Demo IDE", "folder": "/private/var/folders/pytest-of-paul/pytest-999/demo"}',
+        output_packet=None,
+    )
+    fake_session = FakeSession(project_rows=[(row, None)], workflow_rows=[])
+    monkeypatch.setattr("distr.core.db.get_session", lambda: fake_session)
+
+    manager = DummyTelegram()
+    service = InitiativeService.__new__(InitiativeService)
+    service.telegram_manager = manager
+    service._execution_notice_cache = {}
+    service._execution_stale_after_s = 900
+    service._execution_stale_repeat_s = 0
+    service._execution_terminal_notice_window_s = 3600
+
+    service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
+
+    assert manager.sent == []
+
+
+def test_initiative_skips_automation_run_status_rows(monkeypatch):
+    from distr.core.human_engagement import reset_engagement_ledger
+    from distr.core.initiative.service import InitiativeService
+    from distr.core.notification_routing import reset_notification_activity
+
+    reset_notification_activity()
+    reset_engagement_ledger()
+
+    run = SimpleNamespace(
+        id=7461,
+        workflow_id=66,
+        status="completed",
+        started_at=datetime.utcnow() - timedelta(minutes=1),
+        completed_at=datetime.utcnow(),
+    )
+    workflow = SimpleNamespace(
+        id=66,
+        name="Screen Compliment",
+        workflow_type="scheduled",
+        context_rules='{"decisions_surface": "automation"}',
+    )
+    fake_session = FakeSession(project_rows=[], workflow_rows=[(run, workflow)])
+    monkeypatch.setattr("distr.core.db.get_session", lambda: fake_session)
+
+    manager = DummyTelegram()
+    service = InitiativeService.__new__(InitiativeService)
+    service.telegram_manager = manager
+    service._execution_notice_cache = {}
+    service._execution_stale_after_s = 900
+    service._execution_stale_repeat_s = 0
+    service._execution_terminal_notice_window_s = 3600
+
+    service._maybe_send_execution_nudges({"initiative_allow_telegram": True})
+
+    assert manager.sent == []
 
 
 def test_initiative_idle_nudge_uses_text_even_when_event_queue_is_available():

@@ -34,6 +34,9 @@ def test_forces_proactive_orchestrator_for_workload_and_source_triage():
     assert "proactive_orchestrator" in forced_tool_names_for_text(
         "Where am I with the workload in Cursor and Codex?"
     )
+    assert "proactive_orchestrator" in forced_tool_names_for_text(
+        "What is my daily plan from emails, WhatsApp, tickets, boards and projects?"
+    )
 
 
 def test_forces_ticket_tool_for_local_and_remote_ticket_requests(monkeypatch):

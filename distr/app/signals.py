@@ -2,6 +2,8 @@
 
 import logging
 import os
+import json
+import re
 import threading
 
 from PyQt6.QtCore import QTimer
@@ -62,6 +64,69 @@ class SignalBridgeMixin:
         if chat_id:
             payload['chat_id'] = chat_id
         return payload
+
+    def _workflow_report_run_metadata(self, report_text):
+        """Return AutoWorkflowRun metadata referenced by a workflow report, when available."""
+        match = re.search(r"\brun\s+(\d+)\b", str(report_text or ""), flags=re.IGNORECASE)
+        if not match:
+            return {}
+        try:
+            run_id = int(match.group(1))
+        except (TypeError, ValueError):
+            return {}
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+
+            with get_session() as session:
+                row = (
+                    session.query(AutoWorkflowRun, AutoWorkflow)
+                    .outerjoin(AutoWorkflow, AutoWorkflow.id == AutoWorkflowRun.workflow_id)
+                    .filter(AutoWorkflowRun.id == run_id)
+                    .first()
+                )
+                if not row:
+                    return {"run_id": run_id}
+                run, workflow = row
+                try:
+                    run_data = json.loads(run.run_data or "{}")
+                    if not isinstance(run_data, dict):
+                        run_data = {}
+                except Exception:
+                    run_data = {}
+                marker = {}
+                if workflow is not None:
+                    try:
+                        marker = json.loads(workflow.context_rules or "{}")
+                        if not isinstance(marker, dict):
+                            marker = {}
+                    except Exception:
+                        marker = {}
+                return {
+                    "run_id": run_id,
+                    "workflow_id": getattr(run, "workflow_id", None),
+                    "workflow_type": getattr(workflow, "workflow_type", "") if workflow is not None else "",
+                    "workflow_marker": marker,
+                    "run_data": run_data,
+                }
+        except Exception:
+            logger.debug("Workflow report metadata lookup failed", exc_info=True)
+            return {}
+
+    def _workflow_report_is_automation(self, report_text) -> bool:
+        meta = self._workflow_report_run_metadata(report_text)
+        run_data = meta.get("run_data") if isinstance(meta, dict) else {}
+        marker = meta.get("workflow_marker") if isinstance(meta, dict) else {}
+        if not isinstance(run_data, dict):
+            run_data = {}
+        if not isinstance(marker, dict):
+            marker = {}
+        return (
+            str(run_data.get("source_type") or "").strip().lower() == "automation"
+            or str(run_data.get("phase") or "").strip().lower() == "scheduled_automation"
+            or str(run_data.get("execution_mode") or "").strip().lower() == "agent_chat_orchestrator"
+            or str(marker.get("decisions_surface") or "").strip().lower() == "automation"
+        )
 
     def _bridge_signals_to_agent(self):
         """Bridge PyQt signals to agent process command queue"""
@@ -427,7 +492,10 @@ class SignalBridgeMixin:
                 # Pass speak_bool directly into process_text_input so process_chat_input applies it
                 # as a per-request override — no separate set_speaker_enabled needed, and no second
                 # current_chat_changed that would create a new LLM service after set_speaker_enabled ran.
-                self._send_command_to_agent('process_text_input', {'text': message, 'speak': speak_bool})
+                self._send_command_to_agent(
+                    'process_text_input',
+                    {'text': message, 'speak': speak_bool, 'chat_id': chat_id},
+                )
                 logger.info(
                     "Web send-to-agent: process_text_input for chat_id=%s (speak_raw=%r speak_bool=%s)",
                     chat_id,
@@ -512,6 +580,12 @@ class SignalBridgeMixin:
                         session_id,
                     )
                     return
+                if self._workflow_report_is_automation(report_text):
+                    logger.info(
+                        "Workflow finished: automation report for session %d stays in automation/chat ledger",
+                        session_id,
+                    )
+                    return
 
                 # Check if the agent command queue is available before sending
                 has_queue = (
@@ -561,6 +635,12 @@ class SignalBridgeMixin:
 
         clean = (report_text or "").strip()
         if not clean:
+            return
+        if self._workflow_report_is_automation(clean):
+            logger.info(
+                "Workflow finished: suppressing Telegram report for automation session %s",
+                session_id,
+            )
             return
         # Keep Telegram completion readable; full step details remain in workflow history.
         lines = [line.strip() for line in clean.splitlines() if line.strip()]

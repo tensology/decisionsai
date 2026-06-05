@@ -622,7 +622,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "CodexThreadContextTool": "Load a matching local Codex conversation transcript for project context, ticket creation, plans, skill handoffs, or follow-up replies instead of asking the user to paste the thread.",
     "ProactiveOrchestratorTool": (
         "Scan Gmail, Slack, WhatsApp, Telegram, Trello, Jira, and board-derived work signals, "
-        "prioritize important items, match them to projects and recent Codex/Cursor context, "
+        "build daily plans from connected work intelligence, prioritize important items, match them to projects and recent Codex/Cursor context, "
         "and dispatch approved work to Codex, Cursor, Pi, or the configured project backend."
     ),
     "MemorySearchTool": "Search distilled long-term MEMORY.md sections for facts and preferences using keyword relevance.",

@@ -16,7 +16,7 @@ MESSAGE_BUS_MAPPING_PATH = os.path.join(MODELS_DIR, "integration_message_bus_map
 
 ASSETS_DIR = os.path.join(CORE_DIR, "assets")
 
-DB_DIR = os.path.join(CORE_DIR, "db")
+DB_DIR = os.environ.get("DECISIONS_DB_DIR") or os.path.join(CORE_DIR, "db")
 
 SECRETS_DIR = os.path.join(CORE_DIR, "secrets")
 GOOGLE_OAUTH_SECRET_PATH = os.path.join(SECRETS_DIR, "google_oauth_client_secret.json")

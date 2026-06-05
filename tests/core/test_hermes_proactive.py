@@ -138,6 +138,14 @@ def test_dispatch_proactive_candidate_runs_project_backend_after_approval(tmp_pa
     monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr("distr.core.hermes_proactive.get_session", lambda: _session_ctx(factory))
     monkeypatch.setattr("distr.core.external_agent_context.build_external_agent_context", lambda limit=8: {})
+    monkeypatch.setattr(
+        "distr.core.project_cli_backends.get_backend",
+        lambda backend_id: SimpleNamespace(setup_status=lambda: SimpleNamespace(ready=True)),
+    )
+    monkeypatch.setattr(
+        "distr.core.hermes.inspect_visual_baseline_readiness",
+        lambda **kwargs: {"ready": True, "missing_screen_count": 0},
+    )
 
     calls = []
 
@@ -190,6 +198,48 @@ def test_proactive_orchestrator_tool_is_voice_first(monkeypatch):
     assert "REFERENCE:" in result
     assert "candidate_id" in result
     assert "Hermes" not in result.split("REFERENCE:")[0]
+
+
+def test_proactive_orchestrator_tool_builds_daily_plan_from_context(monkeypatch):
+    from distr.core.agent.tools.system.proactive_orchestrator import ProactiveOrchestratorTool
+
+    captured = {}
+
+    def fake_build(self, settings):
+        return SimpleNamespace(
+            chat_history=[{"role": "user", "content": "What matters today?"}],
+            kanban_summary=[{"board_name": "DecisionsAI", "total_tickets": 4}],
+            scheduled_sessions=[{"name": "Morning scan"}],
+            unfinished_workflows=[{"instruction": "Finish workflow"}],
+            skills=[{"id": "ecc"}],
+            developer_context={"active_project": {"name": "DecisionsAI"}},
+            work_scan={"whatsapp": {"messages": 2}, "gmail": {"messages": 1}},
+            memory_user="likes direct, high-signal updates",
+            memory_long_term="prefers voice notes",
+        )
+
+    def fake_generate(scope, settings, bundle, instruction):
+        captured["scope"] = scope
+        captured["instruction"] = instruction
+        captured["bundle"] = bundle
+        return "## Today\n- Handle the DecisionsAI board.\n- Check WhatsApp and Gmail.", {"scope": scope}
+
+    monkeypatch.setattr("distr.core.initiative.context.ContextAssembler.build", fake_build)
+    monkeypatch.setattr("distr.core.initiative.planners.generate_planner_markdown", fake_generate)
+    monkeypatch.setattr(
+        "distr.core.initiative.planners.tts_excerpt_from_markdown",
+        lambda markdown, max_len=650: "Handle the DecisionsAI board, then check WhatsApp and Gmail.",
+    )
+
+    result = ProactiveOrchestratorTool()._run(action="daily_plan")
+
+    assert result.startswith("Handle the DecisionsAI board")
+    assert "REFERENCE:" in result
+    assert '"action": "daily_plan"' in result
+    assert '"work_scan_sources"' in result
+    assert captured["scope"] == "day"
+    assert "WhatsApp" in captured["instruction"]
+    assert captured["bundle"].work_scan["gmail"]["messages"] == 1
 
 
 def test_project_activity_includes_project_events_validations_and_rules(tmp_path, monkeypatch):

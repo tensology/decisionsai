@@ -22,6 +22,7 @@ logger = logging.getLogger(__name__)
 # ── Workflow type validation ──
 
 VALID_WORKFLOW_TYPES = {"manual", "instruction", "scheduled", "audit"}
+USER_VISIBLE_WORKFLOW_TYPES = {"manual", "instruction", "scheduled"}
 
 
 def validate_workflow_type(workflow_type: str) -> bool:
@@ -381,13 +382,14 @@ def list_workflows(limit: int = 50, search: Optional[str] = None, workflow_type:
         if workflow_type:
             q = q.filter(AutoWorkflow.workflow_type == workflow_type)
         else:
-            q = q.filter(AutoWorkflow.workflow_type != 'audit')
+            q = q.filter(AutoWorkflow.workflow_type.in_(sorted(USER_VISIBLE_WORKFLOW_TYPES)))
         if search and search.strip():
             q = q.filter(AutoWorkflow.name.ilike(f"%{search.strip()}%"))
         rows = q.order_by(AutoWorkflow.modified_date.desc()).limit(limit).all()
         return [
             {
                 "id": w.id, "name": w.name,
+                "workflow_type": w.workflow_type or "manual",
                 "description": (w.description or "")[:200],
                 "schedule_enabled": w.schedule_enabled,
                 "schedule_preset": w.schedule_preset,

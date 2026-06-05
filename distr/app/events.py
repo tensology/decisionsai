@@ -1017,15 +1017,18 @@ class EventHandlerMixin:
         policy_text = (text or data.get('voice_note_message') or '').strip()
         if policy_text and not data.get('bypass_engagement_policy'):
             low_value_status = is_low_value_status_text(policy_text)
+            is_remote_link = "/api/remote/" in policy_text
             explicit_notification_intent = bool(
                 data.get('explicit_notification_intent')
                 or data.get('explicit_user_request')
                 or data.get('notify_user')
                 or data.get('requires_response')
                 or data.get('engagement_priority') in ('high', 'urgent')
+                or is_remote_link
             )
             engagement_kind = (
                 data.get('engagement_kind')
+                or ('remote_link' if is_remote_link else None)
                 or ('status_update' if low_value_status else 'telegram_response')
             )
             if low_value_status and not explicit_notification_intent:
@@ -1055,7 +1058,7 @@ class EventHandlerMixin:
                 voice_body=policy_text,
                 requires_response=bool(data.get('requires_response')),
                 explicit_notification_intent=explicit_notification_intent,
-                allow_voice=bool(data.get('allow_voice', True)) and not low_value_status,
+                allow_voice=bool(data.get('allow_voice', True)) and not low_value_status and not is_remote_link,
                 workflow_id=data.get('workflow_id'),
                 run_id=data.get('run_id'),
                 step_id=data.get('step_id'),

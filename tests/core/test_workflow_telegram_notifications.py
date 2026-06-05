@@ -115,6 +115,41 @@ def test_workflow_completion_report_does_not_read_voice_note_payload_verbatim():
     assert "That's what happened" not in message
 
 
+def test_automation_workflow_report_is_not_sent_to_telegram():
+    import json
+
+    from distr.core.db import get_session
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+
+    with get_session() as session:
+        workflow = AutoWorkflow(name="Screen Compliment", workflow_type="scheduled", status="active")
+        session.add(workflow)
+        session.flush()
+        run = AutoWorkflowRun(
+            workflow_id=workflow.id,
+            status="failed",
+            run_data=json.dumps({
+                "source_type": "automation",
+                "phase": "scheduled_automation",
+                "message": "Automation failed.",
+            }),
+        )
+        session.add(run)
+        session.commit()
+        run_id = run.id
+
+    manager = DummyTelegramManager()
+    app = DummySignalApp(manager)
+
+    app._send_workflow_report_to_telegram(
+        353,
+        f"The workflow failed. Session 353, run {run_id}.\n"
+        "Automation Instruction: failed to send voice note.",
+    )
+
+    assert manager.sent == []
+
+
 def test_workflow_report_agent_payload_targets_current_chat(monkeypatch):
     app = DummySignalApp(DummyTelegramManager(), chat_id=44)
     monkeypatch.setattr(app, "_chat_id_exists", lambda chat_id: True)

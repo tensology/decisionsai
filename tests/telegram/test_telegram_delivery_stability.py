@@ -335,6 +335,22 @@ def test_telegram_bus_preserves_input_type_metadata(tmp_path):
     assert seen == [("hello", True, None, {"speak": None, "input_type": "voice", "surface": "telegram"})]
 
 
+def test_sender_rate_limit_defers_message_instead_of_dropping(monkeypatch):
+    import time
+
+    sender = DummyTelegramSender()
+    sender._min_send_interval = 10
+    sender._last_send_time = time.time()
+
+    result = sender.send_to_telegram("A real response that arrived during a burst.")
+
+    assert result is True
+    assert sender._message_queue.qsize() == 1
+    queued = sender._message_queue.get_nowait()
+    assert queued["text"] == "A real response that arrived during a burst."
+    assert queued.get("_not_before", 0) >= sender._last_send_time + sender._min_send_interval
+
+
 class DummyTelegramMessages(TelegramMessagesMixin):
     def __init__(self):
         self._processed_message_ids = set()
@@ -406,6 +422,21 @@ def test_remote_command_uses_telegram_user_id_when_chat_id_not_ready():
     assert len(manager.sent) == 1
     assert "https://www.decisionsai.net/api/remote/?channel=" in manager.sent[0]
     assert manager.enqueued == []
+
+
+def test_remote_word_inside_normal_sentence_is_not_hijacked():
+    manager = DummyTelegramMessages()
+    manager.telegram_user_id = 12345
+
+    manager._handle_telegram_message({"data": {
+        "message_id": 106,
+        "chat_id": 12345,
+        "chat": {"type": "private"},
+        "text": "can we talk about remote work tomorrow",
+    }})
+
+    assert manager.sent == []
+    assert manager.enqueued == [("can we talk about remote work tomorrow", None, "text")]
 
 
 def test_private_voice_is_marked_read_on_receipt_once():

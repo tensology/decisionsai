@@ -76,6 +76,32 @@ _workflow_set_strategy = st.lists(
 class TestDefaultListExcludesAudit:
     """Property 10: Default workflow list excludes audit type."""
 
+    def test_default_list_excludes_internal_execution_workflows(self):
+        """Internal project execution ledgers are not user workflow definitions."""
+        factory = _make_session_factory()
+
+        def patched_get_session():
+            return _session_ctx(factory)
+
+        session = factory()
+        visible = AutoWorkflow(name="Real workflow", status="active", workflow_type="manual")
+        project_cli = AutoWorkflow(name="[Project: App] run tests", status="completed", workflow_type="project_cli")
+        pi_agent = AutoWorkflow(name="[Project: App] fix ticket", status="completed", workflow_type="pi_agent")
+        session.add_all([visible, project_cli, pi_agent])
+        session.commit()
+        visible_id = visible.id
+        project_cli_id = project_cli.id
+        pi_agent_id = pi_agent.id
+        session.close()
+
+        with patch("distr.core.workflow.service.get_session", patched_get_session):
+            default_result = list_workflows()
+            project_cli_result = list_workflows(workflow_type="project_cli")
+
+        assert {row["id"] for row in default_result} == {visible_id}
+        assert {row["id"] for row in project_cli_result} == {project_cli_id}
+        assert pi_agent_id not in {row["id"] for row in default_result}
+
     @settings(max_examples=100, deadline=None)
     @given(workflow_records=_workflow_set_strategy)
     def test_default_list_excludes_audit(self, workflow_records):

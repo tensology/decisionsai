@@ -31,7 +31,16 @@ _PLACEHOLDER_PROJECT_NAMES = {
 _DEDUPED_STATUS_KINDS = {
     "status_update",
     "workflow_status",
+    "workflow_report",
+    "workflow_terminal",
+    "workflow_waiting",
+    "workflow_idle_nudge",
     "automation_status",
+    "automation_run",
+    "execution_terminal",
+    "execution_waiting",
+    "idle_nudge",
+    "initiative_update",
     "tool_result_status",
     "telegram_status",
 }
@@ -40,6 +49,8 @@ _LOW_VALUE_STATUS_RE = re.compile(
     r"saved\s+successfully|"
     r"saved\s+it\s+in\s+decisions|"
     r"saved\s+in\s+decisions|"
+    r"saved\s+the\s+details\s+in\s+decisions|"
+    r"logged\s+the\s+details\s+in\s+decisions|"
     r"stored\s+in\s+decisions|"
     r"recorded\s+in\s+decisions|"
     r"configuration\s+file\s+saved|"
@@ -251,7 +262,7 @@ def _dedupe_key(intent: EngagementIntent) -> str:
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()
 
 
-def sanitize_engagement_text(text: str) -> str:
+def sanitize_engagement_text(text: str, *, preserve_links: bool = False) -> str:
     clean = str(text or "").strip()
     if not clean:
         return ""
@@ -279,7 +290,8 @@ def sanitize_engagement_text(text: str) -> str:
             name = name[9:].strip()
         return f"{name or 'Workflow'} failed. I've logged the details in Decisions."
 
-    clean = re.sub(r"https?://\S+", "", clean)
+    if not preserve_links:
+        clean = re.sub(r"https?://\S+", "", clean)
     clean = re.sub(r"^\s*\[Initiative\]\s*", "", clean)
     clean = re.sub(r"\[APPROVE\]|\[ESCALATE\]|\[SUGGEST_ONLY\]", "", clean)
     clean = re.sub(r"(?i)^quick update:\s*#{1,6}\s*quick check-?in\s*[-:]*\s*", "Quick check-in: ", clean)
@@ -401,7 +413,12 @@ class HumanEngagementService:
                 suppress_reason="duplicate_state",
             )
 
-        body = sanitize_engagement_text(intent.body)
+        preserve_links = (
+            intent.kind == "remote_link"
+            or "/api/remote/" in str(intent.body or "")
+            or "/api/remote/" in str(intent.voice_body or "")
+        )
+        body = sanitize_engagement_text(intent.body, preserve_links=preserve_links)
         voice_body = sanitize_engagement_text(intent.voice_body or intent.body)
         had_attachment_request = bool(intent.attachments)
         usable_attachments = [a for a in intent.attachments if a.usable()]
@@ -441,6 +458,7 @@ class HumanEngagementService:
             channel == "telegram"
             and intent.allow_voice
             and bool(intent.voice_body)
+            and not preserve_links
             and not _explicit_text_only_enabled()
             and not usable_attachments
             and not had_attachment_request

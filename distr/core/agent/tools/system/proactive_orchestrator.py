@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from typing import Optional
+from typing import Any, Optional
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
@@ -12,7 +12,7 @@ from pydantic import BaseModel, Field
 class ProactiveOrchestratorInput(BaseModel):
     action: str = Field(
         default="scan",
-        description="scan to find important work, dispatch to send an approved candidate to the project backend.",
+        description="scan to find important work, daily_plan to build today's plan from connected intelligence, dispatch to send an approved candidate to the project backend.",
     )
     candidate_id: Optional[int] = Field(
         default=None,
@@ -58,6 +58,7 @@ class ProactiveOrchestratorTool(BaseTool):
     name: str = "proactive_orchestrator"
     description: str = (
         "Scan connected work sources and project boards for important actionable work, "
+        "build daily plans from email, WhatsApp, tickets, boards, projects, workflows, and IDE context, "
         "match items to projects and recent Codex/Cursor context, ask for approval before dispatch, "
         "and send approved work to the configured project backend."
     )
@@ -81,7 +82,9 @@ class ProactiveOrchestratorTool(BaseTool):
         from distr.core import hermes_proactive
 
         action_name = (action or "scan").strip().lower()
-        if action_name in {"dispatch", "send", "approve"}:
+        if action_name in {"daily_plan", "daily plan", "plan", "day_plan", "morning_brief", "today"}:
+            result = self._build_daily_plan_result(format=format)
+        elif action_name in {"dispatch", "send", "approve"}:
             if not candidate_id:
                 return "Tell me which work candidate to dispatch first."
             result = hermes_proactive.dispatch_proactive_candidate(
@@ -106,6 +109,53 @@ class ProactiveOrchestratorTool(BaseTool):
             spoken = "I checked the work queue and have the details ready."
         reference = json.dumps(result, ensure_ascii=False, indent=2, default=str)
         return voice_then_reference(spoken, reference)
+
+    def _build_daily_plan_result(self, *, format: str = "summary") -> dict[str, Any]:
+        from distr.core.initiative.context import ContextAssembler
+        from distr.core.initiative.planners import generate_planner_markdown, tts_excerpt_from_markdown
+
+        try:
+            from distr.core.settings import load_settings_from_db
+
+            settings = load_settings_from_db()
+        except Exception:
+            settings = {}
+
+        bundle = ContextAssembler().build(settings)
+        instruction = (
+            "Build today's practical work plan from all connected Decisions intelligence. "
+            "Use email and Gmail signals when available, WhatsApp and Telegram intake, "
+            "ticket boards, Jira/Trello/local boards, active projects, Codex/Cursor developer "
+            "context, workflows, automations, Hermes triage, and long-term memory. "
+            "Prioritize what actually needs attention today, separate blocked items, and "
+            "mention which source each important item came from."
+        )
+        markdown, date_info = generate_planner_markdown("day", settings, bundle, instruction)
+        spoken = tts_excerpt_from_markdown(markdown, max_len=650) or "I built your plan for today."
+        return {
+            "success": True,
+            "action": "daily_plan",
+            "spoken_summary": spoken,
+            "markdown": markdown,
+            "date_info": date_info,
+            "source_summary": {
+                "chat_messages": len(getattr(bundle, "chat_history", []) or []),
+                "boards": len(getattr(bundle, "kanban_summary", []) or []),
+                "scheduled_sessions": len(getattr(bundle, "scheduled_sessions", []) or []),
+                "unfinished_workflows": len(getattr(bundle, "unfinished_workflows", []) or []),
+                "skills": len(getattr(bundle, "skills", []) or []),
+                "has_developer_context": bool(getattr(bundle, "developer_context", {}) or {}),
+                "work_scan_sources": sorted(
+                    (getattr(bundle, "work_scan", {}) or {}).keys()
+                    if isinstance(getattr(bundle, "work_scan", {}), dict)
+                    else []
+                ),
+                "has_memory": bool(
+                    (getattr(bundle, "memory_user", "") or "").strip()
+                    or (getattr(bundle, "memory_long_term", "") or "").strip()
+                ),
+            },
+        }
 
     async def _arun(
         self,

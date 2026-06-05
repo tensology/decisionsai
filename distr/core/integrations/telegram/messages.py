@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import queue
+import re
 import tempfile
 import threading
 import time
@@ -22,6 +23,20 @@ from PyQt6.QtCore import pyqtSlot
 from distr.core.integrations.telegram.utils import hash_channel_id
 
 logger = logging.getLogger(__name__)
+
+
+def _is_remote_control_request(text: str) -> bool:
+    normalized = re.sub(r"\s+", " ", (text or "").lower().strip())
+    return bool(re.fullmatch(
+        r"(?:please )?(?:"
+        r"remote|remote control|remote link|"
+        r"open remote|open remote control|"
+        r"show remote|show remote control|"
+        r"get remote|send remote|send remote link|"
+        r"control link"
+        r")(?: please)?",
+        normalized,
+    ))
 
 
 class TelegramMessagesMixin:
@@ -273,15 +288,8 @@ class TelegramMessagesMixin:
         # Check for "remote control" command - send link instead of forwarding to agent
         if text:
             text_lower = text.lower().strip()
-            remote_control_patterns = [
-                "remote control",
-                "open remote control",
-                "remote",
-                "show remote",
-                "get remote",
-            ]
 
-            if any(pattern in text_lower for pattern in remote_control_patterns):
+            if _is_remote_control_request(text_lower):
                 # Get chat_id for the remote control link
                 chat_id = self._get_chat_id() or getattr(self, "telegram_user_id", None)
                 if chat_id:
