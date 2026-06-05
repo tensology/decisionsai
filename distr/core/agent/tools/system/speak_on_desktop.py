@@ -5,12 +5,21 @@ Used when the user (especially from Telegram) wants the agent to
 announce something, say something, or speak text on the desktop.
 """
 import logging
+import os
 from typing import Any, Type
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
+
+
+def _telegram_desktop_tts_allowed() -> bool:
+    """Allow explicit Telegram intercom requests unless explicitly disabled."""
+    raw = os.environ.get("DECISIONSAI_ALLOW_TELEGRAM_DESKTOP_TTS")
+    if raw is None:
+        return True
+    return str(raw).strip().lower() not in ("0", "false", "no", "off", "disabled")
 
 
 class SpeakOnDesktopInput(BaseModel):
@@ -40,22 +49,16 @@ class SpeakOnDesktopTool(BaseTool):
         if not text:
             return "No text provided to speak."
         try:
-            import os
             # Set thread flag so _emit_telegram_response knows to skip screenshot
             import threading
             is_telegram_request = bool(getattr(threading.current_thread(), "telegram_request", False))
-            allow_telegram_desktop_tts = str(
-                os.environ.get("DECISIONSAI_ALLOW_TELEGRAM_DESKTOP_TTS", "")
-            ).strip().lower() in ("1", "true", "yes", "on")
-            if is_telegram_request and not allow_telegram_desktop_tts:
+            if is_telegram_request and not _telegram_desktop_tts_allowed():
                 logger.info(
                     "speak_on_desktop blocked for Telegram request "
-                    "(set DECISIONSAI_ALLOW_TELEGRAM_DESKTOP_TTS=1 to override)"
+                    "(DECISIONSAI_ALLOW_TELEGRAM_DESKTOP_TTS explicitly disabled)"
                 )
                 return (
-                    "Desktop speech is blocked for Telegram requests to prevent accidental "
-                    "local playback. If you want remote intercom mode, enable "
-                    "DECISIONSAI_ALLOW_TELEGRAM_DESKTOP_TTS=1."
+                    "Desktop speech is disabled for Telegram requests in local settings."
                 )
             threading.current_thread().skip_telegram_screenshot = True
 
