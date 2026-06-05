@@ -54,3 +54,10 @@ Next step: ...
     new direction while a DecisionsAI workflow is running, report it so Hermes
     can store the event, update workflow memory, and let the orchestrator decide
     whether to continue, validate, retry, or ask a follow-up.
+13. If Codex is working in a fresh chat without a DecisionsAI workflow callback,
+    still report material starts, progress, steering, blockers, and completion
+    through the reporter script's ambient mode. Include the current project
+    folder so DecisionsAI can attach the event to a project when possible and
+    send a Telegram notification when it is not attached to a workflow.
+14. Ambient reporting is best-effort. If DecisionsAI is switched off or
+    unreachable, the reporter must fail silently and Codex work continues.

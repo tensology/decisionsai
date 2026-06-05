@@ -10,7 +10,7 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
 
 CLI_TARGETS = {
@@ -28,6 +28,19 @@ _SKILL_RESOURCE_DIRS = ("scripts", "references", "reference")
 
 
 def _resolve_skill_dir(skill_id: str) -> Path | None:
+    try:
+        from distr.core.skills.catalog import registry_entry_for
+
+        entry = registry_entry_for(skill_id)
+        if entry:
+            raw_path = str(entry.get("path") or "").strip()
+            if raw_path:
+                candidate = _PROJECT_ROOT / raw_path if "/" in raw_path else _SKILLS_DIR / raw_path
+                if candidate.exists() and candidate.is_dir():
+                    return candidate
+    except Exception:
+        logger.debug("Could not resolve skill %s through registry", skill_id, exc_info=True)
+
     skill_dir = _SKILLS_DIR / skill_id
     if skill_dir.exists() and skill_dir.is_dir():
         return skill_dir

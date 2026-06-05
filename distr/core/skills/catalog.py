@@ -14,6 +14,9 @@ logger = logging.getLogger(__name__)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
+_ECC_VENDOR_DIR = _PROJECT_ROOT / "vendor" / "ecc"
+_ECC_VENDOR_SKILLS_DIR = _ECC_VENDOR_DIR / "skills"
+_ECC_VENDOR_METADATA_FILE = _ECC_VENDOR_DIR / ".decisions-vendor.json"
 
 # Ticket text keywords → bundled skill ids (google/skills + core workflow skills).
 _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
@@ -64,22 +67,115 @@ def skills_registry_path() -> Path:
     return _REGISTRY_FILE
 
 
+def ecc_vendor_directory() -> Path:
+    return _ECC_VENDOR_DIR
+
+
+def _load_ecc_vendor_metadata() -> dict[str, Any]:
+    if not _ECC_VENDOR_METADATA_FILE.is_file():
+        return {}
+    try:
+        payload = json.loads(_ECC_VENDOR_METADATA_FILE.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        logger.warning("ECC vendor metadata unreadable", exc_info=True)
+        return {}
+
+
+def _parse_skill_frontmatter(path: Path) -> dict[str, str]:
+    text = path.read_text(encoding="utf-8", errors="replace")
+    data: dict[str, str] = {}
+    if text.startswith("---"):
+        parts = text.split("---", 2)
+        if len(parts) >= 3:
+            for line in parts[1].splitlines():
+                if ":" not in line:
+                    continue
+                key, value = line.split(":", 1)
+                key = key.strip()
+                if key in {"name", "description"}:
+                    data[key] = value.strip().strip("\"'")
+    if not data.get("description"):
+        lines = [
+            line.strip()
+            for line in text.splitlines()
+            if line.strip() and not line.strip().startswith("---")
+        ]
+        data["description"] = " ".join(lines[:3])[:300]
+    return data
+
+
+def _load_ecc_vendor_registry() -> tuple[dict[str, Any], ...]:
+    if not _ECC_VENDOR_SKILLS_DIR.is_dir():
+        return tuple()
+    metadata = _load_ecc_vendor_metadata()
+    commit = str(metadata.get("commit") or "").strip()
+    rows: list[dict[str, Any]] = []
+    for skill_file in sorted(_ECC_VENDOR_SKILLS_DIR.glob("*/SKILL.md")):
+        skill_id = skill_file.parent.name
+        frontmatter = _parse_skill_frontmatter(skill_file)
+        rows.append(
+            {
+                "id": skill_id,
+                "name": frontmatter.get("name") or skill_id,
+                "description": frontmatter.get("description") or "",
+                "path": str(skill_file.parent.relative_to(_PROJECT_ROOT)),
+                "source": "ecc",
+                "vendor": {
+                    "name": "ecc",
+                    "path": str(_ECC_VENDOR_DIR.relative_to(_PROJECT_ROOT)),
+                    "commit": commit,
+                    "license": str(metadata.get("license") or "MIT"),
+                    "upstream": str(metadata.get("source") or "https://github.com/affaan-m/ecc"),
+                },
+                "tags": ["ecc", "vendor"],
+            }
+        )
+    return tuple(rows)
+
+
 @lru_cache(maxsize=1)
 def load_registry() -> tuple[dict[str, Any], ...]:
-    """Load skills_registry.json as an immutable tuple of dict rows."""
+    """Load native and vendored skill rows as an immutable tuple of dict rows."""
     if not _REGISTRY_FILE.is_file():
-        return tuple()
-    try:
-        raw = json.loads(_REGISTRY_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("skills_registry.json unreadable", exc_info=True)
-        return tuple()
+        raw = []
+    else:
+        try:
+            raw = json.loads(_REGISTRY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("skills_registry.json unreadable", exc_info=True)
+            raw = []
     if not isinstance(raw, list):
-        return tuple()
+        raw = []
     rows: list[dict[str, Any]] = []
     for item in raw:
         if isinstance(item, dict) and str(item.get("id") or "").strip():
-            rows.append(dict(item))
+            row = dict(item)
+            row.setdefault("source", "local")
+            rows.append(row)
+    by_id = {str(row.get("id") or "").strip().lower(): row for row in rows}
+    for vendor_row in _load_ecc_vendor_registry():
+        key = str(vendor_row.get("id") or "").strip().lower()
+        if not key:
+            continue
+        if key in by_id:
+            native = by_id[key]
+            sources = native.setdefault("vendor_sources", [])
+            if isinstance(sources, list) and not any(
+                isinstance(item, dict) and item.get("source") == vendor_row.get("source")
+                for item in sources
+            ):
+                sources.append(
+                    {
+                        "source": vendor_row.get("source"),
+                        "path": vendor_row.get("path"),
+                        "vendor": vendor_row.get("vendor"),
+                    }
+                )
+            native.setdefault("merged_from", []).append(vendor_row.get("path"))
+            continue
+        rows.append(dict(vendor_row))
+        by_id[key] = rows[-1]
     return tuple(rows)
 
 
@@ -130,6 +226,26 @@ def hermes_skill_catalog(*, limit: int = 80, source: str | None = None) -> list[
     if source:
         src = source.strip().lower()
         rows = tuple(r for r in rows if str(r.get("source") or "").lower() == src)
+    elif limit and rows:
+        ecc_rows = [r for r in rows if str(r.get("source") or "").lower() == "ecc"]
+        native_rows = [r for r in rows if str(r.get("source") or "").lower() != "ecc"]
+        if ecc_rows and native_rows:
+            preferred_ecc = {
+                "react-patterns": 0,
+                "python-patterns": 1,
+                "security-review": 2,
+                "mcp-server-patterns": 3,
+                "git-workflow": 4,
+                "repo-scan": 5,
+                "documentation-lookup": 6,
+                "docker-patterns": 7,
+                "frontend-patterns": 8,
+                "api-design": 9,
+            }
+            ecc_rows.sort(key=lambda row: preferred_ecc.get(str(row.get("id") or ""), 1000))
+            ecc_budget = min(len(ecc_rows), max(5, limit // 2))
+            native_budget = max(0, limit - ecc_budget)
+            rows = tuple(native_rows[:native_budget] + ecc_rows[:ecc_budget])
     out: list[dict[str, str]] = []
     for row in rows[:limit]:
         out.append(

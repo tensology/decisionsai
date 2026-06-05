@@ -372,6 +372,12 @@ def kill_existing_decisions_processes():
 
 # Main execution block
 if __name__ == "__main__":
+    try:
+        from distr.core.harness_pack import ensure_harness_pack_setup_quiet
+
+        ensure_harness_pack_setup_quiet()
+    except Exception:
+        pass
     from distr.app.main import run
     kill_existing_decisions_processes()
     print("Starting Decisions...")
