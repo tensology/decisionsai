@@ -6,19 +6,19 @@
 
 ### Ecosystem tightening before expansion
 
-The next phase is deliberately not about piling on another large feature surface. The focus is tightening the whole DecisionsAI ecosystem so the existing pieces behave like one coherent agentic developer workflow: Chat, Projects, Ticket Boards, Workflows, Skills, Initiative, Telegram, audio, hotkeys, desktop control, and remote boards all need to feel predictable, observable, and connected.
+The next phase is about making DecisionsAI feel more connected before adding more surface area. Chat, Projects, Ticket Boards, Workflows, Automations, Skills, Initiative, Telegram, IDEs, browser evidence, and desktop control should behave like one coherent assistant instead of separate tools.
 
-That means more work on orchestration quality, ticket parsing, tool selection, workflow validation, board-to-project context, remote board parity for Trello/Jira, clearer chat activity traces, stronger regression tests, better initiative communication, and fewer places where the agent quietly does the wrong thing. The goal is for DecisionsAI to reliably receive work, understand where it belongs, create the right ticket or workflow, execute with visible progress, recover when stuck, and communicate what happened without noise.
+That means clearer orchestration, better ticket-to-project context, stronger workflow validation, cleaner chat activity, quieter communication, and more dependable handoffs between boards, automations, Codex, Cursor, and Hermes.
 
-The bigger direction is daily planning and advanced connected intelligence. Hermes should be able to look across Telegram, WhatsApp, Gmail, boards, projects, Codex/Cursor activity, browser evidence, and the enabled Advanced integrations such as Slack, Monday, ClickUp, Jira, and Trello, then turn that into a useful plan instead of a noisy dump. The aim is an agent that can quietly notice what is moving, what is blocked, what is stale, and what deserves your attention, while still asking before it takes meaningful action.
+The larger goal is daily planning and connected intelligence. Hermes should be able to look across Telegram, WhatsApp, Gmail, boards, projects, IDE activity, browser evidence, and enabled Advanced integrations like Slack, Monday, ClickUp, Jira, and Trello, then turn that into a useful plan without creating noise.
 
-The IDE harness is also becoming a first-class part of the product. Codex and Cursor should feel like live development surfaces attached to DecisionsAI, not separate places where context disappears. Setup should keep the local plugins and harness reporting repaired, skills should stay deduped across ECC and local packs, and the orchestrator should know how to continue a thread whether the work started in chat, a board, an automation, a workflow, or an IDE.
+Codex and Cursor are also becoming first-class development surfaces inside the product. Setup should keep their local plugins and harness reporting repaired, skills should stay deduped across ECC and local packs, and the orchestrator should know how to continue work whether it started in chat, a board, an automation, a workflow, or an IDE.
 
 ---
 
 ## [2.7.17] - 2026-06-05
 
-### Orchestration backbone, IDE handoff, human engagement, and automation cleanup
+### Orchestration backbone, IDE handoff, human engagement, and Automation
 
 **Hermes is closer to being the shared orchestration spine.** Workflow runs, automations, IDE activity, browser evidence, proactive nudges, and ticket-board handoffs now have a clearer event shape so the system can understand what work belongs together instead of treating everything as loose progress noise.
 
@@ -26,7 +26,7 @@ The IDE harness is also becoming a first-class part of the product. Codex and Cu
 
 **Ticket Boards now start a real orchestrator conversation.** Sending a ticket to the orchestrator no longer just drops context into chat and leaves you to find it. It loads the agent, sends the ticket with speech enabled, opens the right chat thread, and includes linked project details so the assistant can talk through the ticket, inspect the project, and suggest a useful next step.
 
-**Automations were pulled back into the product shape they were meant to have.** The Automations area is now built around itemized CRUD, scheduling, Run Now, and per-automation history instead of a confusing intake feed. Scheduled runs go through the same workflow spine, which makes them easier to reason about and less likely to create stray chats.
+**A new Automations section was added.** Automations are now itemized instruction workflows with create, edit, remove, scheduling, Run Now, and per-automation history. Scheduled runs use the same workflow spine as the rest of the app, so automation work stays connected to Hermes and the orchestrator.
 
 **ECC and skill setup moved into a cleaner registry model.** The ECC surface is vendored with provenance, skills are deduped instead of blindly copied, and setup can repair Codex, Cursor, and Claude wiring without spraying duplicate skills everywhere.
 
