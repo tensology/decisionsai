@@ -176,13 +176,16 @@ def create_app() -> FastAPI:
                 "frame-ancestors 'none';"
             )
             return response
+        unauthenticated_local_posts = {
+            "/api/harness/events",
+        }
         sensitive_settings_reads = {
             "/api/thirdparty",
             "/api/advanced/accounts",
         }
         try:
             if path.startswith("/api/"):
-                if method != "GET" or path in sensitive_settings_reads:
+                if path not in unauthenticated_local_posts and (method != "GET" or path in sensitive_settings_reads):
                     require_internal_token_request(request)
             if path.startswith("/api/internal/"):
                 require_internal_token_request(request)
@@ -211,6 +214,22 @@ def create_app() -> FastAPI:
             "internal_api_token": app.state.internal_api_token,
             "app_version": _app_version_label(project_root),
         }
+
+    @app.post("/api/harness/events")
+    async def receive_harness_event(request: Request):
+        try:
+            raw = await request.json()
+            data = raw if isinstance(raw, dict) else {}
+        except Exception:
+            data = {}
+        try:
+            from distr.core.harness_events import HarnessEventPayload, record_harness_event_silently
+
+            allowed = set(HarnessEventPayload.__dataclass_fields__.keys())
+            payload = HarnessEventPayload(**{key: value for key, value in data.items() if key in allowed})
+            return JSONResponse(record_harness_event_silently(payload))
+        except Exception:
+            return JSONResponse({"success": True, "silent": True})
     
     try:
         from distr.gui.web.routes.board import create_routes as create_board_routes
@@ -380,6 +399,22 @@ def create_app() -> FastAPI:
             return []
 
     # Skills API — serve the skills registry
+    def _resolve_skill_directory(skill_id: str):
+        from distr.core.skills.catalog import registry_entry_for
+
+        skills_root = project_root / "skills"
+        entry = registry_entry_for(skill_id)
+        if entry:
+            raw_path = str(entry.get("path") or "").strip()
+            if raw_path:
+                candidate = project_root / raw_path if "/" in raw_path else skills_root / raw_path
+                if candidate.exists() and candidate.is_dir():
+                    return candidate
+        candidate = skills_root / skill_id
+        if candidate.exists() and candidate.is_dir():
+            return candidate
+        return None
+
     @app.get("/api/skills")
     async def get_skills_registry():
         from distr.core.skills.catalog import load_registry

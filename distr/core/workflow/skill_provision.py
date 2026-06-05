@@ -17,6 +17,8 @@ _ECC_SKILLS_DIR = _PROJECT_ROOT / "vendor" / "ecc" / "skills"
 CLI_TARGETS = {
     "pi": ".pi/skills",
     "cursor": ".cursor/commands",
+    "cursor_ide": ".cursor/commands",
+    "vscode_ide": ".cursor/commands",
     "claude_code": ".claude/commands",
     "claude": ".claude/commands",
     "codex": ".codex/commands",
@@ -38,10 +40,14 @@ def _resolve_skill_dir(skill_id: str) -> Path | None:
 
 
 def _backend_skill_target(backend_id: str) -> str:
+    bid = _normalized_backend_id(backend_id)
+    return CLI_TARGETS.get(bid, CLI_TARGETS["pi"])
+
+
+def _normalized_backend_id(backend_id: str) -> str:
     from distr.core.project_cli_backends import normalize_backend_id
 
-    bid = normalize_backend_id(backend_id)
-    return CLI_TARGETS.get(bid, CLI_TARGETS["pi"])
+    return normalize_backend_id(backend_id)
 
 
 def push_skill_to_project(
@@ -64,7 +70,8 @@ def push_skill_to_project(
         skill_md = skill_dir / "skill.md"
     if not skill_md.exists():
         return None
-    target = _backend_skill_target(backend_id)
+    normalized_backend_id = _normalized_backend_id(backend_id)
+    target = CLI_TARGETS.get(normalized_backend_id, CLI_TARGETS["pi"])
     target_dir = project_path / target
     target_dir.mkdir(parents=True, exist_ok=True)
     actual_id = entry.canonical_id
@@ -81,7 +88,7 @@ def push_skill_to_project(
                     shutil.rmtree(dest_subdir)
                 shutil.copytree(subdir, dest_subdir)
     else:
-        dest_file = registry.target_path(entry, backend_id, project_path)
+        dest_file = registry.target_path(entry, normalized_backend_id, project_path)
         dest_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_md, dest_file)
         for subdir_name in _SKILL_RESOURCE_DIRS:

@@ -13,10 +13,12 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
-_ECC_SKILLS_DIR = _PROJECT_ROOT / "vendor" / "ecc" / "skills"
+_ECC_VENDOR_DIR = _PROJECT_ROOT / "vendor" / "ecc"
+_ECC_SKILLS_DIR = _ECC_VENDOR_DIR / "skills"
+_ECC_VENDOR_METADATA_FILE = _ECC_VENDOR_DIR / ".decisions-vendor.json"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
 
-# Ticket text keywords → bundled skill ids (google/skills + core workflow skills).
+# Ticket text keywords -> bundled skill ids (google/skills + core workflow skills).
 _TICKET_SKILL_HINTS: list[tuple[list[str], list[str]]] = [
     (["gemini", "vertex ai", "agent platform", "gen ai", "google genai"], ["gemini-api"]),
     (["gemini interaction", "interactions api"], ["gemini-interactions-api"]),
@@ -56,9 +58,15 @@ _GOOGLE_SKILL_PREFIXES = (
     "agent-platform-",
 )
 
+_VENDOR_SOURCES = {"ecc", "ecc_vendor"}
+
 
 def bundled_skills_directory() -> Path:
     return _SKILLS_DIR
+
+
+def ecc_vendor_directory() -> Path:
+    return _ECC_VENDOR_DIR
 
 
 def skills_registry_path() -> Path:
@@ -68,6 +76,24 @@ def skills_registry_path() -> Path:
 def _canonical_id(value: str) -> str:
     text = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
     return text.strip("-")
+
+
+def _relative_path(path: Path) -> str:
+    try:
+        return str(path.relative_to(_PROJECT_ROOT))
+    except ValueError:
+        return str(path)
+
+
+def _load_ecc_vendor_metadata() -> dict[str, Any]:
+    if not _ECC_VENDOR_METADATA_FILE.is_file():
+        return {}
+    try:
+        payload = json.loads(_ECC_VENDOR_METADATA_FILE.read_text(encoding="utf-8"))
+        return payload if isinstance(payload, dict) else {}
+    except Exception:
+        logger.warning("ECC vendor metadata unreadable", exc_info=True)
+        return {}
 
 
 def _skill_file(skill_dir: Path | None) -> Path | None:
@@ -101,12 +127,27 @@ def _local_row_directory(row: dict[str, Any]) -> Path:
     return _SKILLS_DIR / raw_path
 
 
-def _vendor_registry_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
-    from distr.core.skills.registry import SkillRegistry
+def _registry_scan():
+    from distr.core.skills.registry import SkillEntry, SkillRegistry
 
-    registry = SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+    return SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+
+
+def _vendor_payload(entry: Any, metadata: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "name": "ecc",
+        "source": "ecc_vendor",
+        "path": _relative_path(entry.path),
+        "repo": str(metadata.get("source") or "https://github.com/affaan-m/ecc"),
+        "commit": str(metadata.get("commit") or ""),
+        "license": str(metadata.get("license") or "MIT"),
+        "content_hash": entry.content_hash,
+    }
+
+
+def _vendor_registry_rows(scan: Any, existing_ids: set[str], metadata: dict[str, Any]) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
-    for entry in sorted(registry.entries.values(), key=lambda e: e.canonical_id):
+    for entry in sorted(scan.entries.values(), key=lambda e: e.canonical_id):
         if entry.source != "ecc_vendor":
             continue
         if entry.canonical_id in existing_ids:
@@ -118,20 +159,45 @@ def _vendor_registry_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
                 "id": entry.canonical_id,
                 "name": entry.name or entry.canonical_id,
                 "description": description,
-                "path": str(entry.path.relative_to(_PROJECT_ROOT)) if entry.path.is_relative_to(_PROJECT_ROOT) else str(entry.path),
+                "path": _relative_path(entry.path),
                 "source": "ecc_vendor",
+                "vendor": _vendor_payload(entry, metadata),
                 "provenance": {
-                    "repo": "https://github.com/affaan-m/ecc",
-                    "license": "MIT",
+                    "repo": str(metadata.get("source") or "https://github.com/affaan-m/ecc"),
+                    "license": str(metadata.get("license") or "MIT"),
                     "vendored_path": "vendor/ecc",
+                    "commit": str(metadata.get("commit") or ""),
                     "content_hash": entry.content_hash,
                 },
                 "target_surfaces": list(entry.target_surfaces),
                 "conflict_policy": "local_preferred",
                 "editable": False,
+                "tags": ["ecc", "vendor"],
             }
         )
     return rows
+
+
+def _attach_vendor_conflicts(rows: list[dict[str, Any]], scan: Any, metadata: dict[str, Any]) -> None:
+    by_id = {_canonical_id(str(row.get("id") or "")): row for row in rows}
+    for skill_id, conflicts in getattr(scan, "conflicts", {}).items():
+        native = by_id.get(_canonical_id(skill_id))
+        if not native:
+            continue
+        sources = native.setdefault("vendor_sources", [])
+        merged_from = native.setdefault("merged_from", [])
+        for duplicate in conflicts:
+            if duplicate.source != "ecc_vendor":
+                continue
+            vendor = _vendor_payload(duplicate, metadata)
+            if isinstance(sources, list) and not any(
+                isinstance(item, dict) and item.get("path") == vendor.get("path")
+                for item in sources
+            ):
+                sources.append(vendor)
+            if isinstance(merged_from, list) and vendor["path"] not in merged_from:
+                merged_from.append(vendor["path"])
+        native.setdefault("conflict_policy", "local_preferred")
 
 
 @lru_cache(maxsize=1)
@@ -159,7 +225,11 @@ def load_registry() -> tuple[dict[str, Any], ...]:
             row.setdefault("editable", True)
             rows.append(row)
             existing_ids.add(_canonical_id(skill_id))
-    rows.extend(_vendor_registry_rows(existing_ids))
+
+    scan = _registry_scan()
+    metadata = _load_ecc_vendor_metadata()
+    _attach_vendor_conflicts(rows, scan, metadata)
+    rows.extend(_vendor_registry_rows(scan, existing_ids, metadata))
     return tuple(rows)
 
 
@@ -172,7 +242,7 @@ def skill_directory_for_id(skill_id: str) -> Path | None:
         if _canonical_id(str(row.get("id") or "")) != key:
             continue
         source = str(row.get("source") or "").lower()
-        if source == "ecc_vendor":
+        if source in _VENDOR_SOURCES:
             raw_path = Path(str(row.get("path") or ""))
             path = raw_path if raw_path.is_absolute() else _PROJECT_ROOT / raw_path
         else:
@@ -193,6 +263,10 @@ def registry_by_id() -> dict[str, dict[str, Any]]:
         if key:
             out[key] = row
     return out
+
+
+def registry_entry_for(skill_id: str) -> dict[str, Any] | None:
+    return registry_by_id().get(str(skill_id or "").strip().lower())
 
 
 def filter_known_skill_ids(skill_ids: list[str]) -> list[str]:
@@ -227,12 +301,39 @@ def infer_skills_for_ticket(text: str, *, limit: int = 5) -> list[str]:
     return filter_known_skill_ids([sid for _, sid in scored])[:limit]
 
 
+def _matches_source(row: dict[str, Any], source: str) -> bool:
+    row_source = str(row.get("source") or "").strip().lower()
+    requested = source.strip().lower()
+    if requested in _VENDOR_SOURCES:
+        return row_source in _VENDOR_SOURCES
+    return row_source == requested
+
+
 def hermes_skill_catalog(*, limit: int = 80, source: str | None = None) -> list[dict[str, str]]:
     """Compact skill list for Hermes LLM routing prompts."""
     rows = load_registry()
     if source:
-        src = source.strip().lower()
-        rows = tuple(r for r in rows if str(r.get("source") or "").lower() == src)
+        rows = tuple(r for r in rows if _matches_source(r, source))
+    elif limit and rows:
+        ecc_rows = [r for r in rows if str(r.get("source") or "").lower() in _VENDOR_SOURCES]
+        native_rows = [r for r in rows if str(r.get("source") or "").lower() not in _VENDOR_SOURCES]
+        if ecc_rows and native_rows:
+            preferred_ecc = {
+                "react-patterns": 0,
+                "python-patterns": 1,
+                "security-review": 2,
+                "mcp-server-patterns": 3,
+                "git-workflow": 4,
+                "repo-scan": 5,
+                "documentation-lookup": 6,
+                "docker-patterns": 7,
+                "frontend-patterns": 8,
+                "api-design": 9,
+            }
+            ecc_rows.sort(key=lambda row: preferred_ecc.get(str(row.get("id") or ""), 1000))
+            ecc_budget = min(len(ecc_rows), max(5, limit // 2))
+            native_budget = max(0, limit - ecc_budget)
+            rows = tuple(native_rows[:native_budget] + ecc_rows[:ecc_budget])
     out: list[dict[str, str]] = []
     for row in rows[:limit]:
         out.append(
@@ -256,7 +357,7 @@ def merge_transfer_skills(
     """
     Merge skill ids Hermes should push before harness execution.
 
-    Order: workflow pre_chain → board policy/harness prefs → ticket inference → LLM advisory.
+    Order: workflow pre_chain -> board policy/harness prefs -> ticket inference -> LLM advisory.
     Unknown ids are dropped.
     """
     combined: list[str] = []
@@ -284,7 +385,3 @@ def parse_skill_chain(raw: str | list | None) -> list[str]:
 def is_google_skill(skill_id: str) -> bool:
     sid = str(skill_id or "").lower()
     return any(sid.startswith(prefix) for prefix in _GOOGLE_SKILL_PREFIXES)
-
-
-def registry_entry_for(skill_id: str) -> dict[str, Any] | None:
-    return registry_by_id().get(str(skill_id or "").strip().lower())

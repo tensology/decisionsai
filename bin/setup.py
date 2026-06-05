@@ -640,6 +640,29 @@ def setup(skip_model_pull=False, install_optional=False):
     # --- pi CLI Setup ---
     setup_pi_cli(ram_gb, rec)
 
+    # --- ECC Harness Pack Setup ---
+    print("")
+    print("=" * 60)
+    print("ECC Harness Pack Setup")
+    print("=" * 60)
+    try:
+        from distr.core.harness_pack import ensure_harness_pack_setup
+
+        result = ensure_harness_pack_setup(run_full=True)
+        detected = ", ".join(
+            name for name, present in result.get("detected", {}).items() if present
+        ) or "none"
+        print(f"  Vendor ready: {bool(result.get('vendor_ready'))}")
+        print(f"  Detected harnesses: {detected}")
+        print(f"  Registry cache: {result.get('registry_path')}")
+        written = result.get("written") or []
+        if written:
+            print(f"  Updated projections: {len(written)}")
+        else:
+            print("  Projections already current.")
+    except Exception as e:
+        print(f"  Warning: ECC harness pack setup skipped: {e}")
+
     print("All models have been downloaded and set up successfully.")
 
 

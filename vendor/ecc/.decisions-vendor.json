@@ -1,0 +1,7 @@
+{
+  "name": "ecc",
+  "source": "https://github.com/affaan-m/ecc",
+  "commit": "bc8e12bb80c904a5a9864797ef1fd1212aa82f3d",
+  "vendored_by": "DecisionsAI",
+  "license": "MIT"
+}

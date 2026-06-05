@@ -76,3 +76,11 @@ Next step: ...
     DecisionsAI is reachable and the callback or reporter succeeds, continue
     normally. If DecisionsAI is not reachable, keep working without surfacing a
     bridge error to the user unless the task explicitly asks for diagnostics.
+15. If Codex is working in a fresh chat without a DecisionsAI workflow callback,
+    still report material starts, progress, steering, blockers, and completion.
+    Inside a project folder, use the IDE session reporting in item 11. For
+    activity that is not attached to a known project workflow, use ambient
+    harness reporting with the current project folder:
+    `python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py --source ambient --harness codex --event-type codex_progress --status observed --message "<what changed>"`
+    Ambient reporting is best-effort. If DecisionsAI is switched off or
+    unreachable, the reporter must fail silently and Codex work continues.
