@@ -96,6 +96,17 @@ def friendly_telegram_socket_error(err_str: str, *, endpoint: str = "") -> str:
     return "Telegram not connected"
 
 
+def telegram_online_notice_enabled() -> bool:
+    """Return whether the initial Telegram online notice should be sent."""
+    try:
+        from distr.core.settings import load_settings_from_db
+
+        settings = load_settings_from_db()
+        return bool(settings.get("telegram_send_online_notice", True))
+    except Exception:
+        return True
+
+
 class TelegramWebSocketManager(
     TelegramMessagesMixin,
     TelegramSenderMixin,
@@ -842,13 +853,7 @@ class TelegramWebSocketManager(
             )
             # Don't reset _online_message_sent on auto-reconnect - keep it True to prevent sending again
         elif not self._online_message_sent:
-            try:
-                from distr.core.settings import load_settings_from_db
-                settings = load_settings_from_db()
-                send_online_notice = bool(settings.get("telegram_send_online_notice", False))
-            except Exception:
-                send_online_notice = False
-            if send_online_notice:
+            if telegram_online_notice_enabled():
                 logger.info(
                     "[Telegram] 📤 Sending online message (enabled in settings)"
                 )

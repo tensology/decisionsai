@@ -29,6 +29,7 @@ class Settings(Base):
     load_splash_sound = Column(Boolean, default=True)
     show_about = Column(Boolean, default=True)
     welcome_greet_me = Column(Boolean, default=True)
+    telegram_send_online_notice = Column(Boolean, default=True)
     load_on_startup = Column(Boolean, default=True)
     always_confirm_file_operations = Column(Boolean, default=True)  # Always show confirmation dialog for file operations
     startup_listening_state = Column(String, default='remember')  # values: 'remember', 'stop', 'start'
@@ -560,6 +561,7 @@ try:
                 ("cursor_enabled", "BOOLEAN DEFAULT 0"),
                 ("cursor_key", "VARCHAR DEFAULT ''"),
                 # Telegram response format settings
+                ("telegram_send_online_notice", "BOOLEAN DEFAULT 1"),
                 ("telegram_text_only_override", "BOOLEAN DEFAULT 0"),
                 ("telegram_auto_match_mode", "BOOLEAN DEFAULT 0"),
                 # Load on startup

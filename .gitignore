@@ -76,6 +76,7 @@ db/whatsapp_media/
 
 # --- Docs (auto-generated / to be rewritten) ---
 docs/*
+!docs/hermes.md
 
 # --- Installer build artifacts ---
 installer/build/

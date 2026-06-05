@@ -27,6 +27,7 @@ DEFAULT_SETTINGS = {
     'load_splash_sound': True,
     'show_about': False,
     'welcome_greet_me': True,
+    'telegram_send_online_notice': True,
     'load_on_startup': True,
     'always_confirm_file_operations': True,
     'restore_position': True,

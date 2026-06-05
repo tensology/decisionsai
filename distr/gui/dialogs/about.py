@@ -203,6 +203,12 @@ class AboutWindow(QtWidgets.QMainWindow):
         Args:
             layout (QVBoxLayout): Layout to add tabbed widget to
         """
+        # Go up 4 levels: about.py -> dialogs -> gui -> distr -> project root
+        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
+
+        def local_doc_url(*parts):
+            return QUrl.fromLocalFile(os.path.join(project_root, *parts)).toString()
+
         # Create tabbed widget
         tab_widget = QtWidgets.QTabWidget()
         tab_widget.setStyleSheet(f"""
@@ -279,26 +285,44 @@ class AboutWindow(QtWidgets.QMainWindow):
             }
         """)
         
+        hermes_url = local_doc_url("docs", "hermes.md")
+        readme_url = local_doc_url("README.md")
+        codex_url = local_doc_url("codex_plugin", "decisions-codex", "README.md")
+        cursor_url = local_doc_url("cursor_plugin", "decisions-cursor", "README.md")
+        claude_url = local_doc_url("vendor", "ecc", "docs", "HERMES-SETUP.md")
+        ecc_url = local_doc_url("vendor", "ecc", "README.md")
+        sidecar_url = local_doc_url("sidecar", "README.md")
+
         # Convert descriptions to HTML
         descriptions = [
-            ("Your computer used to sit there waiting to be told what to do. Now it argues back — helpfully. "
-             "DecisionsAI is a voice-first AI assistant that lives on your machine, understands plain English, "
-             "and actually <i>does things</i>: opens apps, writes code, reads your screen, "
-             "manages tickets, runs workflows, and occasionally surprises you with how little you have to type anymore."),
-            ("It's not a chatbot with delusions of grandeur. It's a proper local agent — with real tools, "
-             "real memory, and the ability to chain tasks together without you having to babysit every step. "
-             "Talk to it, brief it, then go make a coffee. When you come back, "
-             "the thing you asked for is usually done. Sometimes it even did the thing you <i>meant</i> to ask for."),
-            ("Built on an embarrassing number of excellent open-source projects — see the Credits tab for the full "
-             "cast of people we owe a drink — and glued together by <a href='https://www.tensology.com' style='color:#4a9eff;'>Tensology</a> "
-             "with equal parts ambition and caffeine. "
-             "DecisionsAI is what happens when you get tired of clicking."),
+            ("<b>Welcome to DecisionsAI.</b> This is a local, voice-first workspace assistant for getting real work done: "
+             "talk to it, type to it, send it tickets, ask it to inspect what is on screen, or have it run workflows "
+             "and automations without making every request feel like a separate little island."),
+            (f"The purpose is simple: make your computer feel coordinated. Chat, Ticket Boards, Automations, Workflows, "
+             f"browser evidence, project folders, and IDE conversations can all meet inside "
+             f"<a href='{hermes_url}' style='color:#4a9eff;'>Hermes</a>, the orchestration layer that keeps context, "
+             f"progress, useful memory, and handoffs connected."),
+            (f"For software work, DecisionsAI can link into <a href='{codex_url}' style='color:#4a9eff;'>Codex</a>, "
+             f"<a href='{cursor_url}' style='color:#4a9eff;'>Cursor</a>, "
+             f"<a href='{claude_url}' style='color:#4a9eff;'>Claude-compatible harnessing</a>, and the vendored "
+             f"<a href='{ecc_url}' style='color:#4a9eff;'>ECC harness</a>. The goal is that a ticket, workflow, "
+             f"or ordinary project conversation can move into the right developer surface and still report back "
+             f"to the main orchestrator."),
+            (f"Under the hood, DecisionsAI stays practical: a local web UI, connected accounts you choose, "
+             f"voice and text routes, browser evidence, machine-control through the "
+             f"<a href='{sidecar_url}' style='color:#4a9eff;'>Sidecar</a>, and memory that should help without getting noisy. "
+             f"It should be useful, quiet when nothing valuable needs saying, and clear when something actually needs your attention."),
+            (f"<b>Useful links:</b> <a href='{readme_url}' style='color:#4a9eff;'>README</a> · "
+             f"<a href='https://www.decisionsai.net/' style='color:#4a9eff;'>Website</a> · "
+             f"<a href='https://www.decisionsai.net/privacy' style='color:#4a9eff;'>Privacy</a> · "
+             f"<a href='https://www.decisionsai.net/terms' style='color:#4a9eff;'>Terms</a> · "
+             f"<a href='https://github.com/tensology/decisionsai' style='color:#4a9eff;'>GitHub</a>"),
         ]
         
         # Build HTML content from descriptions
         about_html = "<div style='color: #ffffff;'>"
         for text in descriptions:
-            about_html += f'<p style="margin: 15px 0; font-size: 16px; line-height: 1.15; font-weight: 300;">{text}</p>'
+            about_html += f'<p style="margin: 15px 0; font-size: 16px; line-height: 1.35; font-weight: 300;">{text}</p>'
         about_html += "</div>"
         
         about_content.setHtml(about_html)
@@ -336,8 +360,6 @@ class AboutWindow(QtWidgets.QMainWindow):
         """)
         
         # Load changelog file (CHANGELOG.md is in the project root)
-        # Go up 4 levels: about.py -> dialogs -> gui -> distr -> project root
-        project_root = os.path.dirname(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
         changelog_path = os.path.join(project_root, "CHANGELOG.md")
         if os.path.exists(changelog_path):
             try:

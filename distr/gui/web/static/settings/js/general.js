@@ -52,6 +52,7 @@ async function loadGeneralSettings() {
         document.getElementById('load_splash_sound').checked = settings.load_splash_sound || false;
         document.getElementById('show_about').checked = settings.show_about || false;
         document.getElementById('welcome_greet_me').checked = settings.welcome_greet_me || false;
+        document.getElementById('telegram_send_online_notice').checked = settings.telegram_send_online_notice !== false;
         document.getElementById('load_on_startup').checked = settings.load_on_startup || false;
 
         // Load listening state radio buttons
@@ -137,6 +138,7 @@ async function saveGeneralSettings() {
             load_splash_sound: document.getElementById('load_splash_sound').checked,
             show_about: document.getElementById('show_about').checked,
             welcome_greet_me: document.getElementById('welcome_greet_me').checked,
+            telegram_send_online_notice: document.getElementById('telegram_send_online_notice').checked,
             load_on_startup: document.getElementById('load_on_startup').checked,
             listening_state: listeningState,
             voice_provider: voiceProvider,

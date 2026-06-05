@@ -198,6 +198,20 @@ def run_migrations():
                 logger.info("Added welcome_greet_me column to settings table")
             except Exception as e:
                 logger.warning(f"Could not add welcome_greet_me column: {e}")
+
+    # Handle database migration for telegram_send_online_notice column
+    try:
+        with Session() as session:
+            session.execute(text("SELECT telegram_send_online_notice FROM settings LIMIT 1"))
+    except Exception:
+        # Column doesn't exist, add it enabled so Telegram comes back online on initial launch.
+        with engine.connect() as conn:
+            try:
+                conn.execute(text("ALTER TABLE settings ADD COLUMN telegram_send_online_notice BOOLEAN DEFAULT 1"))
+                conn.commit()
+                logger.info("Added telegram_send_online_notice column to settings table")
+            except Exception as e:
+                logger.warning(f"Could not add telegram_send_online_notice column: {e}")
     
     # Handle database migration for always_confirm_file_operations column
     try:
