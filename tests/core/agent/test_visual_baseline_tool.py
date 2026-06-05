@@ -55,7 +55,7 @@ def test_visual_baseline_tool_creates_gets_and_lists_baselines(monkeypatch):
         action="create",
         name="Gold Admin",
         board_id=7,
-        description="Paul-approved admin UI reference.",
+        description="User-approved admin UI reference.",
         screens=[
             {
                 "screen_name": "Dashboard",

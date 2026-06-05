@@ -12,7 +12,6 @@ logger = logging.getLogger(__name__)
 
 RouteSource = Literal["policy", "board_override", "hermes_override", "harness_preference", "fallback"]
 
-IDE_BACKENDS = {"cursor_ide", "vscode_ide"}
 COMPLEXITY_ORDER = {"low": 0, "medium": 1, "high": 2}
 
 
@@ -111,32 +110,6 @@ def _apply_harness_preferences(
     return updated, rationale, skills
 
 
-def _prefer_ide_if_configured(
-    route: dict[str, str],
-    policy: dict[str, Any],
-    complexity: str,
-) -> tuple[dict[str, str], str]:
-    threshold = str(policy.get("prefer_ide_above_complexity") or "").strip().lower()
-    if not threshold or threshold not in COMPLEXITY_ORDER:
-        return route, ""
-    if COMPLEXITY_ORDER.get(complexity, 1) < COMPLEXITY_ORDER.get(threshold, 2):
-        return route, ""
-    backend = route.get("backend") or ""
-    if backend in IDE_BACKENDS:
-        return route, ""
-    from distr.core.project_cli_backends import get_backend, normalize_backend_id
-
-    for ide_id in ("cursor_ide", "vscode_ide"):
-        try:
-            if get_backend(ide_id).setup_status().ready:
-                updated = dict(route)
-                updated["backend"] = normalize_backend_id(ide_id)
-                return updated, f"Board policy prefers IDE for {complexity} complexity"
-        except Exception:
-            continue
-    return route, ""
-
-
 def _recent_harness_outcomes(
     *,
     project_id: int | None,
@@ -219,7 +192,7 @@ def _call_orchestrator_llm(
             "available_backends": backend_status,
             "learned_rules": learned_context[:3000],
             "recent_outcomes": recent_outcomes,
-            "allowed_backends": ["pi", "cursor", "claude_code", "codex", "cursor_ide", "vscode_ide"],
+            "allowed_backends": ["pi", "cursor", "claude_code", "codex"],
             "available_skills": hermes_skill_catalog(limit=100),
             "response_schema": {
                 "backend": "string",
@@ -339,12 +312,6 @@ def resolve_execution_route(
     if inferred_skills:
         skills.extend(inferred_skills)
 
-    ide_route, ide_rationale = _prefer_ide_if_configured(route, policy, level)
-    if ide_route.get("backend") != route.get("backend"):
-        route = ide_route
-        pref_rationale = pref_rationale or ide_rationale
-        source_hint = "board_override"
-
     visual_baseline_readiness: dict[str, Any] | None = None
     if intake_profile.get("ui_heavy") and board_id:
         try:
@@ -410,14 +377,6 @@ def resolve_execution_route(
             advisory_skills = filter_known_skill_ids(
                 [str(s).strip() for s in (advisory.get("skills") or []) if str(s).strip()]
             )
-            if advisory.get("escalate_to_ide") and suggested_backend not in IDE_BACKENDS:
-                for ide_id in ("cursor_ide", "vscode_ide"):
-                    try:
-                        if get_backend(ide_id).setup_status().ready:
-                            suggested_backend = ide_id
-                            break
-                    except Exception:
-                        continue
             if not override_applied and suggested_backend and (
                 suggested_backend != route.get("backend")
                 or suggested_model != route.get("model")

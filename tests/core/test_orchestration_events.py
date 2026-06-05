@@ -149,6 +149,38 @@ def test_user_notification_event_is_recorded_without_internal_branding(monkeypat
     assert "Hermes" not in timeline[0]["summary"]
 
 
+def test_orchestration_timeline_exposes_surface_subtype_and_attachment(monkeypatch):
+    from distr.core.orchestration_events import emit_orchestration_event, list_orchestration_timeline
+
+    factory = _factory()
+    monkeypatch.setattr("distr.core.hermes.get_session", lambda: _session_ctx(factory))
+
+    emit_orchestration_event(
+        source="cursor",
+        event_type="cursor_prompt_submitted",
+        status="observed",
+        project_id=3,
+        execution_session_id=4,
+        summary="Cursor prompt submitted.",
+        payload={
+            "surface": "cursor",
+            "subtype": "ide_prompt_submitted",
+            "correlation_id": "corr-1",
+            "thread_id": "thread-1",
+            "is_workflow_attached": False,
+        },
+    )
+
+    timeline = list_orchestration_timeline(project_id=3, execution_session_id=4)
+
+    assert timeline[0]["event_type"] == "worker_progress"
+    assert timeline[0]["surface"] == "cursor"
+    assert timeline[0]["subtype"] == "ide_prompt_submitted"
+    assert timeline[0]["correlation_id"] == "corr-1"
+    assert timeline[0]["thread_id"] == "thread-1"
+    assert timeline[0]["is_workflow_attached"] is False
+
+
 def test_route_notification_mentions_missing_visual_baseline():
     from distr.core.orchestration_events import build_orchestration_notification
 

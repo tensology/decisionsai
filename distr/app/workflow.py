@@ -14,6 +14,7 @@ from PyQt6.QtCore import QTimer
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.signals import signal_manager
 from distr.core.workflow_agent import WorkflowAgent
+from distr.core.human_engagement import EngagementIntent, HumanEngagementService
 
 logger = logging.getLogger(__name__)
 
@@ -63,14 +64,6 @@ class WorkflowOrchestrationMixin:
     def _run_workflow_scheduled(self):
         """Periodic scheduler tick — fires due scheduled workflows."""
         try:
-            # Priority rule: board-driven check-ins should claim workflows first
-            # when both board scheduler and workflow scheduler are due together.
-            from distr.core.kanban.scheduler import check_kanban_schedules
-            check_kanban_schedules()
-        except Exception as e:
-            logger.error("Ticket Board scheduler error: %s", e, exc_info=True)
-
-        try:
             from distr.core.workflow.scheduler import (
                 get_due_scheduled_workflows,
                 run_scheduled_workflow,
@@ -87,6 +80,7 @@ class WorkflowOrchestrationMixin:
                 )
                 run_scheduled_workflow(
                     workflow_id,
+                    event_queue=getattr(self, "agent_event_queue", None),
                     on_start_orchestration=lambda wid, rid, steps, wtype: (
                         self._start_workflow_orchestration(wid, rid, steps, wtype)
                     ),
@@ -272,10 +266,29 @@ class WorkflowOrchestrationMixin:
             f"{summary}\n\n"
             "Reply with what should happen next, for example: continue, retry, skip, or add extra instructions."
         )
+        decision = HumanEngagementService(
+            telegram_manager=manager,
+            allow_telegram=True,
+        ).decide(EngagementIntent(
+            source="workflow",
+            surface="telegram",
+            kind="workflow_waiting",
+            priority="high",
+            subject_type="workflow_run",
+            subject_id=str(run_id),
+            state_fingerprint=str(step_id),
+            body=message,
+            requires_response=True,
+            run_id=run_id,
+            step_id=step_id,
+        ))
+        if not decision.should_send:
+            return
+        outbound_text = decision.final_text or decision.final_voice_text or message
         try:
-            manager.send_to_telegram(text=message)
+            manager.send_to_telegram(text=outbound_text)
         except TypeError:
-            manager.send_to_telegram(message)
+            manager.send_to_telegram(outbound_text)
         except Exception as exc:
             logger.debug(
                 "Workflow: failed to notify Telegram for waiting run %s: %s",
@@ -517,7 +530,9 @@ class WorkflowOrchestrationMixin:
                 workflow_id,
             )
 
-            workflow_agent = WorkflowAgent()
+            workflow_agent = WorkflowAgent(
+                event_queue=getattr(self, "agent_event_queue", None),
+            )
             agent_loop = asyncio.new_event_loop()
 
             def _run_loop():

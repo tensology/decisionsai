@@ -1,9 +1,0 @@
-{
-  "permissions": {
-    "allow": [
-      "WebSearch",
-      "WebFetch(domain:forum.cursor.com)",
-      "WebFetch(domain:github.com)"
-    ]
-  }
-}

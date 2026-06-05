@@ -1,7 +1,7 @@
 from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
 from distr.core.kanban.ticket_policy import resolve_ticket_cli_route
 from distr.core.project_cli_backends.base import ProjectTask
-from distr.core.project_cli_backends.registry import CodexBackend
+from distr.core.project_cli_backends.registry import CodexBackend, CursorBackend
 
 
 def test_normalize_codex_intelligence_and_speed():
@@ -95,4 +95,33 @@ def test_codex_build_command_embeds_decisions_callback(monkeypatch):
     assert "internal_token=test-internal-token" in instruction
     assert '"execution_session_id":31' in instruction
     assert "report_decisions_event.py" in instruction
+    assert "codex_prompt_submitted" in instruction
+    assert instruction.endswith("fix tests")
+
+
+def test_cursor_build_command_embeds_decisions_callback(monkeypatch):
+    monkeypatch.setenv("DECISIONS_API_BASE", "http://127.0.0.1:8765")
+    monkeypatch.setenv("DECISIONSAI_INTERNAL_API_TOKEN", "test-internal-token")
+    backend = CursorBackend()
+    task = ProjectTask(
+        project_id=4,
+        project_name="demo",
+        folder="/tmp",
+        instruction="fix tests",
+        workflow_id=2,
+        run_id=9,
+        step_id=11,
+        ticket_id=7,
+        execution_session_id=31,
+    )
+
+    cmd = backend._build_command("cursor-agent", task)
+    instruction = cmd[-1]
+
+    assert "[DECISIONS CURSOR CALLBACK]" in instruction
+    assert "/api/workflows/2/runs/9/codex-events" in instruction
+    assert "internal_token=test-internal-token" in instruction
+    assert '"execution_session_id":31' in instruction
+    assert "report_decisions_event.py" in instruction
+    assert "cursor_progress" in instruction
     assert instruction.endswith("fix tests")

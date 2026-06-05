@@ -34,7 +34,7 @@ class OracleGlobeTool(BaseTool):
         self._chat_manager = chat_manager
         self._event_queue = event_queue
         if event_queue is None:
-            logger.warning("OracleGlobeTool initialized without event_queue - UI updates may not work across processes")
+            logger.debug("OracleGlobeTool initialized without event_queue; UI updates are disabled for this isolated tool context")
     
     def _run(self, text: str = "", transcription: list = None, **kwargs) -> str:
         """Execute globe change action."""
@@ -138,5 +138,4 @@ class OracleGlobeTool(BaseTool):
     async def _arun(self, text: str = "", transcription: list = None, **kwargs) -> str:
         """Async execution."""
         return self._run(text=text, transcription=transcription)
-
 

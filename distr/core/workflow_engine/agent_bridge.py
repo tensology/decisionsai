@@ -7,6 +7,7 @@ so the Voice Agent can react.
 
 import logging
 import queue
+import re
 from typing import Any, Dict, List, Optional
 
 logger = logging.getLogger(__name__)
@@ -99,11 +100,11 @@ class WorkflowAgentBridge:
         total = len(steps_summary)
 
         if cancelled:
-            status_label = "Cancelled"
+            status_line = f"Done - the workflow was cancelled. Session {session_id}, run {run_id}."
         elif success:
-            status_label = "Completed successfully"
+            status_line = f"Done - the workflow finished successfully. Session {session_id}, run {run_id}."
         else:
-            status_label = "Failed"
+            status_line = f"The workflow failed. Session {session_id}, run {run_id}."
 
         # Failed steps: include enough detail for diagnosis (tracebacks, stderr).
         # Passed steps: shorter lines keep voice follow-ups and logs manageable.
@@ -120,21 +121,23 @@ class WorkflowAgentBridge:
             status_tag = f" [{status}]" if status and not ok else ""
             if result:
                 lim = _PASS_SNIPPET if ok else _FAIL_SNIPPET
-                short = result[:lim] + ("..." if len(result) > lim else "")
+                short = WorkflowAgentBridge._human_step_result(result)
+                short = short[:lim] + ("..." if len(short) > lim else "")
                 step_lines.append(f"  {i}. {title}{status_tag}: {short}")
             else:
                 step_lines.append(f"  {i}. {title}{status_tag}")
 
         steps_block = "\n".join(step_lines) if step_lines else "  (no steps)"
 
-        if total == 1:
-            speak_instruction = "Give a brief spoken response about what this single step did."
-        else:
-            speak_instruction = "Give a brief spoken overview of the entire workflow run — what was accomplished across all steps."
-
         return (
-            f"Workflow run {status_label} "
-            f"(session {session_id}, run {run_id})\n"
-            f"Steps ({total}):\n{steps_block}\n\n"
-            f"{speak_instruction}"
+            f"{status_line}\n"
+            f"Steps ({total}):\n{steps_block}"
         )
+
+    @staticmethod
+    def _human_step_result(result: str) -> str:
+        clean = re.sub(r"\s+", " ", str(result or "")).strip()
+        if re.search(r"(?i)\bvoice note sent\b", clean):
+            return "It sent a Telegram voice note with the requested message."
+        clean = re.sub(r"(?i)^voice note sent:\s*", "Sent the Telegram voice note.", clean).strip()
+        return clean

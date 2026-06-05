@@ -948,7 +948,7 @@
             if (!filtered.length) {
                 if (state.waChats.length && state.waSidebarChatListMode) chatListEl.innerHTML = '<div class="text-xs text-gray-400 italic py-2 px-1 leading-snug">No chats match the search box. Clear search to see contacts and select them.</div>';
                 else chatListEl.innerHTML = '<div class="text-xs text-gray-500 italic py-2">No incoming messages</div>';
-                if (!state.waChats.length) deps.showWhatsAppNoMessagesState();
+                if (!state.waChats.length && deps.isMessagesPanelVisible()) deps.showWhatsAppNoMessagesState();
                 return;
             }
             var html = "";
@@ -1067,6 +1067,7 @@
         }
 
         function showWhatsAppThread(sender, name) {
+            if (!deps.isMessagesPanelVisible()) return;
             var state = deps.getState();
             state.waSelectedJid = sender;
             state.waActiveThread = {
@@ -1124,6 +1125,7 @@
                     return { messages: [] };
                 });
             }).then(function(data) {
+                if (!deps.isMessagesPanelVisible() || msgView.classList.contains("hidden")) return;
                 var messages = deps.dedupeThreadMessages(data.messages || []);
                 var nextState = deps.getState();
                 nextState.waThreadMessages = messages.slice();

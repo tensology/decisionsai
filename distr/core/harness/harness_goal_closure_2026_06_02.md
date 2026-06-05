@@ -9,7 +9,7 @@ The harness goal is now operationally proved for the first DecisionsAI workflow 
 - Visual taste learning recorded rejection labels and required an explicit `taste_checks.spacing_off` follow-up after repeated spacing feedback.
 - Scheduled desktop actions were exercised through the agent-facing tool path for preview, create, list, disable, enable, reschedule, cancel, and scheduler run-log behavior.
 - Recurring scheduled actions now have a built-in next-run fallback when `croniter` is unavailable.
-- The final live proof created a Cursor IDE work packet, executed a real Codex CLI backend edit in a disposable git repo, completed the DecisionsAI workflow with a terminal result packet, and produced a next-action decision of `continue`.
+- The final live proof originally used a legacy Cursor IDE work packet, then executed a real Codex CLI backend edit in a disposable git repo, completed the DecisionsAI workflow with a terminal result packet, and produced a next-action decision of `continue`.
 
 ## Visual Baseline Evidence
 
@@ -94,14 +94,14 @@ Live workflow:
 - Run ID: `121`
 - Step ID: `1804`
 - Project ID: `9` (`DecisionsAI`)
-- Backend: `cursor_ide`
-- Engine: `ide_ticket`
-- Work packet: `/Users/paul/development/TENSOLOGY/DECISIONS/DecisionsAI/.tickets/decisionsai_cursor_ide_20260602_220916_1804.md`
+- Backend: `cursor` (legacy note: this proof predates the Cursor plugin migration)
+- Engine: `cursor`
+- Work packet: retired with the old VS Code-compatible extension flow.
 - Project execution session ID: `3`
 
 Observed behavior:
 
-- A real Cursor IDE work packet was created in the project `.tickets` folder.
+- The old proof created a Cursor IDE work packet in the project `.tickets` folder; current Cursor work routes through the Cursor CLI backend and local Cursor plugin.
 - The work packet includes authenticated `continue` and `codex-events` callback URLs.
 - Hermes recorded `backend_handoff_created`, `backend_handoff_updated`, worker dispatch/progress/completion, and `needs_input` events for the live run.
 - The live `codex_needs_input` callback was accepted by a secured local server using `X-DecisionsAI-Internal-Token`.
@@ -128,7 +128,7 @@ Live workflow:
 - Workflow ID: `334`
 - Run ID: `145`
 - Step ID: `1831`
-- Initial backend handoff: `cursor_ide`
+- Initial backend handoff: `cursor`
 - Executed backend proof: `codex`
 
 Generated Codex backend artifacts:
@@ -157,7 +157,7 @@ Live workflow:
 - Workflow ID: `334`
 - Run ID: `145`
 - Step ID: `1831`
-- Backend: `cursor_ide`
+- Backend: `cursor`
 
 Generated UI artifacts:
 
@@ -244,7 +244,7 @@ Scheduled actions ticket:
 ## Verification
 
 - `python3 -m py_compile scripts/harness_live_proof.py distr/core/hermes.py distr/core/project_cli_backends/registry.py distr/gui/web/server.py distr/core/workflow/scheduler.py distr/core/actions/desktop.py distr/gui/web/routes/settings/workflows.py`
-- `pytest tests/core/test_scheduler_once_support.py tests/core/test_harness_operational_proof.py tests/core/test_hermes_learned_rules_context.py::test_backend_handoff_redacts_secrets_and_records_memory tests/core/test_codex_prefs.py tests/core/test_ide_ticket_meta.py -q`
+- `pytest tests/core/test_scheduler_once_support.py tests/core/test_harness_operational_proof.py tests/core/test_hermes_learned_rules_context.py::test_backend_handoff_redacts_secrets_and_records_memory tests/core/test_codex_prefs.py tests/core/test_cursor_plugin_contract.py -q`
   - Result: `18 passed`
 - Broad non-e2e harness suite across routing, Hermes, workflow API, run audit, UI quality, scheduled actions, Codex prefs, and IDE ticket metadata:
   - Result: `139 passed`
@@ -254,6 +254,6 @@ Scheduled actions ticket:
 ## Caveats / Operator Notes
 
 - The foreground-safety proof intentionally skips when the target app cannot be verified as foreground; positive desktop execution is separately covered by the Calculator open-app proof.
-- The first baseline uses DecisionsAI workflow screens by default. Paul can still replace or expand it with preferred gold-standard product screens later.
+- The first baseline uses DecisionsAI workflow screens by default. The user can still replace or expand it with preferred gold-standard product screens later.
 - The proof leaves disabled one-time scheduled actions in the database as run-log evidence.
-- Cursor IDE proof creates a real `.tickets` packet and opens Cursor through the IDE backend. The real autonomous edit proof is currently through Codex CLI backend, which is directly verified in the final live report.
+- Cursor work now routes through the Cursor CLI backend and local Cursor plugin. The real autonomous edit proof is currently through Codex CLI backend, which is directly verified in the final live report.

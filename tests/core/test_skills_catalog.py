@@ -7,6 +7,7 @@ from distr.core.skills.catalog import (
     infer_skills_for_ticket,
     is_google_skill,
     load_registry,
+    skill_directory_for_id,
 )
 
 
@@ -36,3 +37,24 @@ def test_is_google_skill():
     assert is_google_skill("gemini-api")
     assert is_google_skill("google-cloud-waf-security")
     assert not is_google_skill("brainstorming")
+
+
+def test_load_registry_includes_vendored_ecc_skills_without_overriding_local():
+    load_registry.cache_clear()
+    rows = load_registry()
+    by_id = {str(r.get("id") or ""): r for r in rows}
+
+    assert by_id["configure-ecc"]["source"] == "ecc_vendor"
+    assert by_id["configure-ecc"]["editable"] is False
+    assert by_id["configure-ecc"]["provenance"]["license"] == "MIT"
+    assert by_id["brainstorming"]["source"] != "ecc_vendor"
+    assert len([r for r in rows if str(r.get("id") or "") == "brainstorming"]) == 1
+
+
+def test_skill_directory_resolves_vendored_ecc_skill():
+    load_registry.cache_clear()
+    skill_dir = skill_directory_for_id("configure-ecc")
+
+    assert skill_dir is not None
+    assert skill_dir.name == "configure-ecc"
+    assert "vendor/ecc/skills/configure-ecc" in str(skill_dir)

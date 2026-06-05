@@ -46,28 +46,12 @@ class HarnessHandle:
 
 async def dispatch_harness(context: HarnessContext) -> HarnessHandle:
     """Run a project task through the selected backend and normalize the handle."""
-    from distr.core.project_cli_backends.registry import run_project_task
+    from distr.core.project_handoff import dispatch_project_handoff
 
-    result = await run_project_task(
-        context.project,
-        context.instruction,
-        run_id=context.run_id,
-        workflow_id=context.workflow_id,
-        step_id=context.step_id,
-        origin=context.origin,
-        ticket_id=context.ticket_id,
-        ticket_complexity=context.ticket_complexity,
-        backend_id_override=context.backend_id,
-        model_override=context.model or None,
-        codex_reasoning_effort_override=context.codex_reasoning_effort or None,
-        codex_service_tier_override=context.codex_service_tier or None,
-        on_event=context.on_event,
-    )
+    result = await dispatch_project_handoff(context)
     engine = (getattr(result, "engine", "") or "").strip()
     success = bool(getattr(result, "success", False))
-    if engine == "ide_ticket" and success:
-        status = HarnessStatus.WAITING_HUMAN
-    elif success:
+    if success:
         status = HarnessStatus.DONE
     else:
         status = HarnessStatus.FAILED

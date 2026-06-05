@@ -46,6 +46,37 @@ DEFAULT_KOKORO_VOICE = "af_heart"
 DEFAULT_KOKORO_AGENT = "Heart"
 
 
+def _split_text_for_kokoro(text: str, max_chars: int = 390) -> list[str]:
+    """Split text into chunks that Kokoro can synthesize reliably."""
+    clean = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not clean:
+        return []
+
+    sentence_parts = [s.strip() for s in re.split(r"(?<=[.!?])\s+", clean) if s.strip()]
+    if not sentence_parts:
+        sentence_parts = [clean]
+
+    chunks: list[str] = []
+    for sentence in sentence_parts:
+        remaining = sentence
+        while remaining:
+            if len(remaining) <= max_chars:
+                chunks.append(remaining.strip())
+                break
+
+            window = remaining[:max_chars]
+            split_pos = max(window.rfind(","), window.rfind(";"), window.rfind(" - "), window.rfind(" "))
+            if split_pos <= 0:
+                split_pos = max_chars
+            chunk = remaining[:split_pos].strip()
+            if not chunk:
+                chunk = remaining[:max_chars].strip()
+            chunks.append(chunk)
+            remaining = remaining[len(chunk):].strip(" ,;-")
+
+    return [chunk for chunk in chunks if chunk]
+
+
 class KokoroDescriptor(TTSProviderDescriptor):
     """Provider descriptor for Kokoro (Offline) TTS."""
 
@@ -199,15 +230,10 @@ class KokoroDescriptor(TTSProviderDescriptor):
         from distr.core.agent.services.tts.kokoro import _normalize_text_for_tts
         text = _normalize_text_for_tts(text)
 
-        # Split into sentences — Kokoro handles single sentences much better
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-        if not sentences:
-            sentences = [text]
-
         chunks = []
         sample_rate = None
-        for sentence in sentences:
-            audio, sr = kokoro.create(sentence, voice=base_voice, speed=clamped_speed)
+        for chunk in _split_text_for_kokoro(text):
+            audio, sr = kokoro.create(chunk, voice=base_voice, speed=clamped_speed)
             if audio is not None and len(audio) > 0:
                 chunks.append(audio)
                 sample_rate = sr

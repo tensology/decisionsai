@@ -411,6 +411,9 @@ class SendFileToTelegramTool(BaseTool):
             # Check file size (Telegram has limits, but we'll try anyway)
             file_size = os.path.getsize(file_path)
             file_size_mb = file_size / (1024 * 1024)
+
+            if file_size <= 0:
+                return f"Error: Refusing to send empty file: {file_path}"
             
             if file_size_mb > 50:  # Telegram limit is around 50MB for documents
                 return f"Error: File is too large ({file_size_mb:.1f} MB). Telegram limit is 50MB."
@@ -437,39 +440,35 @@ class SendFileToTelegramTool(BaseTool):
                     self._event_queue.put(('send_file_to_telegram', {
                         'file_path': file_path,
                         'file_name': os.path.basename(file_path),
-                        'file_type': 'image'
+                        'file_type': 'image',
+                        'explicit_artifact_intent': True,
                     }))
                 elif file_type == 'audio':
                     # Send as audio file
                     self._event_queue.put(('send_file_to_telegram', {
                         'file_path': file_path,
                         'file_name': os.path.basename(file_path),
-                        'file_type': 'audio'
+                        'file_type': 'audio',
+                        'explicit_artifact_intent': True,
                     }))
                 elif file_type == 'video':
                     # Send as video file
                     self._event_queue.put(('send_file_to_telegram', {
                         'file_path': file_path,
                         'file_name': os.path.basename(file_path),
-                        'file_type': 'video'
+                        'file_type': 'video',
+                        'explicit_artifact_intent': True,
                     }))
                 else:
                     # Send as document (PDF, Excel, Word, etc.)
                     self._event_queue.put(('send_file_to_telegram', {
                         'file_path': file_path,
                         'file_name': os.path.basename(file_path),
-                        'file_type': 'document'
+                        'file_type': 'document',
+                        'explicit_artifact_intent': True,
                     }))
                 
-                # Emoji based on file type
-                emoji_map = {
-                    'image': '📸',
-                    'audio': '🎵',
-                    'video': '🎬',
-                    'document': '📄'
-                }
-                emoji = emoji_map.get(file_type, '📄')
-                return f"✅ Found and sending {file_type}: {os.path.basename(file_path)} ({file_size_mb:.2f} MB)"
+                return f"Found and sending {file_type}: {os.path.basename(file_path)} ({file_size_mb:.2f} MB)"
             else:
                 return "Error: Event queue not available. Cannot send file to Telegram."
                 

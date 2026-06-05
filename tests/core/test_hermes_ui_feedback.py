@@ -318,7 +318,7 @@ def test_visual_baseline_set_is_stored_and_listed_by_board(tmp_path):
         baseline_id = create_visual_baseline_set(
             name="Gold Admin",
             board_id=7,
-            description="Reference screens from Paul's preferred admin UI.",
+            description="Reference screens from the user's preferred admin UI.",
             screens=[
                 {
                     "screen_name": "Dashboard",

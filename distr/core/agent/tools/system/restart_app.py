@@ -51,9 +51,10 @@ class RestartAppTool(BaseTool):
             if eq:
                 # Notify Telegram/chat that we're restarting
                 eq.put(('send_to_telegram', {
-                    'text': 'Restarting the application now. I\'ll be back in a moment.',
-                    'is_done': True,
+                    'text': 'Restarting now.',
+                    'is_done': False,
                     'analyzed_image_path': None,
+                    'skip_screenshot': True,
                 }), block=False)
                 import time
                 time.sleep(0.5)  # Give the message time to send
@@ -61,7 +62,7 @@ class RestartAppTool(BaseTool):
             else:
                 from distr.core.signals import signal_manager
                 signal_manager.restart_app.emit()
-            return "Restarting the application now. See you in a moment!"
+            return "Restarting now."
         except Exception as e:
             logger.error("Error in RestartAppTool: %s", e, exc_info=True)
             return f"Failed to restart: {e}"

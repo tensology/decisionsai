@@ -109,6 +109,7 @@ class TelegramMixin:
 
         analyzed_image_path = None
         skip_screenshot = False
+        explicit_artifact_intent = False
         for t in threading.enumerate():
             img = (
                 getattr(t, 'telegram_analyzed_image', None)
@@ -116,6 +117,8 @@ class TelegramMixin:
             )
             if img:
                 analyzed_image_path = img
+            if getattr(t, 'telegram_send_raw_screenshot', None):
+                explicit_artifact_intent = True
             if getattr(t, 'skip_telegram_screenshot', False):
                 skip_screenshot = True
                 t.skip_telegram_screenshot = False
@@ -126,6 +129,7 @@ class TelegramMixin:
             'skip_screenshot': skip_screenshot,
             'provider': 'kokoro',
             'analyzed_image_path': analyzed_image_path,
+            'explicit_artifact_intent': explicit_artifact_intent,
             'input_type': getattr(self, '_telegram_input_type', None) or getattr(threading.current_thread(), 'telegram_input_type', None),
         }), block=False)
         logger.info("%s: Emitted send_to_telegram from LLM (bypassed TTS pipeline)",

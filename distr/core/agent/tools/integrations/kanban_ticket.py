@@ -171,7 +171,7 @@ def _sanitize_ticket_title(title: str) -> str:
 class KanbanTicketInput(BaseModel):
     """Input schema for KanbanTicketTool."""
     text: str = Field(default="", description="Free-form instruction text (the tool parses board/lane/title from it)")
-    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, checkin_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message")
+    action: str = Field(default="create_ticket", description="Action: list_boards, get_active_board, create_board, create_ticket, list_tickets, list_trello_tickets, list_jira_tickets, get_ticket, discuss_ticket, update_ticket, move_ticket, delete_ticket, attach_file, add_todo, toggle_todo, add_link, send_to_project, send_to_cli, update_external_ticket, move_external_ticket, comment_external_ticket, activate_board, workflow_overview, whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message")
     board_name: str = Field(default="", description="Board name (fuzzy matched)")
     board_id: int = Field(default=0, description="Board ID (exact)")
     target_board_name: str = Field(default="", description="Destination board name for move_ticket when moving a ticket across boards")
@@ -240,7 +240,7 @@ class KanbanTicketTool(BaseTool):
       add_link           — add a URL link (requires ticket_id, title, url)
       delete_link        — remove a link (requires ticket_id, url)
       send_to_project    — send ticket to linked project's .tickets folder (requires ticket_id)
-      checkin_overview          — show orchestrator view of active board check-ins and workflow runs
+      workflow_overview         — show active workflow/backend runs
       whatsapp_sync             — pull stored WhatsApp relay messages into the local app database
       whatsapp_latest_activity  — show who last messaged on WhatsApp and recent chat activity
       whatsapp_work_overview    — summarize recent WhatsApp messages that look work-related
@@ -293,7 +293,7 @@ class KanbanTicketTool(BaseTool):
         "Do not use this tool when the user asks to type ticket text into the active app; use type_text instead. "
         "Do not use this tool when the user asks to create/write a ticket in a folder such as Downloads, Desktop, "
         "Documents, or a filesystem path; use file_operations to create a file there instead. "
-        "Use create_cursor_ticket only for explicit Cursor/.tickets/project-ticket requests. "
+        "Use create_cursor_ticket only for explicit Cursor handoff requests. "
         "When the user asks for a Trello card or Jira ticket, still use action='create_ticket'; "
         "the tool will create it on the matching remote board instead of the local Kanban database. "
         "Use action='list_boards' to see available boards (local, Trello, and Jira). "
@@ -316,7 +316,7 @@ class KanbanTicketTool(BaseTool):
         "Use action='attach_file' with ticket_id and file_path to attach files. "
         "Use action='send_to_project' with ticket_id to send ticket to the linked project folder. "
         "Use action='send_to_cli' with ticket_id to send ticket to pi coding agent for execution. "
-        "Use action='checkin_overview' to get active board check-ins and workflow run phases. "
+        "Use action='workflow_overview' to get active workflow/backend run phases. "
         "Use action='whatsapp_sync' when the user asks to sync or refresh WhatsApp messages from the relay. "
         "Use action='whatsapp_latest_activity' when the user asks who messaged last, whether any WhatsApp messages came in, or for the latest WhatsApp activity. "
         "Use action='whatsapp_work_overview' when the user asks what WhatsApp messages look work-related or need ticketing/follow-up. "
@@ -415,6 +415,17 @@ class KanbanTicketTool(BaseTool):
 
     @staticmethod
     def _board_dict(board) -> Dict:
+        source_lane = getattr(board, "agent_source_lane", None) or ""
+        done_lane = getattr(board, "agent_done_lane", None) or ""
+        if not (source_lane or done_lane):
+            try:
+                from distr.core.utils import load_settings_from_db
+
+                settings = load_settings_from_db()
+                source_lane = settings.get("kanban_agent_source_lane") or ""
+                done_lane = settings.get("kanban_agent_done_lane") or ""
+            except Exception:
+                pass
         return {
             "id": board.id,
             "name": board.name,
@@ -423,8 +434,8 @@ class KanbanTicketTool(BaseTool):
             "default_workflow_id": board.default_workflow_id,
             "default_action_id": board.default_action_id,
             "send_to_cli": bool(board.send_to_cli),
-            "agent_source_lane": board.agent_source_lane or "",
-            "agent_done_lane": board.agent_done_lane or "",
+            "agent_source_lane": source_lane,
+            "agent_done_lane": done_lane,
         }
 
     def _find_board(self, board_id: Optional[int] = None, board_name: Optional[str] = None) -> Optional[Dict]:
@@ -1403,8 +1414,8 @@ class KanbanTicketTool(BaseTool):
                 return self._action_activate_board(board_id or None, board_name or text)
             elif action in ("send_to_cli", "push_to_cli", "run_cli"):
                 return self._action_send_to_cli(ticket_id or self._last_ticket_id)
-            elif action in ("checkin_overview", "workflow_overview", "board_overview", "agent_status"):
-                return self._action_checkin_overview()
+            elif action in ("workflow_overview", "board_overview"):
+                return self._action_workflow_overview()
             elif action in ("whatsapp_sync", "wa_sync", "sync_whatsapp"):
                 return self._action_whatsapp_sync()
             elif action in (
@@ -1470,7 +1481,7 @@ class KanbanTicketTool(BaseTool):
                     "activate_board, list_lanes, create_ticket, list_tickets, get_ticket, discuss_ticket, update_ticket, "
                     "move_ticket, update_external_ticket, move_external_ticket, comment_external_ticket, "
                     "delete_ticket, attach_file, delete_file, add_todo, toggle_todo, "
-                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli, checkin_overview, "
+                    "delete_todo, add_link, delete_link, send_to_project, send_to_cli, workflow_overview, "
                     "whatsapp_sync, whatsapp_latest_activity, whatsapp_work_overview, whatsapp_project_feed, whatsapp_list_contacts, "
                     "whatsapp_list_chats, whatsapp_list_messages, whatsapp_mark_processed, "
                     "whatsapp_snapshot_to_ticket, whatsapp_project_snapshot_to_ticket, whatsapp_send_message"
@@ -2382,7 +2393,14 @@ class KanbanTicketTool(BaseTool):
                     KanbanLane.name.ilike(f"%{lane_name}%")
                 ).first()
             elif target_board_id != old_board_id:
-                preferred_lane = (target_board.agent_source_lane or "").strip()
+                preferred_lane = (getattr(target_board, "agent_source_lane", None) or "").strip()
+                if not preferred_lane:
+                    try:
+                        from distr.core.utils import load_settings_from_db
+
+                        preferred_lane = (load_settings_from_db().get("kanban_agent_source_lane") or "").strip()
+                    except Exception:
+                        preferred_lane = ""
                 if preferred_lane:
                     new_lane = s.query(KanbanLane).filter(
                         KanbanLane.board_id == target_board_id,
@@ -2894,40 +2912,16 @@ class KanbanTicketTool(BaseTool):
                     f"Project CLI dispatch failed: {exc}",
                 )
 
-    def _action_checkin_overview(self) -> str:
-        """Return a concise status report of active board check-ins and workflow runs."""
-        from distr.core.kanban.agent import _active_agents, _active_agents_lock
+    def _action_workflow_overview(self) -> str:
+        """Return a concise status report of active workflow runs."""
         from distr.core.workflow.service import get_active_runs
-        with _active_agents_lock:
-            agents = list(_active_agents.items())
-
-        if not agents:
-            runs = get_active_runs(limit=25)
-            if not runs:
-                return voice_then_reference(
-                    "Nothing is actively running on boards or workflows right now.",
-                    "No active board check-ins or workflow runs.",
-                )
-            lines = ["No in-memory board agents, but active workflow runs exist:"]
-            for r in runs[:10]:
-                lines.append(
-                    f"- run #{r.get('id')} board='{r.get('board_name') or r.get('board_id')}' "
-                    f"ticket='{r.get('ticket_title') or r.get('ticket_id')}' "
-                    f"phase={r.get('phase') or 'unknown'} status={r.get('status')}"
-                )
-            ref = "\n".join(lines)
-            spoken = "No board agents are live in memory, but workflow runs are still active; details are below."
-            return voice_then_reference(spoken, ref)
-
-        board_lines = []
-        for board_id, agent in agents:
-            s = agent.status
-            board_lines.append(
-                f"- board #{board_id}: state={s.state} ticket='{s.current_ticket_title or s.current_ticket_id or 'none'}' "
-                f"phase={s.current_phase or 'unknown'} progress={s.processed_count}/{s.total_tickets}"
-            )
 
         runs = get_active_runs(limit=25)
+        if not runs:
+            return voice_then_reference(
+                "Nothing is actively running in workflows right now.",
+                "No active workflow runs.",
+            )
         run_lines = []
         for r in runs[:10]:
             run_lines.append(
@@ -2936,11 +2930,8 @@ class KanbanTicketTool(BaseTool):
                 f"phase={r.get('phase') or 'unknown'} elapsed={r.get('elapsed_seconds', 0)}s"
             )
 
-        parts = ["Active board check-ins:", *board_lines]
-        if run_lines:
-            parts.extend(["", "Active workflow runs:", *run_lines])
-        ref = "\n".join(parts)
-        spoken = "Here is the check-in view for active boards and workflow runs."
+        ref = "\n".join(["Active workflow runs:", *run_lines])
+        spoken = "Here are the active workflow runs."
         return voice_then_reference(spoken, ref)
 
     def _get_whatsapp_manager(self):

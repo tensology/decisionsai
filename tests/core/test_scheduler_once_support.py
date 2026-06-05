@@ -16,6 +16,14 @@ def test_once_schedule_to_cron_returns_marker():
     assert schedule_to_cron("once", "2026-06-02T13:05:00") == "once:2026-06-02T13:05:00"
 
 
+def test_schedule_to_cron_normalizes_human_time_separators():
+    from distr.core.workflow.scheduler import schedule_to_cron
+
+    assert schedule_to_cron("daily", "9/20") == "20 9 * * *"
+    assert schedule_to_cron("daily", "920") == "20 9 * * *"
+    assert schedule_to_cron("weekly", "9.20", schedule_days="2") == "20 9 * * 2"
+
+
 def test_next_run_from_once_iso_returns_requested_datetime():
     from distr.core.workflow.scheduler import _next_run_from_cron
 
@@ -247,3 +255,44 @@ def test_run_scheduled_workflow_marks_overdue_run_as_late(monkeypatch):
     assert metadata["late"] is True
     assert metadata["late_policy"] == "run_as_soon_as_possible"
     assert metadata["phase"] == "scheduled_action"
+
+
+def test_run_scheduled_workflow_passes_event_queue_to_service(monkeypatch):
+    from distr.core.db.workflow import AutoWorkflow, AutoWorkflowStep
+    from distr.core.workflow.scheduler import run_scheduled_workflow
+
+    session_ctx, factory = _scheduler_session_ctx_factory()
+    with factory() as db:
+        wf = AutoWorkflow(
+            name="Voice reminder",
+            workflow_type="scheduled",
+            schedule_enabled=True,
+            schedule_preset="daily",
+            schedule_time="21:05",
+            next_run_at=datetime(2026, 6, 4, 21, 5, 0),
+        )
+        db.add(wf)
+        db.flush()
+        db.add(AutoWorkflowStep(
+            workflow_id=wf.id,
+            position=0,
+            name="Automation Instruction",
+            action_type="agent_instruction",
+            instruction="Send a voice note to Telegram.",
+        ))
+        db.commit()
+        workflow_id = wf.id
+
+    monkeypatch.setattr("distr.core.workflow.scheduler.get_session", session_ctx)
+    started = []
+    monkeypatch.setattr(
+        "distr.core.workflow.service.start_workflow_run",
+        lambda *args, **kwargs: started.append((args, kwargs)) or {"run_id": 150},
+    )
+    event_queue = object()
+
+    assert run_scheduled_workflow(workflow_id, event_queue=event_queue) is True
+
+    assert started
+    assert started[0][1]["event_queue"] is event_queue
+    assert started[0][1]["run_metadata"]["source_type"] == "scheduled"

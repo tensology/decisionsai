@@ -233,28 +233,11 @@ class Settings(Base):
     # Chat voice/speaker toggle
     chat_voice_enabled = Column(Boolean, default=True)
 
-    # Ticket Board Agent Settings (global, migrated from per-board)
-    kanban_agent_enabled = Column(Boolean, default=False)
-
     # Telegram response format settings
     telegram_text_only_override = Column(Boolean, default=False)
-    telegram_auto_match_mode = Column(Boolean, default=True)
-    kanban_agent_frequency = Column(String, default='daily')
-    kanban_agent_time = Column(String, default='09:00')
-    kanban_agent_hours = Column(String, default='[]')
-    kanban_agent_days = Column(String, default='[]')
-    kanban_agent_monthly_day = Column(Integer, default=1)
-    kanban_agent_source_lane = Column(String, default='Current')
-    kanban_agent_done_lane = Column(String, default='QA/Assess')
-    kanban_agent_orchestrator_provider = Column(String, default='')
-    kanban_agent_orchestrator_model = Column(String, default='')
-    kanban_agent_coder_provider = Column(String, default='')
-    kanban_agent_coder_model = Column(String, default='')
-    kanban_agent_sub_provider = Column(String, default='')
-    kanban_agent_sub_model = Column(String, default='')
+    telegram_auto_match_mode = Column(Boolean, default=False)
     kanban_cli_tool = Column(String, default='')
     kanban_cli_auth = Column(String, default='')
-    _kanban_migration_done = Column(Boolean, default=False)
 
     # Masko (AI skin generation)
     masko_enabled = Column(Boolean, default=False)
@@ -434,7 +417,7 @@ class TelegramGroupMessage(Base):
 class WhatsAppPhoneLink(Base):
     """Link a WhatsApp phone JID to a Ticket Board.
     When a number is linked, its messages show up in the board's WhatsApp tab,
-    and the agent check-in can auto-create tickets from unlinked messages.
+    and Automations can create approved intake tickets from linked messages.
     """
     __tablename__ = 'whatsapp_phone_links'
 
@@ -552,23 +535,8 @@ try:
         if _result.fetchone():
             _existing = {row[1] for row in _conn.execute(sa_text("PRAGMA table_info(settings)"))}
             for _col, _def in [
-                ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
-                ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
-                ("kanban_agent_time", "VARCHAR DEFAULT '09:00'"),
-                ("kanban_agent_hours", "VARCHAR DEFAULT '[]'"),
-                ("kanban_agent_days", "VARCHAR DEFAULT '[]'"),
-                ("kanban_agent_monthly_day", "INTEGER DEFAULT 1"),
-                ("kanban_agent_source_lane", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_done_lane", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_orchestrator_provider", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_orchestrator_model", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_coder_provider", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_coder_model", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_sub_provider", "VARCHAR DEFAULT ''"),
-                ("kanban_agent_sub_model", "VARCHAR DEFAULT ''"),
                 ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
                 ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
-                ("_kanban_migration_done", "BOOLEAN DEFAULT 0"),
                 # Initiative settings
         ("initiative_level", "VARCHAR DEFAULT 'assist'"),
         ("initiative_allow_telegram", "BOOLEAN DEFAULT 0"),
@@ -593,7 +561,7 @@ try:
                 ("cursor_key", "VARCHAR DEFAULT ''"),
                 # Telegram response format settings
                 ("telegram_text_only_override", "BOOLEAN DEFAULT 0"),
-                ("telegram_auto_match_mode", "BOOLEAN DEFAULT 1"),
+                ("telegram_auto_match_mode", "BOOLEAN DEFAULT 0"),
                 # Load on startup
                 ("load_on_startup", "BOOLEAN DEFAULT 1"),
                 # Masko (AI skin generation)

@@ -27,7 +27,8 @@ def _factory(tmp_path):
 def test_is_steerable_backend():
     assert is_steerable_backend("pi")
     assert is_steerable_backend("codex")
-    assert not is_steerable_backend("cursor_ide")
+    assert is_steerable_backend("cursor")
+    assert is_steerable_backend("cursor_ide")
 
 
 @patch("distr.core.pi_rpc.get_rpc_session")

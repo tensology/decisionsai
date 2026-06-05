@@ -282,7 +282,7 @@ class TestWorkflowTypeValidation422:
             json={
                 "name": "Gold Admin",
                 "board_id": 7,
-                "description": "Reference screens from Paul's preferred admin UI.",
+                "description": "Reference screens from the user's preferred admin UI.",
                 "screens": [
                     {
                         "screen_name": "Dashboard",

@@ -13,11 +13,74 @@ from urllib.parse import unquote, urlparse
 
 
 def build_external_agent_context(*, limit: int = 8) -> dict[str, Any]:
-    return {
+    context = {
         "codex_threads": list_codex_threads(limit=limit),
         "codex_history": list_codex_history(limit=limit),
         "cursor_workspaces": list_cursor_workspaces(limit=limit),
     }
+    try:
+        record_external_agent_context_activity(context)
+    except Exception:
+        pass
+    return context
+
+
+def record_external_agent_context_activity(context: dict[str, Any] | None) -> int:
+    """Record recent Codex/Cursor context as quiet Hermes machine activity."""
+    if not isinstance(context, dict):
+        return 0
+    try:
+        from distr.core.hermes_memory import record_machine_activity, run_weekly_machine_activity_compaction
+    except Exception:
+        return 0
+
+    try:
+        run_weekly_machine_activity_compaction()
+    except Exception:
+        pass
+
+    count = 0
+    codex_threads = [item for item in context.get("codex_threads") or [] if isinstance(item, dict)]
+    for item in codex_threads:
+        title = _one_line(item.get("title") or item.get("preview") or "Codex thread", 220)
+        workspace = str(item.get("cwd") or "").strip()
+        activity_id = record_machine_activity(
+            surface="codex",
+            app_name="Codex",
+            window_title=title,
+            workspace_path=workspace,
+            summary=f"Codex thread: {title}",
+            metadata={
+                "thread_id": item.get("id") or "",
+                "source": item.get("source") or "",
+                "model": item.get("model") or "",
+                "updated_at": item.get("updated_at") or "",
+                "archived": bool(item.get("archived")),
+            },
+            at=_iso_to_ts(item.get("updated_at")),
+        )
+        if activity_id:
+            count += 1
+
+    cursor_workspaces = [item for item in context.get("cursor_workspaces") or [] if isinstance(item, dict)]
+    for item in cursor_workspaces:
+        workspace = str(item.get("folder") or "").strip()
+        name = _project_name_from_path(workspace) or "workspace"
+        activity_id = record_machine_activity(
+            surface="cursor",
+            app_name="Cursor",
+            window_title=name,
+            workspace_path=workspace,
+            summary=f"Cursor workspace: {name}",
+            metadata={
+                "storage_id": item.get("storage_id") or "",
+                "updated_at": item.get("updated_at") or "",
+            },
+            at=_iso_to_ts(item.get("updated_at")),
+        )
+        if activity_id:
+            count += 1
+    return count
 
 
 def list_codex_threads(*, limit: int = 8) -> list[dict[str, Any]]:
@@ -588,6 +651,23 @@ def _ts_to_iso(value: Any, *, millis: bool = False) -> str:
         return datetime.fromtimestamp(ts, tz=timezone.utc).isoformat()
     except Exception:
         return ""
+
+
+def _iso_to_ts(value: Any) -> float | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    try:
+        return float(text)
+    except Exception:
+        pass
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.timestamp()
+    except Exception:
+        return None
 
 
 def _one_line(value: Any, limit: int = 180) -> str:

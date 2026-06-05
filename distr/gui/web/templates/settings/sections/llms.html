@@ -236,35 +236,6 @@
             </div>
         </div>
 
-        <!-- Ticket Board Sub-agent LLM (orchestrator uses Conversational globally) -->
-        <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
-            <h3 class="mb-1 text-center text-base font-semibold text-white">Ticket Board Sub-agent</h3>
-            <p class="mb-3 text-center text-xs text-gray-500">Sub-agent model for Ticket Board runs. The orchestrator uses the Conversational LLM. Falls back to Conversational if empty.</p>
-            <div class="flex items-center gap-4 llms-row">
-                <label for="kanban_provider" class="text-sm font-medium text-[#ececf1] w-20 text-right">Provider:</label>
-                <div class="flex-1">
-                    <select id="kanban_provider" name="kanban_provider"
-                            class="w-full bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Inherit from Conversational</option>
-                    </select>
-                </div>
-                <label for="kanban_model" class="text-sm font-medium text-[#ececf1] w-14 text-right">Model:</label>
-                <div class="llms-model-with-action flex min-w-0 flex-1 items-center gap-4">
-                    <select id="kanban_model" name="kanban_model"
-                            class="min-w-0 flex-1 bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm
-                                    focus:outline-none focus:border-[#10a37f] transition-colors
-                                    hover:border-[#7a7c8c] cursor-pointer">
-                        <option value="">Select model...</option>
-                    </select>
-                    <button type="button" id="kanban_download" class="h-8 w-8 flex-shrink-0 bg-[#2d5a27] hover:bg-[#3d7a37] text-white rounded flex items-center justify-center text-lg font-bold transition-colors">
-                        ⬇
-                    </button>
-                </div>
-            </div>
-        </div>
-
         <!-- Project Ticket Routing -->
         <div class="border border-[#565869] rounded-lg p-5 bg-[#1a1f3a]">
             <h3 class="mb-1 text-center text-base font-semibold text-white">Project Ticket Routing</h3>
@@ -278,8 +249,6 @@
                         <option value="cursor">Cursor CLI</option>
                         <option value="codex">Codex CLI</option>
                         <option value="claude_code">Claude Code</option>
-                        <option value="cursor_ide">Cursor IDE</option>
-                        <option value="vscode_ide">VS Code IDE</option>
                     </select>
                     <select id="project_cli_{{ level }}_model" class="project-cli-model bg-[#1a1f3a] border border-[#565869] rounded-md px-3 py-1.5 text-white text-sm focus:outline-none focus:border-[#10a37f] transition-colors hover:border-[#7a7c8c] cursor-pointer" data-level="{{ level }}">
                         <option value="">Select model...</option>

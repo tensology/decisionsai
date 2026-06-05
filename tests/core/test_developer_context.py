@@ -165,7 +165,7 @@ def test_format_developer_context_dict_for_prompt_uses_stored_context():
             {
                 "id": 21,
                 "status": "running",
-                "backend": "cursor_ide",
+                "backend": "cursor",
                 "project_id": 2,
                 "project_name": "DecisionsAI",
                 "origin": "telegram",

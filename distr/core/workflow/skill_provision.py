@@ -10,16 +10,15 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-_PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent
+_PROJECT_ROOT = Path(__file__).resolve().parents[3]
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
+_ECC_SKILLS_DIR = _PROJECT_ROOT / "vendor" / "ecc" / "skills"
 
 CLI_TARGETS = {
     "pi": ".pi/skills",
     "cursor": ".cursor/commands",
     "claude_code": ".claude/commands",
     "claude": ".claude/commands",
-    "cursor_ide": ".cursor/commands",
-    "vscode_ide": ".cursor/commands",
     "codex": ".codex/commands",
     "gemini": ".gemini/commands",
 }
@@ -27,23 +26,21 @@ CLI_TARGETS = {
 _SKILL_RESOURCE_DIRS = ("scripts", "references", "reference")
 
 
+def _skill_registry():
+    from distr.core.skills.registry import SkillRegistry
+
+    return SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+
+
 def _resolve_skill_dir(skill_id: str) -> Path | None:
-    skill_dir = _SKILLS_DIR / skill_id
-    if skill_dir.exists() and skill_dir.is_dir():
-        return skill_dir
-    matches = [
-        d for d in _SKILLS_DIR.iterdir()
-        if d.is_dir() and (d.name.lower().startswith(skill_id.lower()) or skill_id.lower() in d.name.lower())
-    ] if _SKILLS_DIR.exists() else []
-    return matches[0] if len(matches) == 1 else None
+    entry = _skill_registry().get(skill_id.strip())
+    return entry.path if entry else None
 
 
 def _backend_skill_target(backend_id: str) -> str:
     from distr.core.project_cli_backends import normalize_backend_id
 
     bid = normalize_backend_id(backend_id)
-    if bid in ("cursor_ide", "vscode_ide"):
-        return CLI_TARGETS["cursor"]
     return CLI_TARGETS.get(bid, CLI_TARGETS["pi"])
 
 
@@ -54,21 +51,23 @@ def push_skill_to_project(
     backend_id: str,
 ) -> str | None:
     """Push one skill to the harness-specific folder. Returns dest path or None."""
-    skill_dir = _resolve_skill_dir(skill_id.strip())
-    if not skill_dir:
+    registry = _skill_registry()
+    entry = registry.get(skill_id.strip())
+    if not entry:
         return None
+    skill_dir = entry.path
     project_path = Path(project_folder).expanduser().resolve()
     if not project_path.is_dir():
         return None
-    target = _backend_skill_target(backend_id)
-    target_dir = project_path / target
-    target_dir.mkdir(parents=True, exist_ok=True)
     skill_md = skill_dir / "SKILL.md"
     if not skill_md.exists():
         skill_md = skill_dir / "skill.md"
     if not skill_md.exists():
         return None
-    actual_id = skill_dir.name
+    target = _backend_skill_target(backend_id)
+    target_dir = project_path / target
+    target_dir.mkdir(parents=True, exist_ok=True)
+    actual_id = entry.canonical_id
     if target == CLI_TARGETS["pi"]:
         dest_skill_dir = target_dir / actual_id
         dest_skill_dir.mkdir(parents=True, exist_ok=True)
@@ -82,7 +81,8 @@ def push_skill_to_project(
                     shutil.rmtree(dest_subdir)
                 shutil.copytree(subdir, dest_subdir)
     else:
-        dest_file = target_dir / f"{actual_id}.md"
+        dest_file = registry.target_path(entry, backend_id, project_path)
+        dest_file.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(skill_md, dest_file)
         for subdir_name in _SKILL_RESOURCE_DIRS:
             subdir = skill_dir / subdir_name

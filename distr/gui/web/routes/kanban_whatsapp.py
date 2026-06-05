@@ -791,7 +791,14 @@ def register_whatsapp_routes(router, relay_auth_headers, load_or_create_device_i
             board = s.query(KanbanBoard).get(board_id)
             if not board:
                 raise HTTPException(404, "Board not found")
-            source_lane_name = board.agent_source_lane or ""
+            source_lane_name = getattr(board, "agent_source_lane", None) or ""
+            if not source_lane_name:
+                try:
+                    from distr.core.utils import load_settings_from_db
+
+                    source_lane_name = load_settings_from_db().get("kanban_agent_source_lane") or ""
+                except Exception:
+                    source_lane_name = ""
             lane = None
             if source_lane_name:
                 lane = s.query(KanbanLane).filter_by(board_id=board_id, name=source_lane_name).first()

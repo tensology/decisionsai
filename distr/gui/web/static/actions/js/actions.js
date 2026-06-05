@@ -149,21 +149,28 @@
 
     function deleteActionFromList(id) {
         var name = (actionsData.filter(function(a) { return a.id === id; })[0] || {}).title || "this action";
-        if (!confirm("Remove action \"" + name + "\"? This cannot be undone.")) return;
-        fetch("/api/actions/" + id, { method: "DELETE" })
-            .then(function(r) {
-                if (r.ok) {
-                    if (currentActionId === id) {
-                        currentActionId = null;
-                        showEmpty();
-                    }
-                    loadActions();
-                    showSnackbar("Action removed", "success");
-                } else {
-                    return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
-                }
-            })
-            .catch(function(e) { showSnackbar(e.message || "Failed to remove action", "error"); });
+        window.DecisionsAPI.confirm({
+            title: "Remove action",
+            message: "Remove action \"" + name + "\"? This cannot be undone.",
+            confirmLabel: "Remove",
+            danger: true,
+            onConfirm: function() {
+                fetch("/api/actions/" + id, { method: "DELETE" })
+                    .then(function(r) {
+                        if (r.ok) {
+                            if (currentActionId === id) {
+                                currentActionId = null;
+                                showEmpty();
+                            }
+                            loadActions();
+                            showSnackbar("Action removed", "success");
+                        } else {
+                            return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
+                        }
+                    })
+                    .catch(function(e) { showSnackbar(e.message || "Failed to remove action", "error"); });
+            }
+        });
     }
 
     function loadActions(skip_auto_select) {
@@ -405,20 +412,26 @@
     function removeAction() {
         if (!currentActionId) return;
         var name = (actionsData.filter(function(a) { return a.id === currentActionId; })[0] || {}).title || "this action";
-        if (!confirm("Remove action \"" + name + "\"? This cannot be undone.")) return;
-        fetch("/api/actions/" + currentActionId, { method: "DELETE" })
-            .then(function(r) {
-                if (r.ok) {
-                    var id = currentActionId;
-                    currentActionId = null;
-                    showEmpty();
-                    loadActions();
-                    showSnackbar("Action removed", "success");
-                } else {
-                    return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
-                }
-            })
-            .catch(function(e) { showSnackbar(e.message || "Failed to remove action", "error"); });
+        window.DecisionsAPI.confirm({
+            title: "Remove action",
+            message: "Remove action \"" + name + "\"? This cannot be undone.",
+            confirmLabel: "Remove",
+            danger: true,
+            onConfirm: function() {
+                fetch("/api/actions/" + currentActionId, { method: "DELETE" })
+                    .then(function(r) {
+                        if (r.ok) {
+                            currentActionId = null;
+                            showEmpty();
+                            loadActions();
+                            showSnackbar("Action removed", "success");
+                        } else {
+                            return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
+                        }
+                    })
+                    .catch(function(e) { showSnackbar(e.message || "Failed to remove action", "error"); });
+            }
+        });
     }
 
     function addAction() {

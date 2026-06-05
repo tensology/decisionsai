@@ -33,6 +33,68 @@ class HermesEvent(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
 
+class HermesUserMemory(Base):
+    """Durable user preference/style memory extracted from conversations."""
+
+    __tablename__ = "hermes_user_memories"
+
+    id = Column(Integer, primary_key=True)
+    memory_uid = Column(String, nullable=False, unique=True)
+    content = Column(Text, nullable=False, default="")
+    normalized_content = Column(Text, nullable=False, default="")
+    content_hash = Column(String, nullable=False)
+    category = Column(String, nullable=False, default="preference")
+    tags = Column(Text, nullable=True)
+    visibility = Column(String, nullable=False, default="private")
+    scope = Column(String, nullable=False, default="global")
+    scope_id = Column(Integer, nullable=True)
+    project_id = Column(Integer, nullable=True)
+    source_type = Column(String, nullable=False, default="")
+    source_id = Column(String, nullable=False, default="")
+    source_chat_id = Column(Integer, nullable=True)
+    confidence = Column(Float, nullable=False, default=0.6)
+    evidence_count = Column(Integer, nullable=False, default=1)
+    payload_json = Column(Text, nullable=True)
+    enabled = Column(Integer, nullable=False, default=1)
+    manually_added = Column(Integer, nullable=False, default=0)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HermesMachineActivity(Base):
+    """Quiet local activity samples that help Hermes infer active work context."""
+
+    __tablename__ = "hermes_machine_activity"
+
+    id = Column(Integer, primary_key=True)
+    activity_uid = Column(String, nullable=False, unique=True)
+    surface = Column(String, nullable=False, default="desktop")
+    app_name = Column(String, nullable=False, default="")
+    window_title = Column(Text, nullable=False, default="")
+    workspace_path = Column(Text, nullable=False, default="")
+    project_id = Column(Integer, nullable=True)
+    summary = Column(Text, nullable=False, default="")
+    metadata_json = Column(Text, nullable=True)
+    content_hash = Column(String, nullable=False)
+    evidence_count = Column(Integer, nullable=False, default=1)
+    compacted = Column(Integer, nullable=False, default=0)
+    captured_at = Column(DateTime, default=datetime.utcnow)
+    last_seen_at = Column(DateTime, default=datetime.utcnow)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class HermesMaintenanceState(Base):
+    """Small idempotency ledger for background Hermes maintenance jobs."""
+
+    __tablename__ = "hermes_maintenance_state"
+
+    id = Column(Integer, primary_key=True)
+    key = Column(String, nullable=False, unique=True)
+    value_json = Column(Text, nullable=True)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
 class ProjectRuntimeSession(Base):
     """Durable view of Decisions-owned project runtime terminals."""
 
@@ -145,6 +207,14 @@ Index("ix_hermes_events_ticket_id", HermesEvent.ticket_id)
 Index("ix_hermes_events_execution_session_id", HermesEvent.execution_session_id)
 Index("ix_hermes_events_created_at", HermesEvent.created_at)
 Index("ix_hermes_events_type_status", HermesEvent.event_type, HermesEvent.status)
+Index("ix_hermes_user_memories_hash", HermesUserMemory.content_hash)
+Index("ix_hermes_user_memories_category", HermesUserMemory.category)
+Index("ix_hermes_user_memories_scope", HermesUserMemory.scope, HermesUserMemory.scope_id)
+Index("ix_hermes_user_memories_chat", HermesUserMemory.source_chat_id)
+Index("ix_hermes_machine_activity_surface_seen", HermesMachineActivity.surface, HermesMachineActivity.last_seen_at)
+Index("ix_hermes_machine_activity_hash", HermesMachineActivity.content_hash)
+Index("ix_hermes_machine_activity_compacted", HermesMachineActivity.compacted, HermesMachineActivity.last_seen_at)
+Index("ix_hermes_maintenance_state_key", HermesMaintenanceState.key)
 Index("ix_project_runtime_sessions_project_status", ProjectRuntimeSession.project_id, ProjectRuntimeSession.status)
 Index("ix_project_runtime_sessions_terminal_id", ProjectRuntimeSession.terminal_id)
 Index("ix_hermes_validation_records_workflow_run", HermesValidationRecord.workflow_id, HermesValidationRecord.run_id)

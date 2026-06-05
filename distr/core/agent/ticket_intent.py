@@ -84,6 +84,13 @@ _DISCUSS_TICKET_RE = re.compile(
     r"\b(talk|discuss|load|open|think\s+through|help\s+me\s+with)\s+(?:about\s+)?(?:this\s+|that\s+)?ticket\b",
     re.IGNORECASE,
 )
+_IDE_HANDOFF_CONVERSATION_RE = re.compile(
+    r"\b(?:can|could|would|should)\s+(?:we|you)\b"
+    r"(?=.{0,260}?\b(?:cursor|codex|codecs)\b)"
+    r"(?=.{0,260}?\b(?:talk|discuss|plan|conversation|before\s+sending|before\s+dispatch|"
+    r"what\s+(?:work|to\s+do)|work\s+should\s+be\s+done|whether|if|approach)\b)",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def _repo_root() -> str:
@@ -129,8 +136,10 @@ def classify_ticket_intent(text: str) -> TicketIntent:
         return TicketIntent("type_text", 0.94, "explicit request to type ticket text")
     if _TICKET_FILE_DESTINATION_RE.search(raw):
         return TicketIntent("ticket_file", 0.94, "ticket requested in a filesystem destination")
+    if _IDE_HANDOFF_CONVERSATION_RE.search(raw):
+        return TicketIntent("ide_conversation", 0.90, "conversation about IDE handoff, not a durable handoff request")
     if _CURSOR_TICKET_RE.search(raw):
-        return TicketIntent("cursor_ticket", 0.97, "explicit Cursor/.tickets request")
+        return TicketIntent("cursor_ticket", 0.97, "explicit Cursor plugin handoff request")
     if _DECISIONS_PROJECT_TICKET_RE.search(raw) and is_debug_enabled():
         return TicketIntent("debug_decisions_ticket", 0.96, "DEBUG=True DecisionsAI .tickets request")
     if _EXTERNAL_TICKET_RE.search(raw):

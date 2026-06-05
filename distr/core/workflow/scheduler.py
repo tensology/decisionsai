@@ -7,6 +7,7 @@ Ported from distr/core/step_runner/scheduler.py to operate on AutoWorkflow model
 
 import logging
 import json
+import re
 import time as _time
 from datetime import datetime, timedelta
 from typing import Any, List, Optional, Callable
@@ -18,10 +19,39 @@ logger = logging.getLogger(__name__)
 
 # Preset schedules -> cron (default times)
 SCHEDULE_PRESETS = {
+    "15min": "*/15 * * * *",     # Every 15 minutes
+    "30min": "*/30 * * * *",     # Every 30 minutes
     "hourly": "0 * * * *",       # Every hour at :00
     "daily": "0 9 * * *",        # 9am daily
     "weekly": "0 9 * * 1",       # Monday 9am
 }
+
+
+def normalize_schedule_time(value: Optional[str], *, default: str = "09:00") -> str:
+    """Normalize human-entered times to HH:MM.
+
+    The automation UI uses native time inputs, but some shells/browsers/custom
+    controls can hand us values like "9/20" or "920". Keep those schedules from
+    silently falling back to 09:00 and missing the intended minute.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        raw = default
+    raw = raw.lower().replace("am", "").replace("pm", "").strip()
+
+    match = re.fullmatch(r"(\d{1,2})\D+(\d{1,2})", raw)
+    if match:
+        hour, minute = int(match.group(1)), int(match.group(2))
+    elif re.fullmatch(r"\d{3,4}", raw):
+        hour, minute = int(raw[:-2]), int(raw[-2:])
+    elif re.fullmatch(r"\d{1,2}", raw):
+        hour, minute = int(raw), 0
+    else:
+        raise ValueError(f"Invalid schedule time: {value!r}")
+
+    if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+        raise ValueError(f"Schedule time out of range: {value!r}")
+    return f"{hour:02d}:{minute:02d}"
 
 
 def schedule_to_cron(
@@ -54,25 +84,27 @@ def schedule_to_cron(
                     return f"{m} {h} * * 1"
             except (ValueError, IndexError):
                 pass
+    if s in {"15min", "15m"}:
+        return SCHEDULE_PRESETS["15min"]
+    if s in {"30min", "30m"}:
+        return SCHEDULE_PRESETS["30min"]
     if s == "hourly":
         return SCHEDULE_PRESETS["hourly"]
     if s == "once":
         run_at = (schedule_time or "").strip()
         return f"once:{run_at}" if run_at else None
     if s == "daily":
-        time_str = (schedule_time or "09:00").strip()
         try:
-            parts = time_str.split(":")
-            h, m = int(parts[0] or 9), int(parts[1] or 0) if len(parts) > 1 else 0
+            time_str = normalize_schedule_time(schedule_time, default="09:00")
+            h, m = [int(part) for part in time_str.split(":", 1)]
             return f"{m} {h} * * *"
         except (ValueError, IndexError):
             return "0 9 * * *"
     if s == "weekly":
-        time_str = (schedule_time or "09:00").strip()
         days_str = (schedule_days or "1").strip()  # 1 = Monday default
         try:
-            parts = time_str.split(":")
-            h, m = int(parts[0] or 9), int(parts[1] or 0) if len(parts) > 1 else 0
+            time_str = normalize_schedule_time(schedule_time, default="09:00")
+            h, m = [int(part) for part in time_str.split(":", 1)]
             return f"{m} {h} * * {days_str}"
         except (ValueError, IndexError):
             return f"0 9 * * {days_str}"
@@ -100,6 +132,19 @@ def _parse_int_field(value: str, *, minimum: int, maximum: int) -> int | None:
     return parsed
 
 
+def _parse_simple_field_values(value: str, *, minimum: int, maximum: int) -> list[int] | None:
+    raw = str(value or "").strip()
+    if raw == "*":
+        return list(range(minimum, maximum + 1))
+    if raw.startswith("*/"):
+        step = _parse_int_field(raw[2:], minimum=1, maximum=maximum)
+        if not step:
+            return None
+        return list(range(minimum, maximum + 1, step))
+    parsed = _parse_int_field(raw, minimum=minimum, maximum=maximum)
+    return [parsed] if parsed is not None else None
+
+
 def _next_run_from_simple_cron(cron_expr: str, base_local: datetime) -> Optional[datetime]:
     """Fallback for the simple hourly/daily/weekly cron forms this UI emits."""
     parts = (cron_expr or "").strip().split()
@@ -108,8 +153,8 @@ def _next_run_from_simple_cron(cron_expr: str, base_local: datetime) -> Optional
     minute_raw, hour_raw, day_raw, month_raw, weekday_raw = parts
     if day_raw != "*" or month_raw != "*":
         return None
-    minute = _parse_int_field(minute_raw, minimum=0, maximum=59)
-    if minute is None:
+    minutes = _parse_simple_field_values(minute_raw, minimum=0, maximum=59)
+    if not minutes:
         return None
     hours: list[int]
     if hour_raw == "*":
@@ -134,9 +179,10 @@ def _next_run_from_simple_cron(cron_expr: str, base_local: datetime) -> Optional
         if weekdays is not None and _cron_weekday(day) not in weekdays:
             continue
         for hour in hours:
-            candidate = day.replace(hour=hour, minute=minute)
-            if candidate > base_local:
-                candidates.append(candidate)
+            for minute in minutes:
+                candidate = day.replace(hour=hour, minute=minute)
+                if candidate > base_local:
+                    candidates.append(candidate)
     return min(candidates) if candidates else None
 
 
@@ -419,6 +465,7 @@ def _scheduled_action_preflight(workflow: AutoWorkflow) -> str | None:
 def run_scheduled_workflow(
     workflow_id: int,
     on_start_orchestration: Optional[Callable] = None,
+    event_queue: Optional[Any] = None,
 ) -> bool:
     """
     Trigger a scheduled workflow run and advance next_run_at.
@@ -470,6 +517,7 @@ def run_scheduled_workflow(
     result = start_workflow_run(
         workflow_id,
         context="Scheduled Run",
+        event_queue=event_queue,
         run_metadata={
             "source_type": "scheduled",
             "source_label": "Scheduled",

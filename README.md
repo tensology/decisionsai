@@ -45,10 +45,11 @@
 | 🎙️ | **Voice cloning** | Clone voices from audio clips with Kokoro (offline) or ElevenLabs |
 | 🔄 | **Recorded macros** | Capture keyboard and mouse sequences, replay them by voice — perfect for repetitive tasks |
 | 👁️ | **Vision** | Share screenshots, photos, or diagrams — the assistant reasons about what it sees |
-| 🔀 | **Workflows** | Multi-step workflows with validation, agent routing, recording, presets, and scheduling |
+| 🔀 | **Workflows + automations** | Multi-step workflows with validation, agent routing, recording, presets, scheduling, and itemized automations |
 | 🖥️ | **Screen intelligence** | Vision-based screen analysis, pixel-precise element location via Computer Use API, accessibility tree walking |
 | 🐍 | **Python executor** | The agent writes and runs Python scripts for complex tasks — file ops, image processing, web scraping, anything |
-| 🔧 | **pi Agent** | Talk to the pi coding agent from chat — send prompts, stream output, get code done without leaving the conversation |
+| 🧭 | **Hermes orchestration** | Tie chat, ticket boards, workflows, automations, browser evidence, and IDE handoffs into one project-aware ledger |
+| 🔧 | **IDE + coding agents** | Work with Codex, Cursor, Claude, and coding backends from project and ticket context without losing the thread |
 | 📺 | **Terminal overview** | The assistant glances at your terminal tab and reacts to build errors, test failures, or anything on screen |
 | 🌐 | **Remote control** | HMAC-encrypted browser UI — click, type, scroll, drag, and transfer files from anywhere |
 
@@ -84,8 +85,11 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | **Chat** | Browse and manage conversation threads |
 | **Actions** | View, edit, rename, and trigger recorded macros |
 | **Snippets** | Manage text or code snippets with trigger words |
-| **Projects** | Create projects with context blocks and linked files |
-| **Workflows** | Build multi-step workflows with validation, routing, recording, presets, and scheduling |
+| **Projects** | Create projects with context blocks, linked files, and IDE/coding backend setup |
+| **Ticket Boards** | Manage local, Jira, and Trello work, then send tickets into the orchestrator with linked project context |
+| **Automations** | Create scheduled instruction workflows with Run Now and per-automation history |
+| **Workflows** | Build multi-step workflows with validation, routing, recording, browser evidence, presets, and scheduling |
+| **Skills** | Browse local and vendored skills, including ECC-backed capabilities, without duplicate setup |
 
 <p align="center">
   <img src="assets/readme/chat.webp" alt="DecisionsAI Web Interface" />
@@ -104,7 +108,7 @@ DecisionsAI spins up a **local-only** web UI (not exposed to the internet). Open
 | [Coqui TTS](https://github.com/coqui-ai/TTS) | Multi-speaker offline TTS (VCTK voices — 100+ speakers with accents) |
 | [Ollama](https://ollama.ai/) | Local LLM inference (Llama, Gemma, Qwen, and more) |
 | [Pipecat](https://github.com/pipecat-ai/pipecat) | Real-time voice pipeline orchestration |
-| **Hermes** | Internal workflow orchestration ledger for ticket routing, validation, correction loops, and run memory |
+| **Hermes** | Internal orchestration ledger for ticket routing, IDE sessions, browser evidence, validation, correction loops, and run memory |
 | **Sidecar (Go)** | Machine control — accessibility tree, mouse/keyboard, screenshots, drag, scroll, Python execution |
 
 **Optional cloud services:**
@@ -292,15 +296,15 @@ Connect via **Preferences → Advanced → Google** (OAuth 2.0).
 | **Docs** | Create from Markdown |
 | **Sheets** | Read and interact |
 
-### IDE Integration (Kiro)
+### IDE Integration
 
-[Kiro](https://kiro.dev) is the recommended path — describe a feature, bug, or refactor out loud, and the assistant turns it into structured tickets your editor picks up.
+Codex, Cursor, Claude, and other coding backends can be wired through project context so ticket-board work, free-form IDE chats, workflow runs, and orchestrator updates all stay attached to the right project where possible. The CLI path still exists, but the product is moving toward IDE-first handoff and feedback.
 
 ---
 
 ## Workflows
 
-Build multi-step workflows the agent executes in sequence. Each step has an action, optional validation, and routing logic. The workflow agent has full tool access — it can take screenshots, click elements, run Python scripts, search the web, and use any tool the main agent has.
+Build multi-step workflows the agent executes in sequence. Each step has an action, optional validation, and routing logic. The workflow agent has full tool access — it can take screenshots, click elements, run Python scripts, search the web, use browser evidence, and hand project work to IDE/coding agents through the orchestrator.
 
 | Concept | How it works |
 |---|---|

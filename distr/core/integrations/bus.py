@@ -185,7 +185,7 @@ class IntegrationMessageBus:
             )
             return
         try:
-            metadata = {"speak": speak, "input_type": input_type} if input_type else speak
+            metadata = {"speak": speak, "input_type": input_type, "surface": "telegram"} if input_type else {"speak": speak, "surface": "telegram"}
             sink(text, True, image_path, metadata)
         except Exception:
             logger.exception("IntegrationMessageBus: text sink raised")
@@ -217,7 +217,7 @@ class IntegrationMessageBus:
             return
         img = msg.attachments[0] if msg.attachments else None
         try:
-            sink(msg.text, True, img, msg.speak)
+            sink(msg.text, True, img, {"speak": msg.speak, "surface": msg.platform})
         except Exception:
             logger.exception("IntegrationMessageBus: text sink raised (%s)", msg.platform)
 

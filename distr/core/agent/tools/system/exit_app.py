@@ -58,9 +58,10 @@ class ExitAppTool(BaseTool):
             if eq:
                 # Notify Telegram/chat that we're shutting down
                 eq.put(('send_to_telegram', {
-                    'text': 'Goodbye! Shutting down DecisionsAI now.',
-                    'is_done': True,
+                    'text': 'Goodbye.',
+                    'is_done': False,
                     'analyzed_image_path': None,
+                    'skip_screenshot': True,
                 }), block=False)
                 import time
                 time.sleep(0.5)
@@ -68,10 +69,10 @@ class ExitAppTool(BaseTool):
             else:
                 from distr.core.signals import signal_manager
                 signal_manager.exit_app.emit()
-            return "Goodbye! It was great helping you today."
+            return "Goodbye."
         except Exception as e:
             logger.error("Error in ExitAppTool: %s", e, exc_info=True)
-            return "Goodbye!"
+            return "Goodbye."
     
     async def _arun(self, text: str = "", **kwargs) -> str:
         return self._run(text=text)

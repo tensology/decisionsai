@@ -7,6 +7,8 @@ The Qt signal bridge is in distr.core.chat_qt_adapter.ChatManagerQt.
 
 from typing import List, Optional, Tuple
 import logging
+import hashlib
+import json
 from datetime import datetime, timezone
 from sqlalchemy import text
 from distr.core.db import get_session, Chat, Settings
@@ -39,6 +41,153 @@ def _title_from_question(question: str, max_len: int = 50) -> str:
         return "New Chat"
     line = " ".join(question.strip().split())
     return (line[:max_len] + "\u2026") if len(line) > max_len else line
+
+
+def _chat_audit_preview(message: str, *, max_len: int = 1000) -> str:
+    clean = " ".join(str(message or "").split())
+    if not clean:
+        return ""
+    try:
+        from distr.core.hermes import redact_handoff_payload
+
+        redacted = redact_handoff_payload(clean)
+        clean = redacted if isinstance(redacted, str) else clean
+    except Exception:
+        pass
+    if len(clean) <= max_len:
+        return clean
+    return clean[: max_len - 3].rstrip() + "..."
+
+
+def record_chat_audit_event(
+    *,
+    chat_id: int,
+    chat_row_id: int | None,
+    role: str,
+    content: str,
+    source_platform: str | None = None,
+    hidden: bool = False,
+) -> None:
+    """Mirror visible chat turns into the Hermes orchestration ledger."""
+    if hidden:
+        return
+    clean = (content or "").strip()
+    role_clean = (role or "").strip().lower()
+    if not clean or role_clean not in {"user", "assistant", "tool", "workflow"}:
+        return
+    try:
+        from distr.core.orchestration_events import emit_orchestration_event
+
+        preview = _chat_audit_preview(clean)
+        surface = (source_platform or "chat").strip().lower()
+        row_token = chat_row_id if chat_row_id is not None else "root"
+        emit_orchestration_event(
+            source="chat",
+            event_type="chat_message_added",
+            status=role_clean,
+            summary=f"Chat {role_clean} message: {preview}",
+            payload={
+                "surface": surface,
+                "subtype": f"chat_{role_clean}_message",
+                "correlation_id": f"chat:{chat_id}:{row_token}:{role_clean}",
+                "thread_id": str(chat_id),
+                "is_workflow_attached": False,
+                "chat_id": int(chat_id),
+                "chat_row_id": int(chat_row_id) if chat_row_id is not None else None,
+                "role": role_clean,
+                "source_platform": source_platform or "",
+                "content_preview": preview,
+                "content_hash": hashlib.sha256(clean.encode("utf-8")).hexdigest(),
+                "content_length": len(clean),
+            },
+        )
+        if role_clean == "user":
+            try:
+                from distr.core.hermes_memory import extract_and_record_user_memories_from_text
+
+                extract_and_record_user_memories_from_text(
+                    clean,
+                    source_type=surface or "chat",
+                    source_id=f"chat:{chat_id}:{row_token}",
+                    source_chat_id=int(chat_id),
+                )
+            except Exception:
+                logger.debug("chat memory extraction failed", exc_info=True)
+    except Exception:
+        logger.debug("record_chat_audit_event failed", exc_info=True)
+
+
+_CHAT_TRANSCRIPT_AUDIT_SUBTYPES = {
+    "chat_user_message",
+    "chat_assistant_message",
+    "chat_tool_message",
+    "chat_workflow_message",
+}
+
+
+def _is_chat_transcript_audit_payload(payload: dict) -> bool:
+    orchestration = (
+        payload.get("orchestration")
+        if isinstance(payload.get("orchestration"), dict)
+        else {}
+    )
+    subtype = str(orchestration.get("subtype") or payload.get("subtype") or "").strip()
+    role = str(payload.get("role") or "").strip().lower()
+    if subtype in _CHAT_TRANSCRIPT_AUDIT_SUBTYPES:
+        return True
+    return bool(
+        payload.get("content_hash")
+        and subtype.startswith("chat_")
+        and subtype.endswith("_message")
+        and role in {"user", "assistant", "tool", "workflow"}
+    )
+
+
+def remove_chat_transcript_audit_events(chat_id: int) -> int:
+    """Remove Hermes transcript rows for a deleted or cleared chat thread.
+
+    Durable Hermes memories live in separate tables/events and must survive this.
+    """
+    try:
+        target_id = int(chat_id)
+    except (TypeError, ValueError):
+        return 0
+    deleted = 0
+    try:
+        from distr.core.db.hermes import HermesEvent
+
+        with get_session() as session:
+            rows = session.query(HermesEvent).filter(HermesEvent.source == "chat").all()
+            for row in rows:
+                try:
+                    payload = json.loads(row.payload or "{}")
+                    if not isinstance(payload, dict):
+                        payload = {}
+                except Exception:
+                    payload = {}
+                if not _is_chat_transcript_audit_payload(payload):
+                    continue
+                orchestration = (
+                    payload.get("orchestration")
+                    if isinstance(payload.get("orchestration"), dict)
+                    else {}
+                )
+                payload_chat_id = payload.get("chat_id")
+                thread_id = orchestration.get("thread_id") or payload.get("thread_id")
+                matches_chat_id = False
+                try:
+                    matches_chat_id = int(payload_chat_id) == target_id
+                except (TypeError, ValueError):
+                    matches_chat_id = False
+                if matches_chat_id or str(thread_id or "") == str(target_id):
+                    session.delete(row)
+                    deleted += 1
+            if deleted:
+                session.commit()
+    except Exception:
+        logger.debug("remove_chat_transcript_audit_events failed", exc_info=True)
+        return 0
+    return deleted
 
 
 def _setting_val(settings, key: str):
@@ -193,6 +342,12 @@ class ChatService:
                 )
                 session.add(child)
                 session.commit()
+                record_chat_audit_event(
+                    chat_id=int(chat_id),
+                    chat_row_id=int(child.id) if child.id is not None else None,
+                    role="user",
+                    content=starting_question,
+                )
             settings_row = session.query(Settings).first()
             if settings_row:
                 settings_row.last_chat_id = chat_id
@@ -283,6 +438,12 @@ class ChatService:
             )
             session.add(child)
             session.commit()
+            record_chat_audit_event(
+                chat_id=int(root_id),
+                chat_row_id=int(child.id) if child.id is not None else None,
+                role="user",
+                content=cleaned,
+            )
 
     @staticmethod
     def append_assistant_notice(chat_id: int, message: str, *, hidden: bool = False) -> bool:
@@ -327,6 +488,13 @@ class ChatService:
             session.add(child)
             root.modified_date = datetime.now(timezone.utc)
             session.commit()
+            record_chat_audit_event(
+                chat_id=int(root_id),
+                chat_row_id=int(child.id) if child.id is not None else None,
+                role="assistant",
+                content=cleaned,
+                hidden=hidden,
+            )
         return True
 
     @staticmethod

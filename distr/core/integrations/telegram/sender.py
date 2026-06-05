@@ -8,6 +8,7 @@ import mimetypes
 import os
 import queue
 import re
+import tempfile
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -24,15 +25,45 @@ def _audit_outbound_telegram_text(text: Optional[str]) -> Optional[str]:
     if not text:
         return text
     clean = str(text).strip()
+    try:
+        from distr.core.human_engagement import sanitize_engagement_text
+
+        return sanitize_engagement_text(clean)
+    except Exception:
+        pass
+
+    clean_lower = clean.lower()
+    if "has shut down" in clean_lower:
+        return "Goodbye."
+    if "is online" in clean_lower or "welcome back" in clean_lower:
+        return "I'm back online."
+
     clean = re.sub(r"^\s*\[Initiative\]\s*", "", clean)
     clean = re.sub(r"\[APPROVE\]|\[ESCALATE\]|\[SUGGEST_ONLY\]", "", clean)
     clean = re.sub(r"\n{2,}Draft:\n.*?(?=\n{2,}Payload:|\n{2,}[A-Z][A-Za-z ]{2,}:|\Z)", "", clean, flags=re.S)
     clean = re.sub(r"\n{2,}Payload:\s*\{.*?\}(?=\n|$)", "", clean, flags=re.S)
     clean = re.sub(r"\nPayload:\s*\{.*?\}(?=\n|$)", "", clean, flags=re.S)
+    clean = re.sub(r"(?i)^quick update:\s*#{1,6}\s*quick check-?in\s*[-:]*\s*", "Quick check-in: ", clean)
+    clean = re.sub(r"(?im)^\s*#{1,6}\s*", "", clean)
+    clean = re.sub(r"(?m)^\s*[-*]\s+", "", clean)
+    clean = re.sub(r"(?m)^\s*\d+\.\s+", "", clean)
+    clean = clean.replace("**", "").replace("__", "").replace("`", "")
+    clean = re.sub(r"(?i)^quick update:\s*quick check-?in\s*[-:]*\s*", "Quick check-in: ", clean)
+    clean = re.sub(r"(?i)^quick update:\s*", "", clean)
+    clean = re.sub(r"\s+([.,;:])", r"\1", clean)
     clean = re.sub(r"\n{3,}", "\n\n", clean).strip()
-    if len(clean) > 1800:
-        clean = clean[:1790].rstrip() + "\n...(full detail is in the app)"
+    if len(clean) > 900:
+        clean = clean[:890].rsplit(" ", 1)[0].rstrip() + "\nMore detail is in the app."
     return clean
+
+
+def _usable_outbound_file(path: Optional[str]) -> bool:
+    if not path or not os.path.exists(path):
+        return False
+    try:
+        return os.path.getsize(path) > 0
+    except OSError:
+        return False
 
 
 class TelegramSenderMixin:
@@ -121,7 +152,17 @@ class TelegramSenderMixin:
         # CRITICAL: Block any disconnect/reconnect messages from being sent
         if text:
             text = _audit_outbound_telegram_text(text)
-            text_lower = text.lower()
+            if not text and not any((audio_file_path, screenshot_path, document_path, video_path)):
+                return False
+            try:
+                from distr.core.human_engagement import is_low_value_status_text
+
+                if is_low_value_status_text(text):
+                    logger.debug("[Telegram] Suppressed low-value status message: %s", text[:100])
+                    return False
+            except Exception:
+                pass
+            text_lower = (text or "").lower()
             # Block disconnect/reconnect messages (except "has shut down" which is only on manual disconnect)
             if (
                 "disconnect" in text_lower or "reconnect" in text_lower
@@ -157,7 +198,7 @@ class TelegramSenderMixin:
         if message_hash in self._recent_messages:
             last_sent = self._recent_messages[message_hash]
             if now - last_sent < self._dedup_window:
-                logger.warning(
+                logger.debug(
                     f"Duplicate message dropped (sent {now - last_sent:.2f}s ago)"
                 )
                 return False
@@ -238,7 +279,7 @@ class TelegramSenderMixin:
             return False
 
         # Add Audio/Screenshot encoding (simplified adapt from original)
-        if audio_file_path and os.path.exists(audio_file_path):
+        if audio_file_path and _usable_outbound_file(audio_file_path):
             try:
                 with open(audio_file_path, "rb") as f:
                     audio_data = f.read()
@@ -287,7 +328,7 @@ class TelegramSenderMixin:
             except Exception as e:
                 logger.error(f"Failed to encode audio: {e}", exc_info=True)
 
-        if screenshot_path and os.path.exists(screenshot_path):
+        if screenshot_path and _usable_outbound_file(screenshot_path):
             # Convert screenshot to WebP for better compression before sending
             # Resize large images to reduce payload size and avoid connection drops
             try:
@@ -384,7 +425,7 @@ class TelegramSenderMixin:
                     }
 
         # Add Document encoding (PDF, DOC, etc.)
-        if document_path and os.path.exists(document_path):
+        if document_path and _usable_outbound_file(document_path):
             try:
                 with open(document_path, "rb") as f:
                     doc_data = f.read()
@@ -443,7 +484,7 @@ class TelegramSenderMixin:
                 logger.error(f"Failed to encode document: {e}", exc_info=True)
 
         # Add Video encoding
-        if video_path and os.path.exists(video_path):
+        if video_path and _usable_outbound_file(video_path):
             try:
                 with open(video_path, "rb") as f:
                     video_data = f.read()

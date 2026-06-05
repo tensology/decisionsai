@@ -159,7 +159,15 @@ function setupActionButtons() {
     if (clearCache) clearCache.addEventListener('click', function() { showNotification('Cache cleared', 'info'); });
     var resetDefaults = document.getElementById('reset_defaults');
     if (resetDefaults) resetDefaults.addEventListener('click', function() {
-        if (confirm('Reset all settings to defaults?')) showNotification('Settings reset', 'info');
+        window.DecisionsAPI.confirm({
+            title: "Reset settings",
+            message: "Reset all settings to defaults?",
+            confirmLabel: "Reset",
+            danger: true,
+            onConfirm: function() {
+                showNotification('Settings reset', 'info');
+            }
+        });
     });
     var googleConnect = document.getElementById('google_connect');
     if (googleConnect) googleConnect.addEventListener('click', function() { showNotification('Google Workspace (not yet implemented)', 'info'); });

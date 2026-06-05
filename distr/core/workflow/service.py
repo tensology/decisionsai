@@ -46,8 +46,6 @@ def _run_source_label(source_type: Optional[str], ticket: Optional[KanbanTicket]
         return "WhatsApp"
     if ticket_source:
         return ticket_source.replace("_", " ").title()
-    if source == "board_checkin":
-        return "Board check-in"
     if source == "initiative":
         return "Initiative"
     if source == "scheduled":
@@ -1578,6 +1576,7 @@ def start_workflow_run(
     board_id: Optional[int] = None,
     ticket_id: Optional[int] = None,
     run_metadata: Optional[Dict[str, Any]] = None,
+    event_queue: Optional[Any] = None,
 ):
     """Service-level wrapper preserving legacy patch points for tests/callers."""
     if "unittest.mock" not in str(type(_dispatch_step)):
@@ -1589,6 +1588,7 @@ def start_workflow_run(
             board_id=board_id,
             ticket_id=ticket_id,
             run_metadata=run_metadata,
+            event_queue=event_queue,
         )
 
     with get_session() as db:
@@ -1626,7 +1626,7 @@ def start_workflow_run(
     import asyncio
     import threading
 
-    workflow_agent = WorkflowAgent()
+    workflow_agent = WorkflowAgent(event_queue=event_queue)
     agent_loop = asyncio.new_event_loop()
 
     def _run_loop():

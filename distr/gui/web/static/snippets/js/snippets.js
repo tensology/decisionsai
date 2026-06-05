@@ -228,13 +228,20 @@
   }
 
   function deleteSnippet(id) {
-    if (!confirm("Delete this snippet?")) return;
-    apiFetch("/api/snippets/" + id, { method: "DELETE" })
-      .then(function() {
-        showSnackbar("Snippet deleted", "success");
-        loadSnippets();
-      })
-      .catch(function(e) { showSnackbar(e.message || "Could not delete snippet", "error"); });
+    window.DecisionsAPI.confirm({
+      title: "Delete snippet",
+      message: "Delete this snippet? This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: function() {
+        apiFetch("/api/snippets/" + id, { method: "DELETE" })
+          .then(function() {
+            showSnackbar("Snippet deleted", "success");
+            loadSnippets();
+          })
+          .catch(function(e) { showSnackbar(e.message || "Could not delete snippet", "error"); });
+      }
+    });
   }
 
   function isTypingTarget(target) {

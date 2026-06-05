@@ -9,12 +9,59 @@ from PyQt6.QtCore import QTimer
 from distr.core.settings import load_settings_from_db, save_settings_to_db
 from distr.core.signals import signal_manager
 from distr.core.util.speak_flag import coerce_speak_enabled
+from distr.core.human_engagement import EngagementIntent, HumanEngagementService
 
 logger = logging.getLogger(__name__)
 
 
 class SignalBridgeMixin:
     """Bridges Qt signals from the GUI to the agent subprocess via command queue."""
+
+    def _chat_id_exists(self, chat_id) -> bool:
+        try:
+            chat_id_int = int(chat_id)
+        except (TypeError, ValueError):
+            return False
+        try:
+            from distr.core.db import Chat, get_session
+
+            with get_session() as session:
+                return session.get(Chat, chat_id_int) is not None
+        except Exception:
+            return True
+
+    def _resolve_workflow_report_chat_id(self):
+        """Return the active agent chat id for workflow reports, if known."""
+        cm = getattr(self, "chat_manager", None)
+        if cm is not None:
+            try:
+                chat_id = cm.get_current_chat()
+                if chat_id and self._chat_id_exists(chat_id):
+                    return int(chat_id)
+            except Exception:
+                pass
+        try:
+            settings = load_settings_from_db()
+            for key in ("agent_current_chat_id", "last_chat_id"):
+                chat_id = settings.get(key)
+                if chat_id and self._chat_id_exists(chat_id):
+                    return int(chat_id)
+        except Exception:
+            pass
+        return None
+
+    def _workflow_report_agent_payload(self, report_text):
+        payload = {
+            'text': (
+                "The workflow just finished. Please give me a short, plain-English "
+                f"summary of what happened.\n\n{report_text}"
+            ),
+            'speak': False,
+        }
+        chat_id = self._resolve_workflow_report_chat_id()
+        if chat_id:
+            payload['chat_id'] = chat_id
+        return payload
 
     def _bridge_signals_to_agent(self):
         """Bridge PyQt signals to agent process command queue"""
@@ -104,6 +151,15 @@ class SignalBridgeMixin:
         
         # Chat input signals (4th arg speak: when not None, agent sets speaker before processing - used by web)
         def on_send_text_input(text, is_telegram=False, uploaded_image_path=None, speak=None):
+            try:
+                from distr.core.notification_routing import record_surface_activity
+
+                surface = None
+                if isinstance(speak, dict):
+                    surface = speak.get("surface")
+                record_surface_activity(str(surface or ("telegram" if is_telegram else "desktop")))
+            except Exception:
+                pass
             params = {'text': text, 'is_telegram': is_telegram, 'uploaded_image_path': uploaded_image_path}
             if isinstance(speak, dict):
                 if speak.get('speak') is not None:
@@ -481,10 +537,10 @@ class SignalBridgeMixin:
                         session_id,
                     )
 
-                self._send_command_to_agent('process_text_input', {
-                    'text': f"[Workflow Report]\n{report_text}",
-                    'speak': False,
-                })
+                self._send_command_to_agent(
+                    'process_text_input',
+                    self._workflow_report_agent_payload(report_text),
+                )
                 self._send_workflow_report_to_telegram(session_id, report_text)
                 logger.info("Workflow finished: forwarded report for session %d to agent", session_id)
             except Exception as e:
@@ -517,10 +573,26 @@ class SignalBridgeMixin:
             msg = head
         if len(msg) > 900:
             msg = msg[:897].rstrip() + "..."
+        decision = HumanEngagementService(
+            telegram_manager=manager,
+            allow_telegram=True,
+        ).decide(EngagementIntent(
+            source="workflow",
+            surface="telegram",
+            kind="workflow_report",
+            priority="normal",
+            subject_type="workflow_session",
+            subject_id=str(session_id),
+            state_fingerprint=msg,
+            body=msg,
+        ))
+        if not decision.should_send:
+            return
+        outbound_text = decision.final_text or decision.final_voice_text or msg
         try:
-            manager.send_to_telegram(text=msg)
+            manager.send_to_telegram(text=outbound_text)
         except TypeError:
-            manager.send_to_telegram(msg)
+            manager.send_to_telegram(outbound_text)
         except Exception as exc:
             logger.debug(
                 "Workflow finished: failed to send Telegram report for session %s: %s",

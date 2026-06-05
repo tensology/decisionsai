@@ -46,6 +46,10 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         self._input_last_callback_at = 0.0
         self._input_last_callback_peak = 0
 
+    @staticmethod
+    def _pa_continue():
+        return getattr(pyaudio, "paContinue", 0)
+
     def _ensure_audio_task_ready(self):
         """Ensure Pipecat's downstream audio queue exists after an idle resume."""
         self._paused = False
@@ -111,29 +115,53 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
                 self._input_last_callback_peak = 0
 
         try:
+            loop = self.get_event_loop()
+            if loop is None or getattr(loop, "is_closed", lambda: False)():
+                logger.debug("Audio input callback ignored during shutdown: event loop is closed")
+                return (None, self._pa_continue())
+
             frame = InputAudioRawFrame(
                 audio=in_data,
                 sample_rate=self._sample_rate,
                 num_channels=self._params.audio_in_channels,
             )
+            coro = self.push_audio_frame(frame)
             future = asyncio.run_coroutine_threadsafe(
-                self.push_audio_frame(frame),
-                self.get_event_loop(),
+                coro,
+                loop,
             )
 
             def _log_enqueue_failure(done_future):
                 try:
                     done_future.result()
                 except Exception as exc:
+                    if "event loop is closed" in str(exc).lower():
+                        logger.debug("Audio input callback enqueue ignored during shutdown: %s", exc)
+                        return
                     self._input_callback_errors += 1
                     logger.error("Audio input callback could not enqueue frame: %s", exc, exc_info=True)
 
             future.add_done_callback(_log_enqueue_failure)
         except Exception as exc:
+            if "event loop is closed" in str(exc).lower():
+                self._close_unawaited_coro(locals().get("coro"))
+                logger.debug("Audio input callback ignored during shutdown: %s", exc)
+                return (None, self._pa_continue())
             self._input_callback_errors += 1
             logger.error("Audio input callback failed before enqueue: %s", exc, exc_info=True)
 
-        return (None, pyaudio.paContinue)
+        return (None, self._pa_continue())
+
+    @staticmethod
+    def _close_unawaited_coro(coro):
+        if coro is None:
+            return
+        close = getattr(coro, "close", None)
+        if close:
+            try:
+                close()
+            except Exception:
+                pass
 
     def _close_input_stream(self):
         """Close the PortAudio input stream if it is open."""

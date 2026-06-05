@@ -49,16 +49,50 @@ def _codex_plugin_state() -> dict:
     }
 
 
+def _cursor_plugin_candidates() -> list[Path]:
+    cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
+    return [
+        _repo_root() / "cursor_plugin" / "decisions-cursor",
+        cursor_home / "plugins" / "local" / "decisions-cursor",
+        Path.home() / "plugins" / "decisions-cursor",
+    ]
+
+
+def _cursor_plugin_state() -> dict:
+    candidates = _cursor_plugin_candidates()
+    found = next((p for p in candidates if (p / ".cursor-plugin" / "plugin.json").exists()), None)
+    return {
+        "available": bool(found),
+        "path": str(found or candidates[0]),
+        "candidates": [str(p) for p in candidates],
+        "manifest_exists": bool(found),
+    }
+
+
+def _codex_environment_available() -> bool:
+    codex_home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+    agents_home = Path(os.environ.get("AGENTS_HOME") or (Path.home() / ".agents"))
+    return bool(shutil.which("codex") or codex_home.exists() or agents_home.exists())
+
+
+def _cursor_environment_available() -> bool:
+    cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
+    return bool(shutil.which("cursor") or shutil.which("cursor-agent") or cursor_home.exists())
+
+
 def _install_local_codex_plugin() -> dict:
     """Install/register the repo-local DecisionsAI Codex plugin for local Codex."""
     from distr.core.project_cli_backends import get_backend
 
     status = get_backend("codex").setup_status().to_dict()
-    if not status.get("ready"):
+    if not _codex_environment_available():
         return {
             "installed": False,
             "skipped": True,
-            "reason": status.get("message") or "Codex CLI is not available on PATH.",
+            "reason": (
+                "Codex environment was not detected. Install Codex first or run "
+                "scripts/setup_project_clis.sh codex, then retry plugin setup."
+            ),
             "backend": status,
             "plugin": _codex_plugin_state(),
         }
@@ -123,6 +157,58 @@ def _install_local_codex_plugin() -> dict:
     }
 
 
+def _install_local_cursor_plugin() -> dict:
+    """Install the repo-local DecisionsAI Cursor plugin into Cursor's local plugin folder."""
+    from distr.core.project_cli_backends import get_backend
+
+    status = get_backend("cursor").setup_status().to_dict()
+    if not _cursor_environment_available():
+        return {
+            "installed": False,
+            "skipped": True,
+            "reason": (
+                "Cursor environment was not detected. Install Cursor first or run "
+                "scripts/setup_project_clis.sh cursor, then retry plugin setup."
+            ),
+            "backend": status,
+            "plugin": _cursor_plugin_state(),
+        }
+
+    source = _repo_root() / "cursor_plugin" / "decisions-cursor"
+    manifest = source / ".cursor-plugin" / "plugin.json"
+    if not manifest.exists():
+        return {
+            "installed": False,
+            "skipped": True,
+            "reason": "DecisionsAI Cursor plugin source was not found in this checkout.",
+            "backend": status,
+            "plugin": _cursor_plugin_state(),
+        }
+
+    cursor_home = Path(os.environ.get("CURSOR_HOME") or (Path.home() / ".cursor"))
+    target = cursor_home / "plugins" / "local" / "decisions-cursor"
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.exists() or target.is_symlink():
+        if target.is_symlink() or target.is_file():
+            target.unlink()
+        else:
+            shutil.rmtree(target)
+    shutil.copytree(
+        source,
+        target,
+        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"),
+    )
+
+    return {
+        "installed": True,
+        "skipped": False,
+        "path": str(target),
+        "backend": status,
+        "plugin": _cursor_plugin_state(),
+        "message": "DecisionsAI Cursor plugin installed. Restart Cursor or run Developer: Reload Window.",
+    }
+
+
 def _codex_project_sync_payload(project) -> dict:
     from distr.core.project_cli_backends import get_backend
 
@@ -161,6 +247,48 @@ def _codex_project_sync_payload(project) -> dict:
             else "Project folder is missing."
             if not folder_exists
             else backend_status.get("message") or "Codex CLI needs setup."
+        ),
+    }
+
+
+def _cursor_project_sync_payload(project) -> dict:
+    from distr.core.project_cli_backends import get_backend
+
+    folder = (project.folder_location or "").strip()
+    folder_exists = bool(folder and Path(folder).expanduser().exists())
+    plugin = _cursor_plugin_state()
+    try:
+        backend_status = get_backend("cursor").setup_status().to_dict()
+    except Exception as exc:
+        backend_status = {
+            "id": "cursor",
+            "name": "Cursor CLI",
+            "ready": False,
+            "state": "unavailable",
+            "message": str(exc),
+            "setup_required": True,
+            "setup_instructions": "Install Cursor CLI support, then make sure cursor-agent is on PATH.",
+        }
+
+    backend_ready = bool(backend_status.get("ready"))
+    correlated = folder_exists and (backend_ready or plugin.get("available"))
+    return {
+        "project_id": project.id,
+        "project_name": project.name or "",
+        "project_folder": folder,
+        "folder_exists": folder_exists,
+        "current_backend": _backend_id_for_project(project),
+        "recommended_backend": "cursor",
+        "correlated": correlated,
+        "sync_ready": folder_exists and backend_ready,
+        "plugin": plugin,
+        "backend": backend_status,
+        "message": (
+            "Cursor CLI is ready for this project."
+            if folder_exists and backend_ready
+            else "Project folder is missing."
+            if not folder_exists
+            else backend_status.get("message") or "Cursor CLI needs setup."
         ),
     }
 
@@ -486,12 +614,6 @@ def register_routes(router, templates):
         if backend_id == "codex":
             models, source, message = _codex_models(settings)
             return {"models": models, "source": source, "message": message}
-        if backend_id in ("cursor_ide", "vscode_ide"):
-            return {
-                "models": [_model_entry("auto", backend_id, "Auto")],
-                "source": "editor-bridge",
-                "message": "IDE routes create an editor work packet; model choice is controlled inside the editor.",
-            }
         return {"models": _pi_cli_models(), "source": "pi-models", "message": ""}
 
     def _project_backend_model(project_id: int | None, backend_id: str, fallback_model: str = ""):
@@ -539,7 +661,7 @@ def register_routes(router, templates):
             current_provider = backend_id
         current_model = _project_backend_model(project_id, backend_id, current_model if backend_id == "pi" else "")
         if not current_model:
-            current_model = "auto" if backend_id in ("cursor", "codex", "cursor_ide", "vscode_ide") else ("default" if backend_id == "claude_code" else "")
+            current_model = "auto" if backend_id in ("cursor", "codex") else ("default" if backend_id == "claude_code" else "")
             current_provider = backend_id
 
         return JSONResponse({
@@ -684,6 +806,18 @@ def register_routes(router, templates):
                 ),
             })
             return JSONResponse(payload)
+        if normalized_backend_id == "cursor":
+            install = _install_local_cursor_plugin()
+            payload = install.get("backend") or get_backend("cursor").setup_status().to_dict()
+            payload.update({
+                "plugin_install": install,
+                "message": (
+                    "Cursor CLI is available and the DecisionsAI Cursor plugin was installed."
+                    if install.get("installed")
+                    else install.get("reason") or payload.get("message") or "Cursor setup checked."
+                ),
+            })
+            return JSONResponse(payload)
 
         backend = get_backend(normalized_backend_id)
         status = await backend.install_or_setup()
@@ -698,7 +832,11 @@ def register_routes(router, templates):
         from distr.core.project_cli_backends import get_backend_statuses, normalize_backend_id
 
         backend_id = normalize_backend_id(body.get("coding_backend") or body.get("backend_id"))
-        plugin_install = _install_local_codex_plugin()
+        plugin_install = None
+        if backend_id == "codex":
+            plugin_install = _install_local_codex_plugin()
+        elif backend_id == "cursor":
+            plugin_install = _install_local_cursor_plugin()
 
         with get_session() as session:
             project = session.query(Project).filter(Project.id == project_id).first()
@@ -707,7 +845,10 @@ def register_routes(router, templates):
             project.coding_backend = backend_id
             project.coding_backend_model = ""
             session.commit()
-        return JSONResponse({"success": True, **get_backend_statuses(backend_id)})
+        payload = {"success": True, **get_backend_statuses(backend_id)}
+        if plugin_install is not None:
+            payload["plugin_install"] = plugin_install
+        return JSONResponse(payload)
 
     @router.get("/projects/{project_id}/codex-sync")
     async def get_project_codex_sync(project_id: int):
@@ -743,6 +884,42 @@ def register_routes(router, templates):
             "plugin_install": plugin_install,
             **payload,
             **get_backend_statuses("codex"),
+        })
+
+    @router.get("/projects/{project_id}/cursor-sync")
+    async def get_project_cursor_sync(project_id: int):
+        """Report whether this Decisions project can be correlated with Cursor."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            return JSONResponse(_cursor_project_sync_payload(project))
+
+    @router.post("/projects/{project_id}/cursor-sync")
+    async def sync_project_to_cursor(project_id: int):
+        """Bind this project to the Cursor CLI backend and install the Cursor plugin."""
+        from distr.core.db import get_session
+        from distr.core.db.projects import Project
+        from distr.core.project_cli_backends import get_backend_statuses
+
+        plugin_install = _install_local_cursor_plugin()
+        with get_session() as session:
+            project = session.query(Project).filter(Project.id == project_id).first()
+            if not project:
+                raise HTTPException(status_code=404, detail="Project not found")
+            project.coding_backend = "cursor"
+            if not (project.coding_backend_model or "").strip():
+                project.coding_backend_model = "auto"
+            session.commit()
+            payload = _cursor_project_sync_payload(project)
+        return JSONResponse({
+            "success": True,
+            "plugin_install": plugin_install,
+            **payload,
+            **get_backend_statuses("cursor"),
         })
 
     @router.get("/projects/{project_id}/orchestration-activity")

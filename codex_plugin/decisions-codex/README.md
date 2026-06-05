@@ -35,23 +35,20 @@ rather than advertising the internal engine by name.
 
 ## Architecture Position
 
-When Codex exists on the operating system and is authenticated, treat the Codex
-CLI as the reliable execution path for now. It can run real project work and
-gives DecisionsAI a stable process boundary to monitor. If Codex is missing,
-not authenticated, or unavailable, DecisionsAI should show setup state and use
-another configured project backend instead of pretending Codex can run.
+Treat the Codex IDE/chat surface as the preferred execution path. It is where
+the human is already steering work, so DecisionsAI should create or resume a
+project IDE session from the current folder and record prompt, progress, and
+completion events there. The Codex CLI remains a fallback transport for
+automation, setup checks, and environments where the IDE bridge is unavailable.
+When Codex or the bridge is missing, DecisionsAI should show setup state instead
+of pretending the IDE handoff is available.
 
-Treat this plugin as the behavior and context layer, not the main transport
-layer yet. Its job is to make Codex understand DecisionsAI work packets and
-return structured, useful results: what changed, which files were touched,
-which tests ran, what failed, what is blocked, and what the next recommended
-step is.
-
-Do not replace the CLI path until the harness around it is stable: persistent
-goal state, resumable runs, workflow checkpoints, test results, clear completion
-criteria, and human approval gates. Once that is solid, a plugin-native channel
-can add real-time workflow events back into DecisionsAI without relying only on
-terminal output.
+Treat this plugin as the IDE behavior and context layer. Its job is to make
+Codex understand DecisionsAI work packets and return structured, useful
+results: what changed, which files were touched, which tests ran, what failed,
+what is blocked, and what the next recommended step is.
+Those reports become DecisionsAI workflow checkpoints when the IDE session is
+attached to a workflow run.
 
 ## Current Integration Points
 
@@ -92,6 +89,28 @@ python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py \
 Those events are stored against the DecisionsAI execution session and Hermes
 ledger. Useful steering feedback can also become adaptive workflow context so
 future tickets inherit the principle rather than repeating the mistake.
+
+## Project IDE Session Reporting
+
+For ordinary Codex project chats that do not include a workflow callback block,
+the worker skill should still report the IDE turn through the local project
+bridge:
+
+```bash
+python3 ~/plugins/decisions-codex/scripts/report_decisions_event.py \
+  --turn-input "User prompt" \
+  --turn-output "Short Codex result summary"
+```
+
+Without `--callback-url`, the reporter posts to
+`/api/ide/sessions/event` on `DECISIONS_API_BASE` or
+`http://127.0.0.1:8765`. DecisionsAI resolves the project from the current
+working directory, creates or resumes a Codex IDE session, appends the user
+prompt and Codex completion to the linked Decisions chat, and records the run
+events for orchestrator progress checks.
+
+If DecisionsAI is switched off or unreachable, the reporter exits quietly by
+default so Codex work is not blocked. Use `--strict` only for setup diagnostics.
 
 ## Codex Plugin Display
 
@@ -139,14 +158,17 @@ The intended loop is:
 
 1. DecisionsAI sends Codex a clear goal, acceptance criteria, project context,
    workflow state, and any prior evidence.
-2. Codex works inside the project folder through the CLI execution path.
-3. Codex reports progress and evidence using the result contract below.
+2. Codex works inside the project folder through the IDE/chat surface whenever
+   possible, using the CLI only as fallback transport.
+3. Codex reports prompts, progress, and evidence using the result contract below
+   or the project IDE session reporter.
 4. DecisionsAI stores the result against the workflow step and ticket.
 5. DecisionsAI decides whether to continue, retry, ask the human, escalate to a
    smarter backend/model, or close the ticket.
 
-Future plugin-native transport should keep the same loop, but stream progress
-events directly instead of waiting for final CLI output.
+Workflow-attached work should use the workflow callback. Free project chats
+should use the IDE session reporter, which resolves the Decisions project from
+the current working directory.
 
 ## Local Install / Reinstall
 

@@ -32,3 +32,20 @@ def test_short_single_action_request_is_not_augmented():
     text = "Open Chrome."
 
     assert augment_bulk_instruction(text) == text
+
+
+def test_short_ordered_desktop_actions_are_augmented():
+    text = (
+        'say "Hey babe, you are a sexy beautiful dude!"\n'
+        "the move the mouse to the center of the screen on screen 1.\n"
+        "the move the mouse to the center of the screen on screen 2.\n"
+        "the move the mouse to the center of the screen on screen 3."
+    )
+
+    augmented = augment_bulk_instruction(text, source="automation")
+
+    assert augmented.startswith("[Multi-Action Intake]")
+    assert "ordered action queue" in augmented
+    assert "one physical desktop action at a time" in augmented
+    assert "Do not summarize repeated desktop actions into one best-effort action" in augmented
+    assert text in augmented

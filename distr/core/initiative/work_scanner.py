@@ -166,10 +166,8 @@ def _scan_local_boards(scan: dict[str, Any], settings: dict[str, Any]) -> None:
                 "id": board.id,
                 "name": board.name or "",
                 "source": board.source or "database",
-                "agent_enabled": bool(board.agent_enabled),
-                "whatsapp_checkin_enabled": bool(getattr(board, "whatsapp_checkin_enabled", False)),
-                "source_lane": board.agent_source_lane or settings.get("kanban_agent_source_lane", "") or "Current",
-                "done_lane": board.agent_done_lane or settings.get("kanban_agent_done_lane", "") or "QA / Assess",
+                "source_lane": "Current",
+                "done_lane": "QA / Assess",
                 "default_workflow_id": board.default_workflow_id,
                 "default_project_id": board.default_project_id,
                 "send_to_cli": bool(board.send_to_cli),
@@ -358,7 +356,6 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             if board:
                 board_meta[link.board_id] = {
                     "name": board.name or f"Board {board.id}",
-                    "whatsapp_checkin_enabled": bool(getattr(board, "whatsapp_checkin_enabled", False)),
                 }
 
         work_like = []
@@ -370,7 +367,7 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
             phone = row.jid_phone or (row.jid or "").split("@")[0] or "unknown"
             link = link_by_phone.get(phone)
             linked_board = board_meta.get(link.board_id) if link else None
-            linked_whatsapp_enabled = bool(linked_board and linked_board.get("whatsapp_checkin_enabled"))
+            linked_whatsapp_enabled = bool(linked_board)
             is_work_related = _looks_work_related(text)
             item = {
                 "id": row.id,
@@ -383,7 +380,7 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                 "work_related": is_work_related,
                 "linked_board_id": link.board_id if link else None,
                 "linked_board_name": linked_board.get("name") if linked_board else "",
-                "linked_board_whatsapp_checkin_enabled": linked_whatsapp_enabled,
+                "linked_board_whatsapp_linked": linked_whatsapp_enabled,
                 "auto_snapshot": bool(link.auto_snapshot) if link else False,
             }
             if is_work_related or linked_whatsapp_enabled:
@@ -401,7 +398,7 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                     "work_related_count": 0,
                     "linked_board_id": item["linked_board_id"],
                     "linked_board_name": item["linked_board_name"],
-                    "linked_board_whatsapp_checkin_enabled": linked_whatsapp_enabled,
+                    "linked_board_whatsapp_linked": linked_whatsapp_enabled,
                     "auto_snapshot": item["auto_snapshot"],
                     "fresh": bool(row.created_date and row.created_date >= fresh_cutoff),
                 },
@@ -413,7 +410,7 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
 
         grouped_candidates = [
             g for g in grouped.values()
-            if g["fresh"] or g["work_related_count"] > 0 or g.get("linked_board_whatsapp_checkin_enabled")
+            if g["fresh"] or g["work_related_count"] > 0 or g.get("linked_board_whatsapp_linked")
         ]
         grouped_candidates.sort(
             key=lambda g: (
@@ -453,7 +450,7 @@ def _scan_whatsapp(scan: dict[str, Any]) -> None:
                     "latest_preview": chosen["latest_preview"],
                     "linked_board_id": chosen.get("linked_board_id"),
                     "linked_board_name": board_name,
-                    "linked_board_whatsapp_checkin_enabled": bool(chosen.get("linked_board_whatsapp_checkin_enabled")),
+                    "linked_board_whatsapp_linked": bool(chosen.get("linked_board_whatsapp_linked")),
                     "auto_snapshot": bool(chosen.get("auto_snapshot")),
                     "confidence": 0.68,
                     "risk_level": "medium",

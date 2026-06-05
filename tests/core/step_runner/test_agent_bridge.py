@@ -50,11 +50,12 @@ class TestGenerateReport:
                 {"title": "Login", "id": 11},
             ],
         })
-        assert "Completed successfully" in report
-        assert "session 1" in report
+        assert "finished successfully" in report
+        assert "Session 1" in report
         assert "run 5" in report
         assert "Open browser" in report
         assert "Login" in report
+        assert "Give a brief spoken" not in report
 
     def test_failed_run(self):
         report = WorkflowAgentBridge._generate_report({
@@ -64,7 +65,7 @@ class TestGenerateReport:
             "cancelled": False,
             "steps_summary": [],
         })
-        assert "Failed" in report
+        assert "failed" in report
         assert "no steps" in report
 
     def test_cancelled_run(self):
@@ -75,12 +76,33 @@ class TestGenerateReport:
             "cancelled": True,
             "steps_summary": [{"title": "Step A", "id": 1}],
         })
-        assert "Cancelled" in report
+        assert "cancelled" in report
 
     def test_missing_fields_defaults(self):
         report = WorkflowAgentBridge._generate_report({})
-        assert "Failed" in report
+        assert "failed" in report
         assert "no steps" in report
+
+    def test_voice_note_step_is_summarized_naturally_without_raw_payload(self):
+        report = WorkflowAgentBridge._generate_report({
+            "session_id": 350,
+            "run_id": 149,
+            "success": True,
+            "cancelled": False,
+            "steps_summary": [
+                {
+                    "title": "Automation Instruction",
+                    "status": "completed",
+                    "result": "Voice note sent: 'Hey babe, you are a sexy beautiful dude!'",
+                }
+            ],
+        })
+
+        assert "Done - the workflow finished successfully." in report
+        assert "It sent a Telegram voice note with the requested message." in report
+        assert "Hey babe" not in report
+        assert "That's what happened" not in report
+        assert "Give a brief spoken" not in report
 
 
 class TestQueueReportToAgent:
@@ -136,13 +158,13 @@ class TestOnWorkflowCompleted:
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
         assert reports[0]["session_id"] == 10
-        assert "Completed successfully" in reports[0]["report"]
+        assert "finished successfully" in reports[0]["report"]
 
         # Signal was emitted
         mock_sm.workflow_finished.emit.assert_called_once()
         args = mock_sm.workflow_finished.emit.call_args[0]
         assert args[0] == 10
-        assert "Completed successfully" in args[1]
+        assert "finished successfully" in args[1]
 
     @patch("distr.core.signals.signal_manager")
     def test_handles_signal_error_gracefully(self, mock_sm):
@@ -184,7 +206,7 @@ class TestFinishOrchestrationBridgeIntegration:
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
         assert reports[0]["session_id"] == 1
-        assert "Completed successfully" in reports[0]["report"]
+        assert "finished successfully" in reports[0]["report"]
         mock_sm.workflow_finished.emit.assert_called_once()
 
     @patch("distr.core.signals.signal_manager")
@@ -205,7 +227,7 @@ class TestFinishOrchestrationBridgeIntegration:
 
         reports = WorkflowAgentBridge.get_pending_reports()
         assert len(reports) == 1
-        assert "Cancelled" in reports[0]["report"]
+        assert "cancelled" in reports[0]["report"]
 
     @patch("distr.core.signals.signal_manager")
     @patch("distr.app.workflow.WorkflowOrchestrationMixin._cancel_workflow_timeout")

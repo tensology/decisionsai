@@ -638,8 +638,16 @@ class AgentSession:
             if getattr(self, 'ptt_active', False):
                 if hasattr(self.stt_service, 'set_ptt_active'):
                     self.stt_service.set_ptt_active(self.ptt_active)
+        if getattr(self, 'is_dictating', False):
+            if hasattr(self.stt_service, 'set_dictating'):
+                self.stt_service.set_dictating(self.is_dictating)
         
-        self.logger.info(f"✅ STT service swap complete - VAD enabled, hands_free={self.is_hands_free}, ptt_active={getattr(self, 'ptt_active', False)}")
+        self.logger.info(
+            "✅ STT service swap complete - VAD enabled, hands_free=%s, ptt_active=%s, dictating=%s",
+            self.is_hands_free,
+            getattr(self, 'ptt_active', False),
+            getattr(self, 'is_dictating', False),
+        )
         
         # Emit stt_ready event to notify GUI that PTT is safe to use
         if self.event_queue:

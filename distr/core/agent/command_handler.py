@@ -548,7 +548,7 @@ def _cmd_set_dictating(session, params):
         else:
             session.logger.warning("STT service does not support set_dictating()")
     else:
-        session.logger.warning("STT service not available - cannot update dictation mode")
+        session.logger.debug("STT service not yet available - dictation state will be restored when STT starts")
     _sync_audio_input_power(session, "set_dictating")
 
 
@@ -574,8 +574,73 @@ def _cmd_stop_dictation(session, params):
 # Interaction commands
 # ---------------------------------------------------------------------------
 
+def _requested_chat_id(params):
+    if not isinstance(params, dict):
+        return None
+    raw_chat_id = params.get('chat_id')
+    if raw_chat_id in (None, ""):
+        return None
+    try:
+        chat_id = int(raw_chat_id)
+    except (TypeError, ValueError):
+        return None
+    return chat_id if chat_id > 0 else None
+
+
+def _chat_id_exists_for_input(chat_id: int) -> bool:
+    try:
+        from distr.core.db import Chat, get_session
+
+        with get_session() as db:
+            return db.get(Chat, int(chat_id)) is not None
+    except Exception:
+        return True
+
+
+def _apply_requested_chat_for_input(session, params):
+    chat_id = _requested_chat_id(params)
+    if chat_id is None:
+        return None
+    if not _chat_id_exists_for_input(chat_id):
+        session.logger.warning(
+            "process_text_input: ignoring stale requested chat_id=%s",
+            chat_id,
+        )
+        return None
+
+    session._agent_current_chat_id_from_signal = chat_id
+    current_chat_id = None
+    if getattr(session, 'chat_manager', None) is not None:
+        try:
+            current_chat_id = session.chat_manager.get_current_chat()
+        except Exception:
+            current_chat_id = None
+        if current_chat_id != chat_id:
+            try:
+                session.chat_manager.set_current_chat(chat_id)
+            except Exception as exc:
+                session.logger.warning(
+                    "process_text_input: failed to set current chat %s: %s",
+                    chat_id,
+                    exc,
+                )
+
+    if current_chat_id != chat_id and getattr(session, 'llm_service', None) is not None:
+        if hasattr(session.llm_service, 'on_chat_changed'):
+            try:
+                session.llm_service.on_chat_changed(chat_id)
+            except Exception as exc:
+                session.logger.warning(
+                    "process_text_input: failed to load chat %s before input: %s",
+                    chat_id,
+                    exc,
+                )
+
+    return chat_id
+
 def _cmd_process_text_input(session, params):
     text = params.get('text', '')
+    _apply_requested_chat_for_input(session, params)
     # Cancel welcome message task — but wait briefly for TTS to finish
     # the current sentence so we don't leave the player window open
     if session._welcome_task and not session._welcome_task.done():
@@ -671,7 +736,7 @@ def _cmd_push_to_talk_start(session, params):
     if hasattr(session, 'stt_service') and session.stt_service:
         session.stt_service.set_ptt_active(True)
     else:
-        session.logger.warning("PTT: STT service not available - PTT audio may not be captured")
+        session.logger.debug("PTT: STT service not yet available - PTT state will be restored when STT starts")
 
     # Immediate cancel so TTS/LLM stop before frame propagates
     if hasattr(session, 'llm_service') and session.llm_service and hasattr(session.llm_service, '_cancelled'):
@@ -705,7 +770,7 @@ def _cmd_push_to_talk_start(session, params):
     elif hasattr(session, 'stt_service') and session.stt_service:
         session.logger.warning("PTT: Runner/loop not available - STT will send InterruptionFrame on next frame")
     else:
-        session.logger.warning("PTT: STT service not available for interruption")
+        session.logger.debug("PTT: STT service not yet available for interruption")
 
 
 
@@ -717,7 +782,7 @@ def _cmd_push_to_talk_stop(session, params):
     if hasattr(session, 'stt_service') and session.stt_service:
         session.stt_service.set_ptt_active(False)
     else:
-        session.logger.warning("PTT: STT service not available!")
+        session.logger.debug("PTT: STT service not yet available during stop")
     try:
         input_health = session.transport.input().get_input_health()
         session.logger.info("PTT: Audio input health at stop: %s", input_health)
@@ -873,7 +938,7 @@ def _cmd_interrupt_tts(session, params):
         else:
             logger.warning("Interrupt: event loop not available")
     else:
-        logger.warning("Interrupt: STT service not available")
+        logger.debug("Interrupt: STT service not yet available")
 
 
 

@@ -15,7 +15,7 @@ This note captures the hardening pass for large multi-action requests across cha
 - The Workflows active-runs API route was reordered so `/api/workflows/active-runs?limit=50` is no longer swallowed by `/api/workflows/{workflow_id}` and returning a 422.
 - The Workflows UI regression harness now waits for page readiness without relying on network-idle, which is inappropriate for a page with active event streams and polling.
 - The Kanban workflow E2E now seeds its own board, lanes, default workflow, and ticket instead of depending on a manually prepared `TEST PROJECT` board.
-- Project backend routing now includes explicit editor-extension backends for Cursor IDE and VS Code IDE. These create structured `.tickets` work packets, open the editor, and leave workflow steps eligible to wait for review/continuation instead of treating editor handoff as completed engineering.
+- Project backend routing now uses CLI/plugin backends. Cursor work routes through Cursor CLI plus the DecisionsAI Cursor plugin; the legacy VS Code-compatible editor-extension backends have been retired.
 
 ## CLI And Codex Readiness
 
@@ -28,12 +28,12 @@ Checked on this OS:
 - `cursor`: `/usr/local/bin/cursor`
 - `code`: `/usr/local/bin/code`
 
-Project CLI routing has Pi as the default adapter and includes Cursor CLI, Claude Code, Codex, Cursor IDE, and VS Code IDE adapter entries. The regression test proves a workflow ticket can route through a project selected as `codex`, preserve backend/model metadata, advance to validation, and complete. The IDE backend test proves an editor work packet is written with workflow metadata and the editor is opened through the shared backend layer.
+Project CLI routing has Pi as the default adapter and includes Cursor CLI, Claude Code, and Codex adapter entries. The regression test proves a workflow ticket can route through a project selected as `codex`, preserve backend/model metadata, advance to validation, and complete. Cursor plugin checks now replace the old editor work-packet test.
 
 Checked editor extension readiness on this OS:
 
-- Cursor has `decisionsai.decisionsai` installed.
-- VS Code has `decisionsai.decisionsai` installed.
+- Cursor should use the local DecisionsAI Cursor plugin at `~/.cursor/plugins/local/decisions-cursor`.
+- The old `decisionsai.decisionsai` VS Code-compatible extension should be uninstalled.
 
 The local repo does not contain a component named `CLI Anything`. The relevant existing local piece is `distr/core/agent/tools/integrations/unified_cli.py`, but it is Pi-specific. The external CLI-Anything project is useful as a design reference for structured harnesses: DecisionsAI should keep moving editor and GUI integrations toward typed setup/status/execute/result contracts instead of ad-hoc paste automation.
 
@@ -70,5 +70,5 @@ Result detail:
 - Add a live Telegram continuation test against the actual relay/bot session.
 - Add a browser regression for project CLI backend selection in the Projects UI, including visible model/options updates.
 - Add a full development-cycle workflow test that starts from a project ticket, routes into the selected CLI or IDE backend, writes evidence back to the workflow step/ticket, pauses for approval, resumes, and summarizes.
-- Upgrade the editor extension from "submitted to editor" callbacks to true result callbacks when Cursor/VS Code exposes reliable completion/status signals for the editor agent session.
+- Extend the Cursor plugin bridge with richer progress callbacks when Cursor exposes reliable plugin-native completion/status signals.
 - Extend destructive/external action confirmation coverage from prompt-level behavior into concrete tool-level tests.

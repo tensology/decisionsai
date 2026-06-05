@@ -260,7 +260,13 @@ async function detectAudioDevices() {
 
 // Reset audio devices
 async function resetAudioDevices() {
-    if (!confirm('Are you sure you want to reset all audio device settings?')) {
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Reset audio devices",
+        message: "Reset all audio device settings?",
+        confirmLabel: "Reset",
+        danger: true,
+    });
+    if (!confirmed) {
         return;
     }
 

@@ -58,7 +58,7 @@
             var menu = ensureAgentMenu();
             var canRun = !!(opts && opts.hasProject);
             menu.innerHTML =
-                menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                menuButtonHtml("discuss", "Send to Orchestrator", "Send context into the current agent chat.", false) +
                 '<div class="my-1 border-t border-white/10"></div>' +
                 menuButtonHtml("auto", "Run with auto route", "Use complexity routing and availability fallback.", !canRun) +
                 menuButtonHtml("cursor", "Send to Cursor", "Force Cursor when available.", true) +
@@ -72,14 +72,14 @@
                 var cursorReady = canRun && backendReady(backends, "cursor");
                 var codexReady = canRun && backendReady(backends, "codex");
                 menu.innerHTML =
-                    menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                    menuButtonHtml("discuss", "Send to Orchestrator", "Send context into the current agent chat.", false) +
                     '<div class="my-1 border-t border-white/10"></div>' +
                     menuButtonHtml("auto", "Run with auto route", "Complexity decides Cursor/Codex; falls back if needed.", !canRun) +
                     menuButtonHtml("cursor", "Send to Cursor", cursorReady ? "Available now." : "Cursor is not available.", !cursorReady) +
                     menuButtonHtml("codex", "Send to Codex", codexReady ? "Available now." : "Codex is not available.", !codexReady);
             }).catch(function() {
                 menu.innerHTML =
-                    menuButtonHtml("discuss", "Talk to agent", "Send context into the current agent chat.", false) +
+                    menuButtonHtml("discuss", "Send to Orchestrator", "Send context into the current agent chat.", false) +
                     '<div class="my-1 border-t border-white/10"></div>' +
                     menuButtonHtml("auto", "Run with auto route", "Could not check availability; backend will validate.", !canRun) +
                     menuButtonHtml("cursor", "Send to Cursor", "Availability check failed.", true) +
@@ -123,6 +123,36 @@
                 '<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 01-2 2H5a2 2 0 01-2-2V8a2 2 0 012-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg></a>';
         }
 
+        function ticketClipboardText(ticket) {
+            var text = (ticket.title || "").trim();
+            var description = deps.stripHtml(ticket.description || "").trim();
+            if (description) text += (text ? "\n\n" : "") + description;
+            var attachments = [];
+            (ticket.files || []).forEach(function(f) {
+                var url = f.download_url || f.url || "";
+                if (url) attachments.push(url);
+            });
+            (ticket.media || []).forEach(function(m) {
+                var mediaUrl = m.url || m.download_url || "";
+                if (mediaUrl) attachments.push(mediaUrl);
+            });
+            if (attachments.length) text += "\n\nAttachments:\n" + attachments.map(function(url) { return "- " + url; }).join("\n");
+            return text || "(empty ticket)";
+        }
+
+        function copyTicketToClipboard(ticket) {
+            var text = ticketClipboardText(ticket || {});
+            if (!navigator.clipboard || typeof navigator.clipboard.writeText !== "function") {
+                deps.showSnackbar("Clipboard is unavailable in this browser", "error");
+                return;
+            }
+            navigator.clipboard.writeText(text).then(function() {
+                deps.showSnackbar("Copied title and description");
+            }).catch(function(err) {
+                deps.showSnackbar("Copy failed: " + (err && err.message ? err.message : String(err)), "error");
+            });
+        }
+
         function actionButtonHtml(config) {
             if (config.hidden) return "";
             var disabled = !!config.disabled;
@@ -136,16 +166,68 @@
         function buildActionRow(opts) {
             var leftActions = [
                 actionButtonHtml({
+                    keyClass: "kb-act-copy",
+                    tooltip: "Copy title and description",
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 01-2-2V4a2 2 0 012-2h9a2 2 0 012 2v1"/></svg>',
+                }),
+                actionButtonHtml({
                     keyClass: "kb-act-agent",
-                    tooltip: opts.hasProject ? "Talk to agent. Right-click for Cursor/Codex routing." : "Link this board or ticket to a project before running an agent.",
+                    tooltip: "Send to Orchestrator",
                     disabled: false,
                     nativeTooltip: true,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v4"/><path d="M12 18v4"/><rect x="4" y="6" width="16" height="12" rx="3"/><circle cx="9" cy="12" r="1"/><circle cx="15" cy="12" r="1"/><path d="M9 15h6"/></svg><span class="kb-act-label">Agent</span>',
+                }),
+                actionButtonHtml({
+                    keyClass: "kb-act-cli",
+                    tooltip: "Run with Cursor/Codex",
+                    hidden: !opts.hasProject,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>',
+                }),
+                actionButtonHtml({
+                    keyClass: "kb-act-project",
+                    tooltip: "Send to Project",
+                    hidden: !opts.hasProject,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 00-2 2v16a2 2 0 002 2h12a2 2 0 002-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>',
+                }),
+                actionButtonHtml({
+                    keyClass: "kb-act-workflow",
+                    tooltip: "Send to Workflow",
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
+                }),
+                actionButtonHtml({
+                    keyClass: "kb-act-transfer",
+                    tooltip: "Copy to local board",
+                    hidden: !opts.canTransfer,
+                    iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="2" y="2" width="20" height="8" rx="2"/><rect x="2" y="14" width="20" height="8" rx="2"/><line x1="6" y1="6" x2="6.01" y2="6"/><line x1="6" y1="18" x2="6.01" y2="18"/></svg>',
                 })
             ];
-            var deleteAction = "";
+            var deleteAction = actionButtonHtml({
+                keyClass: "kb-act-delete",
+                tooltip: "Delete ticket",
+                hidden: !opts.canDelete,
+                iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4h8v2"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v5"/><path d="M14 11v5"/></svg>',
+            });
             return '<div class="kb-card-actions-left">' + leftActions.join("") + "</div>" +
                 '<div class="kb-card-actions-right">' + deleteAction + "</div>";
+        }
+
+        function deleteLocalTicket(ticket) {
+            if (!ticket || !ticket.id) return;
+            deps.showKanbanConfirm({
+                title: "Delete ticket",
+                message: "Delete this ticket? This cannot be undone.",
+                confirmLabel: "Delete",
+                danger: true,
+                onConfirm: function() {
+                    deps.hideKanbanConfirm();
+                    deps.apiFetch("/api/kanban/tickets/" + ticket.id, { method: "DELETE" }).then(function() {
+                        deps.showSnackbar("Ticket deleted");
+                        deps.reloadCurrentDatabaseBoard();
+                    }).catch(function(e) {
+                        deps.showSnackbar("Delete failed: " + e.message, "error");
+                    });
+                },
+            });
         }
 
         function buildCardMarkup(opts) {
@@ -318,13 +400,13 @@
                 projectActionBtn.classList.toggle("hidden", !canPush);
                 projectActionBtn.disabled = false;
                 projectActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
-                projectActionBtn.title = "Send to Project (.tickets)";
+                projectActionBtn.title = "Send to Project";
                 projectActionBtn.setAttribute("aria-label", projectActionBtn.title);
                 if (cliActionBtn) {
                     cliActionBtn.classList.toggle("hidden", !canPush);
                     cliActionBtn.disabled = false;
                     cliActionBtn.classList.remove("opacity-40", "cursor-not-allowed");
-                    cliActionBtn.title = "Push to CLI";
+                    cliActionBtn.title = "Run with Cursor/Codex";
                     cliActionBtn.setAttribute("aria-label", cliActionBtn.title);
                 }
             }
@@ -338,7 +420,6 @@
         function createTicketCard(ticket, isLocal, boardData) {
             boardData = boardData || deps.getCurrentBoardData() || {};
             var currentBoard = deps.getCurrentBoard();
-            var currentAgentStatus = deps.getCurrentAgentStatus();
             var card = document.createElement("div");
             card.className = "kb-card bg-[#1a1f3a] rounded-lg border border-white/20 p-4 cursor-pointer hover:border-[#f97316]/50 transition-colors relative";
             card.dataset.ticketId = String(ticket.id);
@@ -350,9 +431,6 @@
                     card.classList.add("dragging");
                 });
                 card.addEventListener("dragend", function() { card.classList.remove("dragging"); });
-            }
-            if (currentAgentStatus && currentAgentStatus.state !== "idle" && currentAgentStatus.current_ticket_id != null && String(currentAgentStatus.current_ticket_id) === String(ticket.id)) {
-                card.classList.add("kb-in-progress");
             }
             var pri = (ticket.priority || "medium").toLowerCase();
             var priClass = "kb-pri-" + pri;
@@ -452,6 +530,56 @@
                 });
                 agentBtn.addEventListener("contextmenu", function(e) {
                     showAgentMenu(e, ticket, isLocal, agentBtn, { hasProject: hasProject });
+                });
+            }
+            var copyBtn = card.querySelector(".kb-act-copy");
+            if (copyBtn) {
+                copyBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    copyTicketToClipboard(ticket);
+                });
+            }
+            var cliBtn = card.querySelector(".kb-act-cli");
+            if (cliBtn) {
+                cliBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (isLocal) deps.pushTicketToCli(ticket.id, cliBtn);
+                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "cli", null, "", cliBtn);
+                });
+            }
+            var projectBtn = card.querySelector(".kb-act-project");
+            if (projectBtn) {
+                projectBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (isLocal) deps.sendTicketToProjectById(ticket.id, projectBtn);
+                    else deps.copyAndPushExternalTicket(ticket, currentBoard.source, "project", null, "", projectBtn);
+                });
+            }
+            var workflowBtn = card.querySelector(".kb-act-workflow");
+            if (workflowBtn) {
+                workflowBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.openSendWorkflowModal(ticket, isLocal ? "database" : currentBoard.source);
+                });
+            }
+            var transferBtn = card.querySelector(".kb-act-transfer");
+            if (transferBtn) {
+                transferBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deps.openCopyModal(ticket);
+                });
+            }
+            var deleteBtn = card.querySelector(".kb-act-delete");
+            if (deleteBtn) {
+                deleteBtn.addEventListener("click", function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    deleteLocalTicket(ticket);
                 });
             }
             var wfBadge = card.querySelector(".kb-wf-status-badge");

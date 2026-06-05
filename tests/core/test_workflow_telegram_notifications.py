@@ -1,5 +1,16 @@
+import pytest
+
 from distr.app.signals import SignalBridgeMixin
 from distr.app.workflow import WorkflowOrchestrationMixin
+
+
+@pytest.fixture(autouse=True)
+def _reset_engagement_ledger():
+    from distr.core.human_engagement import reset_engagement_ledger
+
+    reset_engagement_ledger()
+    yield
+    reset_engagement_ledger()
 
 
 class DummyTelegramManager:
@@ -20,8 +31,17 @@ class DummyWorkflowApp(WorkflowOrchestrationMixin):
 
 
 class DummySignalApp(SignalBridgeMixin):
-    def __init__(self, manager):
+    def __init__(self, manager, chat_id=None):
         self.telegram_manager = manager
+        self.chat_manager = DummyChatManager(chat_id)
+
+
+class DummyChatManager:
+    def __init__(self, chat_id):
+        self.chat_id = chat_id
+
+    def get_current_chat(self):
+        return self.chat_id
 
 
 def test_workflow_waiting_state_notifies_telegram_with_continue_prompt():
@@ -63,16 +83,57 @@ def test_workflow_completion_report_sends_concise_telegram_summary():
 
     app._send_workflow_report_to_telegram(
         5,
-        "Workflow run Completed successfully (session 5, run 99)\n"
+        "Done - the workflow finished successfully. Session 5, run 99.\n"
         "Steps (2):\n"
-        "  1. Implement: Changed files: index.html\n"
-        "  2. Validate: Checks passed\n"
-        "\nGive a brief spoken overview.",
+        "  1. Implement: updated index.html.\n"
+        "  2. Validate: checks passed.",
     )
 
     assert len(manager.sent) == 1
     message = manager.sent[0]
-    assert "Workflow run Completed successfully" in message
+    assert "Done - the workflow finished successfully." in message
     assert "Implement" in message
     assert "Validate" in message
     assert "Give a brief" not in message
+
+
+def test_workflow_completion_report_does_not_read_voice_note_payload_verbatim():
+    manager = DummyTelegramManager()
+    app = DummySignalApp(manager)
+
+    app._send_workflow_report_to_telegram(
+        350,
+        "Done - the workflow finished successfully. Session 350, run 149.\n"
+        "Steps (1):\n"
+        "  1. Automation Instruction: It sent a Telegram voice note with the requested message.",
+    )
+
+    assert len(manager.sent) == 1
+    message = manager.sent[0]
+    assert "It sent a Telegram voice note with the requested message." in message
+    assert "Hey babe" not in message
+    assert "That's what happened" not in message
+
+
+def test_workflow_report_agent_payload_targets_current_chat(monkeypatch):
+    app = DummySignalApp(DummyTelegramManager(), chat_id=44)
+    monkeypatch.setattr(app, "_chat_id_exists", lambda chat_id: True)
+
+    payload = app._workflow_report_agent_payload("Workflow finished.")
+
+    assert payload["text"].startswith("The workflow just finished.")
+    assert "Workflow finished." in payload["text"]
+    assert payload["speak"] is False
+    assert payload["chat_id"] == 44
+
+
+def test_workflow_report_agent_payload_skips_stale_current_chat(monkeypatch):
+    app = DummySignalApp(DummyTelegramManager(), chat_id=404)
+    monkeypatch.setattr(app, "_chat_id_exists", lambda chat_id: False)
+
+    payload = app._workflow_report_agent_payload("Workflow finished.")
+
+    assert payload["text"].startswith("The workflow just finished.")
+    assert "Workflow finished." in payload["text"]
+    assert payload["speak"] is False
+    assert "chat_id" not in payload

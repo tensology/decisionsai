@@ -461,61 +461,11 @@
 
     function showConfirmModal(opts) {
         opts = opts || {};
-        var title = opts.title || "Confirm";
-        var message = opts.message || "Are you sure?";
-        var confirmLabel = opts.confirmLabel || "Confirm";
-        var onConfirm = opts.onConfirm || function () {};
-        var existing = document.getElementById("wf-confirm-modal");
-        if (existing) existing.remove();
-        var html = '' +
-            '<div id="wf-confirm-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">' +
-                '<div class="w-full max-w-md mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl p-4 shadow-2xl">' +
-                    '<h3 class="text-white text-sm font-semibold mb-2">' + esc(title) + '</h3>' +
-                    '<p class="text-sm text-gray-300 mb-4">' + esc(message) + '</p>' +
-                    '<div class="flex items-center justify-end gap-2">' +
-                        '<button type="button" class="wf-confirm-cancel px-3 py-1.5 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
-                        '<button type="button" class="wf-confirm-ok px-3 py-1.5 rounded border border-red-500/50 text-red-300 text-xs hover:bg-red-500/20">' + esc(confirmLabel) + '</button>' +
-                    '</div>' +
-                '</div>' +
-            '</div>';
-        document.body.insertAdjacentHTML("beforeend", html);
-        var modal = document.getElementById("wf-confirm-modal");
-        if (!modal) return;
-        var keyHandler = null;
-        function closeModal() {
-            if (keyHandler) {
-                document.removeEventListener("keydown", keyHandler, true);
-                keyHandler = null;
-            }
-            modal.remove();
+        opts.danger = opts.danger !== false;
+        if (window.DecisionsAPI && typeof window.DecisionsAPI.confirm === "function") {
+            window.DecisionsAPI.confirm(opts);
+            return;
         }
-        modal.addEventListener("click", function (evt) {
-            if (evt.target === modal) closeModal();
-        });
-        var cancelBtn = modal.querySelector(".wf-confirm-cancel");
-        var okBtn = modal.querySelector(".wf-confirm-ok");
-        if (cancelBtn) cancelBtn.addEventListener("click", closeModal);
-        if (okBtn) okBtn.addEventListener("click", function () {
-            closeModal();
-            onConfirm();
-        });
-        keyHandler = function (evt) {
-            if (!document.getElementById("wf-confirm-modal")) return;
-            if (evt.key === "Escape") {
-                evt.preventDefault();
-                evt.stopPropagation();
-                closeModal();
-                return;
-            }
-            if (evt.key === "Enter") {
-                evt.preventDefault();
-                evt.stopPropagation();
-                closeModal();
-                onConfirm();
-            }
-        };
-        document.addEventListener("keydown", keyHandler, true);
-        if (okBtn) okBtn.focus();
     }
 
     function isTypingTarget(target) {
@@ -843,20 +793,6 @@
                         '</div>' +
                     '</div>' +
                     '<div id="wf-board-edit-tab-advanced" class="wf-board-edit-pane hidden p-5 space-y-3">' +
-                        '<div class="flex items-center justify-between rounded border border-white/10 bg-[#152054]/50 px-3 py-3">' +
-                            '<div>' +
-                                '<label class="text-sm text-gray-300">Enable agent check-in</label>' +
-                                '<p class="text-xs text-gray-500">Allow the agent to check in and work tickets on this board.</p>' +
-                            '</div>' +
-                            '<input type="checkbox" id="wf-board-edit-agent-enabled" class="accent-[#f97316] w-5 h-5"' + (opt.agent_enabled ? ' checked' : '') + '>' +
-                        '</div>' +
-                        '<div class="flex items-center justify-between rounded border border-white/10 bg-[#152054]/30 px-3 py-3">' +
-                            '<div>' +
-                                '<label class="text-sm text-gray-300">Include WhatsApp check-in</label>' +
-                                '<p class="text-xs text-gray-500">When this board checks in, also inspect WhatsApp chats linked to this board.</p>' +
-                            '</div>' +
-                            '<input type="checkbox" id="wf-board-edit-whatsapp-checkin-enabled" class="accent-[#25D366] w-5 h-5"' + (opt.whatsapp_checkin_enabled ? ' checked' : '') + '>' +
-                        '</div>' +
                         '<div>' +
                             '<label class="block text-xs text-gray-500 mb-1">Default project</label>' +
                             '<select id="wf-board-edit-project" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">' +
@@ -868,10 +804,6 @@
                             '<select id="wf-board-edit-workflow" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">' +
                                 optionHtml(workflowLinkable.workflows || [], opt.default_workflow_id, "title") +
                             '</select>' +
-                        '</div>' +
-                        '<div class="rounded border border-[#25D366]/20 bg-[#25D366]/5 px-3 py-3">' +
-                            '<h4 class="text-xs text-[#86efac] uppercase tracking-wide mb-1">WhatsApp</h4>' +
-                            '<p class="text-xs text-gray-400">WhatsApp check-in uses the board links configured in Ticket Boards. This board setting decides whether those linked WhatsApp chats are included during check-in.</p>' +
                         '</div>' +
                     '</div>' +
                     '<div id="wf-board-edit-tab-hermes" class="wf-board-edit-pane hidden p-5 space-y-3">' +
@@ -968,8 +900,6 @@
                 var description = (document.getElementById("wf-board-edit-desc").value || "").trim();
                 var projectId = document.getElementById("wf-board-edit-project").value || null;
                 var workflowId = document.getElementById("wf-board-edit-workflow").value || null;
-                var agentEnabled = !!document.getElementById("wf-board-edit-agent-enabled").checked;
-                var whatsappEnabled = !!document.getElementById("wf-board-edit-whatsapp-checkin-enabled").checked;
                 var nextColor = document.getElementById("wf-board-edit-color").value || "";
                 var payload = {
                     name: name,
@@ -977,7 +907,6 @@
                     default_project_id: projectId ? parseInt(projectId, 10) : null,
                     default_workflow_id: workflowId ? parseInt(workflowId, 10) : null,
                     color: nextColor,
-                    whatsapp_checkin_enabled: whatsappEnabled,
                 };
                 if (opt.source === "database") {
                     var complexityRouting = {};
@@ -1000,15 +929,8 @@
                 }
                 saveBtn.disabled = true;
                 var request = opt.source === "database"
-                    ? api("PUT", "/kanban/boards/" + encodeURIComponent(opt.id), payload).then(function () {
-                        return api("PUT", "/kanban/boards/" + encodeURIComponent(opt.id) + "/agent-enabled", {
-                            agent_enabled: agentEnabled,
-                            whatsapp_checkin_enabled: whatsappEnabled,
-                        });
-                    })
-                    : api("POST", "/kanban/external-boards/" + encodeURIComponent(opt.source) + "/" + encodeURIComponent(opt.id) + "/register", Object.assign({}, payload, {
-                        agent_enabled: agentEnabled,
-                    }));
+                    ? api("PUT", "/kanban/boards/" + encodeURIComponent(opt.id), payload)
+                    : api("POST", "/kanban/external-boards/" + encodeURIComponent(opt.source) + "/" + encodeURIComponent(opt.id) + "/register", payload);
                 request.then(function () {
                     closeModal();
                     snack("Board updated");
@@ -1333,8 +1255,6 @@
             default_workflow_id: board.default_workflow_id || null,
             description: board.description || "",
             color: board.color || "",
-            agent_enabled: !!board.agent_enabled,
-            whatsapp_checkin_enabled: !!board.whatsapp_checkin_enabled,
             whatsapp_links: Array.isArray(board.whatsapp_links) ? board.whatsapp_links : [],
             value: source + ":" + String(board.id),
             label: (board.name || "Untitled Board") + " [" + boardSourceLabel(source) + "]"
@@ -1835,8 +1755,6 @@
                     default_project_id: b.default_project_id,
                     default_workflow_id: b.default_workflow_id,
                     color: b.color,
-                    agent_enabled: b.agent_enabled,
-                    whatsapp_checkin_enabled: b.whatsapp_checkin_enabled,
                     whatsapp_links: b.whatsapp_links || []
                 });
                 if (opt && !seen[opt.value]) { options.push(opt); seen[opt.value] = true; }
@@ -2377,7 +2295,7 @@
                                     '<option value="weekdays"' + (scheduleKind === "weekdays" ? " selected" : "") + '>Weekdays</option>' +
                                     '<option value="weekly"' + (scheduleKind === "weekly" ? " selected" : "") + '>Weekly</option>' +
                                 '</select>' +
-                                '<input type="time" class="wf-scheduled-action-time rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-scheduled-action-title="' + esc(title) + '" value="' + esc(scheduleTime) + '">' +
+                                '<input type="time" class="wf-scheduled-action-time rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-decisions-datetime-label="Schedule time" data-scheduled-action-title="' + esc(title) + '" value="' + esc(scheduleTime) + '">' +
                                 '<button type="button" class="wf-scheduled-action-reschedule px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-scheduled-action-title="' + esc(title) + '">Reschedule</button>' +
                             '</div>' +
                         '</div>' +
@@ -5008,16 +4926,22 @@
         var clearHistoryBtn = container.querySelector(".sf-clear-history");
         if (clearHistoryBtn) {
             clearHistoryBtn.addEventListener("click", function () {
-                if (!confirm("Clear this step's audit history? This cannot be undone.")) return;
-                api("DELETE", "/workflows/" + currentWorkflowId + "/steps/" + step.id + "/results")
-                    .then(function () {
-                        snack("Step audit history cleared");
-                        var histContainer = container.querySelector(".sf-history-tab-list");
-                        if (histContainer) loadStepHistory(step.id, histContainer);
-                        var resultWrap = container.querySelector(".sf-result-wrap");
-                        if (resultWrap) resultWrap.classList.add("hidden");
-                    })
-                    .catch(function (e) { snack(e.message || "Failed to clear history", "error"); });
+                showConfirmModal({
+                    title: "Clear step history",
+                    message: "Clear this step's audit history? This cannot be undone.",
+                    confirmLabel: "Clear",
+                    onConfirm: function () {
+                        api("DELETE", "/workflows/" + currentWorkflowId + "/steps/" + step.id + "/results")
+                            .then(function () {
+                                snack("Step audit history cleared");
+                                var histContainer = container.querySelector(".sf-history-tab-list");
+                                if (histContainer) loadStepHistory(step.id, histContainer);
+                                var resultWrap = container.querySelector(".sf-result-wrap");
+                                if (resultWrap) resultWrap.classList.add("hidden");
+                            })
+                            .catch(function (e) { snack(e.message || "Failed to clear history", "error"); });
+                    },
+                });
             });
         }
     }
@@ -5427,55 +5351,73 @@
 
     function clearWorkflowRunAudit() {
         if (!currentWorkflowId) return;
-        if (!confirm("Clear the run history for this workflow?\n\nThis removes completed run records and step result records only. Executor sessions and event logs stay intact.")) return;
-        var btn = document.getElementById("wf-clear-runs-btn");
-        if (btn) btn.disabled = true;
-        api("DELETE", "/workflows/" + currentWorkflowId + "/runs")
-            .then(function (data) {
-                snack(workflowFeedbackText(data, "Workflow run history cleared"));
-                stopPolling();
-                loadDetail(currentWorkflowId);
-                loadList();
-                loadActiveRuns();
-            })
-            .catch(function (e) {
-                if (btn) btn.disabled = false;
-                snack(workflowErrorText(e, "Failed to clear workflow history"), "error");
-            });
+        showConfirmModal({
+            title: "Clear run history",
+            message: "Clear the run history for this workflow?\n\nThis removes completed run records and step result records only. Executor sessions and event logs stay intact.",
+            confirmLabel: "Clear",
+            onConfirm: function () {
+                var btn = document.getElementById("wf-clear-runs-btn");
+                if (btn) btn.disabled = true;
+                api("DELETE", "/workflows/" + currentWorkflowId + "/runs")
+                    .then(function (data) {
+                        snack(workflowFeedbackText(data, "Workflow run history cleared"));
+                        stopPolling();
+                        loadDetail(currentWorkflowId);
+                        loadList();
+                        loadActiveRuns();
+                    })
+                    .catch(function (e) {
+                        if (btn) btn.disabled = false;
+                        snack(workflowErrorText(e, "Failed to clear workflow history"), "error");
+                    });
+            },
+        });
     }
 
     function clearWorkflowExecutionSessions() {
         if (!currentWorkflowId) return;
-        if (!confirm("Clear the executor log for this workflow?\n\nThis removes CLI/IDE execution sessions only. Run history and event logs stay intact.")) return;
-        var btn = document.getElementById("wf-clear-execution-sessions");
-        if (btn) btn.disabled = true;
-        api("DELETE", "/workflows/" + currentWorkflowId + "/executor-sessions")
-            .then(function (data) {
-                snack(workflowFeedbackText(data, "Executor log cleared"));
-                expandedWorkflowExecutionSessionId = null;
-                loadWorkflowExecutionSessions();
-                renderWorkflowCliTab();
-            })
-            .catch(function (e) {
-                if (btn) btn.disabled = false;
-                snack(workflowErrorText(e, "Failed to clear executor log"), "error");
-            });
+        showConfirmModal({
+            title: "Clear executor log",
+            message: "Clear the executor log for this workflow?\n\nThis removes CLI/IDE execution sessions only. Run history and event logs stay intact.",
+            confirmLabel: "Clear",
+            onConfirm: function () {
+                var btn = document.getElementById("wf-clear-execution-sessions");
+                if (btn) btn.disabled = true;
+                api("DELETE", "/workflows/" + currentWorkflowId + "/executor-sessions")
+                    .then(function (data) {
+                        snack(workflowFeedbackText(data, "Executor log cleared"));
+                        expandedWorkflowExecutionSessionId = null;
+                        loadWorkflowExecutionSessions();
+                        renderWorkflowCliTab();
+                    })
+                    .catch(function (e) {
+                        if (btn) btn.disabled = false;
+                        snack(workflowErrorText(e, "Failed to clear executor log"), "error");
+                    });
+            },
+        });
     }
 
     function clearWorkflowEvents() {
         if (!currentWorkflowId) return;
-        if (!confirm("Clear the event stream for this workflow?\n\nThis removes orchestration events only. Run history and executor logs stay intact.")) return;
-        var btn = document.getElementById("wf-clear-hermes-events");
-        if (btn) btn.disabled = true;
-        api("DELETE", "/workflows/" + currentWorkflowId + "/events")
-            .then(function (data) {
-                snack(workflowFeedbackText(data, "Workflow events cleared"));
-                loadHermesTimeline();
-            })
-            .catch(function (e) {
-                if (btn) btn.disabled = false;
-                snack(workflowErrorText(e, "Failed to clear workflow events"), "error");
-            });
+        showConfirmModal({
+            title: "Clear event stream",
+            message: "Clear the event stream for this workflow?\n\nThis removes orchestration events only. Run history and executor logs stay intact.",
+            confirmLabel: "Clear",
+            onConfirm: function () {
+                var btn = document.getElementById("wf-clear-hermes-events");
+                if (btn) btn.disabled = true;
+                api("DELETE", "/workflows/" + currentWorkflowId + "/events")
+                    .then(function (data) {
+                        snack(workflowFeedbackText(data, "Workflow events cleared"));
+                        loadHermesTimeline();
+                    })
+                    .catch(function (e) {
+                        if (btn) btn.disabled = false;
+                        snack(workflowErrorText(e, "Failed to clear workflow events"), "error");
+                    });
+            },
+        });
     }
 
     // ── Hermes timeline ──
@@ -5645,15 +5587,21 @@
             if (deleteBtn) {
                 deleteBtn.addEventListener("click", function () {
                     if (!currentWorkflowId) return;
-                    if (!confirm("Delete this context item?")) return;
-                    api("DELETE", "/workflows/" + currentWorkflowId + "/context-items/" + contextItemId)
-                        .then(function () {
-                            if (statusEl) { statusEl.textContent = "Deleted"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
-                            loadDetail(currentWorkflowId);
-                        })
-                        .catch(function () {
-                            if (statusEl) statusEl.textContent = "Delete failed";
-                        });
+                    showConfirmModal({
+                        title: "Delete context item",
+                        message: "Delete this context item?",
+                        confirmLabel: "Delete",
+                        onConfirm: function () {
+                            api("DELETE", "/workflows/" + currentWorkflowId + "/context-items/" + contextItemId)
+                                .then(function () {
+                                    if (statusEl) { statusEl.textContent = "Deleted"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
+                                    loadDetail(currentWorkflowId);
+                                })
+                                .catch(function () {
+                                    if (statusEl) statusEl.textContent = "Delete failed";
+                                });
+                        },
+                    });
                 });
             }
         });
@@ -5761,7 +5709,7 @@
         document.addEventListener("keydown", function (evt) {
             if (evt.key === "Escape") closeWorkflowContextMenu();
             if (evt.defaultPrevented) return;
-            if (document.getElementById("wf-confirm-modal")) return;
+            if (document.getElementById("decisions-confirm-modal")) return;
             if (isTypingTarget(evt.target)) return;
             if (evt.key === "ArrowDown" || evt.key === "ArrowUp") {
                 var list = document.getElementById("wf-list");
@@ -6241,15 +6189,21 @@
         if (stopResetBtn) {
             stopResetBtn.addEventListener("click", function () {
                 if (!currentWorkflowId) return;
-                if (!confirm("Stop all active runs for this workflow?\n\nThis will cancel active runs and reset workflow step states/results.")) return;
-                api("POST", "/workflows/" + currentWorkflowId + "/stop-reset")
-                    .then(function (data) {
-                        snack(workflowFeedbackText(data, "Active runs stopped"));
-                        stopPolling();
-                        loadDetail(currentWorkflowId);
-                        loadActiveRuns();
-                    })
-                    .catch(function (e) { snack(workflowErrorText(e, "Failed to stop active runs"), "error"); });
+                showConfirmModal({
+                    title: "Stop active runs",
+                    message: "Stop all active runs for this workflow?\n\nThis will cancel active runs and reset workflow step states/results.",
+                    confirmLabel: "Stop",
+                    onConfirm: function () {
+                        api("POST", "/workflows/" + currentWorkflowId + "/stop-reset")
+                            .then(function (data) {
+                                snack(workflowFeedbackText(data, "Active runs stopped"));
+                                stopPolling();
+                                loadDetail(currentWorkflowId);
+                                loadActiveRuns();
+                            })
+                            .catch(function (e) { snack(workflowErrorText(e, "Failed to stop active runs"), "error"); });
+                    },
+                });
             });
         }
         var clearRunsBtn = document.getElementById("wf-clear-runs-btn");

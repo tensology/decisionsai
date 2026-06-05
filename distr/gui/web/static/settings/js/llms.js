@@ -219,8 +219,6 @@ async function saveLLMsSettings() {
             workflow_model: document.getElementById('workflow_model').value,
             computer_use_provider: document.getElementById('computer_use_provider').value,
             computer_use_model: document.getElementById('computer_use_model').value,
-            kanban_provider: document.getElementById('kanban_provider').value,
-            kanban_model: document.getElementById('kanban_model').value,
             project_cli_low_backend: document.getElementById('project_cli_low_backend')?.value || 'cursor',
             project_cli_low_model: document.getElementById('project_cli_low_model')?.value || 'auto',
             project_cli_medium_backend: document.getElementById('project_cli_medium_backend')?.value || 'codex',

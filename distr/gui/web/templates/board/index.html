@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Project Board</title>
     <link rel="stylesheet" href="/css/board.css">
+    <link rel="stylesheet" href="/static/shared/css/decisions_datetime.css">
     <!-- SortableJS for smooth drag-and-drop - load with fallback -->
     <script>
         // Try to load SortableJS, provide fallback if CDN fails
@@ -82,7 +83,7 @@
 
                     <div class="form-group">
                         <label for="ticketDueDate">Due Date</label>
-                        <input type="date" id="ticketDueDate" class="form-control">
+                        <input type="date" id="ticketDueDate" data-decisions-datetime-label="Due date" class="form-control">
                     </div>
 
                     <div class="form-group">
@@ -110,6 +111,7 @@
     <div id="snackbar" class="snackbar"></div>
 
     <script src="/static/shared/js/api.js"></script>
+    <script src="/static/shared/js/decisions_datetime.js"></script>
     <script src="/js/board.js"></script>
 </body>
 </html>

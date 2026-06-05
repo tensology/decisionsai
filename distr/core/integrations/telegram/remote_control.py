@@ -57,6 +57,12 @@ class TelegramRemoteControlMixin:
         """
         # Emit signal for app visibility
         self.remote_control_command_received.emit(data)
+        try:
+            from distr.core.notification_routing import record_surface_activity
+
+            record_surface_activity("remote")
+        except Exception:
+            pass
 
         # Serialize command execution to prevent race conditions
         with self._remote_control_lock:

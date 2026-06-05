@@ -243,8 +243,6 @@ class LLMSettings(BaseModel):
     workflow_model: str = ""
     computer_use_provider: str = ""
     computer_use_model: str = ""
-    kanban_provider: str = ""
-    kanban_model: str = ""
     project_cli_low_backend: str = "cursor"
     project_cli_low_model: str = "auto"
     project_cli_medium_backend: str = "codex"

@@ -1,5 +1,6 @@
 """Tests for ticket lane moves posting notices back to source chat."""
 
+from types import SimpleNamespace
 from unittest.mock import MagicMock
 
 from sqlalchemy import create_engine
@@ -7,7 +8,6 @@ from sqlalchemy.orm import sessionmaker
 
 from distr.core.db import Base, Chat
 from distr.core.db.kanban import KanbanBoard, KanbanLane, KanbanTicket
-from distr.core.signals import signal_manager
 
 
 def _memory_ctx(monkeypatch, *patch_targets: str):
@@ -83,9 +83,14 @@ def test_notify_source_chat_ticket_moved_calls_persist_and_signals(monkeypatch):
         fake_append,
     )
     emit_mock = MagicMock()
-    monkeypatch.setattr(signal_manager.chat_message_added, "emit", emit_mock)
     upd_mock = MagicMock()
-    monkeypatch.setattr(signal_manager.chat_updated, "emit", upd_mock)
+    monkeypatch.setattr(
+        "distr.core.signals.signal_manager",
+        SimpleNamespace(
+            chat_message_added=SimpleNamespace(emit=emit_mock),
+            chat_updated=SimpleNamespace(emit=upd_mock),
+        ),
+    )
 
     from distr.core.kanban.ticket_chat_notify import notify_source_chat_ticket_moved
 

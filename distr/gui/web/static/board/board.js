@@ -625,7 +625,13 @@ async function handleTicketSubmit(e) {
 async function handleTicketDelete() {
     const ticketId = document.getElementById('ticketId').value;
 
-    if (!confirm('Are you sure you want to delete this ticket?')) {
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Delete ticket",
+        message: "Delete this ticket? This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+    });
+    if (!confirmed) {
         return;
     }
 
@@ -714,7 +720,13 @@ async function deleteColumn(columnId) {
         message += `\n\nThis will also delete ${ticketCount} ticket(s) in this column.`;
     }
 
-    if (!confirm(message)) return;
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Delete column",
+        message: message,
+        confirmLabel: "Delete",
+        danger: true,
+    });
+    if (!confirmed) return;
 
     try {
         await apiCall(`/api/columns/${columnId}`, 'DELETE');
@@ -811,7 +823,13 @@ function showTicketContextMenu(event, ticketId) {
 
 // Delete ticket function
 async function deleteTicket(ticketId) {
-    if (!confirm('Are you sure you want to delete this ticket?')) {
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Delete ticket",
+        message: "Delete this ticket? This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+    });
+    if (!confirmed) {
         return;
     }
 

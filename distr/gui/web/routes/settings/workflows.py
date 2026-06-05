@@ -1583,7 +1583,7 @@ def register_routes(router, templates):
 
     @router.post("/workflows/{workflow_id}/runs/{run_id}/ui-feedback")
     async def workflow_ui_feedback(workflow_id: int, run_id: int, payload: UiFeedbackRequest):
-        """Record Paul's UI approval/rejection label for a run outcome."""
+        """Record the user's UI approval/rejection label for a run outcome."""
         try:
             from distr.core.hermes import (
                 get_visual_baseline_set,

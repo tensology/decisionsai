@@ -456,6 +456,12 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.mp_context = multiprocessing.get_context('spawn')
         self.agent_command_queue = self.mp_context.Queue()
         self.agent_event_queue = self.mp_context.Queue()
+        try:
+            from distr.core.signals import set_agent_event_queue
+
+            set_agent_event_queue(self.agent_event_queue)
+        except Exception as exc:
+            logging.getLogger(__name__).debug("agent event queue registration skipped: %s", exc)
         self._splash_sound_played = False  # Flag to prevent double-playing splash sound
 
         # Create shared manager for cross-process screen info cache
@@ -602,6 +608,13 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         except Exception as _cleanup_err:
             logger.warning("Orphaned workflow run cleanup failed: %s", _cleanup_err)
 
+        try:
+            from distr.core.hermes_memory import run_weekly_machine_activity_compaction
+
+            run_weekly_machine_activity_compaction()
+        except Exception as _memory_compaction_err:
+            logger.debug("Hermes memory compaction skipped: %s", _memory_compaction_err)
+
         # Workflow scheduler: check for due scheduled workflows every minute
         self.workflow_scheduler_timer = QTimer()
         self.workflow_scheduler_timer.timeout.connect(self._run_workflow_scheduled)
@@ -626,6 +639,7 @@ class Application(EventHandlerMixin, AgentLifecycleMixin, WorkflowOrchestrationM
         self.initiative_service = InitiativeService(
             telegram_manager=self.telegram_manager,
             chat_manager=self.chat_manager,
+            event_queue=self.agent_event_queue,
         )
         self.initiative_service.start()
         

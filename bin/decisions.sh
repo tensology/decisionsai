@@ -192,6 +192,12 @@ fi
 
 migrate_legacy_decisions_home
 
+# Idempotently repair local Codex/Cursor/Claude harness surfaces when present.
+# This must never block Decisions startup or complain when those tools are absent.
+if [ -f "$SCRIPT_DIR/scripts/verify_agent_harness_setup.py" ]; then
+    "$PYTHON_CMD" "$SCRIPT_DIR/scripts/verify_agent_harness_setup.py" --root "$SCRIPT_DIR" --quiet >/dev/null 2>&1 || true
+fi
+
 # Check and install system dependencies
 echo -e "${YELLOW}Checking system dependencies...${NC}"
 
@@ -859,93 +865,109 @@ if [ "$DECISIONS_EXISTS" = false ] && ([ -z "$SYMLINK_DIR" ] || [ "$SYMLINK_DIR"
     [ "$DECISIONS_EXISTS" = false ] && echo ""
 fi
 
-# Check and install Node.js (required for Pi coding agent)
-check_node() {
-    if command -v node &> /dev/null; then
-        NODE_VERSION=$(node -v 2>/dev/null)
-        NODE_MAJOR=$(echo "$NODE_VERSION" | sed 's/v\([0-9]*\).*/\1/')
-        if [ "$NODE_MAJOR" -ge 20 ] 2>/dev/null; then
-            echo -e "${GREEN}✓${NC} Node.js found ($NODE_VERSION)"
-        else
-            echo -e "${YELLOW}⚠${NC}  Node.js $NODE_VERSION found, but Pi requires v20.6+"
-            echo -e "${YELLOW}   Upgrading Node.js...${NC}"
-            if command -v nvm &> /dev/null; then
-                nvm install 20
-                nvm use 20
-            elif command -v brew &> /dev/null; then
-                brew install node@20
-                brew link node@20 2>/dev/null
-            elif command -v fnm &> /dev/null; then
-                fnm install 20
-                fnm use 20
-            else
-                echo -e "${YELLOW}   Install Node.js 20+ manually: https://nodejs.org${NC}"
-                return 1
-            fi
-        fi
-    else
-        echo -e "${YELLOW}Node.js not found. Installing...${NC}"
-        if command -v brew &> /dev/null; then
-            brew install node
-            if [ $? -eq 0 ]; then
-                echo -e "${GREEN}✓${NC} Node.js installed: $(node -v)"
-            else
-                echo -e "${RED}Error: Could not install Node.js via Homebrew.${NC}"
-                echo -e "${YELLOW}   Install manually: https://nodejs.org${NC}"
-                return 1
-            fi
-        elif command -v apt-get &> /dev/null; then
-            # Ubuntu/Debian — install Node.js 20 via NodeSource
-            curl -fsSL https://deb.nodesource.com/setup_20.x | sudo -E bash - 2>/dev/null
-            sudo apt-get install -y nodejs 2>/dev/null
-            if command -v node &> /dev/null; then
-                echo -e "${GREEN}✓${NC} Node.js installed: $(node -v)"
-            else
-                echo -e "${RED}Error: Could not install Node.js.${NC}"
-                echo -e "${YELLOW}   Install manually: https://nodejs.org${NC}"
-                return 1
-            fi
-        else
-            echo -e "${YELLOW}   No package manager found. Install Node.js 20+ manually: https://nodejs.org${NC}"
-            return 1
-        fi
-    fi
-    return 0
-}
+# Check and install the local DecisionsAI Cursor plugin when Cursor is present.
+check_cursor_plugin_setup() {
+    local cursor_plugin_source="$SCRIPT_DIR/cursor_plugin/decisions-cursor"
+    local cursor_plugin_target="$HOME/.cursor/plugins/local/decisions-cursor"
 
-# Check and install Pi coding agent (AI coding agent for project tasks)
-check_pi_agent() {
-    if command -v pi &> /dev/null; then
-        PI_VERSION=$(pi --version 2>/dev/null | head -1 || echo "unknown")
-        echo -e "${GREEN}✓${NC} Pi coding agent found (version: $PI_VERSION)"
+    if [ ! -d "$cursor_plugin_source" ]; then
+        return 0
+    fi
+
+    if ! command -v cursor >/dev/null 2>&1 && [ ! -d "$HOME/.cursor" ]; then
+        echo -e "${YELLOW}Note: Cursor not detected. Skipping DecisionsAI Cursor plugin setup.${NC}"
+        return 0
+    fi
+
+    if [ -f "$cursor_plugin_target/.cursor-plugin/plugin.json" ]; then
+        echo -e "${GREEN}✓${NC} DecisionsAI Cursor plugin already installed"
+        return 0
+    fi
+
+    echo -e "${YELLOW}Installing DecisionsAI Cursor plugin...${NC}"
+    if "$VENV_DIR/bin/python" "$cursor_plugin_source/scripts/install_local.py" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} DecisionsAI Cursor plugin installed"
+        echo -e "${YELLOW}Reload Cursor once so it picks up the local plugin.${NC}"
     else
-        echo -e "${YELLOW}Pi coding agent not found. Installing...${NC}"
-        # Ensure Node.js is available (Pi requires Node 20.6+)
-        if ! command -v node &> /dev/null || [ "$(echo $(node -v | sed 's/v\([0-9]*\).*/\1/'))" -lt 20 ] 2>/dev/null; then
-            check_node
-        fi
-        if command -v npm &> /dev/null; then
-            if npm install -g @mariozechner/pi-coding-agent; then
-                hash -r 2>/dev/null
-                if command -v pi &> /dev/null; then
-                    echo -e "${GREEN}✓${NC} Pi coding agent installed successfully ($(pi --version 2>/dev/null | head -1))"
-                else
-                    echo -e "${YELLOW}⚠${NC}  Pi coding agent installed but not found in PATH."
-                    echo -e "${YELLOW}   You may need to restart your terminal or add $(npm prefix -g)/bin to your PATH.${NC}"
-                fi
-            else
-                echo -e "${YELLOW}⚠${NC}  Could not install Pi coding agent automatically."
-                echo -e "${YELLOW}   Install manually: npm install -g @mariozechner/pi-coding-agent${NC}"
-            fi
-        else
-            echo -e "${RED}Error: npm not found even after Node.js check.${NC}"
-            echo -e "${YELLOW}   Install Node.js 20+ from https://nodejs.org, then run:${NC}"
-            echo -e "${YELLOW}   npm install -g @mariozechner/pi-coding-agent${NC}"
-        fi
+        echo -e "${YELLOW}⚠${NC}  Could not install DecisionsAI Cursor plugin automatically."
+        echo -e "${YELLOW}   Run: python3 cursor_plugin/decisions-cursor/scripts/install_local.py${NC}"
     fi
 }
 
-check_pi_agent
+# Check and register the local DecisionsAI Codex plugin when Codex is present.
+check_codex_plugin_setup() {
+    local codex_plugin_source="$SCRIPT_DIR/codex_plugin/decisions-codex"
+    local codex_plugin_target="$HOME/plugins/decisions-codex"
+
+    if [ ! -d "$codex_plugin_source" ]; then
+        return 0
+    fi
+
+    if ! command -v codex >/dev/null 2>&1 && [ ! -d "$HOME/.codex" ] && [ ! -d "$HOME/.agents" ]; then
+        echo -e "${YELLOW}Note: Codex not detected. Skipping DecisionsAI Codex plugin setup.${NC}"
+        return 0
+    fi
+
+    if [ -f "$codex_plugin_target/.codex-plugin/plugin.json" ]; then
+        echo -e "${GREEN}✓${NC} DecisionsAI Codex plugin already installed"
+        return 0
+    fi
+
+    echo -e "${YELLOW}Installing DecisionsAI Codex plugin...${NC}"
+    if "$VENV_DIR/bin/python" "$codex_plugin_source/scripts/install_local.py" >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} DecisionsAI Codex plugin installed"
+        echo -e "${YELLOW}Reload Codex once so it picks up the local plugin.${NC}"
+    else
+        echo -e "${YELLOW}⚠${NC}  Could not install DecisionsAI Codex plugin automatically."
+        echo -e "${YELLOW}   Run: python3 codex_plugin/decisions-codex/scripts/install_local.py${NC}"
+    fi
+}
+
+check_project_cli_presence() {
+    echo -e "${YELLOW}Checking project coding tools...${NC}"
+
+    if command -v cursor >/dev/null 2>&1 || [ -d "$HOME/.cursor" ]; then
+        echo -e "${GREEN}✓${NC} Cursor environment detected"
+        check_cursor_plugin_setup
+    else
+        echo -e "${YELLOW}Note: Cursor IDE is not detected. Cursor plugin setup skipped.${NC}"
+    fi
+
+    if command -v codex >/dev/null 2>&1 || [ -d "$HOME/.codex" ] || [ -d "$HOME/.agents" ]; then
+        echo -e "${GREEN}✓${NC} Codex environment detected"
+        check_codex_plugin_setup
+    else
+        echo -e "${YELLOW}Note: Codex is not detected. Codex plugin setup skipped.${NC}"
+    fi
+
+    if command -v cursor-agent >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Cursor CLI found ($(cursor-agent --version 2>/dev/null | head -1 || echo "version unknown"))"
+    else
+        echo -e "${YELLOW}Note: cursor-agent is not on PATH; Cursor dispatch will use the IDE/plugin surface first.${NC}"
+    fi
+
+    if command -v codex >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Codex CLI found ($(codex --version 2>/dev/null | head -1 || echo "version unknown"))"
+    else
+        echo -e "${YELLOW}Note: codex is not on PATH; install it separately if CLI fallback is needed.${NC}"
+    fi
+
+    if command -v claude >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Claude Code found ($(claude --version 2>/dev/null | head -1 || echo "version unknown"))"
+    else
+        echo -e "${YELLOW}Note: claude is not on PATH; Claude Code project routing is unavailable.${NC}"
+    fi
+
+    if command -v pi >/dev/null 2>&1; then
+        echo -e "${GREEN}✓${NC} Pi coding agent found ($(pi --version 2>/dev/null | head -1 || echo "version unknown"))"
+    else
+        echo -e "${YELLOW}Note: pi is not on PATH; Pi project routing is unavailable.${NC}"
+    fi
+
+    echo -e "${YELLOW}To install or update project CLIs, run: scripts/setup_project_clis.sh${NC}"
+}
+
+check_project_cli_presence
 
 # Check EULA acceptance before boot
 check_eula_acceptance() {

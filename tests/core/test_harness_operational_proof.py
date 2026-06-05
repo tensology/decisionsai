@@ -371,7 +371,7 @@ def test_live_proof_real_worker_edit_completes_run_with_result_packet(monkeypatc
                     "waiting_kind": "needs_human_input",
                     "human_intervention_state": "needs_human_input",
                     "next_action": "needs_human_input",
-                    "latest_backend_handoff": {"backend_id": "cursor_ide", "state": "waiting"},
+                    "latest_backend_handoff": {"backend_id": "cursor", "state": "waiting"},
                 }
             ),
         )
@@ -386,7 +386,7 @@ def test_live_proof_real_worker_edit_completes_run_with_result_packet(monkeypatc
     terminal = live_proof._store_real_edit_result_packet(
         ids=ids,
         project_id=9,
-        backend_id="cursor_ide",
+        backend_id="cursor",
         edit=edit,
     )
 

@@ -7,6 +7,7 @@ import sys
 import threading
 import re
 import os
+import shutil
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
@@ -122,6 +123,7 @@ def create_app() -> FastAPI:
     _mount_static(app, "/irc/static/css", static_dir / "irc" / "css", "irc_css")
     _mount_static(app, "/irc/static/js", static_dir / "irc" / "js", "irc_js")
     _mount_static(app, "/kanban/static/js", static_dir / "kanban" / "js", "kanban_js")
+    _mount_static(app, "/automations/static/js", static_dir / "automations" / "js", "automations_js")
     _mount_static(app, "/actions/static/js", static_dir / "actions" / "js", "actions_js")
     _mount_static(app, "/snippets/static/js", static_dir / "snippets" / "js", "snippets_js")
     _mount_static(app, "/workflows/static/js", static_dir / "workflows" / "js", "workflows_js")
@@ -143,7 +145,7 @@ def create_app() -> FastAPI:
             path = request.url.path
             if any(path.startswith(p) for p in [
                 "/board/", "/settings/static/", "/chat/static/", "/docs/static/",
-                "/kanban/static/", "/actions/static/", "/workflows/static/",
+                "/kanban/static/", "/automations/static/", "/actions/static/", "/workflows/static/",
                 "/skills/static/", "/projects/static/", "/oauth/static/",
                 "/static/shared/",
             ]):
@@ -283,6 +285,22 @@ def create_app() -> FastAPI:
         logger.error("Failed to load IRC chat routes: %s", e, exc_info=True)
 
     try:
+        from distr.gui.web.routes.ide_bridge import create_routes as create_ide_bridge_routes
+        ide_bridge_router = create_ide_bridge_routes()
+        app.include_router(ide_bridge_router, prefix="/api", tags=["ide_bridge"])
+        logger.info("IDE bridge routes mounted at /api/ide")
+    except Exception as e:
+        logger.error("Failed to load IDE bridge routes: %s", e, exc_info=True)
+
+    try:
+        from distr.gui.web.routes.hermes_memory import create_routes as create_hermes_memory_routes
+        hermes_memory_router = create_hermes_memory_routes()
+        app.include_router(hermes_memory_router, prefix="/api", tags=["hermes"])
+        logger.info("Hermes memory routes mounted at /api/hermes")
+    except Exception as e:
+        logger.error("Failed to load Hermes memory routes: %s", e, exc_info=True)
+
+    try:
         from distr.gui.web.routes.docs import create_routes as create_docs_routes
         docs_router = create_docs_routes()
         app.include_router(docs_router, prefix="/docs/api", tags=["docs"])
@@ -364,25 +382,18 @@ def create_app() -> FastAPI:
     # Skills API — serve the skills registry
     @app.get("/api/skills")
     async def get_skills_registry():
-        import json as _json
-        skills_root = project_root / "skills"
-        registry_file = skills_root / "skills_registry.json"
-        if registry_file.exists():
-            return _json.loads(registry_file.read_text())
-        return []
+        from distr.core.skills.catalog import load_registry
+
+        return [dict(row) for row in load_registry()]
 
     @app.get("/api/skills/{skill_id}")
     async def get_skill_detail(skill_id: str):
-        skills_root = project_root / "skills"
-        skill_dir = skills_root / skill_id
-        if not skill_dir.exists() or not skill_dir.is_dir():
+        from distr.core.skills.catalog import skill_file_for_id
+
+        skill_file = skill_file_for_id(skill_id)
+        if not skill_file:
             raise HTTPException(status_code=404, detail="Skill not found")
-        skill_file = skill_dir / "SKILL.md"
-        if not skill_file.exists():
-            skill_file = skill_dir / "skill.md"
-        if not skill_file.exists():
-            raise HTTPException(status_code=404, detail="Skill SKILL.md not found")
-        content = skill_file.read_text()
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
         return {"id": skill_id, "content": content}
 
     @app.post("/api/skills/{skill_id}/spoken-overview")
@@ -391,17 +402,13 @@ def create_app() -> FastAPI:
         import asyncio
         import base64
 
-        skills_root = project_root / "skills"
-        skill_dir = skills_root / skill_id
-        if not skill_dir.exists() or not skill_dir.is_dir():
-            raise HTTPException(status_code=404, detail="Skill not found")
-        skill_file = skill_dir / "SKILL.md"
-        if not skill_file.exists():
-            skill_file = skill_dir / "skill.md"
-        if not skill_file.exists():
-            raise HTTPException(status_code=404, detail="Skill SKILL.md not found")
+        from distr.core.skills.catalog import skill_file_for_id
 
-        raw = skill_file.read_text()
+        skill_file = skill_file_for_id(skill_id)
+        if not skill_file:
+            raise HTTPException(status_code=404, detail="Skill not found")
+
+        raw = skill_file.read_text(encoding="utf-8", errors="replace")
         body = raw
         if body.startswith("---"):
             end = body.find("---", 3)
@@ -492,8 +499,6 @@ def create_app() -> FastAPI:
     @app.post("/api/skills/{skill_id}/push")
     async def push_skill_to_project(skill_id: str, request: Request):
         """Push a skill to a project's CLI command directory."""
-        import json as _json
-        import shutil
         body = await request.json()
         project_path = body.get("project_path", ".")
         instructions = body.get("instructions", "")
@@ -501,30 +506,13 @@ def create_app() -> FastAPI:
         target = "pi"
         target_dir_name = ".pi/skills"
 
-        skills_root = project_root / "skills"
-        skill_dir = skills_root / skill_id
-        if not skill_dir.exists() or not skill_dir.is_dir():
+        from distr.core.skills.catalog import registry_entry_for
+        from distr.core.workflow.skill_provision import push_skill_to_project as provision_skill_to_project
+
+        registry_row = registry_entry_for(skill_id)
+        if not registry_row:
             raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
-
-        skill_file = skill_dir / "SKILL.md"
-        if not skill_file.exists():
-            skill_file = skill_dir / "skill.md"
-        if not skill_file.exists():
-            raise HTTPException(status_code=404, detail="SKILL.md not found")
-
-        # Read skill name from frontmatter
-        skill_name = skill_id
-        try:
-            fm_content = skill_file.read_text()
-            if fm_content.startswith("---"):
-                end = fm_content.find("---", 3)
-                if end > 0:
-                    for line in fm_content[3:end].split("\n"):
-                        if line.strip().startswith("name:"):
-                            skill_name = line.split(":", 1)[1].strip().strip('"').strip("'")
-                            break
-        except Exception:
-            pass
+        skill_name = str(registry_row.get("name") or skill_id)
 
         # Resolve project path
         from pathlib import Path as P
@@ -532,43 +520,39 @@ def create_app() -> FastAPI:
         if not project.exists():
             project.mkdir(parents=True, exist_ok=True)
 
-        target_dir = project / target_dir_name
-        target_dir.mkdir(parents=True, exist_ok=True)
-
-        # Pi CLI: directory/SKILL.md (Agent Skills spec)
-        dest_skill_dir = target_dir / skill_id
-        dest_skill_dir.mkdir(parents=True, exist_ok=True)
-        dest_file = dest_skill_dir / "SKILL.md"
-        shutil.copy2(skill_file, dest_file)
+        dest = provision_skill_to_project(skill_id=skill_id, project_folder=str(project), backend_id=target)
+        if not dest:
+            raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' could not be provisioned")
+        dest_file = P(dest)
+        dest_skill_dir = dest_file.parent
+        actual_skill_id = dest_skill_dir.name
         pushed_files = [str(dest_file)]
+
         for subdir_name in ["scripts", "references", "reference"]:
-            subdir = skill_dir / subdir_name
-            if subdir.exists() and subdir.is_dir():
-                dest_subdir = dest_skill_dir / subdir_name
-                if dest_subdir.exists():
-                    shutil.rmtree(dest_subdir)
-                shutil.copytree(subdir, dest_subdir)
+            dest_subdir = dest_skill_dir / subdir_name
+            if dest_subdir.exists() and dest_subdir.is_dir():
                 pushed_files.append(str(dest_subdir))
 
         from distr.core.pi_skill_push_files import USER_INTENT_FILENAME, write_pi_skill_user_intent
 
-        intent_path = write_pi_skill_user_intent(dest_skill_dir, skill_id, instructions)
+        intent_path = write_pi_skill_user_intent(dest_skill_dir, actual_skill_id, instructions)
         if intent_path:
             pushed_files.append(str(intent_path))
 
         msg = (
-            f"Pushed '{skill_name}' into {target_dir_name}/{skill_id}/ on disk — "
+            f"Pushed '{skill_name}' into {target_dir_name}/{actual_skill_id}/ on disk — "
             f"Pi will load SKILL.md when you open that project (CLI does not need to be running). "
-            f"Run: /skill:{skill_id}"
+            f"Run: /skill:{actual_skill_id}"
         )
         if intent_path:
             msg += f" Your ‘Use this skill to’ notes are in {USER_INTENT_FILENAME} beside SKILL.md."
 
         return {
             "success": True,
-            "skill_id": skill_id,
+            "skill_id": actual_skill_id,
             "skill_name": skill_name,
             "target": target,
+            "source": registry_row.get("source") or "local",
             "destination": str(dest_file),
             "user_intent_file": str(intent_path) if intent_path else None,
             "files": pushed_files,
@@ -619,8 +603,16 @@ def create_app() -> FastAPI:
             "name": name,
             "description": description,
             "path": skill_id,
+            "source": "local",
+            "editable": True,
         })
         registry_file.write_text(_json.dumps(registry, indent=2), encoding="utf-8")
+        try:
+            from distr.core.skills.catalog import load_registry
+
+            load_registry.cache_clear()
+        except Exception:
+            pass
 
         # Auto-push to pi skills
         pi_skills_dir = project_root / ".pi" / "skills" / skill_id
@@ -646,6 +638,11 @@ def create_app() -> FastAPI:
         skills_root = project_root / "skills"
         skill_dir = skills_root / skill_id
         if not skill_dir.exists() or not skill_dir.is_dir():
+            from distr.core.skills.catalog import registry_entry_for
+
+            row = registry_entry_for(skill_id)
+            if row and str(row.get("source") or "").lower() == "ecc_vendor":
+                raise HTTPException(status_code=409, detail="Vendored ECC skills are read-only. Create a local copy before editing.")
             raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
         if name or description or content:
@@ -670,6 +667,12 @@ def create_app() -> FastAPI:
                             entry["description"] = description or entry.get("description", "")
                             break
                     registry_file.write_text(_json.dumps(registry, indent=2), encoding="utf-8")
+                    try:
+                        from distr.core.skills.catalog import load_registry
+
+                        load_registry.cache_clear()
+                    except Exception:
+                        pass
 
         # Auto-push to pi skills
         pi_skills_dir = project_root / ".pi" / "skills" / skill_id
@@ -691,6 +694,11 @@ def create_app() -> FastAPI:
         skills_root = project_root / "skills"
         skill_dir = skills_root / skill_id
         if not skill_dir.exists():
+            from distr.core.skills.catalog import registry_entry_for
+
+            row = registry_entry_for(skill_id)
+            if row and str(row.get("source") or "").lower() == "ecc_vendor":
+                raise HTTPException(status_code=409, detail="Vendored ECC skills are read-only and cannot be deleted here.")
             raise HTTPException(status_code=404, detail=f"Skill '{skill_id}' not found")
 
         _shutil.rmtree(skill_dir)
@@ -701,6 +709,12 @@ def create_app() -> FastAPI:
             registry = __import__("json").loads(registry_file.read_text())
             registry = [e for e in registry if e.get("id") != skill_id]
             registry_file.write_text(__import__("json").dumps(registry, indent=2), encoding="utf-8")
+        try:
+            from distr.core.skills.catalog import load_registry
+
+            load_registry.cache_clear()
+        except Exception:
+            pass
 
         return {"success": True, "message": f"Deleted skill '{skill_id}'"}
 
@@ -737,6 +751,23 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to load Ticket Board routes: %s", e, exc_info=True)
 
+    # Automations
+    @app.get("/automations/", response_class=HTMLResponse)
+    async def automations_page(request: Request):
+        return page_templates.TemplateResponse(request, "automations/automations.html", _template_context(request, "/automations"))
+
+    @app.get("/automations", response_class=HTMLResponse)
+    async def automations_redirect():
+        return RedirectResponse(url="/automations/", status_code=302)
+
+    try:
+        from distr.gui.web.routes.automations import create_routes as create_automation_routes
+        automation_router = create_automation_routes()
+        app.include_router(automation_router, prefix="/api", tags=["automations"])
+        logger.info("Automation API routes mounted at /api")
+    except Exception as e:
+        logger.error("Failed to load Automation routes: %s", e, exc_info=True)
+
     @app.get("/docs/", response_class=HTMLResponse)
     async def docs_page(request: Request):
         return page_templates.TemplateResponse(request, "docs/docs.html", _template_context(request, "/docs"))
@@ -764,14 +795,14 @@ def create_app() -> FastAPI:
         except Exception as e:
             logger.warning("Orphaned workflow run cleanup could not run: %s", e)
 
-    # Run one-time ticket board settings migration on startup
     @app.on_event("startup")
-    async def _run_kanban_migration():
+    async def _compact_hermes_machine_activity():
         try:
-            from distr.core.kanban.migration import migrate_board_agent_settings_to_global
-            migrate_board_agent_settings_to_global()
+            from distr.core.hermes_memory import run_weekly_machine_activity_compaction
+
+            run_weekly_machine_activity_compaction()
         except Exception as e:
-            logger.warning("Ticket Board settings migration could not run: %s", e)
+            logger.debug("Hermes machine activity compaction skipped: %s", e)
 
     # Check model recommendations staleness on startup
     @app.on_event("startup")

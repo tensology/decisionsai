@@ -28,6 +28,18 @@ class SendVoiceNoteToTelegramTool(BaseTool):
 
     def _run(self, message: str, **kwargs) -> str:
         try:
+            event_queue = self.event_queue
+            if event_queue is None:
+                try:
+                    from distr.core.signals import get_agent_event_queue
+
+                    event_queue = get_agent_event_queue()
+                    self.event_queue = event_queue
+                except Exception:
+                    event_queue = None
+            if event_queue is None:
+                return "Error sending voice note: Telegram delivery bridge is unavailable."
+
             from distr.core.agent.constants import normalize_voice_provider
             from distr.core.agent.services.tts.registry import tts_registry
             from distr.core.settings import load_settings_from_db
@@ -95,12 +107,17 @@ class SendVoiceNoteToTelegramTool(BaseTool):
             
             # Send event to main process to handle Telegram upload
             # For voice notes: no text/caption, no screenshot, just the audio
-            self.event_queue.put(('send_to_telegram', {
+            event_queue.put(('send_to_telegram', {
                 'text': '',  # No text/caption for voice notes - just send the audio
                 'audio_file_path': temp_file_path,
                 'is_done': False,  # Don't trigger screenshot for voice notes
                 'provider': 'tool',
-                'is_voice_note': True  # Flag to indicate this is a voice note
+                'is_voice_note': True,  # Flag to indicate this is a voice note
+                'voice_note_message': message,
+                'explicit_notification_intent': True,
+                'engagement_kind': 'voice_note',
+                'engagement_subject_type': 'tool',
+                'engagement_subject_id': 'send_voice_note_to_telegram',
             }), block=False)
             
             return f"Voice note sent: '{message}'"

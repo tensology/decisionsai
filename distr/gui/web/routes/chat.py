@@ -904,6 +904,9 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                     raise HTTPException(status_code=404, detail="Chat not found")
                 session.delete(chat)
                 session.commit()
+                from distr.core.chat import remove_chat_transcript_audit_events
+
+                remove_chat_transcript_audit_events(chat_id)
                 return JSONResponse({"message": "Chat deleted successfully"})
         except HTTPException:
             raise

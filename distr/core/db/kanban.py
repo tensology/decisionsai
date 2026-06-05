@@ -6,6 +6,7 @@ from sqlalchemy import Column, Index, Integer, String, Text, DateTime, ForeignKe
 from sqlalchemy.orm import relationship
 from . import Base
 from datetime import datetime
+import json
 
 
 class KanbanBoard(Base):
@@ -18,21 +19,6 @@ class KanbanBoard(Base):
     external_board_id = Column(String, nullable=True)  # Trello/Jira board ID
     external_url = Column(String, nullable=True)  # Link to external board
 
-    # Agent check-in settings
-    agent_enabled = Column(Boolean, default=False)
-    whatsapp_checkin_enabled = Column(Boolean, default=False)
-    agent_frequency = Column(String, default='daily')  # 'daily', 'weekly', 'monthly'
-    agent_time = Column(String, default='09:00')  # HH:MM
-    agent_days = Column(Text, default='[]')  # JSON list of day indices (0=Sun..6=Sat) for weekly
-    agent_monthly_day = Column(Integer, default=1)  # Day of month for monthly
-    agent_orchestrator_provider = Column(String, default='')  # defaults to chat conversational setting
-    agent_orchestrator_model = Column(String, default='')
-    agent_coder_provider = Column(String, default='')  # defaults to chat coding setting
-    agent_coder_model = Column(String, default='')
-    agent_sub_provider = Column(String, default='')  # sub-agent provider
-    agent_sub_model = Column(String, default='')
-    agent_source_lane = Column(String, default='')  # lane name the agent picks tickets from (e.g. "Current")
-    agent_done_lane = Column(String, default='')  # lane name to move tickets into when done (e.g. "QA / Assess" or "Done")
     default_workflow_id = Column(Integer, nullable=True)  # FK to auto_workflows.id (default workflow)
     default_project_id = Column(Integer, nullable=True)  # default project for new tickets
     default_snippet_id = Column(Integer, nullable=True)  # default snippet for new tickets
@@ -49,6 +35,34 @@ class KanbanBoard(Base):
 
     lanes = relationship("KanbanLane", back_populates="board", cascade="all, delete-orphan",
                          order_by="KanbanLane.position")
+
+    def _policy_dict(self):
+        try:
+            data = json.loads(self.hermes_policy or "{}")
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    def _set_policy_value(self, key: str, value: str) -> None:
+        data = self._policy_dict()
+        data[key] = value or ""
+        self.hermes_policy = json.dumps(data, sort_keys=True)
+
+    @property
+    def agent_source_lane(self):
+        return self._policy_dict().get("agent_source_lane", "")
+
+    @agent_source_lane.setter
+    def agent_source_lane(self, value):
+        self._set_policy_value("agent_source_lane", value)
+
+    @property
+    def agent_done_lane(self):
+        return self._policy_dict().get("agent_done_lane", "")
+
+    @agent_done_lane.setter
+    def agent_done_lane(self, value):
+        self._set_policy_value("agent_done_lane", value)
 
 
 class KanbanLane(Base):

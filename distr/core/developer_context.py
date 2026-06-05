@@ -121,6 +121,7 @@ class DeveloperWorkContext:
     active_workflows: list[DeveloperWorkflowContext] = field(default_factory=list)
     active_executions: list[DeveloperExecutionContext] = field(default_factory=list)
     external_agent_context: dict[str, Any] = field(default_factory=dict)
+    user_memory_context: str = ""
     recommended_skills: list[DeveloperSkillContext] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
@@ -202,6 +203,9 @@ class DeveloperWorkContext:
             except Exception:
                 logger.warning("Could not render external agent context", exc_info=True)
 
+        if self.user_memory_context:
+            lines.append(self.user_memory_context)
+
         if self.recommended_skills:
             lines.append("- recommended_skills:")
             for skill in self.recommended_skills:
@@ -245,6 +249,7 @@ class DeveloperContextAssembler:
         active_workflows = _safe_call("active workflows", warnings, self._fetch_active_workflows, active_board, active_tickets) or []
         active_executions = _safe_call("active project executions", warnings, self._fetch_active_executions, active_project) or []
         external_agent_context = _safe_call("external agent context", warnings, self._fetch_external_agent_context) or {}
+        user_memory_context = _safe_call("Hermes user memory", warnings, self._fetch_user_memory_context) or ""
         recommended_skills = _safe_call("skill recommendations", warnings, self._recommend_skills, user_request) or []
 
         return DeveloperWorkContext(
@@ -255,6 +260,7 @@ class DeveloperContextAssembler:
             active_workflows=active_workflows,
             active_executions=active_executions,
             external_agent_context=external_agent_context,
+            user_memory_context=user_memory_context,
             recommended_skills=recommended_skills,
             warnings=warnings,
         )
@@ -337,6 +343,25 @@ class DeveloperContextAssembler:
             if not board:
                 return None
 
+            settings = {}
+            try:
+                from distr.core.utils import load_settings_from_db
+
+                settings = load_settings_from_db()
+            except Exception:
+                logger.debug("DeveloperContextAssembler: could not load kanban lane settings", exc_info=True)
+
+            source_lane = (
+                getattr(board, "agent_source_lane", None)
+                or settings.get("kanban_agent_source_lane")
+                or ""
+            )
+            done_lane = (
+                getattr(board, "agent_done_lane", None)
+                or settings.get("kanban_agent_done_lane")
+                or ""
+            )
+
             lanes: list[dict[str, Any]] = []
             for lane in board.lanes or []:
                 ticket_count = (
@@ -361,8 +386,8 @@ class DeveloperContextAssembler:
                 default_workflow_id=board.default_workflow_id,
                 default_action_id=board.default_action_id,
                 send_to_cli=bool(board.send_to_cli),
-                source_lane=board.agent_source_lane or "",
-                done_lane=board.agent_done_lane or "",
+                source_lane=source_lane,
+                done_lane=done_lane,
                 lanes=lanes,
             )
 
@@ -526,6 +551,11 @@ class DeveloperContextAssembler:
 
         return build_external_agent_context(limit=8)
 
+    def _fetch_user_memory_context(self) -> str:
+        from distr.core.hermes_memory import build_memory_context
+
+        return build_memory_context(limit=30)
+
     def _recommend_skills(self, user_request: str) -> list[DeveloperSkillContext]:
         if not (user_request or "").strip():
             return []
@@ -560,6 +590,7 @@ def format_developer_context_dict_for_prompt(
     workflows = context.get("active_workflows") or []
     executions = context.get("active_executions") or []
     external_agent_context = context.get("external_agent_context") or {}
+    user_memory_context = context.get("user_memory_context") or ""
     skills = context.get("recommended_skills") or []
 
     lines: list[str] = ["Developer workflow context:"]
@@ -633,6 +664,9 @@ def format_developer_context_dict_for_prompt(
                 lines.append(external_text)
         except Exception:
             pass
+
+    if user_memory_context:
+        lines.append(str(user_memory_context))
 
     if skills:
         lines.append("- recommended_skills:")

@@ -1,4 +1,5 @@
 import asyncio
+from types import SimpleNamespace
 
 import numpy as np
 
@@ -37,13 +38,28 @@ class FakePyAudio:
 
 
 def _transport():
-    params = LocalAudioTransportParams(
-        audio_in_enabled=True,
-        audio_in_sample_rate=16000,
-        audio_in_channels=1,
-        input_device_index=1,
-    )
-    transport = HotSwappableLocalAudioInputTransport(FakePyAudio(), params)
+    attrs = {
+        "audio_in_enabled": True,
+        "audio_in_sample_rate": 16000,
+        "audio_in_channels": 1,
+        "input_device_index": 1,
+    }
+    try:
+        params = LocalAudioTransportParams(**attrs)
+        transport = HotSwappableLocalAudioInputTransport(FakePyAudio(), params)
+    except TypeError:
+        params = SimpleNamespace(**attrs)
+        transport = object.__new__(HotSwappableLocalAudioInputTransport)
+        transport._py_audio = FakePyAudio()
+        transport._params = params
+        transport._in_stream = None
+        transport._audio_task = None
+        transport._paused = False
+        transport._input_callback_count = 0
+        transport._input_callback_bytes = 0
+        transport._input_callback_errors = 0
+        transport._input_last_callback_at = 0.0
+        transport._input_last_callback_peak = 0
     transport._sample_rate = 16000
     return transport
 
@@ -56,7 +72,7 @@ def test_resume_input_recreates_audio_task_after_idle_pause(monkeypatch):
         created.append(True)
         transport._audio_task = object()
 
-    monkeypatch.setattr(transport, "_create_audio_task", fake_create_audio_task)
+    monkeypatch.setattr(transport, "_create_audio_task", fake_create_audio_task, raising=False)
 
     transport.pause_idle_input()
     assert transport._params.audio_in_enabled is False
@@ -88,6 +104,14 @@ def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
     received = []
     loop = asyncio.new_event_loop()
 
+    class FakeInputAudioRawFrame:
+        def __init__(self, audio, sample_rate, num_channels):
+            self.audio = audio
+            self.sample_rate = sample_rate
+            self.num_channels = num_channels
+
+    monkeypatch.setattr("distr.core.agent.transport.InputAudioRawFrame", FakeInputAudioRawFrame)
+
     async def fake_push_audio_frame(frame):
         received.append(frame)
 
@@ -103,8 +127,8 @@ def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
         loop.run_until_complete(coro)
         return DoneFuture()
 
-    monkeypatch.setattr(transport, "get_event_loop", lambda: loop)
-    monkeypatch.setattr(transport, "push_audio_frame", fake_push_audio_frame)
+    monkeypatch.setattr(transport, "get_event_loop", lambda: loop, raising=False)
+    monkeypatch.setattr(transport, "push_audio_frame", fake_push_audio_frame, raising=False)
     monkeypatch.setattr(asyncio, "run_coroutine_threadsafe", fake_run_coroutine_threadsafe)
 
     try:
@@ -119,4 +143,23 @@ def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):
     assert health["callbacks"] == 1
     assert health["bytes"] == len(audio)
     assert health["last_peak"] == 1024
+    assert health["callback_errors"] == 0
+
+
+def test_audio_callback_ignores_closed_event_loop_during_shutdown(monkeypatch):
+    transport = _transport()
+    loop = asyncio.new_event_loop()
+    loop.close()
+
+    async def fake_push_audio_frame(frame):
+        raise AssertionError("closed event loop should short-circuit before enqueue")
+
+    monkeypatch.setattr(transport, "get_event_loop", lambda: loop, raising=False)
+    monkeypatch.setattr(transport, "push_audio_frame", fake_push_audio_frame, raising=False)
+
+    audio = np.array([0, 512, -1024, 256], dtype=np.int16).tobytes()
+    transport._audio_in_callback(audio, frame_count=4, time_info={}, status=None)
+
+    health = transport.get_input_health()
+    assert health["callbacks"] == 1
     assert health["callback_errors"] == 0

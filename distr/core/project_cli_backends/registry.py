@@ -7,8 +7,6 @@ import json
 import os
 import shutil
 import subprocess
-import time
-from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
@@ -300,11 +298,47 @@ class CursorBackend(OneShotCliBackend):
         "Install Cursor CLI support from Cursor, then make sure the cursor-agent command is on PATH."
     )
 
+    def _callback_instruction(self, task: ProjectTask) -> str:
+        if not task.workflow_id or not task.run_id:
+            return ""
+        api_base = _decisions_api_base()
+        callback_url = _with_internal_token(f"{api_base}/api/workflows/{int(task.workflow_id)}/runs/{int(task.run_id)}/codex-events")
+        reporter = os.environ.get(
+            "DECISIONS_CURSOR_REPORTER",
+            os.path.expanduser("~/.cursor/plugins/local/decisions-cursor/scripts/report_decisions_event.py"),
+        )
+        meta = {
+            "api_base": api_base,
+            "callback_url": callback_url,
+            "workflow_id": task.workflow_id,
+            "run_id": task.run_id,
+            "step_id": task.step_id,
+            "ticket_id": task.ticket_id,
+            "project_id": task.project_id,
+            "execution_session_id": task.execution_session_id,
+            "reporter": reporter,
+        }
+        return (
+            "[DECISIONS CURSOR CALLBACK]\n"
+            f"{json.dumps(meta, ensure_ascii=False, separators=(',', ':'))}\n"
+            "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
+            "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
+            "Prefer the reporter script when available:\n"
+            f"python3 {json.dumps(reporter)} --callback-url {json.dumps(callback_url)} "
+            "--event-type cursor_prompt_submitted --status observed --message \"<what the human asked or changed>\"\n"
+            "Use event_type values: cursor_started, cursor_prompt_submitted, user_steer, cursor_waiting, "
+            "cursor_interrupted, cursor_progress, cursor_completed, cursor_failed, cursor_needs_input.\n"
+            "Do not wait until the final answer if the human submits another prompt, changes direction, "
+            "or adds constraints mid-run.\n"
+            "[/DECISIONS CURSOR CALLBACK]\n\n"
+        )
+
     def _build_command(self, executable: str, task: ProjectTask) -> list[str]:
         cmd = [executable] + self.command_args
         if task.model and task.model != "auto":
             cmd += ["--model", task.model]
-        return cmd + [task.instruction]
+        return cmd + [self._callback_instruction(task) + task.instruction]
+
 
 
 class ClaudeCodeBackend(OneShotCliBackend):
@@ -355,13 +389,15 @@ class CodexBackend(OneShotCliBackend):
         return (
             "[DECISIONS CODEX CALLBACK]\n"
             f"{json.dumps(meta, ensure_ascii=False, separators=(',', ':'))}\n"
-            "When this work is steered, paused, interrupted, blocked, completed, or materially updated, "
-            "report the event back to DecisionsAI. Prefer the reporter script when available:\n"
+            "When this work is opened, prompted, steered, paused, interrupted, blocked, completed, "
+            "or materially updated, report the event back to DecisionsAI if DecisionsAI is reachable. "
+            "Prefer the reporter script when available:\n"
             f"python3 {json.dumps(reporter)} --callback-url {json.dumps(callback_url)} "
-            "--event-type user_steer --status observed --message \"<what changed>\"\n"
-            "Use event_type values: codex_started, user_steer, codex_waiting, codex_interrupted, "
+            "--event-type codex_prompt_submitted --status observed --message \"<what the human asked or changed>\"\n"
+            "Use event_type values: codex_started, codex_prompt_submitted, user_steer, codex_waiting, codex_interrupted, "
             "codex_progress, codex_completed, codex_failed, codex_needs_input.\n"
-            "Do not wait until the final answer if the human changes direction mid-run.\n"
+            "Do not wait until the final answer if the human submits another prompt, changes direction, "
+            "or adds constraints mid-run.\n"
             "[/DECISIONS CODEX CALLBACK]\n\n"
         )
 
@@ -381,212 +417,11 @@ class CodexBackend(OneShotCliBackend):
         return cmd + [self._callback_instruction(task) + task.instruction]
 
 
-class EditorTicketBackend(ProjectCliBackend):
-    """Bridge workflow/project tasks into an editor through the DecisionsAI extension."""
-
-    editor_command = ""
-    editor_name = ""
-    extension_id = "decisionsai.decisionsai"
-
-    def _editor_path(self) -> Optional[str]:
-        return shutil.which(self.editor_command)
-
-    def _extension_installed(self, executable: str) -> bool:
-        try:
-            result = subprocess.run(
-                [executable, "--list-extensions"],
-                capture_output=True,
-                text=True,
-                timeout=8,
-            )
-            extensions = {
-                line.strip().lower()
-                for line in (result.stdout or "").splitlines()
-                if line.strip()
-            }
-            return self.extension_id.lower() in extensions
-        except Exception:
-            return False
-
-    def check_availability(self) -> BackendStatus:
-        path = self._editor_path()
-        if not path:
-            return BackendStatus(
-                id=self.id,
-                name=self.name,
-                installed=False,
-                ready=False,
-                state="missing",
-                message=f"{self.editor_name} command `{self.editor_command}` was not found.",
-                setup_required=True,
-                setup_instructions=self.setup_instructions,
-            )
-        extension_ready = self._extension_installed(path)
-        return BackendStatus(
-            id=self.id,
-            name=self.name,
-            installed=True,
-            ready=extension_ready,
-            state="ready" if extension_ready else "extension_missing",
-            message=(
-                f"{self.editor_name} and the DecisionsAI extension are ready."
-                if extension_ready
-                else f"{self.editor_name} is installed, but the DecisionsAI extension is not installed."
-            ),
-            path=path,
-            version=_version_for(path),
-            setup_required=not extension_ready,
-            setup_instructions=self.setup_instructions,
-            supports_rpc=False,
-            supports_install=False,
-        )
-
-    def _ticket_path(self, task: ProjectTask) -> Path:
-        tickets_dir = Path(task.folder).expanduser() / ".tickets"
-        tickets_dir.mkdir(parents=True, exist_ok=True)
-        stamp = time.strftime("%Y%m%d_%H%M%S")
-        suffix = task.step_id or task.audit_id or int(time.time())
-        return tickets_dir / f"decisionsai_{self.id}_{stamp}_{suffix}.md"
-
-    def _ticket_body(self, task: ProjectTask) -> str:
-        api_base = _decisions_api_base()
-        continue_url = ""
-        bridge_url = ""
-        workflow_id = getattr(task, "workflow_id", None)
-        run_id = getattr(task, "run_id", None)
-        if workflow_id and run_id:
-            continue_url = _with_internal_token(f"{api_base}/api/workflows/{int(workflow_id)}/runs/{int(run_id)}/continue")
-            bridge_url = _with_internal_token(f"{api_base}/api/workflows/{int(workflow_id)}/runs/{int(run_id)}/codex-events")
-        meta = {
-            "project_id": getattr(task, "project_id", None),
-            "project_name": getattr(task, "project_name", ""),
-            "backend": self.id,
-            "origin": getattr(task, "origin", ""),
-            "run_id": run_id,
-            "workflow_id": workflow_id,
-            "step_id": getattr(task, "step_id", None) or getattr(task, "audit_id", None),
-            "ticket_id": getattr(task, "ticket_id", None),
-            "board_id": getattr(task, "board_id", None),
-            "execution_session_id": getattr(task, "execution_session_id", None),
-            "handoff_event_id": getattr(task, "handoff_event_id", None),
-            "api_base": api_base,
-            "callback_url": continue_url,
-            "continue_url": continue_url,
-            "bridge_url": bridge_url,
-            "callback_payload_type": "workflow_continue",
-        }
-        meta_json = json.dumps({k: v for k, v in meta.items() if v is not None}, separators=(",", ":"))
-        return (
-            "<!-- decisions-meta: "
-            + meta_json
-            + " -->\n"
-            "<!-- decisions-ide-meta: "
-            + meta_json
-            + " -->\n"
-            "---\n"
-            "mode: append\n"
-            "auto_continue_on_pickup: false\n"
-            "callback_payload_type: workflow_continue\n"
-            "---\n\n"
-            f"# DecisionsAI Work Packet\n\n"
-            f"Project: {getattr(task, 'project_name', '')} ({getattr(task, 'project_id', '')})\n"
-            f"Backend: {self.name}\n\n"
-            "## Instruction\n\n"
-            f"{str(getattr(task, 'instruction', '')).strip()}\n\n"
-            "## Return Contract\n\n"
-            "When finished, report back to DecisionsAI with:\n"
-            "- Status: completed | failed | needs_input\n"
-            "- Summary\n"
-            "- Files changed\n"
-            "- Tests run\n"
-            "- Blockers or next step\n\n"
-            "## Callback\n\n"
-            "The workflow stays waiting until you report completion.\n"
-            + (f"- VS Code/Cursor command: `DecisionsAI: Report Workflow Complete`\n" if continue_url else "")
-            + (f"- Resume workflow: POST {continue_url}\n" if continue_url else "")
-            + (f"- Bridge events: POST {bridge_url}\n" if bridge_url else "")
-        )
-
-    async def send_task(self, task: ProjectTask, on_event: Optional[EventCallback] = None) -> BackendTaskResult:
-        status = self.check_availability()
-        if not status.ready or not status.path:
-            return BackendTaskResult(False, self.id, "ide_ticket", error=status.message, session_id=task.audit_id)
-        if not task.folder or not os.path.isdir(task.folder):
-            return BackendTaskResult(False, self.id, "ide_ticket", error="Project folder is missing.", session_id=task.audit_id)
-
-        try:
-            ticket_path = self._ticket_path(task)
-            ticket_path.write_text(self._ticket_body(task), encoding="utf-8")
-            subprocess.Popen([status.path, task.folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-        except Exception as exc:
-            msg = f"Failed to create {self.name} work packet: {exc}"
-            _emit(on_event, {"type": "error", "message": msg})
-            return BackendTaskResult(False, self.id, "ide_ticket", error=msg, session_id=task.audit_id)
-
-        try:
-            from distr.core.orchestration_events import emit_orchestration_event
-
-            emit_orchestration_event(
-                source=self.id,
-                event_type="ide_work_packet_created",
-                status="waiting",
-                workflow_id=getattr(task, "workflow_id", None),
-                run_id=getattr(task, "run_id", None),
-                step_id=getattr(task, "step_id", None) or getattr(task, "audit_id", None),
-                ticket_id=getattr(task, "ticket_id", None),
-                board_id=getattr(task, "board_id", None),
-                project_id=getattr(task, "project_id", None),
-                execution_session_id=getattr(task, "execution_session_id", None),
-                summary=f"IDE work packet created for {self.editor_name}.",
-                payload={
-                    "ticket_path": str(ticket_path),
-                    "editor": self.id,
-                    "project_folder": task.folder,
-                },
-            )
-        except Exception:
-            pass
-
-        message = (
-            f"Created IDE work packet for {self.editor_name}: {ticket_path}\n"
-            "The DecisionsAI editor extension should pick it up from `.tickets`. "
-            "Keep the workflow step waiting until the editor work is reviewed or reported back."
-        )
-        _emit(on_event, {"type": "message_end", "message": {"role": "assistant", "content": message}})
-        return BackendTaskResult(True, self.id, "ide_ticket", output=message, session_id=task.audit_id)
-
-
-class CursorIdeBackend(EditorTicketBackend):
-    id = "cursor_ide"
-    name = "Cursor IDE"
-    description = "Cursor editor bridge through the DecisionsAI extension and .tickets work packets."
-    editor_command = "cursor"
-    editor_name = "Cursor"
-    setup_instructions = (
-        "Install Cursor, then install the DecisionsAI extension with "
-        "`vscode_extension/install_vscode_extension.sh` while Cursor is available on PATH."
-    )
-
-
-class VSCodeIdeBackend(EditorTicketBackend):
-    id = "vscode_ide"
-    name = "VS Code IDE"
-    description = "Visual Studio Code bridge through the DecisionsAI extension and .tickets work packets."
-    editor_command = "code"
-    editor_name = "Visual Studio Code"
-    setup_instructions = (
-        "Install VS Code, then install the DecisionsAI extension with "
-        "`vscode_extension/install_vscode_extension.sh` while code is available on PATH."
-    )
-
-
 _BACKENDS: dict[str, ProjectCliBackend] = {
     "pi": PiBackend(),
     "cursor": CursorBackend(),
     "claude_code": ClaudeCodeBackend(),
     "codex": CodexBackend(),
-    "cursor_ide": CursorIdeBackend(),
-    "vscode_ide": VSCodeIdeBackend(),
 }
 
 
@@ -599,12 +434,14 @@ def normalize_backend_id(value: str | None) -> str:
         "claude-code": "claude_code",
         "claudecode": "claude_code",
         "cursor_cli": "cursor",
-        "cursor_editor": "cursor_ide",
-        "cursor_extension": "cursor_ide",
-        "vscode": "vscode_ide",
-        "vs_code": "vscode_ide",
-        "visual_studio_code": "vscode_ide",
-        "vscode_extension": "vscode_ide",
+        "cursor_editor": "cursor",
+        "cursor_extension": "cursor",
+        "cursor_ide": "cursor",
+        "vscode": "cursor",
+        "vs_code": "cursor",
+        "visual_studio_code": "cursor",
+        "vscode_extension": "cursor",
+        "vscode_ide": "cursor",
         "codex_cli": "codex",
         "openai_codex": "codex",
     }

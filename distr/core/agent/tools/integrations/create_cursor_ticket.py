@@ -2,9 +2,9 @@
 Create Cursor Ticket Tool for LangChain.
 
 When the user says "tell cursor …" (voice fast-action or LLM), this tool writes a cleaned
-ticket markdown file. If a project is active with a folder_location, the file goes to
-``<project>/.tickets/`` (same as create_project_ticket and the VS Code extension). Otherwise
-it falls back to ``~/.cursor/decisionsai/tickets/``.
+Cursor plugin handoff markdown file. If a project is active with a folder_location, the file
+goes to ``<project>/.decisions/cursor-handoffs/``. Otherwise it falls back to
+``~/.cursor/decisionsai/handoffs/``.
 """
 
 from typing import Any, Optional
@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import platform
+import shutil
 from datetime import datetime
 from pathlib import Path
 
@@ -97,13 +98,13 @@ def get_clipboard_content() -> Optional[str]:
         return None
 
 class CreateCursorTicketTool(BaseTool):
-    """Tool for creating a ticket file in the active project's .tickets or Cursor's tickets folder."""
+    """Tool for creating a Cursor plugin handoff in the active project."""
 
     name: str = "create_cursor_ticket"
-    description: str = """Create a legacy Cursor/.tickets file only when the user explicitly says 'tell cursor', 'Cursor ticket', '.tickets file', or asks to send work to Cursor.
-    DEBUG=True exception: "make a ticket for Decisions/DecisionsAI" writes a project ticket file into the DecisionsAI repo .tickets/ folder.
-    If a project is active (in use) with a folder path, the file is written to that project's .tickets/ folder.
-    Otherwise the file is written under ~/.cursor/decisionsai/tickets/.
+    description: str = """Create a Cursor plugin handoff only when the user explicitly says 'tell cursor', 'Cursor ticket', or asks to send work to Cursor.
+    DEBUG=True exception: "make a ticket for Decisions/DecisionsAI" writes a Cursor plugin handoff into the DecisionsAI repo.
+    If a project is active (in use) with a folder path, the handoff is written to that project's .decisions/cursor-handoffs/ folder.
+    Otherwise the handoff is written under ~/.cursor/decisionsai/handoffs/.
     The tool cleans up and summarizes the content into a well-formatted ticket.
     Do not use this for ordinary 'create a ticket' requests; those belong to the Kanban Ticket Board tool named create_ticket.
     
@@ -141,6 +142,25 @@ class CreateCursorTicketTool(BaseTool):
         cloud_indicators = [':cloud', ':pro', '/huggingface', '/openrouter', 'gpt-', 'o1', 'o3', 'o4',
                            'claude-', 'gemini-', 'chatgpt-']
         return not any(ind in m for ind in cloud_indicators)
+
+    @staticmethod
+    def _cursor_command() -> Optional[str]:
+        return shutil.which("cursor")
+
+    @staticmethod
+    def _cursor_environment_available() -> bool:
+        return bool(CreateCursorTicketTool._cursor_command() or (Path.home() / ".cursor").exists())
+
+    def _open_project_in_cursor(self, folder: str) -> bool:
+        command = self._cursor_command()
+        if not command or not folder or os.environ.get("PYTEST_CURRENT_TEST"):
+            return False
+        try:
+            subprocess.Popen([command, folder], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            return True
+        except Exception as exc:
+            logger.warning("CreateCursorTicket: could not open Cursor for %s: %s", folder, exc)
+            return False
     
     def _get_recent_conversation_summary(self, max_messages: int = 10) -> Optional[str]:
         """Get a summary of recent conversation messages."""
@@ -406,8 +426,13 @@ Cleaned ticket:"""
             ticket_intent = classify_ticket_intent(text)
             if ticket_intent.kind == "kanban_ticket":
                 return (
-                    "This looks like a normal Ticket Board request, not an explicit Cursor/.tickets request. "
+                    "This looks like a normal Ticket Board request, not an explicit Cursor handoff request. "
                     "Use the create_ticket tool with action='create_ticket' so the ticket is created on the Kanban board."
+                )
+            if ticket_intent.kind == "ide_conversation":
+                return (
+                    "This reads like a conversation about Cursor/Codex work, not an explicit Cursor handoff. "
+                    "Continue the current chat and only create a handoff when the user clearly asks to send work."
                 )
             
             text_lower = text.lower() if text else ""
@@ -499,7 +524,7 @@ Cleaned ticket:"""
                     match = re.search(pattern, text, re.IGNORECASE)
                 
                 if not match:
-                    # Try explicit Cursor/.tickets variants only. Generic
+                    # Try explicit Cursor handoff variants only. Generic
                     # "create a ticket" is reserved for the Kanban board.
                     pattern = r'create\s+(?:a\s+)?(?:cursor|\.tickets?)\s+ticket\s+(.+)'
                     match = re.search(pattern, text, re.IGNORECASE)
@@ -535,13 +560,16 @@ Cleaned ticket:"""
                 if not description:
                     description = ticket_content  # Fallback if removal left nothing
             
-            # Prefer active project's .tickets (same as create_project_ticket / extension watchers)
-            tickets_dir = None
+            # Prefer project-local Cursor plugin handoffs. Generic project exports
+            # still own .tickets elsewhere in the system.
+            handoffs_dir = None
+            cursor_project_folder = None
             project_label = None
             if ticket_intent.kind == "debug_decisions_ticket":
-                tickets_dir = os.path.join(_decisionsai_project_root(), ".tickets")
+                cursor_project_folder = _decisionsai_project_root()
+                handoffs_dir = os.path.join(cursor_project_folder, ".decisions", "cursor-handoffs")
                 project_label = "DecisionsAI"
-                logger.info("CreateCursorTicket: using DEBUG DecisionsAI .tickets at %s", tickets_dir)
+                logger.info("CreateCursorTicket: using DEBUG DecisionsAI cursor handoffs at %s", handoffs_dir)
             else:
                 try:
                     from distr.core.agent.services.rag.project import get_active_project
@@ -549,18 +577,19 @@ Cleaned ticket:"""
                     folder = (ap or {}).get("folder_location") or ""
                     folder = folder.strip()
                     if folder:
-                        tickets_dir = os.path.join(folder, ".tickets")
+                        cursor_project_folder = folder
+                        handoffs_dir = os.path.join(folder, ".decisions", "cursor-handoffs")
                         project_label = (ap or {}).get("name") or "project"
-                        logger.info("CreateCursorTicket: using active project .tickets at %s", tickets_dir)
+                        logger.info("CreateCursorTicket: using active project cursor handoffs at %s", handoffs_dir)
                 except Exception as e:
                     logger.warning("CreateCursorTicket: could not resolve active project: %s", e)
 
-            if not tickets_dir:
+            if not handoffs_dir:
                 home_dir = os.path.expanduser("~")
-                tickets_dir = os.path.join(home_dir, ".cursor", "decisionsai", "tickets")
-                logger.info("CreateCursorTicket: using global Cursor tickets dir %s", tickets_dir)
+                handoffs_dir = os.path.join(home_dir, ".cursor", "decisionsai", "handoffs")
+                logger.info("CreateCursorTicket: using global Cursor handoffs dir %s", handoffs_dir)
 
-            os.makedirs(tickets_dir, exist_ok=True)
+            os.makedirs(handoffs_dir, exist_ok=True)
             
             # Generate filename with timestamp
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -574,7 +603,7 @@ Cleaned ticket:"""
                 safe_title = "ticket"
             
             filename = f"{timestamp}_{safe_title}.md"
-            filepath = os.path.join(tickets_dir, filename)
+            filepath = os.path.join(handoffs_dir, filename)
             
             # Format the ticket content with proper structure
             if title:
@@ -611,13 +640,19 @@ Cleaned ticket:"""
 
             # Store paths for later opening
             self._last_ticket_path = filepath
-            self._last_tickets_folder = tickets_dir
+            self._last_tickets_folder = handoffs_dir
+
+            opened_cursor = self._open_project_in_cursor(cursor_project_folder or os.path.dirname(handoffs_dir))
 
             # Return success message with option to open file or folder
-            result = f"Successfully created ticket file: {filename}\n"
+            result = f"Successfully created Cursor plugin handoff: {filename}\n"
             result += f"Location: {filepath}\n"
             if project_label:
-                result += f"(In active project \"{project_label}\" under .tickets)\n"
+                result += f"(In active project \"{project_label}\" under .decisions/cursor-handoffs)\n"
+            if opened_cursor:
+                result += "Opened the project in Cursor so the plugin can pick up the handoff.\n"
+            elif not self._cursor_environment_available():
+                result += "Cursor is not detected; install Cursor or run scripts/setup_project_clis.sh cursor.\n"
             result += f"\nWould you like me to:\n"
             result += f"  • Open the ticket file (say 'open the ticket' or 'open that file')\n"
             result += f"  • Open the tickets folder (say 'open the tickets folder' or 'open that folder')"

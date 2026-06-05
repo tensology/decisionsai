@@ -117,6 +117,49 @@ class TestWorkflowAgentInstantiation:
             mock_settings_mod.load_settings_from_db.assert_called_once()
 
 
+class TestWorkflowAgentToolQueues:
+    """Verify workflow tool calls can reach the app transport queues."""
+
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
+    @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
+    def test_load_tools_receives_explicit_event_queue(self, mock_resolve, mock_ensure, monkeypatch):
+        calls = []
+        event_queue = object()
+
+        def fake_load_tools(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        from distr.core.agent import tools as tools_module
+        monkeypatch.setattr(tools_module, "load_tools", fake_load_tools)
+
+        WorkflowAgent(settings=_mock_settings(), event_queue=event_queue)
+
+        assert calls
+        assert calls[0]["event_queue"] is event_queue
+
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
+    @patch("distr.core.llm_factory.resolve_settings_keys", return_value=("Ollama", "llama3"))
+    def test_load_tools_uses_registered_agent_event_queue(self, mock_resolve, mock_ensure, monkeypatch):
+        calls = []
+        event_queue = object()
+
+        def fake_load_tools(**kwargs):
+            calls.append(kwargs)
+            return []
+
+        from distr.core.agent import tools as tools_module
+        from distr.core import signals as signals_module
+
+        monkeypatch.setattr(tools_module, "load_tools", fake_load_tools)
+        monkeypatch.setattr(signals_module, "_agent_event_queue", event_queue)
+
+        WorkflowAgent(settings=_mock_settings())
+
+        assert calls
+        assert calls[0]["event_queue"] is event_queue
+
+
 # ===========================================================================
 # 6.2 — execute() returning response text without touching global state
 # ===========================================================================
@@ -208,6 +251,40 @@ class TestWorkflowAgentExecute:
             m.get("role") == "assistant" and "Error" in (m.get("content") or "")
             for m in agent.messages
         )
+
+    @patch("distr.core.agent.tools.loader.ensure_tool_cache_warmed_if_empty")
+    @patch("distr.core.workflow_agent.WorkflowAgent._load_tools")
+    def test_llm_quota_uses_configured_fallback_before_returning_error(self, mock_tools, mock_ensure):
+        """Workflow-specific model failures should try configured fallback LLMs."""
+        settings = {
+            "workflow_llm_provider": "OpenAI",
+            "workflow_llm_model": "gpt-5.5",
+            "conversational_llm_provider": "KiloCode",
+            "conversational_llm_model": "anthropic/claude-opus-4.5",
+            "openai_key": "sk-test",
+            "kilo_key": "kilo-test",
+        }
+        agent = WorkflowAgent(settings=settings)
+
+        calls = []
+
+        def fake_openai_compat():
+            calls.append((agent.provider, agent.model))
+            if agent.provider == "OpenAI":
+                raise RuntimeError("You exceeded your current quota, please check your plan and billing details.")
+            return "fallback response", []
+
+        with patch.object(agent, "_call_openai_compat", side_effect=fake_openai_compat):
+            text, tool_calls = agent._call_llm_sync()
+
+        assert text == "fallback response"
+        assert tool_calls == []
+        assert calls == [
+            ("OpenAI", "gpt-5.5"),
+            ("KiloCode", "anthropic/claude-opus-4.5"),
+        ]
+        assert agent.provider == "KiloCode"
+        assert agent.model == "anthropic/claude-opus-4.5"
 
 
 # ===========================================================================

@@ -21,6 +21,9 @@ from distr.core.db.hermes import (
     HermesCorrectionAttempt,
     HermesEvent,
     HermesLearnedRule,
+    HermesMachineActivity,
+    HermesMaintenanceState,
+    HermesUserMemory,
     HermesValidationRecord,
     HermesVisualBaselineScreen,
     HermesVisualBaselineSet,
@@ -197,7 +200,7 @@ def record_human_intervention_memory(
     execution_session_id: int | None = None,
     handoff_event_id: int | None = None,
 ) -> int | None:
-    """Persist Paul's/user steering or corrections as durable mistake memory."""
+    """Persist user steering or corrections as durable mistake memory."""
     normalized = normalize_mistake_label(label)
     summary = (
         f"Human intervention recorded: {normalized.replace('_', ' ')}"
@@ -235,6 +238,9 @@ def record_human_intervention_memory(
 def ensure_hermes_tables() -> None:
     Base.metadata.create_all(engine, tables=[
         HermesEvent.__table__,
+        HermesUserMemory.__table__,
+        HermesMachineActivity.__table__,
+        HermesMaintenanceState.__table__,
         ProjectRuntimeSession.__table__,
         HermesValidationRecord.__table__,
         HermesCorrectionAttempt.__table__,
@@ -1117,7 +1123,7 @@ def record_ui_feedback_label(
     execution_session_id: int | None = None,
     screenshot_paths: list[str] | None = None,
 ) -> int | None:
-    """Record Paul's UI approval/rejection label as Hermes event and memory."""
+    """Record the user's UI approval/rejection label as Hermes event and memory."""
     from distr.core.harness.ui_quality import build_feedback_summary, normalize_feedback_label
 
     normalized = normalize_feedback_label(label)

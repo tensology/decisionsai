@@ -75,7 +75,7 @@ def test_missing_auto_match_key_defaults_true(extra: dict) -> None:
     """**Validates: Requirements 6.3**
 
     When only ``telegram_text_only_override`` is present,
-    ``auto_match_mode`` defaults to ``True``."""
+    ``auto_match_mode`` defaults to ``True`` for text-safe auto-match replies."""
 
     extra["telegram_text_only_override"] = False
     _, auto_match = load_response_format_settings(extra)

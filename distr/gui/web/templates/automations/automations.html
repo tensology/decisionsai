@@ -1,0 +1,100 @@
+{% extends "base.html" %}
+
+{% block title %}Automations{% endblock %}
+
+{% block content %}
+<div class="w-full px-6 py-8 flex gap-6 h-[calc(100vh-4rem)]">
+    <!-- Left panel: search + automation list + Add -->
+    <div class="w-80 flex-shrink-0 flex flex-col gap-4">
+        <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
+            <input type="text" id="automation-search" placeholder="Search automations..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+        </div>
+        <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
+            <div id="automation-list" class="flex-1 overflow-y-auto space-y-2">
+                <p class="text-sm text-gray-400">Loading automations...</p>
+            </div>
+            <button type="button" id="automation-new" class="mt-4 w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Automation</button>
+        </div>
+    </div>
+
+    <!-- Right panel: empty state or detail form -->
+    <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
+        <div id="automation-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
+            <p class="text-gray-400 text-sm max-w-md mb-6">Create itemized automations with an instruction and schedule. Select an automation from the list or add a new one.</p>
+            <button type="button" id="automation-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Automation</button>
+        </div>
+
+        <form id="automation-detail" class="hidden flex-1 flex flex-col min-h-0">
+            <input type="hidden" id="automation-id">
+            <div class="border-b border-white/20 px-6 py-4 flex items-center justify-between">
+                <div>
+                    <h2 id="automation-detail-title" class="text-lg font-semibold text-white">Automation</h2>
+                    <p id="automation-detail-meta" class="text-xs text-gray-500 mt-1">Not saved yet</p>
+                </div>
+                <div class="flex gap-2">
+                    <button type="button" id="automation-run" class="px-4 py-2 rounded border border-white/20 text-gray-200 hover:bg-white/10 text-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent">Run Now</button>
+                    <button type="submit" id="automation-save" class="px-4 py-2 rounded-lg bg-[#f97316] text-white hover:bg-[#ea580c] active:scale-[0.98] transition-colors text-sm font-medium shadow-sm border border-[#ea580c]/30">Save</button>
+                    <button type="button" id="automation-delete" class="px-4 py-2 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 text-sm disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent">Remove</button>
+                </div>
+            </div>
+
+            <div class="flex-1 overflow-y-auto p-6">
+                <div class="flex gap-1 border-b border-white/20 mb-4">
+                    <button type="button" class="automation-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-[#f97316] text-white -mb-px" data-tab="details">Automation</button>
+                    <button type="button" class="automation-tab px-4 py-3 text-sm font-medium text-gray-400 hover:text-white border-b-2 border-transparent -mb-px" data-tab="history">Run History</button>
+                </div>
+
+                <div id="automation-tab-details" class="automation-tab-pane space-y-4">
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Name</label>
+                        <input type="text" id="automation-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none" placeholder="Daily planning reminder">
+                    </div>
+                    <div>
+                        <label class="block text-sm text-gray-400 mb-1">Instruction</label>
+                        <textarea id="automation-instruction" rows="8" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y" placeholder="Enter the instruction this automation should run..."></textarea>
+                    </div>
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4">
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Schedule</label>
+                            <select id="automation-kind" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                <option value="once">Once</option>
+                                <option value="15min">Every 15 minutes</option>
+                                <option value="30min">Every 30 minutes</option>
+                                <option value="hourly">Hourly</option>
+                                <option value="daily">Daily</option>
+                                <option value="weekly">Weekly</option>
+                            </select>
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Time</label>
+                            <input id="automation-time" type="time" data-decisions-datetime-label="Time" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Run at</label>
+                            <input id="automation-run-at" type="datetime-local" data-decisions-datetime-label="Run at" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        </div>
+                        <div>
+                            <label class="block text-sm text-gray-400 mb-1">Status</label>
+                            <select id="automation-status" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                                <option value="active">Active</option>
+                                <option value="paused">Paused</option>
+                            </select>
+                        </div>
+                    </div>
+                </div>
+
+                <div id="automation-tab-history" class="automation-tab-pane hidden">
+                    <div id="automation-runs" class="space-y-2 max-h-64 overflow-y-auto">
+                        <p class="text-xs text-gray-500">Save an automation to see runs.</p>
+                    </div>
+                </div>
+            </div>
+        </form>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script src="/static/shared/js/api.js"></script>
+<script src="/automations/static/js/automations.js"></script>
+{% endblock %}

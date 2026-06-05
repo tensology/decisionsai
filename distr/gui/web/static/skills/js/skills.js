@@ -34,6 +34,7 @@
   function inferTags(skill) {
     var text = ((skill.name || "") + " " + (skill.description || "") + " " + (skill.id || "")).toLowerCase();
     var tags = [];
+    if ((skill.source || "").toLowerCase() === "ecc_vendor") tags.push("ECC Vendor");
     for (var tag in TAG_RULES) {
       var kws = TAG_RULES[tag];
       for (var i = 0; i < kws.length; i++) {
@@ -212,6 +213,7 @@
     page.forEach(function (skill) {
       var shortDesc = (skill.description || "No description");
       if (shortDesc.length > 120) shortDesc = shortDesc.substring(0, 120) + "…";
+      var isEditable = skill.editable !== false && (skill.source || "").toLowerCase() !== "ecc_vendor";
 
       var tagBadges = skill.tags.slice(0, 3).map(function (t) {
         return '<span class="inline-block px-1.5 py-0.5 text-[10px] font-medium rounded bg-[#f97316]/15 text-[#fb923c]">' + esc(t) + "</span>";
@@ -225,11 +227,15 @@
       html += '  <h4 class="text-sm font-semibold text-white mb-1.5 leading-tight">' + esc(skill.name || skill.id) + "</h4>";
       html += '  <p class="text-xs text-gray-400 leading-relaxed">' + esc(shortDesc) + "</p>";
       html +=
-        '  <div class="flex gap-2 mt-3">' +
+        '  <div class="flex gap-2 mt-3">';
+      if (isEditable) {
+        html +=
         '    <button type="button" class="edit-skill-btn inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Edit this skill">' +
         '      <svg class="w-4 h-4 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z"/></svg>' +
         '      <span class="truncate leading-tight">Edit</span>' +
-        "    </button>" +
+        "    </button>";
+      }
+      html +=
         '    <button type="button" class="push-project-btn flex-1 inline-flex items-center justify-center gap-1.5 py-2 px-2 rounded-md border border-white/20 bg-[#1a1f3a]/60 text-[11px] sm:text-xs font-medium text-gray-200 hover:border-[#f97316]/45 hover:bg-[#f97316]/10 hover:text-[#fb923c] transition-colors min-w-0" title="Push skill to project">' +
         '      <svg class="w-4 h-4 shrink-0 text-[#fb923c]" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>' +
         '      <span class="truncate leading-tight">Push to project</span>' +
@@ -675,27 +681,33 @@
   function deleteSkill() {
     if (!editingSkillId) return;
     var statusEl = document.getElementById("skill-editor-status");
-    if (!confirm("Delete skill '" + editingSkillId + "'? This cannot be undone.")) return;
+    window.DecisionsAPI.confirm({
+      title: "Delete skill",
+      message: "Delete skill '" + editingSkillId + "'? This cannot be undone.",
+      confirmLabel: "Delete",
+      danger: true,
+      onConfirm: function () {
+        statusEl.textContent = "Deleting…";
+        statusEl.className = "text-xs text-gray-400";
 
-    statusEl.textContent = "Deleting…";
-    statusEl.className = "text-xs text-gray-400";
-
-    fetch("/api/skills/" + editingSkillId, { method: "DELETE" })
-      .then(function (r) { return r.json(); })
-      .then(function (data) {
-        if (data.success) {
-          closeSkillEditor();
-          loadSkills();
-          showSnackbar(data.message, "success");
-        } else {
-          statusEl.textContent = "\u274c " + (data.detail || "Delete failed");
-          statusEl.className = "text-xs text-red-400";
-        }
-      })
-      .catch(function (err) {
-        statusEl.textContent = "\u274c " + err.message;
-        statusEl.className = "text-xs text-red-400";
-      });
+        fetch("/api/skills/" + editingSkillId, { method: "DELETE" })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (data.success) {
+              closeSkillEditor();
+              loadSkills();
+              showSnackbar(data.message, "success");
+            } else {
+              statusEl.textContent = "\u274c " + (data.detail || "Delete failed");
+              statusEl.className = "text-xs text-red-400";
+            }
+          })
+          .catch(function (err) {
+            statusEl.textContent = "\u274c " + err.message;
+            statusEl.className = "text-xs text-red-400";
+          });
+      }
+    });
   }
 
   // ── Event bindings ───────────────────────────────────────────────

@@ -18,7 +18,12 @@ from sqlalchemy import text
 
 from distr.core.db import get_session, Chat, Settings
 from distr.core.agent.constants import DEFAULT_MODELS
-from distr.core.chat import ChatService, _normalize_provider
+from distr.core.chat import (
+    ChatService,
+    _normalize_provider,
+    record_chat_audit_event,
+    remove_chat_transcript_audit_events,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -471,6 +476,7 @@ class ChatManagerCore:
             chat = session.query(Chat).filter(Chat.id == chat_id).one()
             session.delete(chat)
             session.commit()
+            remove_chat_transcript_audit_events(chat_id)
 
             if chat_id in self.chat_histories:
                 del self.chat_histories[chat_id]
@@ -533,6 +539,7 @@ class ChatManagerCore:
             root.modified_date = datetime.now(timezone.utc)
             session.query(Chat).filter(Chat.parent_id == root.id).delete()
             session.commit()
+            remove_chat_transcript_audit_events(root.id)
             if root.id in self.chat_histories:
                 del self.chat_histories[root.id]
             if chat_id in self.chat_histories:
@@ -629,6 +636,13 @@ class ChatManagerCore:
                     except (json.JSONDecodeError, TypeError):
                         root.params = json.dumps({"source_platform": source_platform})
                 session.commit()
+                record_chat_audit_event(
+                    chat_id=int(root_id),
+                    chat_row_id=int(root.id) if root.id is not None else None,
+                    role="user",
+                    content=cleaned_text,
+                    source_platform=source_platform,
+                )
             else:
                 params_obj: dict[str, Any] = {}
                 if source_platform:
@@ -644,6 +658,13 @@ class ChatManagerCore:
                 )
                 session.add(new_chat)
                 session.commit()
+                record_chat_audit_event(
+                    chat_id=int(root_id),
+                    chat_row_id=int(new_chat.id) if new_chat.id is not None else None,
+                    role="user",
+                    content=cleaned_text,
+                    source_platform=source_platform,
+                )
 
             self.emit("chat_updated", root_id)
 
@@ -684,6 +705,13 @@ class ChatManagerCore:
                 target.is_hidden = is_hidden
                 target.modified_date = datetime.now(timezone.utc)
                 session.commit()
+                record_chat_audit_event(
+                    chat_id=int(chat_id),
+                    chat_row_id=int(target.id) if target.id is not None else None,
+                    role="assistant",
+                    content=text_content,
+                    hidden=is_hidden,
+                )
             if not is_hidden:
                 self.emit("chat_updated", chat_id)
         except Exception as e:

@@ -1205,7 +1205,8 @@ class KokoroTTSService(TTSService):
                             'text': session_text_normalized,
                             'is_done': is_done,
                             'provider': 'kokoro',  # Only send for Kokoro TTS
-                            'analyzed_image_path': analyzed_image_path  # Image from vision analysis (if from Telegram)
+                            'analyzed_image_path': analyzed_image_path,  # Image from vision analysis (if from Telegram)
+                            'explicit_artifact_intent': bool(should_send_raw_screenshot),
                         }), block=False)
                         logger.debug(f"✅ TTS: Sent send_to_telegram event with text='{session_text_normalized[:100]}...' (is_done={is_done}, provider=kokoro, screenshot={analyzed_image_path is not None})")
                         logger.debug(f"📤 Telegram: '{session_text_normalized[:100]}' {f'+ screenshot' if analyzed_image_path else ''}")

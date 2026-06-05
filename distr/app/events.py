@@ -23,6 +23,12 @@ from distr.core.integrations.telegram.response_format import (
     determine_response_format,
     load_response_format_settings,
 )
+from distr.core.human_engagement import (
+    EngagementAttachment,
+    EngagementIntent,
+    HumanEngagementService,
+    is_low_value_status_text,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -1008,6 +1014,68 @@ class EventHandlerMixin:
         analyzed_image_path = data.get('analyzed_image_path')
         audio_path_from_event = data.get('audio_file_path')
         screenshot_path_from_event = data.get('screenshot_path')
+        policy_text = (text or data.get('voice_note_message') or '').strip()
+        if policy_text and not data.get('bypass_engagement_policy'):
+            low_value_status = is_low_value_status_text(policy_text)
+            explicit_notification_intent = bool(
+                data.get('explicit_notification_intent')
+                or data.get('explicit_user_request')
+                or data.get('notify_user')
+                or data.get('requires_response')
+                or data.get('engagement_priority') in ('high', 'urgent')
+            )
+            engagement_kind = (
+                data.get('engagement_kind')
+                or ('status_update' if low_value_status else 'telegram_response')
+            )
+            if low_value_status and not explicit_notification_intent:
+                engagement_kind = 'status_update'
+            state_fingerprint = (
+                data.get('state_fingerprint')
+                or data.get('engagement_state_fingerprint')
+                or self._telegram_engagement_state_fingerprint(policy_text)
+            )
+            decision = HumanEngagementService(
+                telegram_manager=getattr(self, 'telegram_manager', None),
+            ).decide(EngagementIntent(
+                source=data.get('engagement_source') or 'app_events',
+                surface='telegram',
+                kind=engagement_kind,
+                priority=data.get('engagement_priority') or ('low' if low_value_status else 'normal'),
+                subject_type=data.get('engagement_subject_type') or ('status' if low_value_status else 'telegram_response'),
+                subject_id=str(
+                    data.get('engagement_subject_id')
+                    or data.get('run_id')
+                    or data.get('workflow_id')
+                    or data.get('chat_id')
+                    or 'telegram'
+                ),
+                state_fingerprint=str(state_fingerprint),
+                body=policy_text,
+                voice_body=policy_text,
+                requires_response=bool(data.get('requires_response')),
+                explicit_notification_intent=explicit_notification_intent,
+                allow_voice=bool(data.get('allow_voice', True)) and not low_value_status,
+                workflow_id=data.get('workflow_id'),
+                run_id=data.get('run_id'),
+                step_id=data.get('step_id'),
+                project_id=data.get('project_id'),
+                execution_session_id=data.get('execution_session_id'),
+                thread_id=str(data.get('thread_id') or data.get('chat_id') or ''),
+            ))
+            if not decision.should_send:
+                logger.info("[Telegram] Engagement policy suppressed send_to_telegram: %s", decision.suppress_reason)
+                self._telegram_cleanup_temp_files(
+                    Path(audio_path_from_event) if audio_path_from_event and os.path.exists(audio_path_from_event) else None,
+                    Path(screenshot_path_from_event) if screenshot_path_from_event and os.path.exists(screenshot_path_from_event) else None,
+                    analyzed_image_path,
+                )
+                return
+            if decision.format == 'text' and decision.final_text:
+                text = decision.final_text
+                data['input_type'] = 'text'
+            elif decision.final_voice_text:
+                text = decision.final_voice_text
 
         audio_file = None
         screenshot_file = None
@@ -1073,6 +1141,14 @@ class EventHandlerMixin:
         time.sleep(2)
         self._telegram_cleanup_temp_files(audio_file, screenshot_file, analyzed_image_path)
 
+    @staticmethod
+    def _telegram_engagement_state_fingerprint(text: str) -> str:
+        import hashlib
+        import re
+
+        clean = re.sub(r"\s+", " ", str(text or "").strip().lower())
+        return hashlib.sha256(clean.encode("utf-8")).hexdigest()
+
     # ---- "Done" response preparation ----
 
     def _telegram_prepare_done_response(self, data, text, audio_file, screenshot_file,
@@ -1080,7 +1156,12 @@ class EventHandlerMixin:
                                          analyzed_image_path):
         """Prepare text + screenshot for a 'Done' / tool-completion response."""
         # Skip screenshot if explicitly requested (e.g. speak_on_desktop tool)
-        skip_screenshot = data.get('skip_screenshot', False)
+        explicit_artifact_intent = bool(
+            data.get('explicit_artifact_intent')
+            or data.get('explicit_user_request')
+            or data.get('allow_artifacts')
+        )
+        skip_screenshot = data.get('skip_screenshot', False) or not explicit_artifact_intent
 
         # Voice notes don't need screenshots
         if audio_path_from_event and os.path.exists(audio_path_from_event):
@@ -1107,7 +1188,7 @@ class EventHandlerMixin:
             screenshot_file = Path(screenshot_path_from_event)
         elif not screenshot_file and analyzed_image_path and os.path.exists(analyzed_image_path):
             screenshot_file = Path(analyzed_image_path)
-        elif not screenshot_file:
+        elif not screenshot_file and explicit_artifact_intent:
             screenshot_file = self._telegram_capture_screenshot()
 
         # Fallback screenshot for Done messages (skip if flagged)
@@ -1130,6 +1211,10 @@ class EventHandlerMixin:
         # Read input_type from the event data dict (set by message handler)
         input_type = data.get('input_type', 'voice')
 
+        if data.get('is_voice_note') and audio_file and audio_file.exists():
+            logger.info("[Telegram] 🎵 Explicit voice-note event - preserving prebuilt audio")
+            return None, audio_file, None
+
         # Load response format settings from the Settings_Store
         try:
             settings = load_settings_from_db()
@@ -1149,14 +1234,20 @@ class EventHandlerMixin:
             logger.info(f"[Telegram] 🎤 Sending LLM response: audio only (input_type={input_type}, text_only_override={text_only_override}, auto_match={auto_match_mode})")
             text_to_send = None
 
-        # Include analyzed image if available
-        if not screenshot_file and analyzed_image_path and os.path.exists(analyzed_image_path):
+        explicit_artifact_intent = bool(
+            data.get('explicit_artifact_intent')
+            or data.get('explicit_user_request')
+            or data.get('allow_artifacts')
+        )
+
+        # Include analyzed image if available and explicitly requested
+        if explicit_artifact_intent and not screenshot_file and analyzed_image_path and os.path.exists(analyzed_image_path):
             screenshot_file = Path(analyzed_image_path)
             logger.info(f"[Telegram] 📸 Including analyzed image with LLM response: {analyzed_image_path}")
             self._telegram_draw_cursor_if_needed(screenshot_file)
-        elif not screenshot_file and screenshot_path_from_event and os.path.exists(screenshot_path_from_event):
+        elif explicit_artifact_intent and not screenshot_file and screenshot_path_from_event and os.path.exists(screenshot_path_from_event):
             screenshot_file = Path(screenshot_path_from_event)
-        elif not screenshot_file:
+        elif explicit_artifact_intent and not screenshot_file:
             # Fallback: capture a screenshot only when the agent performed a visual action
             # but no screenshot was stored (e.g. mouse_movement + smart_open without screenshot_analyzer)
             _ACTION_INDICATORS = (
@@ -1516,15 +1607,51 @@ class EventHandlerMixin:
         has_tm = hasattr(self, 'telegram_manager')
         connected = has_tm and self.telegram_manager.is_connected() if has_tm else False
 
+        explicit_artifact_intent = bool(
+            data.get('explicit_artifact_intent')
+            or data.get('explicit_user_request')
+            or data.get('allow_artifacts')
+        )
+
         if has_tm and file_path:
+            try:
+                if not os.path.exists(file_path) or os.path.getsize(file_path) <= 0:
+                    logger.warning("[EVENT QUEUE] Skipping empty or missing Telegram file: %s", file_path)
+                    return
+            except OSError:
+                logger.warning("[EVENT QUEUE] Skipping unreadable Telegram file: %s", file_path)
+                return
+            if not explicit_artifact_intent:
+                logger.info("[EVENT QUEUE] Skipping unsolicited Telegram file: %s", file_path)
+                return
             if not connected:
                 logger.warning("[EVENT QUEUE] Telegram not connected; queuing outbound file for reconnect")
-            emoji_map = {
-                'image': ('📸', 'image'), 'audio': ('🎵', 'audio file'),
-                'video': ('🎬', 'video'), 'document': ('📄', 'document'),
-            }
-            emoji, type_text = emoji_map.get(file_type, ('📄', 'file'))
-            caption = f"{emoji} Sending {type_text}: {file_name}"
+            type_text = {
+                'image': 'image',
+                'audio': 'audio file',
+                'video': 'video',
+                'document': 'document',
+            }.get(file_type, 'file')
+            caption = f"Sending {type_text}: {file_name}"
+            decision = HumanEngagementService(
+                telegram_manager=self.telegram_manager,
+                allow_telegram=True,
+            ).decide(EngagementIntent(
+                source="app_event",
+                surface="telegram",
+                kind="artifact_delivery",
+                priority="normal",
+                subject_type="file",
+                subject_id=str(file_path),
+                state_fingerprint=str(os.path.getmtime(file_path)),
+                body=caption,
+                attachments=[EngagementAttachment(path=file_path, kind=file_type, name=file_name)],
+                explicit_artifact_intent=True,
+            ))
+            if not decision.should_send:
+                logger.info("[EVENT QUEUE] Engagement policy suppressed Telegram file: %s", decision.suppress_reason)
+                return
+            caption = decision.final_text or caption
 
             if file_type == 'image':
                 self.telegram_manager.send_to_telegram(text=caption, screenshot_path=file_path)

@@ -137,21 +137,28 @@
 
     function deleteProjectFromList(id) {
         var name = (projectsData.filter(function(p) { return p.id === id; })[0] || {}).name || "this project";
-        if (!confirm("Remove project \"" + name + "\"? This cannot be undone and will remove board data for this project.")) return;
-        fetch("/api/projects/" + id, { method: "DELETE" })
-            .then(function(r) {
-                if (r.ok) {
-                    if (currentProjectId === id) {
-                        currentProjectId = null;
-                        showEmpty();
-                    }
-                    loadProjects();
-                    showSnackbar("Project removed", "success");
-                } else {
-                    return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
-                }
-            })
-            .catch(function(e) { showSnackbar(e.message || "Failed to remove project", "error"); });
+        window.DecisionsAPI.confirm({
+            title: "Remove project",
+            message: "Remove project \"" + name + "\"? This cannot be undone and will remove board data for this project.",
+            confirmLabel: "Remove",
+            danger: true,
+            onConfirm: function() {
+                fetch("/api/projects/" + id, { method: "DELETE" })
+                    .then(function(r) {
+                        if (r.ok) {
+                            if (currentProjectId === id) {
+                                currentProjectId = null;
+                                showEmpty();
+                            }
+                            loadProjects();
+                            showSnackbar("Project removed", "success");
+                        } else {
+                            return r.json().then(function(e) { throw new Error(e.detail || "Failed to remove"); });
+                        }
+                    })
+                    .catch(function(e) { showSnackbar(e.message || "Failed to remove project", "error"); });
+            }
+        });
     }
 
     function loadProjects() {
@@ -845,18 +852,25 @@
 
     function removeContextItem(id) {
         if (!currentProjectId || !id) return;
-        if (!confirm("Remove this context item?")) return;
-        fetch("/api/projects/" + currentProjectId + "/context-items/" + id, { method: "DELETE" })
-            .then(function(r) {
-                if (r.ok) {
-                    selectProject(currentProjectId);
-                } else {
-                    return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
-                }
-            })
-            .catch(function(e) {
-                alert(e.message || "Failed to remove context item");
-            });
+        window.DecisionsAPI.confirm({
+            title: "Remove context item",
+            message: "Remove this context item?",
+            confirmLabel: "Remove",
+            danger: true,
+            onConfirm: function() {
+                fetch("/api/projects/" + currentProjectId + "/context-items/" + id, { method: "DELETE" })
+                    .then(function(r) {
+                        if (r.ok) {
+                            selectProject(currentProjectId);
+                        } else {
+                            return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
+                        }
+                    })
+                    .catch(function(e) {
+                        alert(e.message || "Failed to remove context item");
+                    });
+            }
+        });
     }
 
     function openProjectFileFolder(id) {
@@ -870,19 +884,26 @@
 
     function removeProjectFile(id) {
         if (!currentProjectId || !id) return;
-        if (!confirm("Remove this file from the project?")) return;
-        fetch("/api/projects/" + currentProjectId + "/files/" + id, { method: "DELETE" })
-            .then(function(r) {
-                if (r.ok) {
-                    selectProject(currentProjectId);
-                    showSnackbar("File removed", "success");
-                } else {
-                    return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
-                }
-            })
-            .catch(function(e) {
-                showSnackbar(e.message || "Failed to remove file", "error");
-            });
+        window.DecisionsAPI.confirm({
+            title: "Remove project file",
+            message: "Remove this file from the project?",
+            confirmLabel: "Remove",
+            danger: true,
+            onConfirm: function() {
+                fetch("/api/projects/" + currentProjectId + "/files/" + id, { method: "DELETE" })
+                    .then(function(r) {
+                        if (r.ok) {
+                            selectProject(currentProjectId);
+                            showSnackbar("File removed", "success");
+                        } else {
+                            return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
+                        }
+                    })
+                    .catch(function(e) {
+                        showSnackbar(e.message || "Failed to remove file", "error");
+                    });
+            }
+        });
     }
 
     function uploadProjectFiles(files) {
@@ -1068,18 +1089,25 @@
         document.getElementById("project-remove").addEventListener("click", function() {
             if (!currentProjectId) return;
             var name = document.getElementById("project-detail-title").textContent || "this project";
-            if (!confirm("Remove project \"" + name + "\"? This cannot be undone and will remove board data for this project.")) return;
-            fetch("/api/projects/" + currentProjectId, { method: "DELETE" })
-                .then(function(r) {
-                    if (r.ok) {
-                        currentProjectId = null;
-                        showEmpty();
-                        loadProjects();
-                    } else {
-                        r.json().then(function(e) { alert(e.detail || "Failed to remove"); });
-                    }
-                })
-                .catch(function() { alert("Failed to remove project"); });
+            window.DecisionsAPI.confirm({
+                title: "Remove project",
+                message: "Remove project \"" + name + "\"? This cannot be undone and will remove board data for this project.",
+                confirmLabel: "Remove",
+                danger: true,
+                onConfirm: function() {
+                    fetch("/api/projects/" + currentProjectId, { method: "DELETE" })
+                        .then(function(r) {
+                            if (r.ok) {
+                                currentProjectId = null;
+                                showEmpty();
+                                loadProjects();
+                            } else {
+                                r.json().then(function(e) { alert(e.detail || "Failed to remove"); });
+                            }
+                        })
+                        .catch(function() { alert("Failed to remove project"); });
+                }
+            });
         });
 
         var contextAddBtn = document.getElementById("context-item-add");
@@ -3238,15 +3266,21 @@
             return;
         }
         
-        if (!confirm("Terminate all startup terminals?")) return;
-        
-        // Close all terminals and clear persisted state for this project
-        Object.keys(_startupTerminals).forEach(function(termId) {
-            closeStartupTerminal(termId);
+        window.DecisionsAPI.confirm({
+            title: "Terminate startup terminals",
+            message: "Terminate all startup terminals?",
+            confirmLabel: "Terminate",
+            danger: true,
+            onConfirm: function() {
+                // Close all terminals and clear persisted state for this project
+                Object.keys(_startupTerminals).forEach(function(termId) {
+                    closeStartupTerminal(termId);
+                });
+                delete _projectTerminalState[currentProjectId];
+                restoreStartupTerminalChrome();
+                showSnackbar("All terminals terminated", "success");
+            }
         });
-        delete _projectTerminalState[currentProjectId];
-        restoreStartupTerminalChrome();
-        showSnackbar("All terminals terminated", "success");
     }
     
     if (document.readyState === "loading") {

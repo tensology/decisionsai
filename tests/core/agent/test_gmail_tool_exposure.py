@@ -20,7 +20,7 @@ class _CoreHarness(LLMSharedMixin):
 class _OllamaHarness(OllamaResponseMixin):
     def __init__(self) -> None:
         self._agent_name = "DecisionsAI"
-        self._username = "Paul"
+        self._username = "User"
         self._model_name = "llama3:8b"
         self._tools = []
         self._tools_dict = {"google_workspace": SimpleNamespace(name="google_workspace")}

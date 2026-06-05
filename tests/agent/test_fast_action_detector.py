@@ -875,6 +875,14 @@ T("delete the file", "fast_action", "FILE_DELETE",
 T("tell cursor the build keeps failing", "fast_action", "CURSOR_TICKET",
   description="Direct cursor ticket command")
 
+T("Can we talk through what work should be done in Cursor before sending anything?", "llm",
+  category="polite_conversational",
+  description="Conversation about Cursor work, not a handoff")
+
+T("Can we talk through what work should be done in Codex before sending anything?", "llm",
+  category="polite_conversational",
+  description="Conversation about Codex work, not a handoff")
+
 T("find skill for database", "fast_action", "SKILL_FIND",
   description="Direct skill find command")
 

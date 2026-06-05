@@ -1,8 +1,8 @@
 """
 Tool execution audit logging.
 
-Records every tool execution as a step in the workflow audit session for the current chat.
-This provides a visible audit log in Settings > Workflows.
+Records every tool execution in the current chat thread and Hermes ledger.
+It deliberately does not create workflow rows for ordinary chat/tool activity.
 
 Human-visible trace: ``distr.agent.activity`` logs one ``[agent_tool]`` line per completion
 (to ``decisions.log`` and stderr by default). Disable stderr-only with
@@ -195,8 +195,7 @@ def record_tool_execution(
     routing_path: Optional[str] = None,
     routing_hint: Optional[str] = None,
 ) -> None:
-    """Record a tool execution to the workflow audit log for the chat.
-    If event_queue is provided, puts an update event so the app can refresh the UI."""
+    """Record a tool execution to the chat-local audit log."""
     if not chat_id:
         return
     turn_chat_id = int(chat_id)
@@ -220,37 +219,16 @@ def record_tool_execution(
     if not _persist_chat_tool_event(chat_event):
         return
 
-    try:
-        from distr.core.workflow.service import append_audit_step
-
-        inst = instruction_hint or f"Executed {tool_name}"
-        # routing_hint is an alias for routing_path (text_extraction path uses routing_hint)
-        effective_routing = routing_hint if routing_hint is not None else routing_path
-        append_audit_step(
-            chat_id=chat_id,
-            tool_name=tool_name,
-            instruction=inst,
-            result=result,
-            status=status,
-            user_text=user_text,
-            routing_path=effective_routing,
-        )
-        pv = _preview_result(result)
-        _activity_logger.info(
-            "[agent_tool] chat_id=%s tool=%s status=%s instruction=%s result=%s",
-            chat_id,
-            tool_name,
-            status,
-            _preview_result(inst, 120),
-            pv or "(empty)",
-        )
-        if event_queue:
-            try:
-                event_queue.put(("step_runner_updated", {}), block=False)
-            except Exception:
-                pass
-    except Exception as e:
-        logger.debug("record_tool_execution failed: %s", e)
+    inst = instruction_hint or f"Executed {tool_name}"
+    pv = _preview_result(result)
+    _activity_logger.info(
+        "[agent_tool] chat_id=%s tool=%s status=%s instruction=%s result=%s",
+        chat_id,
+        tool_name,
+        status,
+        _preview_result(inst, 120),
+        pv or "(empty)",
+    )
 
     try:
         from distr.core.signals import signal_manager

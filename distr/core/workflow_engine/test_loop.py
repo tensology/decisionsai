@@ -166,9 +166,22 @@ class TestLoopService:
         default timeout is 120 s (longer than plain Python to allow for
         browser startup).
         """
+        bridge_session = None
+        try:
+            from distr.core.browser_bridge import create_browser_artifact_session, write_browser_session_manifest
+
+            bridge_session = create_browser_artifact_session(surface="workflow_playwright")
+            write_browser_session_manifest(bridge_session, {"base_url": base_url or ""})
+        except Exception:
+            bridge_session = None
+
         env_extra = {"PLAYWRIGHT_HEADLESS": "1" if headless else "0"}
         if base_url:
             env_extra["PLAYWRIGHT_BASE_URL"] = str(base_url).strip()
+        if bridge_session:
+            env_extra["DECISIONS_BROWSER_SESSION_ID"] = bridge_session.session_id
+            env_extra["PW_SCREENSHOT_DIR"] = bridge_session.artifact_dir
+            env_extra["PW_CONSOLE_LOG"] = bridge_session.console_log_path
 
         # Inject a headless helper at the top of the code so scripts that
         # use ``launch(headless=...)`` can read the env var automatically.
@@ -176,12 +189,37 @@ class TestLoopService:
             "import os as _os\n"
             "_HEADLESS = _os.environ.get('PLAYWRIGHT_HEADLESS', '1') == '1'\n"
             "BASE_URL = _os.environ.get('PLAYWRIGHT_BASE_URL', '')\n"
+            "PW_SCREENSHOT_DIR = _os.environ.get('PW_SCREENSHOT_DIR', '')\n"
+            "PW_CONSOLE_LOG = _os.environ.get('PW_CONSOLE_LOG', '')\n"
         )
         augmented_code = headless_preamble + code
 
-        return self._run_in_subprocess(
+        result = self._run_in_subprocess(
             augmented_code, timeout=timeout, env_extra=env_extra
         )
+        if bridge_session:
+            try:
+                from pathlib import Path
+                from distr.core.browser_bridge import record_browser_snapshot
+
+                screenshots = sorted(
+                    [
+                        path
+                        for path in Path(bridge_session.artifact_dir).iterdir()
+                        if path.is_file() and path.suffix.lower() in {".png", ".jpg", ".jpeg", ".webp"}
+                    ],
+                    key=lambda path: path.stat().st_mtime,
+                    reverse=True,
+                )
+                record_browser_snapshot(
+                    bridge_session,
+                    status="completed" if result.exit_code == 0 else "failed",
+                    summary="Workflow Playwright step captured browser state.",
+                    screenshot_path=str(screenshots[0]) if screenshots else "",
+                )
+            except Exception:
+                logger.debug("Could not record workflow Playwright browser snapshot", exc_info=True)
+        return result
 
     # ------------------------------------------------------------------
 

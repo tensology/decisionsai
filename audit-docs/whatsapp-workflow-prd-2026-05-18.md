@@ -14,7 +14,7 @@ DecisionsAI already has most of the raw ingredients for WhatsApp-driven work int
 - WhatsApp messages can be composed into ticket drafts and snapshot tickets.
 - Kanban tickets can be linked to projects, workflows, and controlled project execution sessions.
 - Initiative can scan WhatsApp, boards, and Telegram, then suggest or queue actions based on user permissions.
-- Project execution backends exist, including Pi, Codex, Cursor CLI, Claude Code, Cursor IDE, and VS Code IDE, but they should run inside Decisions-controlled execution sessions rather than disappearing into the background.
+- Project execution backends exist, including Pi, Codex, Cursor CLI, and Claude Code, and they should run inside Decisions-controlled execution sessions rather than disappearing into the background.
 
 The current problem is orchestration. The assessed workflow is not really a reusable workflow yet. It is one large instruction that mixes intake, project setup, database loading, ticket creation, IDE launching, and execution, followed by an empty validation step. That makes it hard to reason about, hard to validate, and easy for the agent to do incomplete or irrelevant work.
 

@@ -262,6 +262,11 @@ def set_agent_event_queue(event_queue):
     _agent_event_queue = event_queue
 
 
+def get_agent_event_queue():
+    """Return the registered agent event queue, if one is available."""
+    return _agent_event_queue
+
+
 def speak_text_directly_event_queue(text: str):
     """Emit speak_text_directly through event_queue (preferred) or signal_manager (fallback).
 

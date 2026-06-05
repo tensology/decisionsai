@@ -62,7 +62,7 @@ class ActionType(Enum):
     DOCUMENT_CONVERT = "document_convert"      # Convert documents (MD → PDF/DOCX/Google Doc)
     IMAGE_GENERATE = "image_generate"          # Generate image using image_generator tool
     SCREENSHOT_ANALYZE = "screenshot_analyze"   # Analyze screenshot with vision model
-    CURSOR_TICKET = "cursor_ticket"            # Create ticket file in Cursor tickets folder
+    CURSOR_TICKET = "cursor_ticket"            # Create Cursor plugin handoff
     AUDIO_TRANSCRIBE = "audio_transcribe"      # Transcribe audio files
     WEB_SEARCH = "web_search"                  # Search the web for current info
     WORKFLOW_CONTINUE = "workflow_continue"    # Continue waiting workflow run
@@ -116,11 +116,7 @@ class FastActionDetector:
             # Clipboard variants (more specific, must come first)
             (re.compile(r'\btell\s+cursor\s+(what\'?s?\s+in\s+the\s+clipboard|what\s+is\s+in\s+the\s+clipboard|whats\s+in\s+the\s+clipboard|from\s+the\s+clipboard|from\s+clipboard|clipboard\s+content|the\s+clipboard)', re.IGNORECASE),
              ActionType.CURSOR_TICKET, "create_cursor_ticket", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
-            (re.compile(r'\bcan\s+you\s+tell\s+cursor\s+(what\'?s?\s+in\s+the\s+clipboard|what\s+is\s+in\s+the\s+clipboard|whats\s+in\s+the\s+clipboard|from\s+the\s+clipboard|from\s+clipboard|clipboard\s+content|the\s+clipboard)', re.IGNORECASE),
-             ActionType.CURSOR_TICKET, "create_cursor_ticket", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             # Regular message variants
-            (re.compile(r'\bcan\s+you\s+tell\s+cursor\s+(.+)', re.IGNORECASE),
-             ActionType.CURSOR_TICKET, "create_cursor_ticket", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             (re.compile(r'\btell\s+cursor\s+(.+)', re.IGNORECASE),
              ActionType.CURSOR_TICKET, "create_cursor_ticket", {"text": "__ORIGINAL_TEXT__"}, False, "done"),
             

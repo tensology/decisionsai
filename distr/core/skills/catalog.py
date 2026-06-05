@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent.parent.parent
 _SKILLS_DIR = _PROJECT_ROOT / "skills"
+_ECC_SKILLS_DIR = _PROJECT_ROOT / "vendor" / "ecc" / "skills"
 _REGISTRY_FILE = _SKILLS_DIR / "skills_registry.json"
 
 # Ticket text keywords → bundled skill ids (google/skills + core workflow skills).
@@ -64,23 +65,125 @@ def skills_registry_path() -> Path:
     return _REGISTRY_FILE
 
 
+def _canonical_id(value: str) -> str:
+    text = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower())
+    return text.strip("-")
+
+
+def _skill_file(skill_dir: Path | None) -> Path | None:
+    if not skill_dir:
+        return None
+    for name in ("SKILL.md", "skill.md"):
+        path = skill_dir / name
+        if path.is_file():
+            return path
+    return None
+
+
+def _body_excerpt(skill_file: Path, *, limit: int = 220) -> str:
+    try:
+        text = skill_file.read_text(encoding="utf-8", errors="replace")
+    except Exception:
+        return ""
+    if text.startswith("---"):
+        end = text.find("\n---", 3)
+        if end != -1:
+            text = text[end + 4 :]
+    text = re.sub(r"\s+", " ", text).strip()
+    return text[:limit]
+
+
+def _local_row_directory(row: dict[str, Any]) -> Path:
+    raw_path = str(row.get("path") or row.get("id") or "").strip()
+    path = Path(raw_path)
+    if path.is_absolute():
+        return path
+    return _SKILLS_DIR / raw_path
+
+
+def _vendor_registry_rows(existing_ids: set[str]) -> list[dict[str, Any]]:
+    from distr.core.skills.registry import SkillRegistry
+
+    registry = SkillRegistry(local_roots=[_SKILLS_DIR], vendor_roots=[_ECC_SKILLS_DIR]).scan()
+    rows: list[dict[str, Any]] = []
+    for entry in sorted(registry.entries.values(), key=lambda e: e.canonical_id):
+        if entry.source != "ecc_vendor":
+            continue
+        if entry.canonical_id in existing_ids:
+            continue
+        skill_file = _skill_file(entry.path)
+        description = entry.description or (_body_excerpt(skill_file) if skill_file else "")
+        rows.append(
+            {
+                "id": entry.canonical_id,
+                "name": entry.name or entry.canonical_id,
+                "description": description,
+                "path": str(entry.path.relative_to(_PROJECT_ROOT)) if entry.path.is_relative_to(_PROJECT_ROOT) else str(entry.path),
+                "source": "ecc_vendor",
+                "provenance": {
+                    "repo": "https://github.com/affaan-m/ecc",
+                    "license": "MIT",
+                    "vendored_path": "vendor/ecc",
+                    "content_hash": entry.content_hash,
+                },
+                "target_surfaces": list(entry.target_surfaces),
+                "conflict_policy": "local_preferred",
+                "editable": False,
+            }
+        )
+    return rows
+
+
 @lru_cache(maxsize=1)
 def load_registry() -> tuple[dict[str, Any], ...]:
-    """Load skills_registry.json as an immutable tuple of dict rows."""
-    if not _REGISTRY_FILE.is_file():
-        return tuple()
-    try:
-        raw = json.loads(_REGISTRY_FILE.read_text(encoding="utf-8"))
-    except Exception:
-        logger.warning("skills_registry.json unreadable", exc_info=True)
-        return tuple()
-    if not isinstance(raw, list):
-        return tuple()
+    """Load the deduped local + vendored skills registry as immutable rows."""
     rows: list[dict[str, Any]] = []
-    for item in raw:
-        if isinstance(item, dict) and str(item.get("id") or "").strip():
-            rows.append(dict(item))
+    existing_ids: set[str] = set()
+    if not _REGISTRY_FILE.is_file():
+        raw = []
+    else:
+        try:
+            raw = json.loads(_REGISTRY_FILE.read_text(encoding="utf-8"))
+        except Exception:
+            logger.warning("skills_registry.json unreadable", exc_info=True)
+            raw = []
+    if isinstance(raw, list):
+        for item in raw:
+            if not isinstance(item, dict):
+                continue
+            skill_id = str(item.get("id") or "").strip()
+            if not skill_id:
+                continue
+            row = dict(item)
+            row.setdefault("source", "local")
+            row.setdefault("editable", True)
+            rows.append(row)
+            existing_ids.add(_canonical_id(skill_id))
+    rows.extend(_vendor_registry_rows(existing_ids))
     return tuple(rows)
+
+
+def skill_directory_for_id(skill_id: str) -> Path | None:
+    """Resolve a skill id to either a local skill dir or a vendored ECC skill dir."""
+    key = _canonical_id(skill_id)
+    if not key:
+        return None
+    for row in load_registry():
+        if _canonical_id(str(row.get("id") or "")) != key:
+            continue
+        source = str(row.get("source") or "").lower()
+        if source == "ecc_vendor":
+            raw_path = Path(str(row.get("path") or ""))
+            path = raw_path if raw_path.is_absolute() else _PROJECT_ROOT / raw_path
+        else:
+            path = _local_row_directory(row)
+        if _skill_file(path):
+            return path
+    return None
+
+
+def skill_file_for_id(skill_id: str) -> Path | None:
+    return _skill_file(skill_directory_for_id(skill_id))
 
 
 def registry_by_id() -> dict[str, dict[str, Any]]:

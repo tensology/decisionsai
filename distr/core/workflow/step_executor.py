@@ -577,20 +577,7 @@ class StepExecutorMixin:
             output = (getattr(result, "output", "") or "").strip()
             error = (getattr(result, "error", "") or "").strip()
             passed = bool(getattr(result, "success", False))
-            engine = (getattr(result, "engine", "") or "").strip()
             text = output or error or f"Sent to {backend_name}."
-            if engine == "ide_ticket" and passed and run_id:
-                try:
-                    with get_session() as db:
-                        run = db.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == int(run_id)).first()
-                        if run:
-                            payload = json.loads(run.run_data or "{}") or {}
-                            payload["ide_handoff_pending"] = True
-                            payload["ide_ticket_path"] = output
-                            run.run_data = json.dumps(payload)
-                            db.commit()
-                except Exception:
-                    pass
             return {
                 "output": (
                     f"Project CLI backend: {backend_name}\n"
@@ -599,7 +586,7 @@ class StepExecutorMixin:
                     f"{text}"
                 )[:6000],
                 "passed": passed,
-                "skip_wait": engine != "ide_ticket",
+                "skip_wait": True,
             }
         except Exception as e:
             return {"output": f"Failed sending to project CLI: {e}", "passed": False}

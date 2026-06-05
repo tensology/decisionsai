@@ -1267,7 +1267,7 @@ function createChatItem(chat) {
                     <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
                 </svg>
             </button>
-            <button class="chat-item-btn" onclick="event.stopPropagation(); deleteChat(${chat.id})" title="Delete">
+            <button type="button" class="chat-item-btn chat-item-delete-btn" data-chat-id="${chat.id}" title="Delete" aria-label="Delete chat">
                 <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
                     <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
                 </svg>
@@ -1293,6 +1293,14 @@ function createChatItem(chat) {
         renameBtn.addEventListener('click', (e) => {
             e.stopPropagation();
             renameChat(chat.id);
+        });
+    }
+    const deleteBtn = div.querySelector('.chat-item-delete-btn');
+    if (deleteBtn) {
+        deleteBtn.addEventListener('click', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            deleteChat(chat.id);
         });
     }
 
@@ -2841,7 +2849,13 @@ function addErrorMessage(text) {
 
 // Delete Chat — when deleting the loaded or current chat, load the first remaining chat and select it
 async function deleteChat(chatId) {
-    if (!confirm('Are you sure you want to delete this chat?')) {
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Delete chat",
+        message: "Delete this chat? This cannot be undone.",
+        confirmLabel: "Delete",
+        danger: true,
+    });
+    if (!confirmed) {
         return;
     }
     const wasLoaded = (loadedChatId === chatId);
@@ -3685,7 +3699,13 @@ async function deleteChatCustomVoice(context) {
     const dbId = selected.dataset.customVoiceId || (voiceId && voiceId.startsWith('custom_') ? voiceId.split('_')[1] : '');
     const providerVoiceId = selected.dataset.providerVoiceId || voiceId;
     const voiceName = voiceEl.options[voiceEl.selectedIndex]?.text || voiceId;
-    if (!confirm('Delete custom voice "' + voiceName + '"?')) return;
+    const confirmed = await window.DecisionsAPI.confirm({
+        title: "Delete custom voice",
+        message: 'Delete custom voice "' + voiceName + '"? This cannot be undone.',
+        confirmLabel: "Delete",
+        danger: true,
+    });
+    if (!confirmed) return;
 
     try {
         const url = dbId

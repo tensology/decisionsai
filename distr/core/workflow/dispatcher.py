@@ -600,6 +600,7 @@ def start_workflow_run(
     board_id: Optional[int] = None,
     ticket_id: Optional[int] = None,
     run_metadata: Optional[Dict[str, Any]] = None,
+    event_queue: Optional[Any] = None,
 ) -> Dict[str, Any]:
     """Start a full workflow run.
 
@@ -765,7 +766,7 @@ def start_workflow_run(
                 details=f"Workflow run {run_id} started.",
             )
 
-        workflow_agent = WorkflowAgent()
+        workflow_agent = WorkflowAgent(event_queue=event_queue)
         agent_loop = asyncio.new_event_loop()
 
         def _run_loop():

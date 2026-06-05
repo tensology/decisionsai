@@ -38,6 +38,11 @@ from distr.core.initiative.proposed_action import (
     parse_llm_response,
     serialize,
 )
+from distr.core.human_engagement import (
+    EngagementIntent,
+    HumanEngagementService,
+    human_project_label,
+)
 
 logger = logging.getLogger("distr.core.initiative.service")
 
@@ -83,9 +88,12 @@ def _initiative_update_text(text: str) -> str:
     clean = _clean_telegram_line(text, 360)
     if not clean:
         return ""
+    clean = re.sub(r"(?i)^#+\s*quick check-?in\s*[-:]*\s*", "Quick check-in: ", clean).strip()
     if clean.lower().startswith(("i ", "i'", "i’ve", "i'll", "workflow", "ticket", "created", "started", "approved", "rejected")):
         return clean
-    return f"Quick update: {clean}"
+    if clean.lower().startswith("quick check-in"):
+        return clean
+    return clean
 
 
 def _planner_telegram_excerpt(markdown: str, max_len: int = 320) -> str:
@@ -162,9 +170,10 @@ class InitiativeService:
     IDLE_TIMEOUT_MS = 300_000   # 5 minutes
     SCHEDULE_TICK_MS = 60_000   # 1 minute
 
-    def __init__(self, telegram_manager, chat_manager):
+    def __init__(self, telegram_manager, chat_manager, event_queue=None):
         self.telegram_manager = telegram_manager
         self.chat_manager = chat_manager
+        self.event_queue = event_queue
         self._draft_queue = DraftQueue()
         self._context_assembler = ContextAssembler()
         self._idle_timer = QTimer()
@@ -188,6 +197,11 @@ class InitiativeService:
         # same action is not repeatedly proposed within cooldown_seconds.
         self._recent_proposals: deque = deque()
         self._proposal_cooldown_s: float = 7_200.0  # 2 hours; approvals should not nag.
+        self._execution_notice_cache: dict[str, float] = {}
+        self._execution_stale_after_s: float = 900.0
+        self._execution_stale_repeat_s: float = 1800.0
+        self._execution_idle_max_notice_age_s: float = 1200.0
+        self._execution_terminal_notice_window_s: float = 3600.0
         # Run settings migration on init
         try:
             from distr.core.utils import load_settings_from_db
@@ -365,6 +379,11 @@ class InitiativeService:
         except Exception:
             logger.error("InitiativeService: failed to load settings on schedule tick", exc_info=True)
             return
+        threading.Thread(
+            target=self._maybe_send_execution_nudges,
+            args=(settings,),
+            daemon=True,
+        ).start()
         level = self._get_level(settings)
         if level not in ("operate", "own"):
             return
@@ -1381,7 +1400,16 @@ class InitiativeService:
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if allow_telegram and uid and uid > 0:
             msg = _initiative_approval_text(entry, resolved_tier.name)
-            self.telegram_manager.send_to_telegram(text=msg)
+            self._send_telegram_if_allowed(
+                msg,
+                settings,
+                kind="approval_request",
+                subject_type="initiative_action",
+                subject_id=entry.id,
+                state_fingerprint=entry.id,
+                requires_response=True,
+                priority="high",
+            )
 
         # Also log to chat
         self._log_to_chat(
@@ -1405,18 +1433,444 @@ class InitiativeService:
         except Exception as e:
             logger.debug("InitiativeService: _log_to_chat failed: %s", e)
 
-    def _send_telegram_if_allowed(self, text: str, settings: dict) -> None:
+    def _send_telegram_if_allowed(
+        self,
+        text: str,
+        settings: dict,
+        *,
+        kind: str = "initiative_update",
+        subject_type: str = "initiative",
+        subject_id: str = "global",
+        state_fingerprint: str | None = None,
+        requires_response: bool = False,
+        priority: str = "normal",
+        allow_voice: bool | None = None,
+    ) -> None:
+        text = _initiative_update_text(text)
+        if not text:
+            return
+        if allow_voice is None:
+            allow_voice = kind not in {"idle_nudge", "workflow_idle_nudge"}
         allow_telegram = settings.get("initiative_allow_telegram", False)
-        if not allow_telegram:
+        service = HumanEngagementService(
+            telegram_manager=self.telegram_manager,
+            allow_telegram=allow_telegram,
+        )
+        decision = service.decide(EngagementIntent(
+            source="initiative",
+            surface="proactive",
+            kind=kind,
+            priority=priority,
+            subject_type=subject_type,
+            subject_id=str(subject_id),
+            state_fingerprint=state_fingerprint or text,
+            body=text,
+            voice_body=text if allow_voice else None,
+            allow_voice=bool(allow_voice),
+            requires_response=requires_response,
+        ))
+        if not decision.should_send:
+            return
+        outbound_text = decision.final_text or decision.final_voice_text or text
+        self._record_notification_route(decision.channel, decision.route_reason, outbound_text)
+        try:
+            if decision.channel == "desktop":
+                from distr.core.signals import signal_manager
+
+                signal_manager.speak_text_directly.emit(outbound_text)
+                logger.info("InitiativeService: sent desktop notification (%s): %s", decision.route_reason, outbound_text[:100])
+                return
+            if decision.channel == "remote":
+                if self._send_remote_notification(outbound_text):
+                    logger.info("InitiativeService: sent remote notification (%s): %s", decision.route_reason, outbound_text[:100])
+                    return
+                if not allow_telegram:
+                    return
+            if decision.channel == "telegram" and decision.format == "voice" and getattr(self, "event_queue", None):
+                try:
+                    self.event_queue.put(('send_to_telegram', {
+                        'text': outbound_text,
+                        'is_done': False,
+                        'provider': 'tool',
+                        'skip_screenshot': True,
+                        'explicit_artifact_intent': False,
+                        'input_type': 'voice',
+                    }), block=False)
+                    logger.info("InitiativeService: queued Telegram voice notification (%s): %s", decision.route_reason, outbound_text[:100])
+                    return
+                except Exception:
+                    logger.debug("InitiativeService: could not queue Telegram voice notification", exc_info=True)
+            self.telegram_manager.send_to_telegram(text=outbound_text)
+            logger.info("InitiativeService: sent Telegram notification (%s): %s", decision.route_reason, outbound_text[:100])
+        except Exception as e:
+            logger.warning("InitiativeService: notification send failed: %s", e)
+
+    def _record_notification_route(self, surface: str, reason: str, text: str) -> None:
+        try:
+            from distr.core.orchestration_events import emit_orchestration_event
+
+            emit_orchestration_event(
+                source="initiative",
+                event_type="initiative_notification_routed",
+                status="observed",
+                summary=f"Initiative notification routed to {surface}.",
+                payload={
+                    "surface": surface,
+                    "reason": reason,
+                    "preview": (text or "")[:240],
+                },
+            )
+        except Exception:
+            logger.debug("InitiativeService: could not record notification route", exc_info=True)
+
+    def _send_remote_notification(self, text: str) -> bool:
+        manager = self.telegram_manager
+        if manager is None or not hasattr(manager, "_send_websocket_message"):
+            return False
+        ctx = getattr(manager, "_pending_remote_agent_response", None)
+        request_id = ctx.get("request_id") if isinstance(ctx, dict) else None
+        try:
+            manager._send_websocket_message({
+                "type": "remote_agent_response",
+                "request_id": request_id,
+                "data": {
+                    "text": text,
+                    "mode": "proactive",
+                    "source_command": "initiative_notification",
+                    "audio": None,
+                },
+            })
+            return True
+        except Exception:
+            logger.debug("InitiativeService: remote notification send failed", exc_info=True)
+            return False
+
+    def _notice_allowed(self, key: str, *, repeat_after_s: float | None = None) -> bool:
+        now = time.time()
+        previous = self._execution_notice_cache.get(key)
+        if previous is None:
+            self._execution_notice_cache[key] = now
+            return True
+        if repeat_after_s is not None and now - previous >= repeat_after_s:
+            self._execution_notice_cache[key] = now
+            return True
+        return False
+
+    @staticmethod
+    def _dt_age_s(value) -> float | None:
+        if not value:
+            return None
+        try:
+            if getattr(value, "tzinfo", None) is not None:
+                value = value.replace(tzinfo=None)
+            return max(0.0, (datetime.utcnow() - value).total_seconds())
+        except Exception:
+            return None
+
+    @staticmethod
+    def _short_label(value: str, max_len: int = 72) -> str:
+        clean = re.sub(r"\s+", " ", str(value or "")).strip()
+        if len(clean) <= max_len:
+            return clean
+        return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "…"
+
+    @staticmethod
+    def _packet(value) -> dict:
+        if isinstance(value, dict):
+            return value
+        if not value:
+            return {}
+        try:
+            data = json.loads(value)
+            return data if isinstance(data, dict) else {}
+        except Exception:
+            return {}
+
+    @staticmethod
+    def _clean_summary_fragment(value: str, max_len: int = 150) -> str:
+        clean = re.sub(r"\s+", " ", str(value or "")).strip()
+        clean = clean.strip(" -:")
+        if len(clean) <= max_len:
+            return clean
+        return clean[: max_len - 1].rsplit(" ", 1)[0].rstrip() + "..."
+
+    def _execution_backend_label(self, row, input_packet: dict, project) -> tuple[str, str]:
+        candidates = [
+            input_packet.get("source"),
+            input_packet.get("surface"),
+            input_packet.get("backend_id"),
+            input_packet.get("backend"),
+            getattr(row, "route_backend", ""),
+            getattr(project, "coding_backend", ""),
+        ]
+        known = {
+            "cursor": "Cursor",
+            "codex": "Codex",
+            "claude": "Claude",
+            "claude_code": "Claude",
+            "claude-code": "Claude",
+        }
+        for candidate in candidates:
+            key = re.sub(r"\s+", "_", str(candidate or "").strip().lower())
+            if key in known:
+                return known[key], key
+
+        route_type = str(getattr(row, "route_type", "") or "").strip().lower()
+        if route_type == "ide_bridge" or any(input_packet.get(k) for k in ("cwd", "folder", "chat_id")):
+            return "the IDE session", "ide"
+        return "the project session", "project"
+
+    def _execution_project_label(self, row, input_packet: dict, project, surface: str) -> str:
+        workspace_path = (
+            input_packet.get("folder")
+            or input_packet.get("cwd")
+            or getattr(project, "folder_location", "")
+            or getattr(project, "path", "")
+            or ""
+        )
+        raw_name = (
+            input_packet.get("project_name")
+            or getattr(project, "name", "")
+            or (f"project {getattr(row, 'project_id', '')}" if getattr(row, "project_id", None) else "")
+        )
+        return self._short_label(
+            human_project_label(
+                raw_name,
+                workspace_path=workspace_path,
+                surface=surface,
+            )
+        )
+
+    def _execution_instruction_summary(self, row, input_packet: dict) -> str:
+        for key in (
+            "instruction",
+            "prompt",
+            "user_request",
+            "request",
+            "task",
+            "ticket_title",
+            "message",
+        ):
+            summary = self._clean_summary_fragment(input_packet.get(key, ""))
+            if summary:
+                return summary
+        return ""
+
+    def _execution_result_summary(self, row, output_packet: dict) -> str:
+        for key in ("summary", "result", "message", "final_response", "output"):
+            summary = self._clean_summary_fragment(output_packet.get(key, ""), 170)
+            if summary:
+                return summary
+        error = self._clean_summary_fragment(getattr(row, "error", ""), 150)
+        return error
+
+    def _execution_idle_fingerprint(self, row, status: str, input_packet: dict) -> str:
+        # Idle means the user-facing state has not changed. updated_at can churn
+        # from bookkeeping, so keep it out of this fingerprint.
+        started = getattr(row, "started_at", None) or input_packet.get("started_at") or ""
+        instruction = self._execution_instruction_summary(row, input_packet)
+        instruction_hash = hashlib.sha256(instruction.encode("utf-8")).hexdigest()[:12] if instruction else ""
+        return f"idle:{status}:{started}:{instruction_hash}"
+
+    def _execution_idle_text(self, backend_label: str, project_name: str, minutes: int, instruction: str) -> str:
+        prefix = f"{backend_label} for {project_name} has not shown new movement for {minutes} minutes."
+        if instruction:
+            prefix += f" It was working on: {instruction}."
+        return f"{prefix} I can check it if you ask."
+
+    def _execution_waiting_text(self, backend_label: str, project_name: str, instruction: str) -> str:
+        prefix = f"{backend_label} for {project_name} is waiting for input."
+        if instruction:
+            prefix += f" It was working on: {instruction}."
+        return f"{prefix} I saved the current state in Decisions."
+
+    def _execution_terminal_text(
+        self,
+        backend_label: str,
+        project_name: str,
+        status: str,
+        instruction: str,
+        result: str,
+    ) -> str:
+        if status == "completed":
+            text = f"{backend_label} finished {project_name}."
+        else:
+            text = f"{backend_label} ran into an issue on {project_name}."
+        if instruction:
+            text += f" It was working on: {instruction}."
+        if result:
+            text += f" Result: {result}."
+        text += " I saved the details in Decisions."
+        return text
+
+    def _maybe_send_execution_nudges(self, settings: dict) -> None:
+        if not settings.get("initiative_allow_telegram", False):
             return
         uid = getattr(self.telegram_manager, "telegram_user_id", None)
         if not uid or uid <= 0:
             return
-        text = _initiative_update_text(text)
-        if not text:
-            return
+        sent_this_tick = 0
         try:
-            self.telegram_manager.send_to_telegram(text=text)
-            logger.info("InitiativeService: sent Telegram: %s", text[:100])
-        except Exception as e:
-            logger.warning("InitiativeService: Telegram send failed: %s", e)
+            max_notices = max(1, int(settings.get("initiative_max_notifications_per_tick", 1) or 1))
+        except Exception:
+            max_notices = 1
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.kanban import ProjectExecutionSession
+            from distr.core.db.projects import Project
+            from distr.core.db.workflow import AutoWorkflow, AutoWorkflowRun
+
+            with get_session() as session:
+                project_rows = (
+                    session.query(ProjectExecutionSession, Project)
+                    .outerjoin(Project, Project.id == ProjectExecutionSession.project_id)
+                    .order_by(ProjectExecutionSession.updated_at.desc())
+                    .limit(40)
+                    .all()
+                )
+                workflow_rows = (
+                    session.query(AutoWorkflowRun, AutoWorkflow)
+                    .outerjoin(AutoWorkflow, AutoWorkflow.id == AutoWorkflowRun.workflow_id)
+                    .order_by(AutoWorkflowRun.started_at.desc())
+                    .limit(40)
+                    .all()
+                )
+
+                for row, project in project_rows:
+                    status = (row.status or "").strip().lower()
+                    input_packet = self._packet(getattr(row, "input_packet", None))
+                    output_packet = self._packet(getattr(row, "output_packet", None))
+                    backend_label, backend_surface = self._execution_backend_label(row, input_packet, project)
+                    project_name = self._execution_project_label(row, input_packet, project, backend_surface)
+                    instruction = self._execution_instruction_summary(row, input_packet)
+                    if status in {"completed", "failed"}:
+                        age_s = self._dt_age_s(row.completed_at or row.updated_at)
+                        if age_s is not None and age_s > self._execution_terminal_notice_window_s:
+                            continue
+                        key = f"project:{row.id}:{status}"
+                        if self._notice_allowed(key):
+                            result = self._execution_result_summary(row, output_packet)
+                            self._send_telegram_if_allowed(
+                                self._execution_terminal_text(
+                                    backend_label,
+                                    project_name,
+                                    status,
+                                    instruction,
+                                    result,
+                                ),
+                                settings,
+                                kind="execution_terminal",
+                                subject_type="ide_session",
+                                subject_id=str(row.id),
+                                state_fingerprint=status,
+                            )
+                            sent_this_tick += 1
+                            if sent_this_tick >= max_notices:
+                                return
+                    elif status in {"waiting", "needs_input"}:
+                        key = f"project:{row.id}:waiting"
+                        if self._notice_allowed(key):
+                            self._send_telegram_if_allowed(
+                                self._execution_waiting_text(backend_label, project_name, instruction),
+                                settings,
+                                kind="execution_waiting",
+                                subject_type="ide_session",
+                                subject_id=str(row.id),
+                                state_fingerprint=f"waiting:{status}:{instruction}",
+                                requires_response=True,
+                            )
+                            sent_this_tick += 1
+                            if sent_this_tick >= max_notices:
+                                return
+                    elif status in {"queued", "running", "dispatched", "observed"}:
+                        age_s = self._dt_age_s(row.updated_at)
+                        if age_s is not None and age_s >= self._execution_stale_after_s:
+                            max_age_s = float(getattr(self, "_execution_idle_max_notice_age_s", 1200.0))
+                            if max_age_s > 0 and age_s > max_age_s:
+                                continue
+                            minutes = int(age_s // 60)
+                            key = f"project:{row.id}:stale"
+                            state_fingerprint = self._execution_idle_fingerprint(row, status, input_packet)
+                            if self._notice_allowed(key):
+                                self._send_telegram_if_allowed(
+                                    self._execution_idle_text(backend_label, project_name, minutes, instruction),
+                                    settings,
+                                    kind="idle_nudge",
+                                    subject_type="ide_session",
+                                    subject_id=str(row.id),
+                                    state_fingerprint=state_fingerprint,
+                                    requires_response=True,
+                                    allow_voice=False,
+                                )
+                                sent_this_tick += 1
+                                if sent_this_tick >= max_notices:
+                                    return
+
+                for run, workflow in workflow_rows:
+                    status = (run.status or "").strip().lower()
+                    workflow_name = self._short_label(getattr(workflow, "name", "") or f"workflow {run.workflow_id}")
+                    if status in {"completed", "failed", "cancelled"}:
+                        age_s = self._dt_age_s(run.completed_at or run.started_at)
+                        if age_s is not None and age_s > self._execution_terminal_notice_window_s:
+                            continue
+                        key = f"workflow:{run.id}:{status}"
+                        if self._notice_allowed(key):
+                            if status == "completed":
+                                workflow_text = f"{workflow_name} finished successfully. I saved the details in Decisions."
+                            elif status == "cancelled":
+                                workflow_text = f"{workflow_name} was cancelled. I saved the details in Decisions."
+                            else:
+                                workflow_text = f"{workflow_name} ran into an issue. I saved the details in Decisions."
+                            self._send_telegram_if_allowed(
+                                workflow_text,
+                                settings,
+                                kind="workflow_terminal",
+                                subject_type="workflow_run",
+                                subject_id=str(run.id),
+                                state_fingerprint=status,
+                            )
+                            sent_this_tick += 1
+                            if sent_this_tick >= max_notices:
+                                return
+                    elif status == "waiting":
+                        key = f"workflow:{run.id}:waiting"
+                        if self._notice_allowed(key):
+                            self._send_telegram_if_allowed(
+                                f"{workflow_name} is waiting for input. I saved the current state in Decisions.",
+                                settings,
+                                kind="workflow_waiting",
+                                subject_type="workflow_run",
+                                subject_id=str(run.id),
+                                state_fingerprint=str(run.started_at),
+                                requires_response=True,
+                            )
+                            sent_this_tick += 1
+                            if sent_this_tick >= max_notices:
+                                return
+                    elif status == "running":
+                        age_s = self._dt_age_s(run.started_at)
+                        if age_s is not None and age_s >= self._execution_stale_after_s:
+                            max_age_s = float(getattr(self, "_execution_idle_max_notice_age_s", 1200.0))
+                            if max_age_s > 0 and age_s > max_age_s:
+                                continue
+                            minutes = int(age_s // 60)
+                            key = f"workflow:{run.id}:stale"
+                            if self._notice_allowed(key):
+                                self._send_telegram_if_allowed(
+                                    (
+                                        f"{workflow_name} has not shown new movement for {minutes} minutes. "
+                                        "I can inspect it if you ask."
+                                    ),
+                                    settings,
+                                    kind="workflow_idle_nudge",
+                                    subject_type="workflow_run",
+                                    subject_id=str(run.id),
+                                    state_fingerprint=str(run.started_at),
+                                    requires_response=True,
+                                    allow_voice=False,
+                                )
+                                sent_this_tick += 1
+                                if sent_this_tick >= max_notices:
+                                    return
+        except Exception:
+            logger.debug("InitiativeService: execution nudge scan failed", exc_info=True)

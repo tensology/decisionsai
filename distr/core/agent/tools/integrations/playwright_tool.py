@@ -23,7 +23,8 @@ from pydantic import BaseModel, Field
 
 logger = logging.getLogger(__name__)
 
-# Temp directory for Playwright screenshots and console logs
+# Backward-compatible default directory; each actual run now gets an isolated
+# directory from distr.core.browser_bridge.
 _PW_SCREENSHOT_DIR = os.path.join(tempfile.gettempdir(), "pw_screenshots")
 _PW_CONSOLE_LOG = os.path.join(_PW_SCREENSHOT_DIR, "console.json")
 
@@ -126,7 +127,12 @@ class PlaywrightTool(BaseTool):
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _build_console_wrapper(user_code: str) -> str:
+    def _build_console_wrapper(
+        user_code: str,
+        *,
+        screenshot_dir: Optional[str] = None,
+        console_log: Optional[str] = None,
+    ) -> str:
         """Wrap user code with automatic browser console log capture.
 
         Injects page.on() listeners for console messages, page errors, and
@@ -137,12 +143,15 @@ class PlaywrightTool(BaseTool):
         # 1. Monkey-patches browser.new_page() to auto-attach console listeners
         # 2. Runs the user's original code unchanged
         # 3. Writes captured logs to _PW_CONSOLE_LOG
+        screenshot_dir = screenshot_dir or _PW_SCREENSHOT_DIR
+        console_log = console_log or _PW_CONSOLE_LOG
         wrapper = f'''
 import json as _json, os as _os, atexit as _atexit
 
 _pw_console_logs = {{"errors": [], "warnings": [], "info": [], "failed_requests": []}}
-_PW_CONSOLE_LOG = {repr(_PW_CONSOLE_LOG)}
-_os.makedirs({repr(_PW_SCREENSHOT_DIR)}, exist_ok=True)
+_PW_CONSOLE_LOG = {repr(console_log)}
+_PW_SCREENSHOT_DIR = {repr(screenshot_dir)}
+_os.makedirs(_PW_SCREENSHOT_DIR, exist_ok=True)
 
 # Clear previous console log
 if _os.path.exists(_PW_CONSOLE_LOG):
@@ -189,6 +198,8 @@ def _pw_attach_listeners(page):
     def _patched_screenshot(**ss_kwargs):
         if "full_page" not in ss_kwargs:
             ss_kwargs["full_page"] = True
+        if "path" not in ss_kwargs:
+            ss_kwargs["path"] = _os.path.join(_PW_SCREENSHOT_DIR, "result.png")
         return _orig_screenshot(**ss_kwargs)
     page.screenshot = _patched_screenshot
 
@@ -217,12 +228,13 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
         return wrapper + user_code + '\n\n_pw_flush_console()\n'
 
     @staticmethod
-    def _read_console_logs() -> Optional[dict]:
+    def _read_console_logs(console_log: Optional[str] = None) -> Optional[dict]:
         """Read captured console logs from the JSON file."""
-        if not os.path.isfile(_PW_CONSOLE_LOG):
+        path = console_log or _PW_CONSOLE_LOG
+        if not os.path.isfile(path):
             return None
         try:
-            with open(_PW_CONSOLE_LOG, "r") as f:
+            with open(path, "r") as f:
                 return json.load(f)
         except Exception as exc:
             logger.warning("Failed to read console logs: %s", exc)
@@ -262,13 +274,14 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _find_screenshot() -> Optional[str]:
+    def _find_screenshot(screenshot_dir: Optional[str] = None) -> Optional[str]:
         """Find the most recent screenshot in the Playwright screenshot dir."""
-        if not os.path.isdir(_PW_SCREENSHOT_DIR):
+        root = screenshot_dir or _PW_SCREENSHOT_DIR
+        if not os.path.isdir(root):
             return None
         candidates = []
-        for fname in os.listdir(_PW_SCREENSHOT_DIR):
-            fpath = os.path.join(_PW_SCREENSHOT_DIR, fname)
+        for fname in os.listdir(root):
+            fpath = os.path.join(root, fname)
             if os.path.isfile(fpath) and fname.lower().endswith((".png", ".jpg", ".jpeg", ".webp")):
                 candidates.append((os.path.getmtime(fpath), fpath))
         if not candidates:
@@ -454,13 +467,30 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
         label = description or "Playwright script"
         logger.info("PlaywrightTool: executing — %s", label)
 
+        try:
+            from distr.core.browser_bridge import (
+                create_browser_artifact_session,
+                record_browser_snapshot,
+                write_browser_session_manifest,
+            )
+
+            browser_session = create_browser_artifact_session(surface="playwright")
+            write_browser_session_manifest(browser_session, {"description": description or ""})
+            screenshot_dir = browser_session.artifact_dir
+            console_log = browser_session.console_log_path
+        except Exception:
+            browser_session = None
+            record_browser_snapshot = None
+            screenshot_dir = _PW_SCREENSHOT_DIR
+            console_log = _PW_CONSOLE_LOG
+
         # Ensure screenshot directory exists
-        os.makedirs(_PW_SCREENSHOT_DIR, exist_ok=True)
+        os.makedirs(screenshot_dir, exist_ok=True)
 
         # Clear previous console log
-        if os.path.exists(_PW_CONSOLE_LOG):
+        if os.path.exists(console_log):
             try:
-                os.remove(_PW_CONSOLE_LOG)
+                os.remove(console_log)
             except OSError:
                 pass
 
@@ -493,7 +523,7 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                 logger.warning("Confirmation check failed, proceeding: %s", e)
 
         # Wrap user code with console log capture harness
-        wrapped_code = self._build_console_wrapper(code)
+        wrapped_code = self._build_console_wrapper(code, screenshot_dir=screenshot_dir, console_log=console_log)
 
         # Write code to a temp file and execute
         tmp = None
@@ -539,16 +569,27 @@ _pw_sync.BrowserContext.new_page = _patched_context_new_page
                     pass
 
         # --- Read captured console logs ---
-        console_logs = self._read_console_logs()
+        console_logs = self._read_console_logs(console_log)
         if console_logs:
             console_summary = self._format_console_logs(console_logs)
             response += f"\n\n--- Browser Console Logs ---\n{console_summary}"
 
         # --- Vision analysis of the screenshot (with console logs for cross-check) ---
         if analyze_screenshot:
-            screenshot_path = self._find_screenshot()
+            screenshot_path = self._find_screenshot(screenshot_dir)
             if screenshot_path:
                 logger.info("PlaywrightTool: found screenshot at %s, sending to vision LLM", screenshot_path)
+                if browser_session and record_browser_snapshot:
+                    try:
+                        record_browser_snapshot(
+                            browser_session,
+                            status="completed",
+                            summary=f"Playwright browser snapshot captured: {label}",
+                            screenshot_path=screenshot_path,
+                            console_logs=console_logs or {},
+                        )
+                    except Exception:
+                        logger.debug("Could not record browser snapshot", exc_info=True)
                 analysis = self._analyze_with_vision(screenshot_path, description, console_logs)
                 if analysis:
                     response += f"\n\n--- Browser Screenshot Analysis (Vision LLM) ---\n{analysis}"

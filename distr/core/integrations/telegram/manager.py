@@ -643,7 +643,7 @@ class TelegramWebSocketManager(
                 logger.info("Sending shutdown message to Telegram...")
                 # Bypass rate limiting and deduplication for shutdown message
                 # Build message directly to ensure it's sent
-                msg = {"type": "send_message", "text": f"{self._get_agent_name()} says goodbye! DecisionsAI has shut down."}
+                msg = {"type": "send_message", "text": "Goodbye."}
 
                 # Get valid chat id
                 effective_chat_id = self.chat_id
@@ -852,7 +852,7 @@ class TelegramWebSocketManager(
                 logger.info(
                     "[Telegram] 📤 Sending online message (enabled in settings)"
                 )
-                self.send_to_telegram(f"{self._get_agent_name()} is online.", None, None)
+                self.send_to_telegram("I'm back online.", None, None)
             else:
                 logger.debug("[Telegram] ⏭️ Skipping online message (disabled)")
             self._online_message_sent = True

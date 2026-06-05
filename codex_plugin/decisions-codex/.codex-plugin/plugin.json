@@ -1,7 +1,7 @@
 {
   "name": "decisions-codex",
   "version": "0.1.2",
-  "description": "Codex bridge for DecisionsAI agentic workflow execution.",
+  "description": "Codex IDE/chat bridge for DecisionsAI project orchestration.",
   "author": {
     "name": "Tensology",
     "email": "support@decisions.ai",
@@ -22,8 +22,8 @@
   "skills": "./skills/",
   "interface": {
     "displayName": "DecisionsAI Codex",
-    "shortDescription": "Run DecisionsAI workflow tickets through Codex with evidence, steering, and validation callbacks.",
-    "longDescription": "Connects Codex to the DecisionsAI agentic workflow loop. Codex receives bounded ticket packets, works inside the linked project folder, reports status, changed files, tests, evidence, blockers, steering, waiting, and completion events back to DecisionsAI, and lets the Hermes-backed run ledger retain execution memory.",
+    "shortDescription": "Connect Codex IDE chats and workflow tickets to DecisionsAI project orchestration.",
+    "longDescription": "Connects Codex IDE/chat sessions to DecisionsAI project orchestration. Codex can receive bounded ticket packets or ordinary project prompts, work inside the linked project folder, report prompts, status, changed files, tests, evidence, blockers, steering, waiting, and completion events back to DecisionsAI, and let the Hermes-backed run ledger retain execution memory.",
     "developerName": "Tensology",
     "category": "Developer Tools",
     "capabilities": [
@@ -35,9 +35,9 @@
     "privacyPolicyURL": "https://www.decisionsai.net/privacy",
     "termsOfServiceURL": "https://www.decisionsai.net/terms",
     "defaultPrompt": [
+      "Start a DecisionsAI-linked Codex project chat.",
       "Run this DecisionsAI ticket and report evidence.",
-      "Continue this workflow step and return status.",
-      "Validate this project against the ticket outcome."
+      "Continue this workflow step and return status."
     ],
     "brandColor": "#f97316",
     "composerIcon": "./assets/icon.png",

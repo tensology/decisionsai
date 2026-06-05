@@ -1387,22 +1387,8 @@ def run_migrations():
     except Exception as e:
         logger.debug(f"AutoWorkflow routing_mode migration: {e}")
 
-    # Ticket boards: add agent check-in columns
-    _kanban_agent_columns = [
-        ("agent_enabled", "BOOLEAN DEFAULT 0"),
-        ("whatsapp_checkin_enabled", "BOOLEAN DEFAULT 0"),
-        ("agent_frequency", "VARCHAR DEFAULT 'daily'"),
-        ("agent_time", "VARCHAR DEFAULT '09:00'"),
-        ("agent_days", "TEXT DEFAULT '[]'"),
-        ("agent_monthly_day", "INTEGER DEFAULT 1"),
-        ("agent_orchestrator_provider", "VARCHAR DEFAULT ''"),
-        ("agent_orchestrator_model", "VARCHAR DEFAULT ''"),
-        ("agent_coder_provider", "VARCHAR DEFAULT ''"),
-        ("agent_coder_model", "VARCHAR DEFAULT ''"),
-        ("agent_sub_provider", "VARCHAR DEFAULT ''"),
-        ("agent_sub_model", "VARCHAR DEFAULT ''"),
-        ("agent_source_lane", "VARCHAR DEFAULT ''"),
-        ("agent_done_lane", "VARCHAR DEFAULT ''"),
+    # Ticket boards: add default routing/link columns.
+    _kanban_board_columns = [
         ("default_workflow_id", "INTEGER DEFAULT NULL"),
         ("default_project_id", "INTEGER DEFAULT NULL"),
         ("default_snippet_id", "INTEGER DEFAULT NULL"),
@@ -1413,7 +1399,7 @@ def run_migrations():
         with engine.connect() as conn:
             result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='kanban_boards'"))
             if result.fetchone():
-                for col, col_def in _kanban_agent_columns:
+                for col, col_def in _kanban_board_columns:
                     try:
                         conn.execute(text(f"ALTER TABLE kanban_boards ADD COLUMN {col} {col_def}"))
                         conn.commit()
@@ -1422,7 +1408,7 @@ def run_migrations():
                         if "duplicate column" not in str(e).lower():
                             logger.warning(f"Could not add {col} column to kanban_boards: {e}")
     except Exception as e:
-        logger.debug(f"Ticket Board agent columns migration: {e}")
+        logger.debug(f"Ticket Board columns migration: {e}")
 
     # AutoWorkflow steps: add action_id column (link step to Action entity)
     try:
@@ -1492,22 +1478,8 @@ def run_migrations():
     except Exception as e:
         logger.warning(f"Could not seed workflows: {e}")
 
-    # Ticket Board agent global settings columns on settings table
+    # Ticket Board/project execution settings columns on settings table
     _kanban_settings_columns = [
-        ("kanban_agent_enabled", "BOOLEAN DEFAULT 0"),
-        ("kanban_agent_frequency", "VARCHAR DEFAULT 'daily'"),
-        ("kanban_agent_time", "VARCHAR DEFAULT '09:00'"),
-        ("kanban_agent_hours", "VARCHAR DEFAULT '[]'"),
-        ("kanban_agent_days", "VARCHAR DEFAULT '[]'"),
-        ("kanban_agent_monthly_day", "INTEGER DEFAULT 1"),
-        ("kanban_agent_source_lane", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_done_lane", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_orchestrator_provider", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_orchestrator_model", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_coder_provider", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_coder_model", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_sub_provider", "VARCHAR DEFAULT ''"),
-        ("kanban_agent_sub_model", "VARCHAR DEFAULT ''"),
         ("kanban_cli_tool", "VARCHAR DEFAULT ''"),
         ("kanban_cli_auth", "VARCHAR DEFAULT ''"),
         ("project_cli_low_backend", "VARCHAR DEFAULT 'cursor'"),

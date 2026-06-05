@@ -146,7 +146,7 @@ def _get_tool_definitions(
         ("OpenFileTool", {}),
         # Execute Code
         ("ExecuteCodeTool", dict(event_queue=event_queue, command_queue=command_queue, confirmation_results_dict=confirmation_results_dict)),
-        # Create Cursor Ticket (legacy explicit Cursor/.tickets, plus DEBUG DecisionsAI self tickets)
+        # Create Cursor handoff (explicit Cursor requests, plus DEBUG DecisionsAI self tickets)
         ("CreateCursorTicketTool", dict(llm_service=llm_service, llm_model=llm_model or "qwen3:8b", chat_manager=chat_manager)),
         # Ticket Board Ticket (primary ticket tool)
         ("KanbanTicketTool", dict(chat_manager=chat_manager, llm_service=llm_service, event_queue=event_queue)),
@@ -661,7 +661,7 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "SendFileToTelegramTool": "Send a file or image to a Telegram user or group chat.",
     "SendVoiceNoteToTelegramTool": "Record or convert text to a voice note and send it via Telegram.",
     "GitOperationsTool": "Perform Git operations like clone, pull, push, commit, diff, log, and browse GitHub repositories.",
-    "CreateCursorTicketTool": "Create a legacy Cursor/.tickets work item only when the user explicitly asks for Cursor or .tickets. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes to DecisionsAI/.tickets; ordinary ticket requests use create_ticket.",
+    "CreateCursorTicketTool": "Create a Cursor plugin handoff only when the user explicitly asks for Cursor. In DEBUG=True only, 'make a ticket for Decisions/DecisionsAI' writes a DecisionsAI Cursor handoff; ordinary ticket requests use create_ticket.",
     "KanbanTicketTool": (
         "Create, update, list, move, or manage tickets, tasks, or cards on project ticket boards, including external "
         "Jira and Trello boards/tickets. Also handles WhatsApp work intake in order: sync relay messages, list latest "

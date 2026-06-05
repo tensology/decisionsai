@@ -286,10 +286,13 @@ class PlayerWindow(QtWidgets.QWidget):
             self.movie.setPaused(True)
             self.logger.debug("[PlayerWindow] GIF reset to frame 144 before showing")
         
-        # FIRST LOAD HACK: Move offscreen and show to force window creation/mapping
-        # This ensures accurate geometry calculations for the first time
+        # First load: position before showing so Qt never maps the window outside
+        # known screen bounds, which creates noisy qpa.window warnings on macOS.
         if not self.isVisible():
-            self.move(-10000, -10000)
+            if self.oracle_window and hasattr(self.oracle_window, 'position_player_window'):
+                self.oracle_window.position_player_window()
+            else:
+                self.update_position()
             self.show()
             QtWidgets.QApplication.processEvents()
         
@@ -485,6 +488,5 @@ class PlayerWindow(QtWidgets.QWidget):
                 self.movie.jumpToNextFrame()
             self.movie.setPaused(True)
             self.logger.info("[PlayerWindow] Animation stopped and reset to frame 144")
-
 
 

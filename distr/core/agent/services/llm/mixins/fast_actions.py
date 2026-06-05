@@ -197,14 +197,14 @@ class FastActionMixin:
             response_text = "A new conversation has been created"
         elif fast_action.action_type == ActionType.CURSOR_TICKET:
             if result and isinstance(result, str) and not is_error:
-                if "Successfully created" in result and "under .tickets)" in result:
-                    response_text = "Ticket saved in your active project's tickets folder"
+                if "Successfully created" in result and "cursor-handoffs)" in result:
+                    response_text = "Cursor handoff saved in your active project"
                 elif "Successfully created" in result:
-                    response_text = "Ticket created successfully"
+                    response_text = "Cursor handoff created successfully"
                 else:
-                    response_text = result[:100] if len(result) <= 100 else "Ticket created"
+                    response_text = result[:100] if len(result) <= 100 else "Cursor handoff created"
             else:
-                response_text = "Ticket created"
+                response_text = "Cursor handoff created"
         else:
             response_text = brief_tool_completion_message(getattr(tool, "name", ""))
             if result and isinstance(result, str) and not is_error:

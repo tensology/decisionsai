@@ -94,7 +94,7 @@ def _create_live_handoff_run(project_id: int, backend_id: str, stamp: str) -> di
             name=f"Dispatch to {backend_id}",
             action_type="send_to_project_cli",
             step_type="send_to_project_cli",
-            instruction="Create a live IDE work packet and wait for callback evidence.",
+            instruction="Create a live Cursor backend handoff and wait for callback evidence.",
             status="running",
         )
         db.add(step)
@@ -568,7 +568,7 @@ def _write_real_edit_artifacts(stamp: str) -> dict[str, str]:
     after_lines = [
         "Harness worker surface",
         "status: completed",
-        "route: cursor_ide",
+        "route: cursor",
         f"evidence: live worker edit proof {stamp}",
         "decisions_callback: completed",
     ]
@@ -652,7 +652,7 @@ def _store_real_edit_result_packet(
         summary="Live worker edit proof completed through DecisionsAI callback and terminal result packet.",
         files_changed=[edit["target_file"]],
         change_summary=[
-            "Changed disposable worker surface from dispatched/pending to completed/cursor_ide.",
+            "Changed disposable worker surface from dispatched/pending to completed/cursor.",
             "Wrote unified diff and verification log as durable evidence.",
         ],
         commands_run=["python3 scripts/harness_live_proof.py --real-worker-edit-proof"],
@@ -923,7 +923,7 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Run live DecisionsAI harness proof.")
     parser.add_argument("--api-base", default=os.environ.get("DECISIONS_API_BASE", "http://127.0.0.1:8765"))
     parser.add_argument("--project-id", type=int, default=9)
-    parser.add_argument("--backend", default="cursor_ide")
+    parser.add_argument("--backend", default="cursor")
     parser.add_argument("--positive-open-app", action="store_true")
     parser.add_argument("--positive-app-name", default="Calculator")
     parser.add_argument("--no-ui-change-proof", action="store_true")

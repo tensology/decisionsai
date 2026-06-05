@@ -491,10 +491,16 @@ function deleteSelectedCustomVoice() {
     const voiceId = selected.value;
     const voiceName = selected.textContent.replace(/^⭐\s*/, '');
 
-    if (!confirm('Delete custom voice "' + voiceName + '"? This cannot be undone.')) return;
-
     const provider = document.getElementById('tts_provider').value;
-    _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, selected);
+    window.DecisionsAPI.confirm({
+        title: "Delete custom voice",
+        message: 'Delete custom voice "' + voiceName + '"? This cannot be undone.',
+        confirmLabel: "Delete",
+        danger: true,
+        onConfirm: function() {
+            _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, selected);
+        }
+    });
 }
 
 async function _resolveAndDeleteCustomVoice(provider, voiceId, voiceName, selectedOption = null) {

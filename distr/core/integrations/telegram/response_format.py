@@ -6,6 +6,8 @@ Determines whether the agent replies with text or voice based on:
 - auto_match_mode setting
 
 Precedence: text_only_override (highest) → auto_match_mode → default voice (lowest).
+The safe default is auto-match: typed Telegram messages receive text replies,
+while voice replies require a voice input or an explicit voice preference.
 """
 
 from typing import Literal, Optional, Tuple

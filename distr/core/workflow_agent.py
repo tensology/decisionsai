@@ -3,12 +3,12 @@ WorkflowAgent — lightweight, in-process LLM agent for workflow step execution.
 
 Unlike the main pipecat voice agent, WorkflowAgent has:
 - No STT/TTS pipeline
-- No event_queue or signal_manager dependencies
+- Optional app event/command queues for tools that need transport
 - Its own isolated message history
 - Synchronous LLM streaming via llm_factory.create_stream
 
-This keeps workflow execution completely decoupled from the main agent,
-allowing concurrent workflows and uninterrupted user interaction.
+This keeps workflow execution independent from the main voice pipeline while
+still letting explicitly requested tools reach the same delivery bridges.
 """
 
 import asyncio
@@ -60,10 +60,16 @@ class WorkflowAgent:
     Each instance wraps an LLM provider (resolved from settings) with its own
     ``_messages`` list and tool set.  The async ``execute(instruction)`` method
     sends the instruction to the LLM, collects the full response, and returns
-    the response text — no signals, no event queues, no shared state.
+    the response text.
     """
 
-    def __init__(self, settings: Optional[Dict[str, Any]] = None):
+    def __init__(
+        self,
+        settings: Optional[Dict[str, Any]] = None,
+        event_queue: Optional[Any] = None,
+        command_queue: Optional[Any] = None,
+        confirmation_results_dict: Optional[Any] = None,
+    ):
         """Initialise the workflow agent.
 
         Parameters
@@ -71,12 +77,19 @@ class WorkflowAgent:
         settings : dict, optional
             Application settings dict.  When *None*, settings are loaded from
             the database via ``load_settings_from_db()``.
+        event_queue : optional
+            App delivery queue used by tools such as Telegram voice notes.
+            When omitted, WorkflowAgent uses the registered agent queue if one
+            exists in this process.
         """
         if settings is None:
             from distr.core.settings import load_settings_from_db
             settings = load_settings_from_db()
 
         self._settings = settings
+        self._event_queue = event_queue if event_queue is not None else self._resolve_registered_event_queue()
+        self._command_queue = command_queue
+        self._confirmation_results_dict = confirmation_results_dict
 
         # Resolve provider and model from settings
         from distr.core.llm_factory import resolve_settings_keys
@@ -85,7 +98,7 @@ class WorkflowAgent:
         # Isolated message history — never touches the main agent's messages
         self._messages: List[Dict[str, str]] = []
 
-        # Load tools (scoped to this agent — no event_queue/command_queue)
+        # Load tools (scoped to this agent, with transport queues when available)
         self._tools: list = []
         self._tools_dict: Dict[str, Any] = {}
         # Match main-session tool availability: warm cache if startup has not run yet
@@ -106,6 +119,16 @@ class WorkflowAgent:
             "WorkflowAgent initialised: provider=%s model=%s tools=%d",
             self._provider, self._model, len(self._tools),
         )
+
+    @staticmethod
+    def _resolve_registered_event_queue():
+        try:
+            from distr.core.signals import get_agent_event_queue
+
+            return get_agent_event_queue()
+        except Exception as exc:
+            logger.debug("WorkflowAgent: registered event queue unavailable: %s", exc)
+            return None
 
     def enable_computer_use(self, goal: str) -> None:
         """Switch this agent into computer-use mode for a specific goal.
@@ -131,9 +154,9 @@ class WorkflowAgent:
                 llm_service=None,
                 tts_service=None,
                 llm_model=self._model,
-                event_queue=None,
-                command_queue=None,
-                confirmation_results_dict=None,
+                event_queue=self._event_queue,
+                command_queue=self._command_queue,
+                confirmation_results_dict=self._confirmation_results_dict,
             )
             self._tools_dict = {tool.name: tool for tool in self._tools}
             logger.debug("WorkflowAgent: loaded %d tools", len(self._tools))
@@ -264,27 +287,109 @@ class WorkflowAgent:
 
     def _call_llm_sync(self) -> tuple:
         """Synchronous LLM call with tools. Returns (text, tool_calls_list)."""
+        original_provider, original_model = self._provider, self._model
+        candidates = self._llm_call_candidates()
+        failures: list[tuple[str, str, BaseException]] = []
+
+        for idx, (provider, model) in enumerate(candidates):
+            self._provider, self._model = provider, model
+            prov = self._provider_lower
+            try:
+                result = self._call_current_provider()
+                failure_text = self._model_config_error_text(result)
+                if failure_text:
+                    raise RuntimeError(failure_text)
+                if idx > 0:
+                    logger.info(
+                        "WorkflowAgent: fallback LLM succeeded (%s/%s) after %d failed candidate(s)",
+                        provider,
+                        model,
+                        idx,
+                    )
+                return result
+            except Exception as exc:
+                failures.append((provider, model, exc))
+                if idx < len(candidates) - 1:
+                    next_provider, next_model = candidates[idx + 1]
+                    logger.warning(
+                        "WorkflowAgent: LLM candidate failed (%s/%s); trying fallback %s/%s: %s",
+                        provider,
+                        model,
+                        next_provider,
+                        next_model,
+                        exc,
+                    )
+                    continue
+
+                from distr.core.llm_errors import format_model_error
+
+                self._provider, self._model = original_provider, original_model
+                msg = format_model_error(
+                    exc,
+                    provider=provider,
+                    model=model,
+                    operation="run the workflow agent",
+                )
+                if len(failures) > 1:
+                    tried = ", ".join(f"{p}/{m}" for p, m, _ in failures)
+                    msg = f"{msg} Tried workflow LLM fallbacks: {tried}."
+                logger.error("WorkflowAgent: LLM call failed (%s/%s): %s", prov, model, msg, exc_info=True)
+                return msg, []
+
+        self._provider, self._model = original_provider, original_model
+        return "Model request failed while trying to run the workflow agent. No LLM candidates were configured.", []
+
+    def _call_current_provider(self) -> tuple:
         prov = self._provider_lower
+        if prov == "anthropic":
+            return self._call_anthropic()
+        if prov == "ollama":
+            return self._call_ollama()
+        # OpenAI-compatible: openai, groq, openrouter, kilocode, gemini
+        return self._call_openai_compat()
 
-        try:
-            if prov == "anthropic":
-                return self._call_anthropic()
-            elif prov == "ollama":
-                return self._call_ollama()
-            else:
-                # OpenAI-compatible: openai, groq, openrouter, kilocode, gemini
-                return self._call_openai_compat()
-        except Exception as exc:
-            from distr.core.llm_errors import format_model_error
+    def _llm_call_candidates(self) -> list[tuple[str, str]]:
+        """Return configured LLM candidates in workflow-first fallback order."""
+        from distr.core.llm_factory import normalize_provider
 
-            msg = format_model_error(
-                exc,
-                provider=self._provider,
-                model=self._model,
-                operation="run the workflow agent",
-            )
-            logger.error("WorkflowAgent: LLM call failed (%s/%s): %s", prov, self._model, msg, exc_info=True)
-            return msg, []
+        candidates: list[tuple[str, str]] = []
+        seen: set[tuple[str, str]] = set()
+
+        def add(provider: Any, model: Any) -> None:
+            raw_provider = str(provider or "").strip()
+            if not raw_provider:
+                return
+            raw_model = str(model or "").strip()
+            normalized = normalize_provider(raw_provider)
+            key = (normalized.lower(), raw_model.lower())
+            if key in seen:
+                return
+            seen.add(key)
+            candidates.append((normalized, raw_model))
+
+        add(self._provider, self._model)
+        for provider_key, model_key in (
+            ("workflow_llm_provider", "workflow_llm_model"),
+            ("step_runner_llm_provider", "step_runner_llm_model"),
+            ("conversational_llm_provider", "conversational_llm_model"),
+            ("agent_provider", "agent_model"),
+            ("llm_provider", "llm_model"),
+            ("coding_llm_provider", "coding_llm_model"),
+        ):
+            add(self._settings.get(provider_key), self._settings.get(model_key))
+
+        return candidates or [(self._provider, self._model)]
+
+    @staticmethod
+    def _model_config_error_text(result: tuple) -> str:
+        """Treat local credential/config error strings as retryable candidate failures."""
+        text = result[0] if isinstance(result, tuple) and result else ""
+        if not isinstance(text, str):
+            return ""
+        lower = text.strip().lower()
+        if lower.startswith("error: no api key") or "api key not configured" in lower:
+            return text
+        return ""
 
     @property
     def _provider_lower(self) -> str:

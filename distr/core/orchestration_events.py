@@ -19,7 +19,7 @@ STANDARD_EVENT_TYPES = {
     "user_notified",
 }
 
-WORKER_SOURCES = {"codex", "cursor", "cursor_ide", "vscode_ide", "pi", "executor", "ide", "claude_code"}
+WORKER_SOURCES = {"codex", "cursor", "pi", "executor", "claude_code", "browser", "automation"}
 
 LEGACY_EVENT_TYPE_MAP = {
     "workflow_run_started": "run_started",
@@ -49,10 +49,23 @@ LEGACY_EVENT_TYPE_MAP = {
     "codex_interrupted": "needs_input",
     "codex_completed": "worker_completed",
     "codex_failed": "worker_failed",
-    "ide_work_packet_created": "worker_dispatched",
-    "ide_iteration_completed": "worker_completed",
+    "cursor_started": "worker_dispatched",
+    "cursor_progress": "worker_progress",
+    "cursor_prompt_submitted": "worker_progress",
+    "cursor_completed": "worker_completed",
+    "cursor_failed": "worker_failed",
+    "ide_session_started": "worker_dispatched",
+    "browser_snapshot_captured": "worker_progress",
+    "browser_run_started": "worker_dispatched",
+    "browser_run_completed": "worker_completed",
+    "browser_run_failed": "worker_failed",
+    "initiative_notification_routed": "user_notified",
+    "project_runtime_snapshot": "worker_progress",
+    "project_handoff_dispatched": "worker_dispatched",
     "human_intervention_recorded": "needs_input",
     "learned_rule_updated": "memory_written",
+    "user_memory_written": "memory_written",
+    "machine_activity_recorded": "worker_progress",
     "validation_recorded": "worker_progress",
 }
 
@@ -101,8 +114,6 @@ def _source_label(source: Any) -> str:
     labels = {
         "codex": "Codex",
         "cursor": "Cursor",
-        "cursor_ide": "Cursor",
-        "vscode_ide": "VS Code",
         "pi": "Pi",
         "executor": "The project worker",
         "workflow": "The workflow",
@@ -110,7 +121,6 @@ def _source_label(source: Any) -> str:
         "chat": "Chat",
         "voice": "Voice",
         "notification": "I",
-        "ide": "The editor",
         "claude_code": "Claude Code",
     }
     return labels.get(raw, raw.replace("_", " ").title() if raw else "The worker")
@@ -199,12 +209,28 @@ def emit_orchestration_event(
         status=status,
     )
     enriched_payload = dict(payload or {})
+    surface = str(enriched_payload.get("surface") or source or "system").strip().lower()
+    subtype = str(enriched_payload.get("subtype") or legacy_event_type).strip()
+    is_workflow_attached = enriched_payload.get("is_workflow_attached")
+    if is_workflow_attached is None:
+        is_workflow_attached = bool(workflow_id or run_id or step_id)
     enriched_payload["orchestration"] = {
         "event_type": standard_event_type,
         "legacy_event_type": "" if legacy_event_type == standard_event_type else legacy_event_type,
         "source": (source or "system").strip() or "system",
+        "surface": surface,
+        "subtype": subtype,
+        "correlation_id": str(enriched_payload.get("correlation_id") or ""),
+        "thread_id": str(enriched_payload.get("thread_id") or ""),
+        "is_workflow_attached": bool(is_workflow_attached),
         "notify_channels": list(notify_channels or []),
     }
+    try:
+        from distr.core.notification_routing import record_surface_activity
+
+        record_surface_activity(surface)
+    except Exception:
+        pass
 
     from distr.core.hermes import emit_event
 
@@ -290,6 +316,11 @@ def _timeline_entry(event: dict[str, Any]) -> dict[str, Any]:
         "evidence": event.get("evidence") or {},
         "created_at": event.get("created_at"),
         "notify_channels": orchestration.get("notify_channels") or [],
+        "surface": orchestration.get("surface") or payload.get("surface") or "",
+        "subtype": orchestration.get("subtype") or payload.get("subtype") or legacy_event_type or event_type,
+        "correlation_id": orchestration.get("correlation_id") or payload.get("correlation_id") or "",
+        "thread_id": orchestration.get("thread_id") or payload.get("thread_id") or "",
+        "is_workflow_attached": bool(orchestration.get("is_workflow_attached")),
     }
     entry["notification"] = build_orchestration_notification(entry)
     return entry

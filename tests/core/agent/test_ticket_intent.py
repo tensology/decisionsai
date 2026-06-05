@@ -23,6 +23,27 @@ def test_explicit_cursor_ticket_routes_to_cursor():
     assert intent.confidence >= 0.9
 
 
+def test_conversational_cursor_planning_does_not_create_handoff():
+    cursor = classify_ticket_intent(
+        "Can we talk through what work should be done in Cursor before sending anything?"
+    )
+    codex = classify_ticket_intent(
+        "Can we talk through what work should be done in Codex before sending anything?"
+    )
+
+    assert cursor.kind == "ide_conversation"
+    assert codex.kind == "ide_conversation"
+
+
+def test_cursor_ticket_tool_rejects_conversational_planning():
+    tool = CreateCursorTicketTool()
+
+    result = tool._run("Can we talk through what work should be done in Cursor before sending anything?")
+
+    assert "conversation" in result.lower()
+    assert "handoff" in result.lower()
+
+
 def test_remote_ticket_requests_are_classified_separately():
     jira = classify_ticket_intent("create a Jira ticket for the OAuth callback failure")
     trello = classify_ticket_intent("make a Trello card for the landing page bug")
@@ -71,7 +92,7 @@ def test_cursor_ticket_tool_rejects_generic_ticket_creation():
     assert "create_ticket" in result
 
 
-def test_cursor_ticket_tool_writes_decisionsai_ticket_in_debug_mode(monkeypatch, tmp_path):
+def test_cursor_ticket_tool_writes_decisionsai_cursor_handoff_in_debug_mode(monkeypatch, tmp_path):
     monkeypatch.setenv("DEBUG", "True")
     monkeypatch.setattr(
         "distr.core.agent.tools.integrations.create_cursor_ticket._decisionsai_project_root",
@@ -89,13 +110,21 @@ def test_cursor_ticket_tool_writes_decisionsai_ticket_in_debug_mode(monkeypatch,
 
     result = tool._run("make a ticket for DecisionsAI to fix the flaky Telegram status")
 
-    tickets_dir = tmp_path / ".tickets"
-    created = list(tickets_dir.glob("*.md"))
+    handoffs_dir = tmp_path / ".decisions" / "cursor-handoffs"
+    created = list(handoffs_dir.glob("*.md"))
     assert len(created) == 1
     assert "Location:" in result
-    assert str(tickets_dir) in result
+    assert str(handoffs_dir) in result
     assert "DecisionsAI" in result
     assert "Ensure Telegram delivery status is reliable." in created[0].read_text()
+
+
+def test_cursor_ticket_tool_describes_plugin_handoff_not_legacy_extension():
+    tool = CreateCursorTicketTool()
+
+    assert "Cursor plugin handoff" in tool.description
+    assert "legacy Cursor/.tickets" not in tool.description
+    assert "VS Code extension" not in tool.description
 
 
 def test_ticket_skill_recommendations_include_relevant_available_skills():

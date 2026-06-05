@@ -523,8 +523,6 @@ def _backend_label(value: Any) -> str:
     labels = {
         "codex": "Codex",
         "cursor": "Cursor",
-        "cursor_ide": "Cursor",
-        "vscode_ide": "VS Code",
         "pi": "Pi",
         "claude_code": "Claude Code",
     }

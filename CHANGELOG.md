@@ -12,6 +12,30 @@ That means more work on orchestration quality, ticket parsing, tool selection, w
 
 ---
 
+## [2.7.17] - 2026-06-05
+
+### Orchestration backbone, IDE handoff, human engagement, and automation cleanup
+
+**Hermes is closer to being the shared orchestration spine.** Workflow runs, automations, IDE activity, browser evidence, proactive nudges, and ticket-board handoffs now have a clearer event shape so the system can understand what work belongs together instead of treating everything as loose progress noise.
+
+**Cursor and Codex handoffs became more project-aware.** IDE conversations can now report back into DecisionsAI with project and session context, including chats that were not started from a workflow. That gives the orchestrator a better chance of knowing which project is moving, which one is idle, and where a response belongs.
+
+**Ticket Boards now start a real orchestrator conversation.** Sending a ticket to the orchestrator no longer just drops context into chat and leaves you to find it. It loads the agent, sends the ticket with speech enabled, opens the right chat thread, and includes linked project details so the assistant can talk through the ticket, inspect the project, and suggest a useful next step.
+
+**Automations were pulled back into the product shape they were meant to have.** The Automations area is now built around itemized CRUD, scheduling, Run Now, and per-automation history instead of a confusing intake feed. Scheduled runs go through the same workflow spine, which makes them easier to reason about and less likely to create stray chats.
+
+**ECC and skill setup moved into a cleaner registry model.** The ECC surface is vendored with provenance, skills are deduped instead of blindly copied, and setup can repair Codex, Cursor, and Claude wiring without spraying duplicate skills everywhere.
+
+**Browser and Playwright work is less isolated.** Browser runs can keep per-session evidence, including screenshots and console/network context, and tie that evidence back to the same project, workflow, automation, or IDE conversation that started it.
+
+**The assistant got a quieter, more human engagement layer.** Telegram and desktop responses now route through a central policy so low-value status gets logged instead of spammed, voice is preferred when it is useful, repeated idle nudges are suppressed, raw provider errors are summarized, and lifecycle messages are shorter.
+
+**Hermes memory started separating conversation history from durable preferences.** The memory layer can keep useful long-term style and taste signals while letting old chat transcripts be removed or compacted, with weekly compaction groundwork added so the system does not slowly bloat.
+
+**The Ticket Boards UI was tightened around real work.** Board loading, Messages/Boards switching, ticket controls, modal actions, and project-linked ticket context were cleaned up so the board is usable as a work surface again rather than just a place tickets happen to exist.
+
+---
+
 ## [2.7.16] - 2026-05-30
 
 ### More visible agent work, better workflow memory, and cleaner handoffs

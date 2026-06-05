@@ -132,8 +132,6 @@ def register_routes(router, templates):
             "workflow_model": (settings.get("workflow_llm_model") or "").strip(),
             "computer_use_provider": (settings.get("computer_use_provider") or "").strip().lower() or "",
             "computer_use_model": (settings.get("computer_use_model") or "").strip(),
-            "kanban_provider": (settings.get("kanban_agent_orchestrator_provider") or "").strip().lower() or "",
-            "kanban_model": (settings.get("kanban_agent_orchestrator_model") or "").strip(),
             "project_cli_low_backend": (settings.get("project_cli_low_backend") or "cursor").strip().lower(),
             "project_cli_low_model": (settings.get("project_cli_low_model") or "auto").strip(),
             "project_cli_medium_backend": (settings.get("project_cli_medium_backend") or "codex").strip().lower(),
@@ -173,8 +171,6 @@ def register_routes(router, templates):
                 (s.get("workflow_llm_model") or "").strip(),
                 (s.get("computer_use_provider") or "").strip().lower(),
                 (s.get("computer_use_model") or "").strip(),
-                (s.get("kanban_agent_orchestrator_provider") or "").strip().lower(),
-                (s.get("kanban_agent_orchestrator_model") or "").strip(),
                 (s.get("project_cli_low_backend") or "").strip().lower(),
                 (s.get("project_cli_low_model") or "").strip(),
                 (s.get("project_cli_medium_backend") or "").strip().lower(),
@@ -213,8 +209,6 @@ def register_routes(router, templates):
         settings["workflow_llm_model"] = workflow_model
         settings["computer_use_provider"] = (settings_data.computer_use_provider or "").strip()
         settings["computer_use_model"] = (settings_data.computer_use_model or "").strip()
-        settings["kanban_agent_orchestrator_provider"] = (settings_data.kanban_provider or "").strip()
-        settings["kanban_agent_orchestrator_model"] = (settings_data.kanban_model or "").strip()
         from distr.core.kanban.codex_prefs import normalize_codex_intelligence, normalize_codex_speed
         from distr.core.project_cli_backends import normalize_backend_id
         settings["project_cli_low_backend"] = normalize_backend_id(settings_data.project_cli_low_backend or "cursor")

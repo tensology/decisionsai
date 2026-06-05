@@ -11,9 +11,9 @@
     <style>
         :root { --color-primary: #f97316; --color-secondary: #dc2626; --color-accent: #fb923c; --color-primary-rgb: 249, 115, 22; --color-secondary-rgb: 220, 38, 38; }
     </style>
-    {% block head_styles %}
     <link rel="stylesheet" href="/static/shared/css/base.css">
-    {% endblock %}
+    <link rel="stylesheet" href="/static/shared/css/decisions_datetime.css">
+    {% block head_styles %}{% endblock %}
     {% block extra_head %}{% endblock %}
 </head>
 <body class="bg-[#0d1642] text-[#ececf1] min-h-screen font-['Quicksand',sans-serif]">
@@ -51,6 +51,10 @@
                         <a href="/kanban/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2"/></svg>
                             Ticket Boards
+                        </a>
+                        <a href="/automations/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
+                            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 7h7M4 12h10M4 17h7m10-10h-6m6 5h-3m3 5h-6"/></svg>
+                            Automations
                         </a>
                         <a href="/actions/" class="nav-tab px-3 py-2 rounded-md text-sm font-medium text-[#ececf1] hover:bg-white/10 hover:text-white transition-colors flex items-center gap-1.5">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/></svg>
@@ -130,7 +134,9 @@
       };
     })();
     </script>
+    <script src="/static/shared/js/api.js"></script>
     {% block body_scripts %}{% endblock %}
+    <script src="/static/shared/js/decisions_datetime.js"></script>
     {% block extra_scripts %}{% endblock %}
     <script>
     (function() {
@@ -140,7 +146,7 @@
           var href = tab.getAttribute('href');
           if (!href) return;
           var tabPath = href.replace(/^https?:\/\/[^/]+/, '').replace(/\/$/, '') || '/';
-          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/irc' && (path === '/irc' || path.startsWith('/irc/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/kanban' && (path === '/kanban' || path.startsWith('/kanban/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
+          var isActive = path === tabPath || (tabPath === '/chat' && (path === '/chat' || path.startsWith('/chat/'))) || (tabPath === '/irc' && (path === '/irc' || path.startsWith('/irc/'))) || (tabPath === '/workflows' && (path === '/workflows' || path.startsWith('/workflows/'))) || (tabPath === '/snippets' && (path === '/snippets' || path.startsWith('/snippets/'))) || (tabPath === '/automations' && (path === '/automations' || path.startsWith('/automations/'))) || (tabPath === '/kanban' && (path === '/kanban' || path.startsWith('/kanban/'))) || (tabPath === '/docs' && (path === '/docs' || path.startsWith('/docs/')));
           tab.classList.toggle('active', isActive);
         });
         // Highlight settings gear icon when on /settings

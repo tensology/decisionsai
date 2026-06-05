@@ -283,7 +283,7 @@ class TelegramMessagesMixin:
 
             if any(pattern in text_lower for pattern in remote_control_patterns):
                 # Get chat_id for the remote control link
-                chat_id = self._get_chat_id()
+                chat_id = self._get_chat_id() or getattr(self, "telegram_user_id", None)
                 if chat_id:
                     hashed = hash_channel_id(chat_id)
                     remote_url = (
@@ -324,14 +324,24 @@ class TelegramMessagesMixin:
             mode_intent = detect_mode_switch_intent(text)
             if mode_intent == "text_only":
                 update_setting("telegram_text_only_override", True)
+                update_setting("telegram_auto_match_mode", True)
                 logger.info(
                     "[Telegram] ✅ Detected text-only intent — persisted telegram_text_only_override=True"
                 )
             elif mode_intent == "voice":
                 update_setting("telegram_text_only_override", False)
+                update_setting("telegram_auto_match_mode", False)
                 logger.info(
                     "[Telegram] ✅ Detected voice intent — persisted telegram_text_only_override=False"
                 )
+
+        # Always log incoming messages for visibility with chat_id
+        try:
+            from distr.core.notification_routing import record_surface_activity
+
+            record_surface_activity("telegram")
+        except Exception:
+            pass
 
         # Always log incoming messages for visibility with chat_id
         chat_id_str = f" (chat_id: {chat_id})" if chat_id else " (no chat_id)"

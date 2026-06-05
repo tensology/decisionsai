@@ -1,0 +1,46 @@
+{
+  "name": "decisions-cursor",
+  "version": "0.1.0",
+  "description": "Cursor IDE/chat bridge for DecisionsAI project orchestration.",
+  "author": {
+    "name": "Tensology",
+    "email": "support@decisions.ai",
+    "url": "https://www.decisionsai.net"
+  },
+  "homepage": "https://www.decisionsai.net",
+  "repository": "https://github.com/tensology/decisionsai",
+  "license": "Proprietary",
+  "keywords": [
+    "decisionsai",
+    "cursor",
+    "workflow",
+    "ticket-board",
+    "project-cli",
+    "orchestration",
+    "developer-tools"
+  ],
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "DecisionsAI Cursor",
+    "shortDescription": "Connect Cursor IDE chats and workflow tickets to DecisionsAI project orchestration.",
+    "longDescription": "Connects Cursor IDE/chat sessions to DecisionsAI project orchestration. Cursor can receive bounded ticket packets or ordinary project prompts, work inside the linked project folder, report prompts, status, changed files, tests, evidence, blockers, steering, waiting, and completion events back to DecisionsAI, and let the run ledger retain execution memory.",
+    "developerName": "Tensology",
+    "category": "Developer Tools",
+    "capabilities": [
+      "Interactive",
+      "Write",
+      "Automation"
+    ],
+    "websiteURL": "https://www.decisionsai.net",
+    "privacyPolicyURL": "https://www.decisionsai.net/privacy",
+    "termsOfServiceURL": "https://www.decisionsai.net/terms",
+    "defaultPrompt": [
+      "Start a DecisionsAI-linked Cursor project chat.",
+      "Run this DecisionsAI ticket and report evidence.",
+      "Continue this workflow step and return status."
+    ],
+    "brandColor": "#f97316",
+    "composerIcon": "./assets/icon.png",
+    "logo": "./assets/logo.png"
+  }
+}

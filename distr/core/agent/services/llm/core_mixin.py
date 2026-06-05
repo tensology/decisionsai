@@ -1671,9 +1671,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
             return sentences
 
         default_welcome = _add_interaction([
-            f"Hello {self._username}!",
-            "I'm your AI assistant, here to help you get things done!",
-            "I'm ready to help!",
+            "I'm back online.",
+            "I'm ready when you need me.",
         ])
 
         if not self.chat_manager:
@@ -1697,6 +1696,7 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     content_lower = content.lower()
                     is_welcome_like = (
                         'welcome back' in content_lower
+                        or "i'm back online" in content_lower
                         or "i'm your ai assistant" in content_lower
                         or "what would you like to talk about or do today" in content_lower
                     )
@@ -1728,14 +1728,13 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
 
             if summary and summary.lower() not in ('nothing', 'we discussed nothing', 'we talked about nothing'):
                 return _add_interaction([
-                    f"Hello {self._username}! Welcome back!",
+                    "I'm back online.",
                     summary,
-                    "What would you like to talk about or do today?",
                 ])
 
             return _add_interaction([
-                f"Hello {self._username}! Welcome back!",
-                "We were chatting previously. What would you like to continue with?",
+                "I'm back online.",
+                "I'll pick up where we left off when you are ready.",
             ])
 
         except Exception as e:
@@ -1759,8 +1758,8 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                     pass
 
             return _add_interaction([
-                f"Hello {self._username}! Welcome back!",
-                "We were chatting previously. What would you like to continue with?",
+                "I'm back online.",
+                "I'll pick up where we left off when you are ready.",
             ])
 
     async def _generate_welcome_summary(self, conversation_text: str, agent_name: str) -> str:

@@ -206,8 +206,6 @@
         function populateBoardModal(data) {
             document.getElementById("kb-board-modal-name").value = data.name || "";
             document.getElementById("kb-board-modal-desc").value = data.description || "";
-            document.getElementById("kb-board-modal-agent-enabled").checked = !!data.agent_enabled;
-            document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = !!data.whatsapp_checkin_enabled;
             var colorInput = document.getElementById("kb-board-modal-color");
             var colorHex = document.getElementById("kb-board-modal-color-hex");
             var c = data.color || "#f97316";
@@ -232,20 +230,11 @@
                 ]).then(function(results) {
                     var data = results[0] || {};
                     var list = Array.isArray(results[1]) ? results[1] : [];
-                    var row = list.find(function(b) { return String(b.id) === String(boardId); });
-                    if (row && typeof row.agent_enabled !== "undefined") {
-                        data.agent_enabled = row.agent_enabled;
-                    }
-                    if (row && typeof row.whatsapp_checkin_enabled !== "undefined") {
-                        data.whatsapp_checkin_enabled = row.whatsapp_checkin_enabled;
-                    }
                     populateBoardModal(data);
                 }).catch(function() {});
             } else {
                 document.getElementById("kb-board-modal-name").value = "";
                 document.getElementById("kb-board-modal-desc").value = "";
-                document.getElementById("kb-board-modal-agent-enabled").checked = false;
-                document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = false;
                 var colorInput = document.getElementById("kb-board-modal-color");
                 var colorHex = document.getElementById("kb-board-modal-color-hex");
                 colorInput.value = "#f97316";
@@ -278,8 +267,6 @@
                 document.getElementById("kb-board-modal-name").value = boardName;
                 document.getElementById("kb-board-modal-name").readOnly = false;
                 document.getElementById("kb-board-modal-desc").value = "";
-                document.getElementById("kb-board-modal-agent-enabled").checked = !!localCfg.agent_enabled;
-                document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked = !!localCfg.whatsapp_checkin_enabled;
                 var colorInput = document.getElementById("kb-board-modal-color");
                 var colorHex = document.getElementById("kb-board-modal-color-hex");
                 var c = localCfg.color || boardMeta.color || (provider === "trello" ? "#0079bf" : "#0052cc");
@@ -329,8 +316,6 @@
                     default_project_id: parseInt(document.getElementById("kb-board-def-project").value, 10) || 0,
                     default_workflow_id: parseInt(document.getElementById("kb-board-def-workflow").value, 10) || 0,
                     color: document.getElementById("kb-board-modal-color").value || "",
-                    agent_enabled: document.getElementById("kb-board-modal-agent-enabled").checked,
-                    whatsapp_checkin_enabled: document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked,
                 };
                 deps.apiFetch("/api/kanban/external-boards/" + extCfg.provider + "/" + encodeURIComponent(extCfg.extBoardId) + "/register", {
                     method: "POST", headers: { "Content-Type": "application/json" },
@@ -355,19 +340,12 @@
                 default_project_id: parseInt(document.getElementById("kb-board-def-project").value, 10) || 0,
                 color: document.getElementById("kb-board-modal-color").value || "",
             };
-            var agentChecked = document.getElementById("kb-board-modal-agent-enabled").checked;
-            var whatsappCheckinChecked = document.getElementById("kb-board-modal-whatsapp-checkin-enabled").checked;
 
             if (deps.getEditingBoardId()) {
                 var boardId = deps.getEditingBoardId();
                 deps.apiFetch("/api/kanban/boards/" + boardId, {
                     method: "PUT", headers: { "Content-Type": "application/json" },
                     body: JSON.stringify(payload)
-                }).then(function() {
-                    return deps.apiFetch("/api/kanban/boards/" + boardId + "/agent-enabled", {
-                        method: "PUT", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ agent_enabled: agentChecked, whatsapp_checkin_enabled: whatsappCheckinChecked }),
-                    });
                 }).then(function() {
                     deps.showSnackbar("Board updated");
                     closeBoardModal();
@@ -387,11 +365,6 @@
                             default_project_id: payload.default_project_id,
                             color: payload.color,
                         })
-                    }).then(function() { return data; });
-                }).then(function(data) {
-                    return deps.apiFetch("/api/kanban/boards/" + data.id + "/agent-enabled", {
-                        method: "PUT", headers: { "Content-Type": "application/json" },
-                        body: JSON.stringify({ agent_enabled: agentChecked, whatsapp_checkin_enabled: whatsappCheckinChecked }),
                     }).then(function() { return data; });
                 }).then(function(data) {
                     deps.showSnackbar("Board created");
@@ -439,191 +412,15 @@
                 });
                 return;
             }
-            if (confirm('Delete board "' + name + '" and all its tickets? This cannot be undone.')) {
-                deleteBoardById(boardId, errorPrefix);
-            }
-        }
-
-        function populateProjectCliBackends() {
-            return deps.apiFetch("/api/projects/cli-backends").then(function(data) {
-                var backends = data.backends || [];
-                ["low", "medium", "high"].forEach(function(level) {
-                    var sel = document.getElementById("kb-gs-cli-" + level + "-backend");
-                    if (!sel || !backends.length) return;
-                    var selected = sel.value;
-                    sel.innerHTML = "";
-                    backends.forEach(function(backend) {
-                        var opt = document.createElement("option");
-                        opt.value = backend.id || "";
-                        opt.textContent = backend.name || backend.id || "";
-                        sel.appendChild(opt);
-                    });
-                    if (selected) sel.value = selected;
-                });
-            }).catch(function(e) {
-                deps.showSnackbar("Failed to load project agent backends: " + e.message, "error");
+            window.DecisionsAPI.confirm({
+                title: "Delete board",
+                message: 'Delete board "' + name + '" and all its tickets? This cannot be undone.',
+                confirmLabel: "Delete",
+                danger: true,
+                onConfirm: function() {
+                    deleteBoardById(boardId, errorPrefix);
+                },
             });
-        }
-
-        function loadProjectCliRouteModels(level, backend, selectedModel) {
-            var sel = document.getElementById("kb-gs-cli-" + level + "-model");
-            if (!sel) return Promise.resolve();
-            backend = (backend || "pi").trim();
-            selectedModel = (selectedModel || "auto").trim();
-            sel.innerHTML = '<option value="auto">Loading models...</option>';
-            sel.disabled = true;
-            return deps.apiFetch("/api/projects/cli-models?backend_id=" + encodeURIComponent(backend)).then(function(data) {
-                var models = data.models || [];
-                sel.innerHTML = "";
-                var auto = document.createElement("option");
-                auto.value = "auto";
-                auto.textContent = "Auto";
-                sel.appendChild(auto);
-                models.forEach(function(model) {
-                    var opt = document.createElement("option");
-                    opt.value = (model && typeof model === "object") ? (model.id || "") : (model || "");
-                    opt.textContent = (model && typeof model === "object") ? (model.name || model.id || "") : (model || "");
-                    sel.appendChild(opt);
-                });
-                if (selectedModel && !Array.prototype.some.call(sel.options, function(opt) { return opt.value === selectedModel; })) {
-                    var extra = document.createElement("option");
-                    extra.value = selectedModel;
-                    extra.textContent = selectedModel;
-                    sel.appendChild(extra);
-                }
-                sel.value = selectedModel || "auto";
-            }).catch(function() {
-                sel.innerHTML = '<option value="auto">Auto</option>';
-                sel.value = selectedModel || "auto";
-            }).then(function() {
-                sel.disabled = false;
-            });
-        }
-
-        function updateCodexRouteCog(level) {
-            var backendSel = document.getElementById("kb-gs-cli-" + level + "-backend");
-            var cog = document.getElementById("kb-gs-cli-" + level + "-codex-cog");
-            var panel = document.getElementById("kb-gs-cli-" + level + "-codex-panel");
-            var isCodex = backendSel && backendSel.value === "codex";
-            if (cog) cog.classList.toggle("hidden", !isCodex);
-            if (!isCodex && panel) panel.classList.add("hidden");
-        }
-
-        function updateAllCodexRouteCogs() {
-            ["low", "medium", "high"].forEach(updateCodexRouteCog);
-        }
-
-        function populateProjectCliRoutes(settings) {
-            return populateProjectCliBackends().then(function() {
-                var defaults = {
-                    low: { backend: "cursor", model: "auto" },
-                    medium: { backend: "codex", model: "auto" },
-                    high: { backend: "codex", model: "gpt-5.3-codex" },
-                };
-                return Promise.all(["low", "medium", "high"].map(function(level) {
-                    var backend = settings["project_cli_" + level + "_backend"] || defaults[level].backend;
-                    var model = settings["project_cli_" + level + "_model"] || defaults[level].model;
-                    var backendSel = document.getElementById("kb-gs-cli-" + level + "-backend");
-                    if (backendSel) backendSel.value = backend;
-                    var intelSel = document.getElementById("kb-gs-cli-" + level + "-codex-intelligence");
-                    if (intelSel) intelSel.value = settings["project_cli_" + level + "_codex_intelligence"] || "";
-                    var speedSel = document.getElementById("kb-gs-cli-" + level + "-codex-speed");
-                    if (speedSel) speedSel.value = settings["project_cli_" + level + "_codex_speed"] || "";
-                    updateCodexRouteCog(level);
-                    return loadProjectCliRouteModels(level, backend, model);
-                }));
-            });
-        }
-
-        function loadGlobalKanbanSettings() {
-            return Promise.all([
-                deps.apiFetch("/api/kanban/settings"),
-                deps.apiFetch("/api/llms"),
-            ]).then(function(results) {
-                var s = results[0] || {};
-                document.getElementById("kb-gs-agent-enabled").checked = !!s.kanban_agent_enabled;
-                document.getElementById("kb-gs-frequency").value = s.kanban_agent_frequency || "daily";
-                updateGsFrequencyUI(s.kanban_agent_frequency || "daily");
-
-                var gsHours = [];
-                try { gsHours = typeof s.kanban_agent_hours === "string" ? JSON.parse(s.kanban_agent_hours) : (s.kanban_agent_hours || []); } catch (e) { gsHours = []; }
-                document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
-                    var h = parseInt(btn.dataset.hour, 10);
-                    btn.setAttribute("data-selected", gsHours.indexOf(h) >= 0 ? "1" : "0");
-                });
-
-                var gsDays = [];
-                try { gsDays = typeof s.kanban_agent_days === "string" ? JSON.parse(s.kanban_agent_days) : (s.kanban_agent_days || []); } catch (e) { gsDays = []; }
-                document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
-                    var d = parseInt(btn.dataset.day, 10);
-                    btn.setAttribute("data-selected", gsDays.indexOf(d) >= 0 ? "1" : "0");
-                });
-
-                document.getElementById("kb-gs-monthly-day-input").value = String(s.kanban_agent_monthly_day || 1);
-                document.getElementById("kb-gs-time-input").value = s.kanban_agent_time || "09:00";
-            }).catch(function(e) { deps.showSnackbar("Failed to load settings: " + e.message, "error"); });
-        }
-
-        /** Notify other tabs / listeners that global LLM rows were saved (e.g. Settings → LLMs). */
-        function notifyLlmsSettingsSynced() {
-            try {
-                if (typeof BroadcastChannel !== "undefined") {
-                    var ch = new BroadcastChannel("decisions_llms_settings_sync");
-                    ch.postMessage({ source: "kanban" });
-                    setTimeout(function() {
-                        try { ch.close(); } catch (e2) {}
-                    }, 0);
-                }
-            } catch (e) {}
-        }
-
-        function saveGlobalKanbanSettings() {
-            var hours = [];
-            document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
-                if (btn.getAttribute("data-selected") === "1") hours.push(parseInt(btn.dataset.hour, 10));
-            });
-            hours = hours.filter(function(v, i, a) { return a.indexOf(v) === i; });
-            var days = [];
-            document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
-                if (btn.getAttribute("data-selected") === "1") days.push(parseInt(btn.dataset.day, 10));
-            });
-            var payload = {
-                kanban_agent_enabled: document.getElementById("kb-gs-agent-enabled").checked,
-                kanban_agent_frequency: document.getElementById("kb-gs-frequency").value,
-                kanban_agent_time: document.getElementById("kb-gs-time-input").value || "09:00",
-                kanban_agent_hours: hours,
-                kanban_agent_days: days,
-                kanban_agent_monthly_day: parseInt(document.getElementById("kb-gs-monthly-day-input").value, 10) || 1
-            };
-            deps.apiFetch("/api/kanban/settings", {
-                    method: "PUT",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify(payload)
-                }).then(function() {
-                deps.showSnackbar("Settings saved");
-                closeGlobalSettingsModal();
-            }).catch(function(e) { deps.showSnackbar("Save failed: " + e.message, "error"); });
-        }
-
-        function openGlobalSettingsModal() {
-            loadGlobalKanbanSettings();
-            document.getElementById("kb-global-settings-modal").classList.remove("hidden");
-        }
-
-        function closeGlobalSettingsModal() {
-            document.getElementById("kb-global-settings-modal").classList.add("hidden");
-        }
-
-        function updateGsFrequencyUI(freq) {
-            var hourPicker = document.getElementById("kb-gs-hour-picker");
-            var dayPicker = document.getElementById("kb-gs-day-picker");
-            var monthlyDay = document.getElementById("kb-gs-monthly-day");
-            var timePicker = document.getElementById("kb-gs-time");
-            var isMinuteBased = freq.endsWith("min");
-            hourPicker.classList.toggle("hidden", freq !== "hourly");
-            dayPicker.classList.toggle("hidden", freq !== "weekly" && freq !== "fortnightly");
-            monthlyDay.classList.toggle("hidden", freq !== "monthly");
-            timePicker.classList.toggle("hidden", freq === "hourly" || isMinuteBased);
         }
 
         function updateTabBarVisibility() {
@@ -769,11 +566,16 @@
                 deps.showSnackbar("Board set as active");
                 deps.loadBoards(true);
                 if (data && data.linked_project) {
-                    if (confirm('This board is linked to project "' + data.linked_project.name + '". Activate that project too?')) {
-                        deps.apiFetch("/api/projects/" + data.linked_project.id + "/use", { method: "POST" }).then(function() {
-                            deps.showSnackbar("Project activated");
-                        }).catch(function() {});
-                    }
+                    window.DecisionsAPI.confirm({
+                        title: "Activate linked project",
+                        message: 'This board is linked to project "' + data.linked_project.name + '". Activate that project too?',
+                        confirmLabel: "Activate",
+                        onConfirm: function() {
+                            deps.apiFetch("/api/projects/" + data.linked_project.id + "/use", { method: "POST" }).then(function() {
+                                deps.showSnackbar("Project activated");
+                            }).catch(function() {});
+                        },
+                    });
                 }
             }).catch(function(e) { deps.showSnackbar("Activate failed: " + e.message, "error"); });
         }
@@ -821,56 +623,7 @@
             });
         }
 
-        function bindGlobalSettings() {
-            document.getElementById("kb-settings-cog").addEventListener("click", openGlobalSettingsModal);
-            document.getElementById("kb-gs-close").addEventListener("click", closeGlobalSettingsModal);
-            document.getElementById("kb-gs-cancel").addEventListener("click", closeGlobalSettingsModal);
-            document.getElementById("kb-gs-save").addEventListener("click", saveGlobalKanbanSettings);
-            document.getElementById("kb-gs-frequency").addEventListener("change", function() {
-                updateGsFrequencyUI(this.value);
-            });
-            document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
-                btn.addEventListener("click", function() {
-                    var cur = btn.getAttribute("data-selected") === "1";
-                    btn.setAttribute("data-selected", cur ? "0" : "1");
-                });
-            });
-            var selectAllHoursBtn = document.getElementById("kb-gs-hours-select-all");
-            if (selectAllHoursBtn) {
-                selectAllHoursBtn.addEventListener("click", function() {
-                    document.querySelectorAll(".kb-gs-hour").forEach(function(btn) {
-                        btn.setAttribute("data-selected", "1");
-                    });
-                });
-            }
-            document.querySelectorAll(".kb-gs-day").forEach(function(btn) {
-                btn.addEventListener("click", function() {
-                    var cur = btn.getAttribute("data-selected") === "1";
-                    btn.setAttribute("data-selected", cur ? "0" : "1");
-                });
-            });
-            document.querySelectorAll(".kb-gs-cli-backend").forEach(function(sel) {
-                sel.addEventListener("change", function() {
-                    loadProjectCliRouteModels(this.dataset.level, this.value, "auto");
-                    updateCodexRouteCog(this.dataset.level);
-                });
-            });
-            document.querySelectorAll(".kb-gs-cli-codex-cog").forEach(function(btn) {
-                btn.addEventListener("click", function(e) {
-                    e.stopPropagation();
-                    var level = btn.dataset.level;
-                    var panel = document.getElementById("kb-gs-cli-" + level + "-codex-panel");
-                    if (!panel) return;
-                    var open = !panel.classList.contains("hidden");
-                    document.querySelectorAll(".kb-gs-cli-codex-panel").forEach(function(p) { p.classList.add("hidden"); });
-                    if (!open) panel.classList.remove("hidden");
-                });
-            });
-            document.addEventListener("click", function(e) {
-                if (e.target.closest(".kb-gs-cli-codex-cog") || e.target.closest(".kb-gs-cli-codex-panel")) return;
-                document.querySelectorAll(".kb-gs-cli-codex-panel").forEach(function(p) { p.classList.add("hidden"); });
-            });
-        }
+        function bindGlobalSettings() {}
 
         function bindBoardActions() {
             document.getElementById("kb-add-ticket").addEventListener("click", deps.addTicket);
@@ -909,11 +662,6 @@
             closeBoardModal: closeBoardModal,
             saveBoardModal: saveBoardModal,
             deleteBoard: deleteBoard,
-            loadGlobalKanbanSettings: loadGlobalKanbanSettings,
-            saveGlobalKanbanSettings: saveGlobalKanbanSettings,
-            openGlobalSettingsModal: openGlobalSettingsModal,
-            closeGlobalSettingsModal: closeGlobalSettingsModal,
-            updateGsFrequencyUI: updateGsFrequencyUI,
             updateTabBarVisibility: updateTabBarVisibility,
             getSidebarTabFromUrl: getSidebarTabFromUrl,
             switchSidebarTab: switchSidebarTab,

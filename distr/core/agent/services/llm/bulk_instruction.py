@@ -13,6 +13,12 @@ _EXECUTE_RE = re.compile(
     r"\b(?:execute|run|do|perform|set\s+up|create|schedule|process|carry\s+out|follow)\b",
     re.IGNORECASE,
 )
+_DESKTOP_ACTION_RE = re.compile(
+    r"\b(?:say|speak|announce|tell|move\s+(?:the\s+)?(?:mouse|cursor|pointer)|"
+    r"click|double\s+click|right\s+click|scroll|type|press|hotkey|drag)\b",
+    re.IGNORECASE,
+)
+_ORDERING_RE = re.compile(r"\b(?:then|after(?:wards)?|next|the\s+move|step\s+\d+)\b", re.IGNORECASE)
 
 
 @dataclass(frozen=True)
@@ -55,6 +61,24 @@ def profile_bulk_instruction(text: str) -> BulkInstructionProfile:
     )
 
 
+def _looks_like_short_ordered_desktop_actions(text: str) -> bool:
+    """Detect compact multi-step desktop commands that still need a queue."""
+
+    text = text or ""
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if len(lines) < 2 or len(text) > 3500:
+        return False
+
+    action_lines = [line for line in lines if _DESKTOP_ACTION_RE.search(line)]
+    if len(action_lines) < 2:
+        return False
+
+    screen_targets = len(re.findall(r"\b(?:screen|display|monitor)\s+\d+\b", text, re.IGNORECASE))
+    repeated_mouse_targets = len(re.findall(r"\bmove\s+(?:the\s+)?(?:mouse|cursor|pointer)\b", text, re.IGNORECASE))
+    has_ordering = bool(_ORDERING_RE.search(text))
+    return has_ordering or screen_targets >= 2 or repeated_mouse_targets >= 2
+
+
 def augment_bulk_instruction(text: str, *, source: str = "chat") -> str:
     """Wrap large multi-action instructions with orchestration guardrails.
 
@@ -63,7 +87,8 @@ def augment_bulk_instruction(text: str, *, source: str = "chat") -> str:
     """
 
     profile = profile_bulk_instruction(text)
-    if not profile.is_bulk:
+    is_short_ordered_desktop = _looks_like_short_ordered_desktop_actions(text)
+    if not profile.is_bulk and not is_short_ordered_desktop:
         return text
 
     mode = (
@@ -71,6 +96,17 @@ def augment_bulk_instruction(text: str, *, source: str = "chat") -> str:
         if profile.asks_execution
         else "The user may only be asking for assessment or planning."
     )
+    desktop_guardrails = ""
+    if is_short_ordered_desktop:
+        desktop_guardrails = (
+            "Desktop action packet detected: keep one physical desktop action at a time. "
+            "Mouse, keyboard, drag, scroll, and click steps share the same local desktop "
+            "state and must be serialized. Speech/announcement steps may run through the "
+            "speech tool, but still report their own success, policy refusal, or blocker. "
+            "Do not summarize repeated desktop actions into one best-effort action; attempt "
+            "each requested target in order and explicitly report unavailable screens or "
+            "blocked steps.\n\n"
+        )
     return (
         "[Multi-Action Intake]\n"
         f"Source: {source}\n"
@@ -78,6 +114,7 @@ def augment_bulk_instruction(text: str, *, source: str = "chat") -> str:
         f"Structure signals: {profile.day_heading_count} day headings, "
         f"{profile.list_item_count} list items, {profile.time_count} time-like entries.\n"
         f"{mode}\n\n"
+        f"{desktop_guardrails}"
         "Before executing tool actions from this request:\n"
         "1. Split the request into an ordered action queue with dependencies and blockers.\n"
         "2. Execute ready actions through the correct tools instead of treating the request as a single vague instruction.\n"
