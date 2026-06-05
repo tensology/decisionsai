@@ -47,3 +47,12 @@ def test_codex_reporter_supports_project_ide_session_endpoint():
     assert '"session_id": session_id if session_id is not None else args.execution_session_id' in reporter
     assert "--strict" in reporter
     assert "return 0, \"\"" in reporter
+
+
+def test_codex_plugin_installer_repairs_active_codex_cache():
+    installer = (PLUGIN_ROOT / "scripts" / "install_local.py").read_text(encoding="utf-8")
+
+    assert '"plugin", "add", selector' in installer
+    assert 'selector = f"{PLUGIN_NAME}@{marketplace_name}"' in installer
+    assert "INSTALLED_BY_DEFAULT" in installer
+    assert "Restart Codex or reload plugins, then enable DecisionsAI Codex from the plugin list." not in installer

@@ -98,8 +98,9 @@ def _install_local_codex_plugin() -> dict:
         }
 
     source = _repo_root() / "codex_plugin" / "decisions-codex"
+    installer = source / "scripts" / "install_local.py"
     manifest = source / ".codex-plugin" / "plugin.json"
-    if not manifest.exists():
+    if not manifest.exists() or not installer.exists():
         return {
             "installed": False,
             "skipped": True,
@@ -110,42 +111,31 @@ def _install_local_codex_plugin() -> dict:
 
     target = Path.home() / "plugins" / "decisions-codex"
     marketplace = Path.home() / ".agents" / "plugins" / "marketplace.json"
-    target.parent.mkdir(parents=True, exist_ok=True)
-    marketplace.parent.mkdir(parents=True, exist_ok=True)
-    if target.exists():
-        shutil.rmtree(target)
-    shutil.copytree(
-        source,
-        target,
-        ignore=shutil.ignore_patterns("__pycache__", ".DS_Store"),
-    )
-
-    if marketplace.exists():
-        try:
-            payload = json.loads(marketplace.read_text(encoding="utf-8"))
-        except Exception:
-            payload = {}
-    else:
-        payload = {}
-    if not isinstance(payload, dict):
-        payload = {}
-    payload.setdefault("name", "local-codex-plugins")
-    payload.setdefault("interface", {"displayName": "Local Codex Plugins"})
-    plugins = payload.get("plugins")
-    if not isinstance(plugins, list):
-        plugins = []
-    plugins = [
-        item for item in plugins
-        if not (isinstance(item, dict) and item.get("name") == "decisions-codex")
-    ]
-    plugins.append({
-        "name": "decisions-codex",
-        "source": {"type": "local", "path": "./plugins/decisions-codex"},
-        "policy": {"installation": "AVAILABLE", "authentication": "NONE"},
-        "category": "Developer Tools",
-    })
-    payload["plugins"] = plugins
-    marketplace.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    try:
+        result = subprocess.run(
+            [sys.executable, str(installer)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=90,
+        )
+    except Exception as exc:
+        return {
+            "installed": False,
+            "skipped": False,
+            "reason": f"Could not run DecisionsAI Codex plugin installer: {exc}",
+            "backend": status,
+            "plugin": _codex_plugin_state(),
+        }
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout or "").strip()
+        return {
+            "installed": False,
+            "skipped": False,
+            "reason": detail or "DecisionsAI Codex plugin installer failed.",
+            "backend": status,
+            "plugin": _codex_plugin_state(),
+        }
 
     return {
         "installed": True,
@@ -154,6 +144,7 @@ def _install_local_codex_plugin() -> dict:
         "marketplace": str(marketplace),
         "backend": status,
         "plugin": _codex_plugin_state(),
+        "message": "DecisionsAI Codex plugin installed, cachebusted, and reinstalled through Codex.",
     }
 
 
