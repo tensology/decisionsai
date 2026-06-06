@@ -1009,8 +1009,6 @@ class OpenAICompatibleLLMService(BaseLLMService):
             return True
         elif is_silent:
             # Tool asked for no voice UI — close the segment without speaking \"Done\".
-            from distr.core.agent.libs import LLMFullResponseEndFrame, LLMFullResponseStartFrame
-
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(LLMFullResponseEndFrame())
             return True
@@ -1027,12 +1025,10 @@ class OpenAICompatibleLLMService(BaseLLMService):
                 else:
                     line_count = tts_text.count('\n') + 1
                     tts_text = f"{first_line} ... and {line_count - 1} more lines."
-            from distr.core.agent.libs import LLMFullResponseStartFrame
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(TextFrame(text=tts_text))
             fallback = tool_result_text
         else:
-            from distr.core.agent.libs import LLMFullResponseStartFrame
             await self.push_frame(LLMFullResponseStartFrame())
             await self.push_frame(TextFrame(text=generic_ack))
             fallback = generic_ack

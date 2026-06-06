@@ -161,38 +161,40 @@ class PlayerWindow(QtWidgets.QWidget):
 
 
     def setup_voice_graphic(self):
-        self.voice_label = QtWidgets.QLabel(self.voice_container)
-        self.voice_label.setGeometry(0, 0, 300, 60)
-        self.voice_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        container_w, container_h = self.width(), self.height()
+
+        self.voice_background = QtWidgets.QLabel(self.voice_container)
+        self.voice_background.setObjectName("voiceBackground")
+        self.voice_background.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.voice_background.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents)
         
         gif_path = os.path.join(IMAGES_DIR, "voice.gif")        
         reader = QImageReader(gif_path)
         if reader.canRead():
             original_size = reader.size()
             if original_size.isValid() and original_size.height() > 0:
-                # Set the height to 150% of the voice box height
-                new_height = int(self.voice_label.height() * 2)
-                # Calculate the width while maintaining aspect ratio
+                # 100% of pill height — background layer behind controls
+                new_height = container_h
                 new_width = int(new_height * original_size.width() / original_size.height())
                 
                 self.movie = QMovie(gif_path)
                 self.movie.setScaledSize(QSize(new_width, new_height))
-                self.voice_label.setMovie(self.movie)
+                self.voice_background.setMovie(self.movie)
                 
-                # Center the GIF horizontally and vertically
-                x_offset = (self.voice_label.width() - new_width) // 2
-                y_offset = ((self.voice_label.height() - new_height) // 2) - 3
-                self.voice_label.setGeometry(x_offset, y_offset, new_width, new_height)
+                x_offset = (container_w - new_width) // 2 - 10
+                y_offset = (container_h - new_height) // 2
+                self.voice_background.setGeometry(x_offset, y_offset, new_width, new_height)
                 
                 self.total_frames = self.movie.frameCount()
             else:
                 self.logger.error("Invalid image dimensions: %dx%d", original_size.width(), original_size.height())
-                self.voice_label.setText("Invalid Image")
+                self.voice_background.setText("Invalid Image")
         else:
             self.logger.error("Unable to read image from %s: %s", gif_path, reader.errorString())
-            self.voice_label.setText("Image Load Error")
+            self.voice_background.setText("Image Load Error")
         
-        self.voice_label.setStyleSheet("color: white; font-size: 14px;")
+        self.voice_background.setStyleSheet("background: transparent; border: none; color: white; font-size: 14px;")
+        self.voice_background.lower()
 
     def setup_stop_button(self):
         self.stop_button = QtWidgets.QPushButton(self.voice_container)
@@ -218,6 +220,8 @@ class PlayerWindow(QtWidgets.QWidget):
         
         self.stop_button.clicked.connect(self.on_stop_clicked)
         self.stop_button.move(260, 14)
+        self.stop_button.raise_()
+        self.voice_background.lower()
 
     def update_animation(self):
         """Update GIF animation frame"""
