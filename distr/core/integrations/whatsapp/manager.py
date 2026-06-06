@@ -42,6 +42,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 from distr.core.integrations.base import IntegrationReconnectMixin
+from distr.core.integrations.telegram.utils import relay_internal_token
 
 
 def _whatsapp_agent_bridge_enabled() -> bool:
@@ -236,7 +237,7 @@ class WhatsAppWebSocketManager(IntegrationReconnectMixin, QObject):
 
     def _relay_auth_headers(self, payload: str = "") -> dict:
         """Build auth headers for relay REST endpoints."""
-        token = (os.environ.get("RELAY_INTERNAL_TOKEN", "") or "").strip()
+        token = relay_internal_token()
         if token:
             return {"X-Relay-Internal-Token": token}
         ws_token = str((self._ws_auth_bundle or {}).get("ws_token") or "").strip()

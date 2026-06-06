@@ -1,4 +1,5 @@
 import asyncio
+import time
 from types import SimpleNamespace
 
 import numpy as np
@@ -97,6 +98,31 @@ def test_pause_idle_input_keeps_existing_stream_warm():
     assert transport._in_stream is stream
     assert transport._in_stream.is_active()
     assert transport.get_input_health()["stream_active"] is True
+
+
+def test_resume_input_reopens_active_stream_when_callbacks_stale_after_idle(monkeypatch):
+    transport = _transport()
+    created = []
+
+    def fake_create_audio_task():
+        created.append(True)
+        transport._audio_task = object()
+        transport._audio_in_queue = object()
+
+    monkeypatch.setattr(transport, "_create_audio_task", fake_create_audio_task, raising=False)
+
+    transport._open_input_stream()
+    stale_stream = transport._in_stream
+    transport.pause_idle_input()
+    transport._input_last_callback_at = time.time() - 10.0
+
+    transport.resume_input()
+
+    assert created == [True]
+    assert stale_stream.closed is True
+    assert transport._in_stream is not stale_stream
+    assert transport._in_stream.is_active()
+    assert len(transport._py_audio.open_calls) == 2
 
 
 def test_audio_callback_enqueues_input_frame_and_records_health(monkeypatch):

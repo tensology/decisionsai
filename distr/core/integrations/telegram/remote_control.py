@@ -23,7 +23,7 @@ try:
 except ImportError:
     requests = None
 
-from distr.core.integrations.telegram.utils import hash_channel_id
+from distr.core.integrations.telegram.utils import hash_channel_id, relay_internal_token
 
 logger = logging.getLogger(__name__)
 
@@ -110,6 +110,28 @@ class TelegramRemoteControlMixin:
                     self._send_websocket_message(response)
                     logger.info(
                         f"Sent screen list: {len(formatted_screens)} screen(s) with geometry and scale_factor"
+                    )
+
+                elif command == "remote_audio_stop":
+                    audio_request_id = str(command_data.get("request_id") or request_id or "")
+                    if not hasattr(self, "_cancelled_remote_audio_requests"):
+                        self._cancelled_remote_audio_requests = set()
+                    if audio_request_id:
+                        self._cancelled_remote_audio_requests.add(audio_request_id)
+                        if len(self._cancelled_remote_audio_requests) > 100:
+                            self._cancelled_remote_audio_requests = set(
+                                list(self._cancelled_remote_audio_requests)[-50:]
+                            )
+                    pending = getattr(self, "_pending_remote_agent_response", None) or {}
+                    if audio_request_id and pending.get("request_id") == audio_request_id:
+                        self._pending_remote_agent_response = None
+                    self._send_websocket_message(
+                        {
+                            "type": "remote_control_response",
+                            "command": "remote_audio_stop",
+                            "request_id": request_id,
+                            "data": {"success": True, "audio_request_id": audio_request_id},
+                        }
                     )
 
                 elif command == "screenshot":
@@ -1170,6 +1192,7 @@ class TelegramRemoteControlMixin:
                     api_method = (command_data.get("method") or "GET").upper()
                     api_path = command_data.get("path", "")
                     api_body = command_data.get("body")
+                    response_type = (command_data.get("response_type") or "json").lower()
                     if not api_path:
                         self._send_websocket_message({
                             "type": "remote_control_response", "command": "api_relay",
@@ -1196,10 +1219,19 @@ class TelegramRemoteControlMixin:
                                 resp = _req.delete(url, headers=headers, timeout=15)
                             else:
                                 resp = _req.request(api_method, url, json=api_body, headers=headers, timeout=15)
-                            try:
-                                resp_data = resp.json()
-                            except Exception:
-                                resp_data = {"text": resp.text}
+                            if response_type == "base64":
+                                import base64 as _base64
+
+                                resp_data = {
+                                    "body_base64": _base64.b64encode(resp.content).decode("ascii"),
+                                    "content_type": resp.headers.get("content-type", ""),
+                                    "size_bytes": len(resp.content),
+                                }
+                            else:
+                                try:
+                                    resp_data = resp.json()
+                                except Exception:
+                                    resp_data = {"text": resp.text}
                             self._send_websocket_message({
                                 "type": "remote_control_response", "command": "api_relay",
                                 "request_id": request_id,
@@ -2112,7 +2144,7 @@ class TelegramRemoteControlMixin:
                 "screen_number": str(screen_number),
                 "format": image_format,
             }
-            relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+            relay_token = relay_internal_token()
             headers = {"X-Relay-Internal-Token": relay_token} if relay_token else {}
 
             logger.info(f"POSTing screenshot to {api_url} (size={len(image_data)})")

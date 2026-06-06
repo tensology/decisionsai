@@ -11,6 +11,8 @@ import json
 import os
 import logging
 
+from distr.core.integrations.telegram.utils import relay_internal_token
+
 from ._shared import (
     logger,
     parse_connected_accounts,
@@ -28,7 +30,7 @@ _oauth_states: Dict[str, float] = {}
 
 def _relay_headers() -> dict:
     """Return headers for authenticating with the www.decisionsai.net relay server."""
-    token = (os.environ.get("RELAY_INTERNAL_TOKEN", "") or "").strip()
+    token = relay_internal_token()
     if token:
         return {"X-Relay-Internal-Token": token}
     return {}
@@ -991,7 +993,7 @@ def register_routes(router, templates):
 
             api_url = f"{server_base.rstrip('/')}/api/telegram/link/request/"
             headers = {"Content-Type": "application/json"}
-            relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+            relay_token = relay_internal_token()
             if relay_token:
                 headers["X-Relay-Internal-Token"] = relay_token
 

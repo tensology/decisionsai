@@ -38,6 +38,8 @@ def _normalize_output_device_name(device_name: Optional[str]) -> str:
 class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
     """Local audio input transport that supports hot-swapping devices."""
 
+    _STALE_INPUT_CALLBACK_SECS = 2.0
+
     def __init__(self, py_audio, params):
         super().__init__(py_audio, params)
         self._input_callback_count = 0
@@ -45,6 +47,7 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
         self._input_callback_errors = 0
         self._input_last_callback_at = 0.0
         self._input_last_callback_peak = 0
+        self._input_stream_opened_at = 0.0
 
     @staticmethod
     def _pa_continue():
@@ -66,17 +69,46 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
                     logger.info("Audio input task ended and will be recreated")
             self._audio_task = None
 
+        if getattr(self, "_audio_task", None) is not None and getattr(self, "_audio_in_queue", None) is None:
+            logger.warning("Audio input task is alive but its queue is missing; recreating task")
+            self._audio_task = None
+
         if getattr(self._params, "audio_in_enabled", True) and getattr(self, "_audio_task", None) is None:
             self._create_audio_task()
+
+    def _input_stream_is_active(self) -> bool:
+        if not self._in_stream:
+            return False
+        try:
+            return bool(self._in_stream.is_active())
+        except Exception:
+            return False
+
+    def _input_stream_callback_age(self) -> Optional[float]:
+        reference = float(getattr(self, "_input_last_callback_at", 0.0) or 0.0)
+        if reference <= 0:
+            reference = float(getattr(self, "_input_stream_opened_at", 0.0) or 0.0)
+        if reference <= 0:
+            return None
+        return max(0.0, time.time() - reference)
+
+    def _input_stream_callbacks_stale(self) -> bool:
+        age = self._input_stream_callback_age()
+        return age is not None and age > self._STALE_INPUT_CALLBACK_SECS
 
     def _open_input_stream(self):
         """Open and start the PortAudio input stream if it is not already active."""
         if self._in_stream:
-            try:
-                if self._in_stream.is_active():
-                    return
-            except Exception:
-                pass
+            if self._input_stream_is_active() and not self._input_stream_callbacks_stale():
+                return
+            if self._input_stream_is_active():
+                logger.warning(
+                    "Audio input stream reports active but callbacks are stale; reopening stream: %s",
+                    self.get_input_health(),
+                )
+            else:
+                logger.info("Audio input stream is inactive; reopening stream: %s", self.get_input_health())
+            self._close_input_stream()
 
         if not self._sample_rate:
             self._sample_rate = getattr(self._params, "audio_in_sample_rate", None) or 16000
@@ -98,6 +130,8 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
             input_device_index=self._params.input_device_index,
         )
         self._in_stream.start_stream()
+        self._input_stream_opened_at = time.time()
+        self._input_last_callback_at = 0.0
 
     def _audio_in_callback(self, in_data, frame_count, time_info, status):
         """PortAudio callback with health logging around Pipecat enqueue."""
@@ -192,12 +226,10 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
             self._in_stream = None
 
     def get_input_health(self):
-        stream_active = False
-        if self._in_stream:
-            try:
-                stream_active = bool(self._in_stream.is_active())
-            except Exception:
-                stream_active = False
+        stream_active = self._input_stream_is_active()
+        task = getattr(self, "_audio_task", None)
+        task_alive = bool(task) and not getattr(task, "done", lambda: False)()
+        callback_age = self._input_stream_callback_age()
         return {
             "enabled": bool(getattr(self._params, "audio_in_enabled", False)),
             "stream_active": stream_active,
@@ -206,8 +238,10 @@ class HotSwappableLocalAudioInputTransport(LocalAudioInputTransport):
             "callbacks": self._input_callback_count,
             "bytes": self._input_callback_bytes,
             "last_peak": self._input_last_callback_peak,
+            "last_callback_age_ms": None if callback_age is None else int(callback_age * 1000),
             "callback_errors": self._input_callback_errors,
-            "audio_task_alive": bool(getattr(self, "_audio_task", None)),
+            "stream_callbacks_stale": bool(stream_active and self._input_stream_callbacks_stale()),
+            "audio_task_alive": task_alive,
         }
 
     async def process_frame(self, frame, direction):

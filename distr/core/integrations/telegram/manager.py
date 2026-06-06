@@ -35,7 +35,7 @@ except ImportError:
 logger = logging.getLogger(__name__)
 
 # Re-export for backward compatibility
-from distr.core.integrations.telegram.utils import hash_channel_id
+from distr.core.integrations.telegram.utils import hash_channel_id, relay_internal_token
 
 from distr.core.integrations.telegram.messages import TelegramMessagesMixin
 from distr.core.integrations.telegram.sender import TelegramSenderMixin
@@ -263,6 +263,7 @@ class TelegramWebSocketManager(
 
         # State tracking
         self._remote_control_lock = threading.Lock()
+        self._cancelled_remote_audio_requests: set[str] = set()
         self._online_message_sent = False
         self._last_connection_status = (
             None  # Track connection status for polling detection
@@ -576,7 +577,7 @@ class TelegramWebSocketManager(
         base = self.server_url.split("/ws/")[0]
         base = base.replace("wss://", "https://").replace("ws://", "http://")
         api_url = f"{base}/api/telegram/ws-token"
-        relay_token = (os.environ.get("RELAY_INTERNAL_TOKEN") or "").strip()
+        relay_token = relay_internal_token()
         headers = {"Content-Type": "application/json"}
         if relay_token:
             headers["X-Relay-Internal-Token"] = relay_token

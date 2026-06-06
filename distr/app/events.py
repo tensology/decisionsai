@@ -860,7 +860,7 @@ class EventHandlerMixin:
             return None
 
     def _send_to_remote_worker(self, data, remote_ctx):
-        """Build and send a remote-app assistant response payload (text + audio)."""
+        """Build and send a remote-app assistant response payload plus Ogg audio stream."""
         text = (data.get('text') or '').strip()
         if not text:
             logger.warning(
@@ -869,66 +869,97 @@ class EventHandlerMixin:
             )
             return
 
+        request_id = remote_ctx.get("request_id")
+
+        def is_cancelled() -> bool:
+            try:
+                cancelled = getattr(self.telegram_manager, "_cancelled_remote_audio_requests", set())
+                return bool(request_id and request_id in cancelled)
+            except Exception:
+                return False
+
         logger.info(
             "[REMOTE TTS] Preparing response for remote-app: request_id=%s chars=%d",
-            remote_ctx.get("request_id"),
+            request_id,
             len(text),
         )
 
-        audio_file = self._telegram_generate_tts(text)
-        if audio_file and audio_file.exists() and str(audio_file).endswith('.wav'):
-            audio_file = self._convert_wav_to_ogg(audio_file)
+        generated_audio_file = None
+        stream_audio_file = None
+        audio_stream_ready = False
 
-        audio_payload = None
-        if audio_file and audio_file.exists():
-            try:
-                with open(audio_file, "rb") as f:
-                    audio_bytes = f.read()
-                audio_payload = {
-                    "data": base64.b64encode(audio_bytes).decode("ascii"),
-                    "mime_type": "audio/ogg" if str(audio_file).endswith(".ogg") else "audio/wav",
-                    "filename": os.path.basename(str(audio_file)),
-                    "size_bytes": len(audio_bytes),
-                }
+        if not is_cancelled():
+            generated_audio_file = self._telegram_generate_tts(text)
+            stream_audio_file = generated_audio_file
+            if stream_audio_file and stream_audio_file.exists() and str(stream_audio_file).endswith('.wav'):
+                stream_audio_file = self._convert_wav_to_ogg(stream_audio_file)
+
+            if stream_audio_file and stream_audio_file.exists() and str(stream_audio_file).endswith(".ogg"):
+                audio_stream_ready = True
                 logger.info(
-                    "[REMOTE TTS] Encoded audio payload: request_id=%s bytes=%d file=%s",
-                    remote_ctx.get("request_id"),
-                    len(audio_bytes),
-                    audio_payload["filename"],
+                    "[REMOTE TTS] Ogg stream ready: request_id=%s bytes=%d file=%s",
+                    request_id,
+                    stream_audio_file.stat().st_size,
+                    os.path.basename(str(stream_audio_file)),
                 )
-            except Exception:
-                logger.exception(
-                    "[REMOTE TTS] Failed encoding audio payload (request_id=%s)",
-                    remote_ctx.get("request_id"),
+            elif stream_audio_file and stream_audio_file.exists():
+                logger.warning(
+                    "[REMOTE TTS] Skipping non-Ogg remote audio stream: request_id=%s file=%s",
+                    request_id,
+                    stream_audio_file,
                 )
 
         payload = {
             "type": "remote_agent_response",
-            "request_id": remote_ctx.get("request_id"),
+            "request_id": request_id,
             "data": {
                 "text": text,
                 "mode": remote_ctx.get("mode") or "command",
                 "source_command": remote_ctx.get("source_command"),
-                "audio": audio_payload,
+                "audio": None,
+                "audio_streamed": audio_stream_ready,
+                "audio_mime_type": "audio/ogg; codecs=opus" if audio_stream_ready else None,
             },
         }
 
         try:
             self.telegram_manager._send_websocket_message(payload)
             logger.info(
-                "[REMOTE TTS] Sent remote_agent_response: request_id=%s has_audio=%s",
-                remote_ctx.get("request_id"),
-                bool(audio_payload),
+                "[REMOTE TTS] Sent remote_agent_response: request_id=%s audio_stream_ready=%s",
+                request_id,
+                audio_stream_ready,
             )
+
+            if audio_stream_ready and stream_audio_file and not is_cancelled():
+                from distr.core.integrations.telegram.remote_audio_stream import (
+                    iter_remote_audio_stream_messages,
+                    remote_audio_stopped_message,
+                )
+
+                for message in iter_remote_audio_stream_messages(
+                    request_id=str(request_id),
+                    audio_path=stream_audio_file,
+                ):
+                    if is_cancelled():
+                        self.telegram_manager._send_websocket_message(
+                            remote_audio_stopped_message(str(request_id), reason="user_stop")
+                        )
+                        logger.info("[REMOTE TTS] Remote audio stream stopped: request_id=%s", request_id)
+                        break
+                    self.telegram_manager._send_websocket_message(message)
+                    if message.get("type") == "remote_agent_audio_chunk":
+                        time.sleep(0.002)
         except Exception:
             logger.exception(
                 "[REMOTE TTS] Failed sending remote_agent_response: request_id=%s",
-                remote_ctx.get("request_id"),
+                request_id,
             )
         finally:
             # Keep the same cleanup timing/behavior as Telegram worker path.
             time.sleep(2)
-            self._telegram_cleanup_temp_files(audio_file, None, None)
+            self._telegram_cleanup_temp_files(stream_audio_file, None, None)
+            if generated_audio_file and generated_audio_file != stream_audio_file:
+                self._telegram_cleanup_temp_files(generated_audio_file, None, None)
 
     def _integration_reply_chat_id(self):
         """Internal chat id for routing connector replies (Discord / Slack)."""

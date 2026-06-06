@@ -27,6 +27,7 @@ from cryptography.hazmat.primitives.asymmetric.ed25519 import Ed25519PrivateKey
 from cryptography.hazmat.primitives import serialization
 
 from distr.core.paths import DB_DIR
+from distr.core.integrations.telegram.utils import relay_internal_token
 from distr.core.integrations.whatsapp.paths import resolve_whatsapp_media_disk_path
 from distr.core.kanban.ticket_policy import (
     infer_ticket_complexity,
@@ -1933,7 +1934,7 @@ def create_routes():
     router = APIRouter()
 
     def _relay_auth_headers(payload: str = ""):
-        token = (os.environ.get("RELAY_INTERNAL_TOKEN", "") or "").strip()
+        token = relay_internal_token()
         if token:
             return {"X-Relay-Internal-Token": token}
         return {}
