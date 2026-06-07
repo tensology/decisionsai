@@ -2128,11 +2128,26 @@ class OracleWindow(FileDropMixin, MenuTrayMixin, LifecycleMixin, QtWidgets.QMain
     def _trigger_drop_success_glow(self):
         """Trigger file drop success visual via skin system."""
         self._event_dispatcher.fire_hook("file_drop_success", trigger="oracle:file_drop_success")
-        # Auto-revert after 4 seconds (flash glow handles its own timing for oracle)
-        QTimer.singleShot(
-            4000,
-            lambda: self._event_dispatcher.revert_hook("file_drop_success", trigger="oracle:file_drop_success_timer"),
+        QTimer.singleShot(4000, self._finish_drop_success_glow)
+
+    def _finish_drop_success_glow(self):
+        """End temporary file-drop hook and clear any lingering drop glow."""
+        was_drop_hook = self._event_dispatcher.get_current_hook() == "file_drop_success"
+        self._event_dispatcher.revert_hook(
+            "file_drop_success",
+            trigger="oracle:file_drop_success_timer",
         )
+        if was_drop_hook:
+            return
+
+        # fade/breathing styles loop forever; if another hook preempted file_drop_success
+        # without turning glow off, the white drop ring would otherwise stick.
+        current_hook = self._event_dispatcher.get_current_hook()
+        response = self._event_dispatcher.get_event_response(current_hook)
+        if response is None or not response.glow:
+            self._glow_engine.stop()
+            self._shadow_color = QtGui.QColor(0, 0, 0, 0)
+            self.update()
 
     
 

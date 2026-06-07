@@ -97,7 +97,7 @@ class TestOracleSkin:
         assert oracle.events["ptt_active"].glow_style == "pulse"
 
     def test_file_drop_success_glow_style(self, oracle) -> None:
-        assert oracle.events["file_drop_success"].glow_style == "fade"
+        assert oracle.events["file_drop_success"].glow_style == "flash"
 
     def test_recording_action_tray_icon(self, oracle) -> None:
         assert oracle.events["recording_action"].tray_icon == "recording"
