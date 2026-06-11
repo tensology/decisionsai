@@ -1721,6 +1721,14 @@
     background-color: rgba(255, 255, 255, 0.1);
     color: #ececf1;
 }
+.speaker-toggle:disabled {
+    cursor: not-allowed;
+    opacity: 0.45;
+}
+.speaker-toggle:disabled:hover {
+    background-color: transparent;
+    color: #f97316;
+}
 .speaker-toggle[aria-pressed="false"] {
     color: #8e8ea0;
 }
@@ -2023,21 +2031,6 @@
     cursor: not-allowed;
 }
 
-.header-load-btn {
-    flex-shrink: 0;
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    color: #ececf1;
-    background-color: #f97316;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-}
-.header-load-btn:hover {
-    background-color: #ea580c;
-}
-
 .chat-config-modal-content {
     max-width: 720px;
 }
@@ -2091,33 +2084,6 @@
     .chat-header-actions {
         margin-left: 0;
     }
-}
-
-.load-chat-bar {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 12px 24px;
-    background-color: rgba(249, 115, 22, 0.15);
-    border-bottom: 1px solid rgba(249, 115, 22, 0.3);
-    gap: 16px;
-}
-.load-chat-bar-text {
-    font-size: 14px;
-    color: #8e8ea0;
-}
-.load-chat-bar-btn {
-    padding: 6px 14px;
-    font-size: 13px;
-    font-weight: 500;
-    color: #fff;
-    background-color: #f97316;
-    border: none;
-    border-radius: 8px;
-    cursor: pointer;
-}
-.load-chat-bar-btn:hover {
-    background-color: #ea580c;
 }
 
 .settings-label {
