@@ -79,12 +79,36 @@ def _looks_like_short_ordered_desktop_actions(text: str) -> bool:
     return has_ordering or screen_targets >= 2 or repeated_mouse_targets >= 2
 
 
+def should_bypass_fast_action_detection(text: str) -> bool:
+    """Return True when *text* is a wrapped orchestration dispatch, not direct user speech.
+
+  Automations, ticket handoffs, and workflow step packets can contain phrases like
+  ``run action …`` inside an ``Instruction:`` block. Fast-action regex must not
+  treat those as immediate voice/chat commands.
+    """
+
+    raw = text or ""
+    if raw.startswith("[Multi-Action Intake]\n"):
+        return True
+    if "This is a DecisionsAI automation run." in raw:
+        return True
+    if "[Ticket Board — orchestrator engage this ticket]" in raw:
+        return True
+    if "[WORKFLOW ENGINE] Executing step" in raw:
+        return True
+    return False
+
+
 def augment_bulk_instruction(text: str, *, source: str = "chat") -> str:
     """Wrap large multi-action instructions with orchestration guardrails.
 
     The raw user text is preserved exactly after the guardrail block so tools and
     downstream agents still receive the original content.
     """
+
+    text = text or ""
+    if text.startswith("[Multi-Action Intake]\n"):
+        return text
 
     profile = profile_bulk_instruction(text)
     is_short_ordered_desktop = _looks_like_short_ordered_desktop_actions(text)

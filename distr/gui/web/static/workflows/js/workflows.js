@@ -19,30 +19,30 @@
     var latestActiveRuns = [];
     var latestWorkflowExecutionSessions = [];
     var latestHermesEvents = [];
-    var latestBoardActivity = null;
-    var latestLearnedRules = [];
     var wfContextMenuEl = null;
     var wfContextMenuId = null;
+    var wfQueueMetricMenuEl = null;
+    var wfQueueMetricMenuState = null;
     var workflowRuntimeStateById = {};
     var workflowBoardOptions = [];
     var workflowDatabaseBoards = [];
     var workflowBoardLoadToken = 0;
-    var workflowBoardCollapsedColumns = {};
-    var selectedWorkflowBoardTicketKey = "";
+    var workflowBoardRenderState = { data: null, selected: null };
     var workflowBoardTicketByKey = {};
+    var workflowTicketUi = null;
     var workflowLinkable = { projects: [], workflows: [] };
     var workflowQueueTickets = [];
     var workflowActionsCatalog = [];
     var workflowActionsCatalogLoaded = false;
-    var workflowSkillsCatalog = [];
-    var workflowSkillsCatalogLoaded = false;
-    var workflowQueueBoardFilter = "all";
     var workflowQueueDragTicketId = null;
     var workflowBoardDragPayload = null;
+    var workflowBoardDragGhostEl = null;
     var workflowDropDocumentBound = false;
+    var workflowDropZoneHoverDepth = 0;
     var workflowLastDragPoint = null;
     var workflowPendingTicketLinks = {};
     var workflowLinkedExternalTicketKeys = {};
+    var workflowLocalTicketSourceKeys = {};
     var selectedWorkflowCliTicketId = null;
     var workflowTicketModalState = null;
     var workflowWhatsappTicketDraft = null;
@@ -55,9 +55,7 @@
         execution_mode: "sequential",
         concurrency_scope: "project",
         max_parallel_tickets: 3,
-        branch_per_ticket: true,
-        max_correction_attempts: 1,
-        auto_dispatch_corrections: false
+        branch_per_ticket: true
     };
 
     // Inline SVG icons (14x14, currentColor)
@@ -90,22 +88,238 @@
         return source.charAt(0).toUpperCase() + source.slice(1);
     }
 
-    function workflowBoardCollapseKey(selected, lane) {
-        var boardKey = selected ? selected.value : "board";
-        var laneKey = lane && lane.id != null ? lane.id : (lane && lane.name ? lane.name : "lane");
-        return boardKey + "::" + String(laneKey);
+    function stripHtml(html) {
+        if (!html) return "";
+        if (typeof html === "object") {
+            var parts = [];
+            (function walk(node) {
+                if (Array.isArray(node)) { node.forEach(walk); return; }
+                if (typeof node === "object" && node !== null) {
+                    if (node.type === "text") parts.push(node.text || "");
+                    if (node.type === "hardBreak" || node.type === "paragraph") parts.push("\n");
+                    if (node.content) walk(node.content);
+                    if (Array.isArray(node.marks)) node.marks.forEach(walk);
+                }
+            })(html);
+            return parts.join("").replace(/\n{3,}/g, "\n\n").trim();
+        }
+        var tmp = document.createElement("div");
+        tmp.innerHTML = html;
+        return (tmp.textContent || tmp.innerText || "").replace(/\s+/g, " ").trim();
     }
 
-    function loadWorkflowBoardCollapsedColumns() {
+    function workflowApiFetch(path, opts) {
+        opts = opts || {};
+        var method = opts.method || "GET";
+        var body = opts.body;
+        if (typeof body === "string") {
+            try { body = JSON.parse(body); } catch (e) { body = undefined; }
+        }
+        var apiPath = path.indexOf("/api") === 0 ? path.slice(4) : path;
+        return api(method, apiPath, body);
+    }
+
+    function workflowListLaneExpandedStorageKey(selected) {
+        if (!selected || selected.id == null) return null;
+        var source = selected.source || "database";
+        return "kb_list_lane_expanded_" + source + "_" + String(selected.id);
+    }
+
+    function workflowResolveDefaultListExpandedLaneId(lanes) {
+        if (!lanes || !lanes.length) return null;
+        var currentLane = lanes.filter(function (lane) {
+            return String(lane.name || "").trim().toLowerCase() === "current";
+        })[0];
+        if (currentLane && currentLane.id != null) return String(currentLane.id);
+        return lanes[0].id != null ? String(lanes[0].id) : null;
+    }
+
+    function getWorkflowListExpandedLaneId(lanes, selected) {
+        var key = workflowListLaneExpandedStorageKey(selected);
+        if (key) {
+            try {
+                var saved = localStorage.getItem(key);
+                if (saved === "__none__") return null;
+                if (saved && lanes.some(function (lane) { return String(lane.id) === String(saved); })) {
+                    return String(saved);
+                }
+            } catch (e) {}
+        }
+        return workflowResolveDefaultListExpandedLaneId(lanes);
+    }
+
+    function saveWorkflowListExpandedLaneId(selected, laneId) {
+        var key = workflowListLaneExpandedStorageKey(selected);
+        if (!key) return;
         try {
-            workflowBoardCollapsedColumns = JSON.parse(localStorage.getItem("wf_board_collapsed_columns") || "{}") || {};
-        } catch (e) {
-            workflowBoardCollapsedColumns = {};
+            if (laneId == null || laneId === "") {
+                localStorage.setItem(key, "__none__");
+            } else {
+                localStorage.setItem(key, String(laneId));
+            }
+        } catch (e) {}
+    }
+
+    function workflowListLaneChevronSvg() {
+        return '<svg class="kb-ticket-list-chevron" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 18l6-6-6-6"/></svg>';
+    }
+
+    function setWorkflowListLaneExpanded(container, laneId) {
+        if (!container) return;
+        var expandedId = laneId != null && laneId !== "" ? String(laneId) : "";
+        container.querySelectorAll(".kb-ticket-list-section").forEach(function (section) {
+            var isExpanded = expandedId && String(section.dataset.laneId) === expandedId;
+            section.classList.toggle("kb-ticket-list-section--expanded", isExpanded);
+            var head = section.querySelector(".kb-ticket-list-section-head");
+            var body = section.querySelector(".kb-ticket-list-section-body");
+            if (head) head.setAttribute("aria-expanded", isExpanded ? "true" : "false");
+            if (body) body.hidden = !isExpanded;
+        });
+        if (expandedId) {
+            var active = container.querySelector('.kb-ticket-list-section[data-lane-id="' + expandedId + '"]');
+            if (active) initWorkflowListRowMarquees(active);
         }
     }
 
-    function saveWorkflowBoardCollapsedColumns() {
-        try { localStorage.setItem("wf_board_collapsed_columns", JSON.stringify(workflowBoardCollapsedColumns || {})); } catch (e) {}
+    function bindWorkflowListLaneAccordion(container, lanes, selected) {
+        container.querySelectorAll(".kb-ticket-list-section-head").forEach(function (head) {
+            head.addEventListener("click", function () {
+                var section = head.closest(".kb-ticket-list-section");
+                if (!section) return;
+                var laneId = section.dataset.laneId;
+                if (!laneId) return;
+                if (section.classList.contains("kb-ticket-list-section--expanded")) {
+                    setWorkflowListLaneExpanded(container, null);
+                    saveWorkflowListExpandedLaneId(selected, null);
+                    return;
+                }
+                setWorkflowListLaneExpanded(container, laneId);
+                saveWorkflowListExpandedLaneId(selected, laneId);
+            });
+        });
+    }
+
+    function initWorkflowListRowMarquees(rootEl) {
+        var ticketUi = ensureWorkflowTicketUi();
+        if (!ticketUi || !ticketUi.initListRowMarquee) return;
+        (rootEl || document).querySelectorAll(".kb-ticket-list-section--expanded .kb-ticket-list-row").forEach(function (row) {
+            ticketUi.initListRowMarquee(row);
+        });
+    }
+
+    function findWorkflowTicketKeyById(ticketId) {
+        var keys = Object.keys(workflowBoardTicketByKey || {});
+        for (var i = 0; i < keys.length; i++) {
+            var item = workflowBoardTicketByKey[keys[i]];
+            if (item && item.ticket && String(item.ticket.id) === String(ticketId)) return keys[i];
+        }
+        return "";
+    }
+
+    function ensureWorkflowTicketUi() {
+        if (workflowTicketUi) return workflowTicketUi;
+        if (!window.KanbanTicketUi) return null;
+        workflowTicketUi = window.KanbanTicketUi.create({
+            esc: esc,
+            stripHtml: stripHtml,
+            truncate: function (s, maxLen) {
+                if (!s) return "";
+                s = String(s).replace(/\s+/g, " ").trim();
+                return s.length > maxLen ? s.substring(0, maxLen) + "…" : s;
+            },
+            setPriorityButtons: function () {},
+            setTicketComplexity: function () {},
+            renderModalLinks: function () {},
+            switchTicketTab: function () {},
+            showSnackbar: snack,
+            prepareExternalTicketModal: function () {},
+            openTicketModal: function (ticketId) {
+                var key = findWorkflowTicketKeyById(ticketId);
+                if (key) openWorkflowBoardTicket(key);
+            },
+            copyAndPushExternalTicket: function () {
+                snack("Use Ticket Boards to run actions on external tickets", "info");
+            },
+            openSendWorkflowModal: function (ticket, source) {
+                if (!ticket) return;
+                if (currentWorkflowId) {
+                    var isLocal = !source || source === "database";
+                    if (!isLocal) {
+                        snack("Link external tickets from Ticket Boards", "info");
+                        return;
+                    }
+                    api("PATCH", "/tickets/tickets/" + encodeURIComponent(ticket.id), {
+                        linked_workflow_id: currentWorkflowId
+                    }).then(function () {
+                        snack("Ticket linked to workflow", "success");
+                        var select = document.getElementById("wf-board-select");
+                        if (select && select.value) loadWorkflowBoardTickets(select.value);
+                        loadWorkflowTicketQueue();
+                    }).catch(function (e) { snack(e.message || "Failed to link ticket", "error"); });
+                    return;
+                }
+                snack("Select a workflow first", "error");
+            },
+            openCopyModal: function () {
+                snack("Use Ticket Boards to copy external tickets", "info");
+            },
+            apiFetch: workflowApiFetch,
+            sendTicketToProjectById: function (ticketId, btnEl) {
+                if (btnEl) btnEl.disabled = true;
+                workflowApiFetch("/api/tickets/tickets/" + ticketId + "/send-to-project", { method: "POST" })
+                    .then(function (r) { snack((r && r.message) || "Sent to project", "success"); })
+                    .catch(function (e) { snack(e.message || "Failed to send to project", "error"); })
+                    .finally(function () { if (btnEl) btnEl.disabled = false; });
+            },
+            sendTicketToAgentById: function () {
+                snack("Use Ticket Boards to dispatch tickets to an agent", "info");
+            },
+            pushTicketToCli: function (ticketId, btnEl) {
+                if (btnEl) btnEl.disabled = true;
+                workflowApiFetch("/api/tickets/tickets/" + ticketId + "/send-to-cli", { method: "POST" })
+                    .then(function (r) { snack((r && r.message) || "Sent to CLI", "success"); })
+                    .catch(function (e) { snack(e.message || "Failed to send to CLI", "error"); })
+                    .finally(function () { if (btnEl) btnEl.disabled = false; });
+            },
+            reloadCurrentDatabaseBoard: function () {
+                var select = document.getElementById("wf-board-select");
+                if (select && select.value) loadWorkflowBoardTickets(select.value);
+            },
+            showKanbanConfirm: function (opts) {
+                opts = opts || {};
+                if (window.confirm(opts.message || "Continue?")) {
+                    if (typeof opts.onConfirm === "function") opts.onConfirm();
+                } else if (typeof opts.onCancel === "function") {
+                    opts.onCancel();
+                }
+            },
+            hideKanbanConfirm: function () {},
+            startTicketDiscussion: function (ticket, isLocal) {
+                if (!ticket) return;
+                var title = ticket.title || "Ticket";
+                var desc = ticketTextValue(ticket.description || "");
+                var text = title + (desc ? ("\n\n" + desc) : "");
+                if (navigator.clipboard && navigator.clipboard.writeText) {
+                    navigator.clipboard.writeText(text).then(function () {
+                        snack("Ticket copied — open Chat to discuss", "success");
+                    }).catch(function () {
+                        snack("Open Chat to discuss this ticket", "info");
+                    });
+                } else {
+                    snack("Open Chat to discuss this ticket", "info");
+                }
+            },
+            getCurrentBoard: function () {
+                var opt = currentWorkflowBoardOption();
+                if (!opt) return null;
+                return { id: opt.id, source: opt.source, extUrl: opt.url || "" };
+            },
+            getCurrentBoardData: function () {
+                return workflowBoardRenderState.data || {};
+            },
+            showRunPopover: function () {}
+        });
+        return workflowTicketUi;
     }
 
     function workflowTicketKey(selected, lane, ticket) {
@@ -142,46 +356,423 @@
         return "";
     }
 
-    function workflowBoardTicketRowClasses(isLinked, isSelected, canDrag, blocked, pending) {
-        var classes = "wf-board-ticket-row block w-full text-left px-3 py-2 border border-transparent transition-colors ";
-        if (pending) {
-            classes += "bg-amber-500/10 border-amber-500/50 cursor-wait opacity-80 ";
-            return classes;
+    function workflowListDragHandleHtml(draggable, title) {
+        title = title || "Drag";
+        var gripSvg =
+            '<svg width="10" height="16" viewBox="0 0 10 16" fill="currentColor" aria-hidden="true">' +
+            '<circle cx="2.5" cy="2" r="1.2"/><circle cx="7.5" cy="2" r="1.2"/>' +
+            '<circle cx="2.5" cy="8" r="1.2"/><circle cx="7.5" cy="8" r="1.2"/>' +
+            '<circle cx="2.5" cy="14" r="1.2"/><circle cx="7.5" cy="14" r="1.2"/>' +
+            "</svg>";
+        if (!draggable) {
+            return '<span class="kb-ticket-list-drag-handle opacity-35" aria-hidden="true">' + gripSvg + "</span>";
         }
-        if (isLinked) {
-            classes += "bg-green-500/10 border-green-500/50 cursor-default ";
-            return classes;
-        }
-        if (blocked) {
-            classes += "opacity-55 cursor-not-allowed ";
-            return classes;
-        }
-        classes += canDrag ? "cursor-grab active:cursor-grabbing " : "cursor-default ";
-        classes += isSelected
-            ? "bg-blue-500/20 border-blue-500/50 "
-            : "hover:bg-white/5 ";
-        return classes;
+        return '<span class="kb-ticket-list-drag-handle" title="' + esc(title) + '" aria-label="' + esc(title) + '">' + gripSvg + "</span>";
     }
 
-    function applyWorkflowBoardTicketSelectionStyles(list) {
-        if (!list) return;
-        list.querySelectorAll(".wf-board-ticket-row").forEach(function (row) {
-            var selectedRow = row.dataset.ticketKey === selectedWorkflowBoardTicketKey;
-            var linkedRow = row.dataset.linkedWorkflow === "true";
-            [
-                "bg-[#f97316]/15", "ring-[#f97316]/50",
-                "bg-blue-500/20", "border-blue-500/50",
-                "bg-green-500/10", "border-green-500/50",
-                "hover:bg-white/5", "ring-1", "border-transparent"
-            ].forEach(function (cls) { row.classList.remove(cls); });
-            if (linkedRow) {
-                row.classList.add("bg-green-500/10", "border-green-500/50");
-            } else if (selectedRow) {
-                row.classList.add("bg-blue-500/20", "border-blue-500/50");
-            } else {
-                row.classList.add("border-transparent", "hover:bg-white/5");
+    function normalizeWorkflowPriority(value) {
+        var pri = String(value || "medium").toLowerCase();
+        if (pri !== "critical" && pri !== "high" && pri !== "low") pri = "medium";
+        return pri;
+    }
+
+    function workflowComplexityNumeral(level) {
+        level = normalizeComplexity(level);
+        return level === "low" ? "I" : (level === "high" ? "III" : "II");
+    }
+
+    function workflowPriorityBadgeHtml(priority, opts) {
+        opts = opts || {};
+        var pri = normalizeWorkflowPriority(priority);
+        var title = opts.title || (opts.interactive && !opts.locked ? "Change priority" : ("Priority: " + pri));
+        var classes = "kb-metric-badge kb-pri-" + pri;
+        if (opts.interactive) classes += " wf-queue-metric-badge";
+        if (opts.interactive && !opts.locked) {
+            return '<button type="button" class="' + classes + '" title="' + esc(title) + '" aria-label="' + esc(title) + '" aria-haspopup="menu" data-metric="priority" data-ticket-id="' + esc(opts.ticketId || "") + '">' + esc(pri) + "</button>";
+        }
+        return '<span class="' + classes + '" title="' + esc(title) + '">' + esc(pri) + "</span>";
+    }
+
+    function workflowComplexityBadgeHtml(complexity, opts) {
+        opts = opts || {};
+        var level = normalizeComplexity(complexity);
+        var numeral = workflowComplexityNumeral(level);
+        var title = opts.title || (opts.interactive && !opts.locked ? "Change complexity" : ("Complexity: " + level));
+        var classes = "kb-metric-badge kb-complexity-numeral kb-cx-" + level;
+        if (opts.interactive) classes += " wf-queue-metric-badge";
+        if (opts.interactive && !opts.locked) {
+            return '<button type="button" class="' + classes + '" title="' + esc(title) + '" aria-label="' + esc(title) + '" aria-haspopup="menu" data-metric="complexity" data-ticket-id="' + esc(opts.ticketId || "") + '">' + numeral + "</button>";
+        }
+        return '<span class="' + classes + '" title="' + esc(title) + '">' + numeral + "</span>";
+    }
+
+    function workflowQueueTicketFromApi(ticket) {
+        ticket = ticket || {};
+        return {
+            id: ticket.id,
+            title: ticket.title || "",
+            description: ticket.description || "",
+            priority: ticket.priority || "medium",
+            complexity: ticket.complexity || "medium",
+            position: ticket.position,
+            workflow_queue_position: ticket.workflow_queue_position || 0,
+            workflow_status: ticket.workflow_status || "",
+            linked_workflow_id: ticket.linked_workflow_id,
+            linked_project_id: ticket.linked_project_id || ticket.board_default_project_id || null,
+            linked_project_name: ticket.linked_project_name || ticket.board_default_project_name || null,
+            board_id: ticket.board_id,
+            board_name: ticket.board_name || "",
+            cli_route: ticket.cli_route || null
+        };
+    }
+
+    function fetchWorkflowQueueTicketRecord(ticketId) {
+        return api("GET", "/tickets/tickets/" + encodeURIComponent(ticketId))
+            .then(function (ticket) { return workflowQueueTicketFromApi(ticket); });
+    }
+
+    function appendWorkflowQueueTicket(ticket) {
+        if (!ticket || !ticket.id) return;
+        var exists = workflowQueueTickets.some(function (item) { return String(item.id) === String(ticket.id); });
+        if (!exists) workflowQueueTickets.push(ticket);
+        workflowQueueTickets.sort(function (a, b) {
+            return (a.workflow_queue_position || 0) - (b.workflow_queue_position || 0) || (a.id || 0) - (b.id || 0);
+        });
+        renderWorkflowTickets(workflowQueueTickets);
+    }
+
+    function workflowBoardTicketRowForKey(ticketKey) {
+        var escapedKey = window.CSS && CSS.escape ? CSS.escape(ticketKey) : String(ticketKey).replace(/"/g, '\\"');
+        return document.querySelector('.wf-board-ticket-row[data-ticket-key="' + escapedKey + '"]');
+    }
+
+    function isLocalDatabaseTicketId(value) {
+        return /^\d+$/.test(String(value == null ? "" : value));
+    }
+
+    function isExternalWorkflowBoardPayload(payload) {
+        if (!payload || payload.type !== "workflow-board-ticket") return false;
+        if (payload.external_source) return true;
+        var source = String(payload.source || "");
+        if (source && source !== "database") return true;
+        if (payload.external_id) return true;
+        return !isLocalDatabaseTicketId(payload.ticket_id);
+    }
+
+    function workflowBoardTicketDragEmptyImage() {
+        if (!workflowBoardTicketDragEmptyImage._img) {
+            var img = new Image();
+            img.src = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
+            workflowBoardTicketDragEmptyImage._img = img;
+        }
+        return workflowBoardTicketDragEmptyImage._img;
+    }
+
+    function positionWorkflowBoardDragGhost(evt) {
+        if (!workflowBoardDragGhostEl || !evt) return;
+        workflowBoardDragGhostEl.style.left = (evt.clientX + 14) + "px";
+        workflowBoardDragGhostEl.style.top = (evt.clientY + 12) + "px";
+    }
+
+    function removeWorkflowBoardDragGhost() {
+        if (workflowBoardDragGhostEl && workflowBoardDragGhostEl.parentNode) {
+            workflowBoardDragGhostEl.parentNode.removeChild(workflowBoardDragGhostEl);
+        }
+        workflowBoardDragGhostEl = null;
+    }
+
+    function replaceWorkflowDragHandle(row) {
+        if (!row) return null;
+        var grip = row.querySelector(".kb-ticket-list-drag-handle");
+        if (!grip || grip.dataset.wfGripReplaced === "1") return grip;
+        var fresh = grip.cloneNode(true);
+        grip.parentNode.replaceChild(fresh, grip);
+        fresh.dataset.wfGripReplaced = "1";
+        return fresh;
+    }
+
+    function workflowTicketDragBlockedTarget(evt) {
+        if (!evt || !evt.target || !evt.target.closest) return false;
+        return !!(
+            evt.target.closest(".kb-ticket-list-actions")
+            || evt.target.closest(".wf-workflow-queue-actions")
+            || evt.target.closest(".wf-queue-metric-badge")
+            || evt.target.closest("button:not(.kb-ticket-list-drag-handle)")
+            || evt.target.closest("a")
+        );
+    }
+
+    function createWorkflowBoardDragGhost(row, evt) {
+        if (!row) return;
+        removeWorkflowBoardDragGhost();
+        var rect = row.getBoundingClientRect();
+        var ghost = row.cloneNode(true);
+        ghost.setAttribute("aria-hidden", "true");
+        ghost.classList.remove("dragging", "wf-board-ticket-pending", "wf-board-ticket-linked");
+        ghost.classList.add("wf-board-ticket-drag-ghost", "wf-board-ticket-drag-ghost-floating");
+        ghost.style.width = Math.max(rect.width, 240) + "px";
+        document.body.appendChild(ghost);
+        workflowBoardDragGhostEl = ghost;
+        positionWorkflowBoardDragGhost(evt);
+        if (evt && evt.dataTransfer) {
+            evt.dataTransfer.setDragImage(workflowBoardTicketDragEmptyImage(), 0, 0);
+        }
+    }
+
+    function bindWorkflowTicketRowDragSources(row, handlers) {
+        if (!row || row.dataset.wfTicketDragBound === "1") return;
+        row.dataset.wfTicketDragBound = "1";
+        var grip = replaceWorkflowDragHandle(row);
+        function onDragStart(evt) {
+            if (workflowTicketDragBlockedTarget(evt)) {
+                evt.preventDefault();
+                return;
+            }
+            if (handlers.onDragStart) handlers.onDragStart(evt, row);
+        }
+        function onDrag(evt) {
+            positionWorkflowBoardDragGhost(evt);
+            if (handlers.onDrag) handlers.onDrag(evt, row);
+        }
+        function onDragEnd(evt) {
+            row.classList.remove("dragging");
+            removeWorkflowBoardDragGhost();
+            if (handlers.onDragEnd) handlers.onDragEnd(evt, row);
+        }
+        row.draggable = true;
+        row.addEventListener("dragstart", onDragStart);
+        row.addEventListener("drag", onDrag);
+        row.addEventListener("dragend", onDragEnd);
+        if (grip) {
+            grip.draggable = true;
+            grip.addEventListener("dragstart", function (evt) {
+                evt.stopPropagation();
+                onDragStart(evt);
+            });
+            grip.addEventListener("dragend", onDragEnd);
+        }
+    }
+
+    function workflowBoardTicketLinkState(item) {
+        var ticket = item.ticket;
+        var selected = item.selected;
+        var externalLinkKey = workflowTicketExternalLinkKey(selected, ticket);
+        var localLinkKey = ticket.id ? ("database:" + String(ticket.id)) : "";
+        var isExternallyLinked = !!(externalLinkKey && workflowLinkedExternalTicketKeys[externalLinkKey]);
+        var isPendingLink = !!((externalLinkKey && workflowPendingTicketLinks[externalLinkKey]) || (localLinkKey && workflowPendingTicketLinks[localLinkKey]));
+        var isLinkedToWorkflow = !!ticket.linked_workflow_id || isExternallyLinked;
+        var boardHasProject = !!(selected && selected.default_project_id);
+        var hasTicketIdentity = !!(ticket.id || ticket.key || ticket.external_id);
+        return {
+            isLinkedToWorkflow: isLinkedToWorkflow,
+            isPendingLink: isPendingLink,
+            blockedByMissingProject: !isLinkedToWorkflow && !isPendingLink && !boardHasProject,
+            canDragToWorkflow: !!(hasTicketIdentity && !isLinkedToWorkflow && !isPendingLink && boardHasProject),
+        };
+    }
+
+    function attachWorkflowBoardTicketDrag(row, ticketKey) {
+        if (!row || row.dataset.wfDragBound === "1") return;
+        row.dataset.wfDragBound = "1";
+        bindWorkflowTicketRowDragSources(row, {
+            onDragStart: function (evt) {
+                var item = workflowBoardTicketByKey[ticketKey];
+                if (!item || !item.ticket) {
+                    evt.preventDefault();
+                    return;
+                }
+                var state = workflowBoardTicketLinkState(item);
+                if (!state.canDragToWorkflow) {
+                    evt.preventDefault();
+                    return;
+                }
+                if (!item.selected || !item.selected.default_project_id) {
+                    evt.preventDefault();
+                    snack("Link this board to a project before adding tickets to a workflow", "error");
+                    return;
+                }
+                var payload = workflowBoardTicketDropPayload(ticketKey);
+                if (!payload) {
+                    evt.preventDefault();
+                    return;
+                }
+                workflowBoardDragPayload = payload;
+                workflowLastDragPoint = null;
+                row.classList.add("dragging");
+                createWorkflowBoardDragGhost(row, evt);
+                evt.dataTransfer.effectAllowed = "copyMove";
+                var payloadJson = JSON.stringify(payload);
+                evt.dataTransfer.setData("application/json", payloadJson);
+                evt.dataTransfer.setData("application/x-workflow-board-ticket", payloadJson);
+                evt.dataTransfer.setData("text/plain", String(payload.ticket_key || item.ticket.id || ""));
+            },
+            onDragEnd: function () {
+                setWorkflowTicketDropTargetActive(false);
+                workflowDropZoneHoverDepth = 0;
+                if (workflowBoardDragPayload && workflowLastDragPoint && workflowDropZoneContainsPoint(workflowLastDragPoint)) {
+                    handleWorkflowTicketDropPayload(workflowBoardDragPayload);
+                }
+                setTimeout(function () {
+                    workflowBoardDragPayload = null;
+                    workflowLastDragPoint = null;
+                }, 250);
             }
         });
+    }
+
+    function attachWorkflowQueueTicketDrag(row) {
+        if (!row || row.dataset.wfQueueDragBound === "1") return;
+        row.dataset.wfQueueDragBound = "1";
+        bindWorkflowTicketRowDragSources(row, {
+            onDragStart: function (evt) {
+                workflowQueueDragTicketId = row.dataset.ticketId || "";
+                if (!workflowQueueDragTicketId) {
+                    evt.preventDefault();
+                    return;
+                }
+                workflowLastDragPoint = null;
+                row.classList.add("dragging");
+                createWorkflowBoardDragGhost(row, evt);
+                evt.dataTransfer.effectAllowed = "move";
+                evt.dataTransfer.setData("text/plain", workflowQueueDragTicketId);
+            },
+            onDragEnd: function () {
+                workflowQueueDragTicketId = null;
+            }
+        });
+    }
+
+    function syncWorkflowBoardTicketRowUi(ticketKey) {
+        var item = workflowBoardTicketByKey[ticketKey];
+        var row = workflowBoardTicketRowForKey(ticketKey);
+        if (!item || !item.ticket || !row) return;
+        var state = workflowBoardTicketLinkState(item);
+        row.dataset.linkedWorkflow = state.isLinkedToWorkflow ? "true" : "false";
+        row.classList.toggle("wf-board-ticket-linked", state.isLinkedToWorkflow);
+        row.classList.toggle("wf-board-ticket-pending", state.isPendingLink);
+        row.classList.toggle("opacity-55", state.blockedByMissingProject);
+        if (state.canDragToWorkflow) {
+            attachWorkflowBoardTicketDrag(row, ticketKey);
+        } else {
+            row.draggable = false;
+            var handle = row.querySelector(".kb-ticket-list-drag-handle");
+            if (handle) handle.draggable = false;
+        }
+    }
+
+    function refreshWorkflowLaneAddAllButtons() {
+        var list = document.getElementById("wf-board-ticket-list");
+        if (!list) return;
+        list.querySelectorAll(".wf-lane-add-all-board-tickets").forEach(function (btn) {
+            var laneId = btn.dataset.laneId || "";
+            btn.disabled = getAddableBoardTicketItems(laneId).length === 0;
+        });
+    }
+
+    function rememberWorkflowBoardTicketSource(localTicketId, payload) {
+        if (!localTicketId || !payload || !payload.ticket_key) return;
+        workflowLocalTicketSourceKeys[String(localTicketId)] = String(payload.ticket_key);
+    }
+
+    function applyWorkflowBoardTicketLinkedState(ticketKey, payload) {
+        if (!ticketKey) return;
+        var item = workflowBoardTicketByKey[ticketKey];
+        if (item && item.ticket && currentWorkflowId) {
+            item.ticket.linked_workflow_id = parseInt(currentWorkflowId, 10);
+        }
+        if (payload) {
+            var externalKey = workflowPayloadLinkKey(payload);
+            if (externalKey) workflowLinkedExternalTicketKeys[externalKey] = true;
+        }
+        syncWorkflowBoardTicketRowUi(ticketKey);
+        refreshWorkflowLaneAddAllButtons();
+    }
+
+    function restoreWorkflowBoardTicketAfterQueueRemove(ticketId, externalKey) {
+        if (!ticketId && !externalKey) return;
+        if (ticketId) delete workflowPendingTicketLinks["database:" + String(ticketId)];
+        if (externalKey) delete workflowLinkedExternalTicketKeys[externalKey];
+
+        var keysToSync = {};
+        Object.keys(workflowBoardTicketByKey || {}).forEach(function (key) {
+            var item = workflowBoardTicketByKey[key];
+            if (!item || !item.ticket) return;
+            var matchesLocal = ticketId && String(item.ticket.id) === String(ticketId);
+            var matchesExternal = externalKey && workflowTicketExternalLinkKey(item.selected, item.ticket) === externalKey;
+            if (!matchesLocal && !matchesExternal) return;
+            item.ticket.linked_workflow_id = null;
+            keysToSync[key] = true;
+        });
+
+        var sourceBoardKey = ticketId ? workflowLocalTicketSourceKeys[String(ticketId)] : "";
+        if (sourceBoardKey && workflowBoardTicketByKey[sourceBoardKey]) {
+            var sourceItem = workflowBoardTicketByKey[sourceBoardKey];
+            var sourceExternalKey = workflowTicketExternalLinkKey(sourceItem.selected, sourceItem.ticket);
+            if (sourceExternalKey) delete workflowLinkedExternalTicketKeys[sourceExternalKey];
+            keysToSync[sourceBoardKey] = true;
+        }
+        if (ticketId) delete workflowLocalTicketSourceKeys[String(ticketId)];
+
+        Object.keys(keysToSync).forEach(function (key) {
+            syncWorkflowBoardTicketRowUi(key);
+        });
+        refreshWorkflowLaneAddAllButtons();
+    }
+
+    function workflowBoardTicketDropPayload(ticketKey) {
+        var item = workflowBoardTicketByKey[ticketKey];
+        if (!item || !item.ticket || !item.selected) return null;
+        var ticket = item.ticket;
+        var selected = item.selected;
+        var isExternal = selected.source !== "database";
+        var destinationBoard = isExternal ? workflowDatabaseBoardForProject(selected.default_project_id) : null;
+        return {
+            type: "workflow-board-ticket",
+            ticket_key: ticketKey,
+            ticket_id: ticket.id,
+            title: ticket.title || ticket.name || "Untitled ticket",
+            description: ticketTextValue(ticket.description || ticket.desc || ""),
+            priority: ticket.priority || "medium",
+            complexity: ticket.complexity || "",
+            source: selected.source,
+            external_source: isExternal ? selected.source : "",
+            external_id: isExternal ? String(ticket.id || ticket.key || ticket.external_id || "") : "",
+            external_url: ticket.url || ticket.external_url || "",
+            board_id: selected.source === "database" ? selected.id : selected.local_id,
+            local_board_id: selected.local_id,
+            destination_board_id: destinationBoard ? destinationBoard.id : null,
+            default_project_id: selected.default_project_id || null
+        };
+    }
+
+    function getAddableBoardTicketItems(laneId) {
+        var items = [];
+        Object.keys(workflowBoardTicketByKey || {}).forEach(function (ticketKey) {
+            var item = workflowBoardTicketByKey[ticketKey];
+            if (!item || !item.ticket || !item.selected) return;
+            if (laneId != null && laneId !== "" && item.lane && String(item.lane.id) !== String(laneId)) return;
+            var ticket = item.ticket;
+            var selected = item.selected;
+            var externalLinkKey = workflowTicketExternalLinkKey(selected, ticket);
+            var localLinkKey = ticket.id ? ("database:" + String(ticket.id)) : "";
+            var isExternallyLinked = !!(externalLinkKey && workflowLinkedExternalTicketKeys[externalLinkKey]);
+            var isPendingLink = !!((externalLinkKey && workflowPendingTicketLinks[externalLinkKey]) || (localLinkKey && workflowPendingTicketLinks[localLinkKey]));
+            var isLinkedToWorkflow = !!ticket.linked_workflow_id || isExternallyLinked;
+            var boardHasProject = !!(selected && selected.default_project_id);
+            if (!(ticket.id || ticket.key || ticket.external_id) || isLinkedToWorkflow || isPendingLink || !boardHasProject) return;
+            var payload = workflowBoardTicketDropPayload(ticketKey);
+            if (!payload) return;
+            items.push({ ticketKey: ticketKey, ticket: ticket, selected: selected, payload: payload, lane: item.lane });
+        });
+        return items;
+    }
+
+    function bindWorkflowBoardListRow(row, ticket, lane, selected, board) {
+        var ticketKey = workflowTicketKey(selected, lane, ticket);
+        workflowBoardTicketByKey[ticketKey] = { ticket: ticket, lane: lane, selected: selected, board: board };
+        row.classList.add("wf-board-ticket-row");
+        row.dataset.ticketKey = ticketKey;
+        syncWorkflowBoardTicketRowUi(ticketKey);
     }
 
     function ticketTextValue(value) {
@@ -314,56 +905,11 @@
             .then(function (data) {
                 snack(workflowFeedbackText(data, "UI feedback recorded"));
                 loadHermesTimeline({ quiet: true });
-                refreshBoardHermesViews({ quiet: true });
-                if (saveAsBaseline && data.visual_baseline_readiness) {
-                    loadVisualBaselines({ quiet: true });
-                }
             })
             .catch(function (e) {
                 snack(workflowErrorText(e, "Failed to record UI feedback"), "error");
             })
             .finally(function () { button.disabled = false; });
-    }
-
-    function renderCorrectionStatus(packet, run) {
-        packet = packet || {};
-        run = run || {};
-        var execution = packet.execution || {};
-        var snapshots = Array.isArray(execution.validation_snapshots) ? execution.validation_snapshots : [];
-        var attempts = Array.isArray(run.correction_attempts) ? run.correction_attempts.slice() : [];
-        var knownAttemptIds = {};
-        attempts.forEach(function (attempt) {
-            if (attempt && attempt.id != null) knownAttemptIds[String(attempt.id)] = true;
-        });
-        snapshots.forEach(function (snapshot) {
-            if (!snapshot || !snapshot.correction_attempt_id) return;
-            var id = String(snapshot.correction_attempt_id);
-            if (knownAttemptIds[id]) return;
-            attempts.push({
-                id: snapshot.correction_attempt_id,
-                validation_record_id: snapshot.record_id || snapshot.validation_record_id || null,
-                status: "queued",
-                attempt_number: null,
-                dispatch_result: {},
-                validation_type: snapshot.validation_type || ""
-            });
-            knownAttemptIds[id] = true;
-        });
-        attempts = attempts.filter(function (attempt) { return attempt && attempt.id != null; });
-        if (!attempts.length) return "";
-        var html = '<div class="mt-2 flex flex-wrap items-center gap-1.5" data-testid="wf-run-correction-status">';
-        attempts.slice(-3).forEach(function (attempt) {
-            var dispatch = attempt.dispatch_result || {};
-            var autoDispatched = dispatch.auto_dispatch === true || dispatch.terminal_ui_quality_gate === true || attempt.status === "dispatched";
-            var label = autoDispatched ? "Correction auto-dispatched" : "Correction queued";
-            var cls = autoDispatched ? "border-blue-500/30 bg-blue-500/10 text-blue-200" : "border-amber-500/30 bg-amber-500/10 text-amber-200";
-            html += '<span class="inline-flex items-center gap-1 rounded border px-1.5 py-0.5 text-[11px] ' + cls + '">' +
-                esc(label) + ' #' + esc(attempt.id) +
-                (attempt.status ? ' <span class="text-gray-400">' + esc(attempt.status) + '</span>' : '') +
-                '</span>';
-        });
-        html += '</div>';
-        return html;
     }
 
     function renderRunPacketEvidence(packet, run) {
@@ -377,8 +923,7 @@
         var logs = lastItems(artifacts.logs, 3);
         var patches = lastItems(artifacts.diffs_or_patches, 3);
         var links = lastItems(artifacts.links, 3);
-        var correctionStatus = renderCorrectionStatus(packet, run);
-        var hasEvidence = packet.summary || audit.final_verdict || actionTrace.length || validations.length || screenshots.length || logs.length || patches.length || links.length || correctionStatus;
+        var hasEvidence = packet.summary || audit.final_verdict || actionTrace.length || validations.length || screenshots.length || logs.length || patches.length || links.length;
         if (!hasEvidence) return "";
 
         var html = '<div class="wf-run-evidence mt-2 pt-2 border-t border-white/10" data-testid="wf-run-evidence">';
@@ -409,8 +954,6 @@
             });
             html += '</div>';
         }
-        html += correctionStatus;
-
         var artifactGroups = [
             ["Screenshots", screenshots],
             ["Logs", logs],
@@ -747,6 +1290,191 @@
         });
     }
 
+    var WORKFLOW_EXEC_ROUTE_DEFAULTS = {
+        low: { backend: "cursor", model: "auto" },
+        medium: { backend: "codex", model: "auto" },
+        high: { backend: "codex", model: "gpt-5.3-codex" }
+    };
+
+    function workflowExecRouteLevels() {
+        return ["low", "medium", "high"];
+    }
+
+    function workflowExecRouteModelLabel(model) {
+        if (!model) return "";
+        if (typeof model === "string") return model;
+        return model.name || model.id || model.model || "";
+    }
+
+    function workflowExecRouteModelValue(model) {
+        if (!model) return "";
+        if (typeof model === "string") return model;
+        return model.id || model.model || model.name || "";
+    }
+
+    function workflowExecRouteHtml() {
+        return workflowExecRouteLevels().map(function (level) {
+            var label = level.charAt(0).toUpperCase() + level.slice(1);
+            return '<div class="wf-board-exec-route-block space-y-1" data-level="' + level + '">' +
+                '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
+                    '<label class="text-xs text-gray-400 font-medium">' + label + "</label>" +
+                    '<select id="wf-board-exec-' + level + '-backend" class="wf-board-exec-backend w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
+                        '<option value="pi">Pi</option><option value="cursor">Cursor CLI</option><option value="codex">Codex CLI</option><option value="claude_code">Claude Code</option>' +
+                    "</select>" +
+                    '<select id="wf-board-exec-' + level + '-model" class="wf-board-exec-model w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" data-level="' + level + '">' +
+                        '<option value="auto">Auto</option>' +
+                    "</select>" +
+                    '<button type="button" id="wf-board-exec-' + level + '-codex-cog" class="wf-board-exec-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
+                "</div>" +
+                '<div id="wf-board-exec-' + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
+                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Intelligence</span>' +
+                        '<select id="wf-board-exec-' + level + '-codex-intelligence" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
+                            '<option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option>' +
+                        "</select></label>" +
+                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Speed</span>' +
+                        '<select id="wf-board-exec-' + level + '-codex-speed" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
+                            '<option value="">Default</option><option value="flex">Flex</option><option value="fast">Fast</option>' +
+                        "</select></label>" +
+                    '<p class="col-span-2 text-[10px] text-gray-500">Codex CLI only — passed as model_reasoning_effort and service_tier when this complexity route runs.</p>' +
+                "</div>" +
+            "</div>";
+        }).join("");
+    }
+
+    function updateWorkflowExecCodexPrefVisibility(level, root) {
+        root = root || document;
+        var backend = root.querySelector("#wf-board-exec-" + level + "-backend");
+        var cog = root.querySelector("#wf-board-exec-" + level + "-codex-cog");
+        var panel = root.querySelector("#wf-board-exec-" + level + "-codex-prefs");
+        var isCodex = backend && backend.value === "codex";
+        if (cog) cog.disabled = !isCodex;
+        if (!isCodex && panel) panel.classList.add("hidden");
+    }
+
+    function toggleWorkflowExecCodexPrefPanel(level, root) {
+        root = root || document;
+        var backend = root.querySelector("#wf-board-exec-" + level + "-backend");
+        var panel = root.querySelector("#wf-board-exec-" + level + "-codex-prefs");
+        if (!panel || !backend || backend.value !== "codex") return;
+        panel.classList.toggle("hidden");
+    }
+
+    function loadWorkflowExecRouteModels(level, backendId, selectedModel, root) {
+        root = root || document;
+        var select = root.querySelector("#wf-board-exec-" + level + "-model");
+        if (!select) return Promise.resolve();
+        var current = selectedModel || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model || "auto";
+        select.disabled = true;
+        select.innerHTML = "";
+        var loadingOpt = document.createElement("option");
+        loadingOpt.value = current;
+        loadingOpt.textContent = "Loading...";
+        select.appendChild(loadingOpt);
+        return api("GET", "/projects/cli-models?backend_id=" + encodeURIComponent(backendId || "codex"))
+            .then(function (data) {
+                var models = Array.isArray(data.models) ? data.models : [];
+                var seen = {};
+                select.innerHTML = "";
+                function append(value, label) {
+                    value = value || "auto";
+                    if (seen[value]) return;
+                    seen[value] = true;
+                    var opt = document.createElement("option");
+                    opt.value = value;
+                    opt.textContent = label || value;
+                    select.appendChild(opt);
+                }
+                append("auto", "Auto");
+                models.forEach(function (model) {
+                    var value = workflowExecRouteModelValue(model);
+                    if (!value) return;
+                    append(value, workflowExecRouteModelLabel(model));
+                });
+                if (current && !seen[current]) append(current, current);
+                select.value = current || "auto";
+                select.disabled = false;
+                updateWorkflowExecCodexPrefVisibility(level, root);
+            })
+            .catch(function () {
+                select.innerHTML = "";
+                var opt = document.createElement("option");
+                opt.value = current;
+                opt.textContent = current;
+                select.appendChild(opt);
+                select.disabled = false;
+                updateWorkflowExecCodexPrefVisibility(level, root);
+            });
+    }
+
+    function populateWorkflowExecRouting(data, llmData, root) {
+        root = root || document;
+        data = data || {};
+        llmData = llmData || {};
+        var loads = [];
+        workflowExecRouteLevels().forEach(function (level) {
+            var backend = root.querySelector("#wf-board-exec-" + level + "-backend");
+            var route = (data.routing && data.routing[level]) || {};
+            var backendValue = route.backend || llmData["project_cli_" + level + "_backend"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend;
+            var modelValue = route.model || llmData["project_cli_" + level + "_model"] || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model;
+            if (backend) backend.value = backendValue;
+            var intelligence = root.querySelector("#wf-board-exec-" + level + "-codex-intelligence");
+            var speed = root.querySelector("#wf-board-exec-" + level + "-codex-speed");
+            if (intelligence) intelligence.value = route.codex_intelligence || "";
+            if (speed) speed.value = route.codex_speed || "";
+            var prefsPanel = root.querySelector("#wf-board-exec-" + level + "-codex-prefs");
+            if (prefsPanel) prefsPanel.classList.add("hidden");
+            loads.push(loadWorkflowExecRouteModels(level, backendValue, modelValue, root));
+            updateWorkflowExecCodexPrefVisibility(level, root);
+        });
+        return Promise.all(loads);
+    }
+
+    function collectWorkflowExecRouting(root) {
+        root = root || document;
+        var routing = {};
+        workflowExecRouteLevels().forEach(function (level) {
+            var backend = root.querySelector("#wf-board-exec-" + level + "-backend");
+            var model = root.querySelector("#wf-board-exec-" + level + "-model");
+            var intelligence = root.querySelector("#wf-board-exec-" + level + "-codex-intelligence");
+            var speed = root.querySelector("#wf-board-exec-" + level + "-codex-speed");
+            var row = {
+                backend: (backend && backend.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].backend,
+                model: (model && model.value) || WORKFLOW_EXEC_ROUTE_DEFAULTS[level].model
+            };
+            if (row.backend === "codex") {
+                row.codex_intelligence = (intelligence && intelligence.value) || "";
+                row.codex_speed = (speed && speed.value) || "";
+            }
+            routing[level] = row;
+        });
+        return routing;
+    }
+
+    function bindWorkflowExecRoutingControls(root) {
+        root = root || document;
+        root.querySelectorAll(".wf-board-exec-backend").forEach(function (select) {
+            if (select.dataset.execBound === "1") return;
+            select.dataset.execBound = "1";
+            select.addEventListener("change", function () {
+                loadWorkflowExecRouteModels(select.dataset.level, select.value, "auto", root);
+            });
+        });
+        root.querySelectorAll(".wf-board-exec-codex-cog").forEach(function (btn) {
+            if (btn.dataset.execBound === "1") return;
+            btn.dataset.execBound = "1";
+            btn.addEventListener("click", function () {
+                toggleWorkflowExecCodexPrefPanel(btn.dataset.level, root);
+            });
+        });
+    }
+
+    function saveWorkflowExecRouting(root) {
+        return api("POST", "/workflows/hermes-setup", {
+            enabled: true,
+            routing: collectWorkflowExecRouting(root)
+        });
+    }
+
     function openWorkflowBoardEditModal() {
         var opt = currentWorkflowBoardOption();
         if (!opt) {
@@ -758,7 +1486,7 @@
         var color = /^#[0-9a-f]{6}$/i.test(opt.color || "") ? opt.color : "#f97316";
         var html = '' +
             '<div id="wf-board-edit-modal" class="fixed inset-0 z-[10000] flex items-center justify-center bg-black/60">' +
-                '<div class="w-full max-w-xl mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden">' +
+                '<div class="w-full max-w-3xl mx-4 bg-[#1a1f3a] border border-white/20 rounded-xl shadow-2xl overflow-hidden max-h-[90vh] flex flex-col">' +
                     '<div class="flex items-start justify-between gap-3 px-5 pt-5 pb-3">' +
                         '<div class="min-w-0 flex-1">' +
                             '<p class="text-[11px] uppercase tracking-wide text-gray-500 mb-1">Edit board</p>' +
@@ -769,11 +1497,11 @@
                             '<span class="px-1.5 py-0.5 rounded border border-white/15 bg-white/5 text-[11px] text-gray-400">' + esc(boardSourceLabel(opt.source)) + '</span>' +
                         '</div>' +
                     '</div>' +
-                    '<div class="flex gap-6 px-5 border-b border-white/10">' +
+                    '<div class="flex gap-6 px-5 border-b border-white/10 flex-shrink-0">' +
                         '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-white border-b-2 border-[#f97316]" data-tab="details">Details</button>' +
-                        '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="advanced">Advanced</button>' +
-                        (opt.source === "database" ? '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="hermes">Routing</button>' : '') +
+                        '<button type="button" class="wf-board-edit-tab pb-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-tab="execution">Execution</button>' +
                     '</div>' +
+                    '<div class="overflow-y-auto min-h-0 flex-1">' +
                     '<div id="wf-board-edit-tab-details" class="wf-board-edit-pane p-5 space-y-3">' +
                         '<div>' +
                             '<label class="block text-xs text-gray-500 mb-1">Board name</label>' +
@@ -784,6 +1512,12 @@
                             '<input type="text" id="wf-board-edit-desc" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none" value="' + esc(opt.description || "") + '" placeholder="Optional description">' +
                         '</div>' +
                         '<div>' +
+                            '<label class="block text-xs text-gray-500 mb-1">Project</label>' +
+                            '<select id="wf-board-edit-project" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">' +
+                                optionHtml(workflowLinkable.projects || [], opt.default_project_id, "name") +
+                            '</select>' +
+                        '</div>' +
+                        '<div>' +
                             '<label class="block text-xs text-gray-500 mb-1">Board colour</label>' +
                             '<div class="flex items-center gap-3">' +
                                 '<input type="color" id="wf-board-edit-color" value="' + esc(color) + '" class="w-10 h-10 rounded border border-white/20 bg-transparent cursor-pointer" style="padding:2px;">' +
@@ -792,48 +1526,15 @@
                             '</div>' +
                         '</div>' +
                     '</div>' +
-                    '<div id="wf-board-edit-tab-advanced" class="wf-board-edit-pane hidden p-5 space-y-3">' +
+                    '<div id="wf-board-edit-tab-execution" class="wf-board-edit-pane hidden p-5 space-y-3">' +
                         '<div>' +
-                            '<label class="block text-xs text-gray-500 mb-1">Default project</label>' +
-                            '<select id="wf-board-edit-project" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">' +
-                                optionHtml(workflowLinkable.projects || [], opt.default_project_id, "name") +
-                            '</select>' +
+                            '<p class="text-sm font-semibold text-white">Ticket complexity routing</p>' +
+                            '<p class="text-xs text-gray-500 mt-0.5">Global workflow setting. Ticket complexity chooses the implementation agent and model for every workflow.</p>' +
                         '</div>' +
-                        '<div>' +
-                            '<label class="block text-xs text-gray-500 mb-1">Default workflow</label>' +
-                            '<select id="wf-board-edit-workflow" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm focus:border-[#f97316] focus:outline-none">' +
-                                optionHtml(workflowLinkable.workflows || [], opt.default_workflow_id, "title") +
-                            '</select>' +
-                        '</div>' +
+                        '<div class="space-y-2">' + workflowExecRouteHtml() + "</div>" +
                     '</div>' +
-                    '<div id="wf-board-edit-tab-hermes" class="wf-board-edit-pane hidden p-5 space-y-3">' +
-                        '<p class="text-xs text-gray-400">Hybrid routing: policy baseline with optional LLM advisory override.</p>' +
-                        '<div class="grid grid-cols-1 md:grid-cols-2 gap-3">' +
-                            '<label class="space-y-1"><span class="text-xs text-gray-500">Routing mode</span>' +
-                                '<select id="wf-board-hermes-routing-mode" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
-                                    '<option value="hybrid">Hybrid</option><option value="policy">Policy only</option><option value="llm">LLM advisory</option>' +
-                                '</select></label>' +
-                            '<label class="space-y-1"><span class="text-xs text-gray-500">Prefer IDE above complexity</span>' +
-                                '<select id="wf-board-hermes-ide-threshold" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white text-sm">' +
-                                    '<option value="">Off</option><option value="medium">Medium+</option><option value="high">High only</option>' +
-                                '</select></label>' +
-                        '</div>' +
-                        '<label class="flex items-center gap-2 text-sm text-gray-300">' +
-                            '<input type="checkbox" id="wf-board-hermes-require-approval" class="accent-[#f97316]">' +
-                            '<span>Require approval before applying route overrides</span>' +
-                        '</label>' +
-                        '<div class="rounded border border-white/10 bg-[#152054]/40 p-3 space-y-2">' +
-                            '<p class="text-xs text-gray-400 uppercase tracking-wide">Complexity routing overrides</p>' +
-                            '<div class="grid grid-cols-1 md:grid-cols-3 gap-2">' +
-                                ['low', 'medium', 'high'].map(function (level) {
-                                    return '<label class="space-y-1"><span class="text-[11px] text-gray-500">' + level + '</span>' +
-                                        '<input type="text" class="wf-board-route-backend w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs" data-level="' + level + '" placeholder="backend / model">' +
-                                    '</label>';
-                                }).join("") +
-                            '</div>' +
-                        '</div>' +
                     '</div>' +
-                    '<div class="flex items-center justify-center gap-3 px-5 py-4 border-t border-white/10">' +
+                    '<div class="flex items-center justify-center gap-3 px-5 py-4 border-t border-white/10 flex-shrink-0">' +
                         '<button type="button" class="wf-board-edit-close min-w-[72px] px-3 py-1.5 rounded border border-white/20 text-center text-gray-300 text-xs hover:bg-white/10">Cancel</button>' +
                         '<button type="button" id="wf-board-edit-save" class="min-w-[72px] px-3 py-1.5 rounded bg-[#f97316] text-center text-white text-xs font-medium hover:bg-[#ea580c]">Save</button>' +
                     '</div>' +
@@ -871,35 +1572,25 @@
                 colorHex.textContent = "#f97316";
             });
         }
-        function populateHermesPolicy(policy) {
-            policy = policy && typeof policy === "object" ? policy : {};
-            var modeEl = document.getElementById("wf-board-hermes-routing-mode");
-            var ideEl = document.getElementById("wf-board-hermes-ide-threshold");
-            var approvalEl = document.getElementById("wf-board-hermes-require-approval");
-            if (modeEl) modeEl.value = policy.routing_mode || "hybrid";
-            if (ideEl) ideEl.value = policy.prefer_ide_above_complexity || "";
-            if (approvalEl) approvalEl.checked = policy.require_approval_for_override !== false;
-            var routes = policy.complexity_routing || {};
-            document.querySelectorAll(".wf-board-route-backend").forEach(function (input) {
-                var level = input.dataset.level || "";
-                var route = routes[level] || {};
-                var backend = route.backend || "";
-                var model = route.model || "";
-                input.value = backend ? (model && model !== "auto" ? backend + " / " + model : backend) : "";
-            });
-        }
-        if (opt.source === "database") {
-            api("GET", "/tickets/boards/" + encodeURIComponent(opt.id)).then(function (data) {
-                populateHermesPolicy(data && data.hermes_policy);
-            }).catch(function () { populateHermesPolicy({}); });
-        }
+        bindWorkflowExecRoutingControls(modal);
+        Promise.all([
+            api("GET", "/workflows/hermes-setup").catch(function () { return {}; }),
+            api("GET", "/llms").catch(function () { return {}; })
+        ]).then(function (results) {
+            return populateWorkflowExecRouting(results[0] || {}, results[1] || {}, modal);
+        }).catch(function () {
+            populateWorkflowExecRouting({}, {}, modal);
+        });
         var saveBtn = document.getElementById("wf-board-edit-save");
         if (saveBtn) {
             saveBtn.addEventListener("click", function () {
                 var name = (document.getElementById("wf-board-edit-name").value || "").trim() || opt.name;
                 var description = (document.getElementById("wf-board-edit-desc").value || "").trim();
                 var projectId = document.getElementById("wf-board-edit-project").value || null;
-                var workflowId = document.getElementById("wf-board-edit-workflow").value || null;
+                var workflowEl = document.getElementById("wf-board-edit-workflow");
+                var workflowId = workflowEl
+                    ? (workflowEl.value || null)
+                    : (opt.default_workflow_id != null ? String(opt.default_workflow_id) : null);
                 var nextColor = document.getElementById("wf-board-edit-color").value || "";
                 var payload = {
                     name: name,
@@ -908,37 +1599,20 @@
                     default_workflow_id: workflowId ? parseInt(workflowId, 10) : null,
                     color: nextColor,
                 };
-                if (opt.source === "database") {
-                    var complexityRouting = {};
-                    document.querySelectorAll(".wf-board-route-backend").forEach(function (input) {
-                        var level = input.dataset.level || "";
-                        var raw = (input.value || "").trim();
-                        if (!level || !raw) return;
-                        var parts = raw.split("/").map(function (part) { return part.trim(); });
-                        complexityRouting[level] = {
-                            backend: parts[0] || raw,
-                            model: parts[1] || "auto",
-                        };
-                    });
-                    payload.hermes_policy = {
-                        routing_mode: (document.getElementById("wf-board-hermes-routing-mode") || {}).value || "hybrid",
-                        require_approval_for_override: !!(document.getElementById("wf-board-hermes-require-approval") || {}).checked,
-                        prefer_ide_above_complexity: (document.getElementById("wf-board-hermes-ide-threshold") || {}).value || "",
-                        complexity_routing: complexityRouting,
-                    };
-                }
                 saveBtn.disabled = true;
-                var request = opt.source === "database"
+                var boardRequest = opt.source === "database"
                     ? api("PUT", "/tickets/boards/" + encodeURIComponent(opt.id), payload)
                     : api("POST", "/tickets/external-boards/" + encodeURIComponent(opt.source) + "/" + encodeURIComponent(opt.id) + "/register", payload);
-                request.then(function () {
-                    closeModal();
-                    snack("Board updated");
-                    loadWorkflowBoards();
-                }).catch(function (e) {
-                    saveBtn.disabled = false;
-                    snack(e.message || "Failed to update board", "error");
-                });
+                Promise.all([boardRequest, saveWorkflowExecRouting(modal)])
+                    .then(function () {
+                        closeModal();
+                        snack("Board and execution routing saved");
+                        loadWorkflowBoards();
+                    })
+                    .catch(function (e) {
+                        saveBtn.disabled = false;
+                        snack(e.message || "Failed to save board settings", "error");
+                    });
             });
         }
     }
@@ -1178,10 +1852,16 @@
                 }
                 el.innerHTML = data.map(function (w) {
                     var isActive = currentWorkflowId === w.id;
-                    return '<button type="button" class="wf-workflow-tab px-4 py-2 text-sm text-gray-400 truncate' + (isActive ? " active" : "") + '" data-id="' + w.id + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '" tabindex="' + (isActive ? "0" : "-1") + '" title="' + esc(w.name) + '">' + esc(w.name) + "</button>";
+                    var title = w.name + (isActive ? " (double-click to rename)" : "");
+                    return '<button type="button" class="wf-workflow-tab px-4 py-2 text-sm text-gray-400 truncate' + (isActive ? " active" : "") + '" data-id="' + w.id + '" role="tab" aria-selected="' + (isActive ? "true" : "false") + '" tabindex="' + (isActive ? "0" : "-1") + '" title="' + esc(title) + '">' + esc(w.name) + "</button>";
                 }).join("");
                 el.querySelectorAll("[data-id]").forEach(function (row) {
                     row.addEventListener("click", function () { selectWorkflow(parseInt(row.dataset.id, 10)); });
+                    row.addEventListener("dblclick", function (evt) {
+                        evt.preventDefault();
+                        evt.stopPropagation();
+                        if (currentWorkflowId === parseInt(row.dataset.id, 10)) beginWorkflowTabRename(row);
+                    });
                     row.addEventListener("contextmenu", function (evt) {
                         openWorkflowContextMenu(evt, parseInt(row.dataset.id, 10));
                     });
@@ -1206,10 +1886,84 @@
     function selectWorkflow(id) {
         currentWorkflowId = id;
         expandedStepId = null;
-        workflowQueueBoardFilter = "all";
         try { localStorage.setItem("wf_last_selected", id); } catch (e) {}
         loadList();
         loadDetail(id);
+    }
+
+    function getActiveWorkflowTab() {
+        if (currentWorkflowId == null) return null;
+        var list = document.getElementById("wf-list");
+        return list ? list.querySelector('.wf-workflow-tab[data-id="' + currentWorkflowId + '"]') : null;
+    }
+
+    function getWorkflowRenameDraftName() {
+        var tab = getActiveWorkflowTab();
+        var input = tab ? tab.querySelector(".wf-workflow-tab-rename") : null;
+        if (input) return (input.value || "").trim();
+        return currentWorkflow && currentWorkflow.name ? String(currentWorkflow.name).trim() : "";
+    }
+
+    function finishWorkflowTabRename(nextName) {
+        var tab = getActiveWorkflowTab();
+        if (!tab) return;
+        tab.textContent = nextName || "Untitled Workflow";
+        tab.title = (nextName || "Untitled Workflow") + " (double-click to rename)";
+    }
+
+    function cancelWorkflowTabRename() {
+        finishWorkflowTabRename(currentWorkflow && currentWorkflow.name ? currentWorkflow.name : "Untitled Workflow");
+    }
+
+    function beginWorkflowTabRename(tab) {
+        if (!tab || tab.querySelector(".wf-workflow-tab-rename")) return;
+        var currentName = currentWorkflow && currentWorkflow.name ? currentWorkflow.name : (tab.textContent || "").trim();
+        var input = document.createElement("input");
+        input.type = "text";
+        input.className = "wf-workflow-tab-rename";
+        input.value = currentName;
+        input.setAttribute("aria-label", "Workflow name");
+        tab.textContent = "";
+        tab.appendChild(input);
+        input.focus();
+        input.select();
+        input.addEventListener("click", function (evt) { evt.stopPropagation(); });
+        input.addEventListener("keydown", function (evt) {
+            if (evt.key === "Enter") {
+                evt.preventDefault();
+                saveWorkflowName();
+            }
+            if (evt.key === "Escape") {
+                evt.preventDefault();
+                cancelWorkflowTabRename();
+            }
+        });
+    }
+
+    function saveWorkflowName() {
+        if (!currentWorkflowId) return;
+        var statusEl = document.getElementById("wf-name-save-status");
+        var nextName = getWorkflowRenameDraftName() || "Untitled Workflow";
+        var currentName = currentWorkflow && currentWorkflow.name ? String(currentWorkflow.name).trim() : "";
+        if (nextName === currentName) {
+            finishWorkflowTabRename(nextName);
+            return;
+        }
+        if (statusEl) statusEl.textContent = "Saving...";
+        api("PATCH", "/workflows/" + currentWorkflowId, { name: nextName })
+            .then(function () {
+                if (currentWorkflow) currentWorkflow.name = nextName;
+                finishWorkflowTabRename(nextName);
+                if (statusEl) {
+                    statusEl.textContent = "Saved";
+                    setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500);
+                }
+                loadList();
+            })
+            .catch(function (e) {
+                if (statusEl) statusEl.textContent = "Failed";
+                snack(e.message || "Failed to save workflow name", "error");
+            });
     }
 
     function loadDetail(id) {
@@ -1217,7 +1971,6 @@
             currentWorkflow = data;
             document.getElementById("wf-empty").classList.add("hidden");
             document.getElementById("wf-detail").classList.remove("hidden");
-            document.getElementById("wf-detail-name").value = data.name || "";
             var nameStatus = document.getElementById("wf-name-save-status");
             if (nameStatus) nameStatus.textContent = "";
             renderRuns(data.runs || []);
@@ -1226,9 +1979,6 @@
             loadWorkflowExecutionSessions();
             loadWorkflowTicketQueue();
             loadHermesTimeline({ quiet: true });
-            renderContextRules(data);
-            renderSkillChains(data);
-            loadLearnedRules({ quiet: true });
             checkActiveRun();
         }).catch(function () { snack("Failed to load workflow", "error"); });
     }
@@ -1707,7 +2457,6 @@
     function loadWorkflowBoards() {
         var select = document.getElementById("wf-board-select");
         if (select) select.innerHTML = '<option value="">Loading boards...</option>';
-        renderWorkflowBoardSpinner("");
 
         Promise.all([
             api("GET", "/tickets/boards").catch(function () { return []; }),
@@ -1763,10 +2512,12 @@
         var list = document.getElementById("wf-board-ticket-list");
         if (!selected || !list) return;
         attempt = attempt || 0;
-        workflowBoardLoadToken += 1;
+        if (attempt === 0) {
+            workflowBoardLoadToken += 1;
+            try { localStorage.setItem("wf_board_selected", value); } catch (e) {}
+            renderWorkflowBoardSpinner("Loading tickets...");
+        }
         var token = workflowBoardLoadToken;
-        try { localStorage.setItem("wf_board_selected", value); } catch (e) {}
-        renderWorkflowBoardSpinner("Loading tickets...");
 
         var path = selected.source === "database"
             ? "/tickets/boards/" + encodeURIComponent(selected.id)
@@ -1775,9 +2526,10 @@
         api("GET", path).then(function (data) {
             if (token !== workflowBoardLoadToken) return;
             if (selected.source !== "database" && data && data.cache_ready === false && attempt < 60) {
-                renderWorkflowBoardTickets(data, selected, "Syncing board tickets...");
+                renderWorkflowBoardSpinner("Syncing board tickets...");
                 setTimeout(function () {
-                    if (token === workflowBoardLoadToken) loadWorkflowBoardTickets(value, attempt + 1);
+                    if (token !== workflowBoardLoadToken) return;
+                    loadWorkflowBoardTickets(value, attempt + 1);
                 }, 800);
                 return;
             }
@@ -1796,141 +2548,89 @@
         if (!list) return;
         if (message && !board) {
             list.innerHTML = '<p class="text-sm text-gray-500">' + esc(message) + '</p>';
+            workflowBoardRenderState = { data: null, selected: null };
             return;
         }
         var lanes = board && Array.isArray(board.lanes) ? board.lanes : [];
         if (!lanes.length) {
             list.innerHTML = '<p class="text-sm text-gray-500">' + esc(message || "No columns or tickets found for this board.") + '</p>';
+            workflowBoardRenderState = { data: null, selected: selected || null };
             return;
         }
-        var boardName = (board && board.name) || (selected && selected.name) || "Board";
-        var boardHasProject = !!(selected && selected.default_project_id);
-        var html = '<div class="text-xs text-gray-500 mb-1 truncate">' + esc(boardName) + '</div>';
+
+        workflowBoardRenderState = { data: board, selected: selected };
         workflowBoardTicketByKey = {};
+        var ticketUi = ensureWorkflowTicketUi();
+        var isLocal = !!(selected && selected.source === "database");
+        var boardHasProject = !!(selected && selected.default_project_id);
+        var boardData = board || {};
+        var expandedLaneId = getWorkflowListExpandedLaneId(lanes, selected);
+
+        list.innerHTML = "";
+        list.classList.toggle("wf-board-ticket-list--blocked", !boardHasProject);
         if (message) {
-            html += '<div class="text-xs text-amber-300 mb-2">' + esc(message) + '</div>';
+            var msgEl = document.createElement("div");
+            msgEl.className = "text-xs text-amber-300 mb-2";
+            msgEl.textContent = message;
+            list.appendChild(msgEl);
         }
         if (!boardHasProject) {
-            html += '<div class="mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200">Link this board to a project before dragging tickets into a workflow.</div>';
+            var warnEl = document.createElement("div");
+            warnEl.className = "mb-2 rounded border border-amber-500/30 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-200";
+            warnEl.textContent = "This board is not linked to a project, so tickets cannot be added to a workflow. Click the gear icon next to the board dropdown to link it to a project.";
+            list.appendChild(warnEl);
         }
+
         lanes.forEach(function (lane) {
             var tickets = Array.isArray(lane.tickets) ? lane.tickets : [];
-            var collapseKey = workflowBoardCollapseKey(selected, lane);
-            var collapsed = !!workflowBoardCollapsedColumns[collapseKey];
-            html += '<div class="wf-board-column rounded border border-white/10 bg-[#10183f] overflow-hidden" data-collapse-key="' + esc(collapseKey) + '">';
-            html += '<div class="flex items-center justify-between gap-2 border-b border-white/10 px-3 py-2">';
-            html += '<button type="button" class="wf-board-column-toggle min-w-0 flex flex-1 items-center gap-2 text-left hover:text-white" data-collapse-key="' + esc(collapseKey) + '">';
-            html += '<span class="chevron' + (collapsed ? "" : " open") + ' text-gray-500">›</span><span class="text-xs font-medium text-gray-200 truncate">' + esc(lane.name || "Column") + '</span>';
-            html += '</button>';
-            html += '<div class="flex items-center gap-1.5 flex-shrink-0">';
-            html += '<span class="text-[11px] text-gray-500">' + tickets.length + '</span>';
-            html += '</div>';
-            html += '</div>';
-            html += '<div class="wf-board-column-body' + (collapsed ? " hidden" : "") + '">';
-            if (!tickets.length) {
-                html += '<div class="px-3 py-2 text-xs text-gray-500">No tickets</div>';
-            } else {
-                html += '<div class="divide-y divide-white/5">';
-                tickets.forEach(function (ticket) {
-                    var title = ticket.title || ticket.name || "Untitled ticket";
-                    var meta = ticket.priority || ticket.id || "";
-                    var ticketKey = workflowTicketKey(selected, lane, ticket);
-                    var isSelected = selectedWorkflowBoardTicketKey === ticketKey;
-                    var badge = workflowStatusBadge(ticket);
-                    var externalLinkKey = workflowTicketExternalLinkKey(selected, ticket);
-                    var localLinkKey = ticket.id ? ("database:" + String(ticket.id)) : "";
-                    var isExternallyLinked = !!(externalLinkKey && workflowLinkedExternalTicketKeys[externalLinkKey]);
-                    var isPendingLink = !!((externalLinkKey && workflowPendingTicketLinks[externalLinkKey]) || (localLinkKey && workflowPendingTicketLinks[localLinkKey]));
-                    var isLinkedToWorkflow = !!ticket.linked_workflow_id || isExternallyLinked;
-                    var blockedByMissingProject = !isLinkedToWorkflow && !isPendingLink && !boardHasProject;
-                    var canDragToWorkflow = !!(ticket.id && !isLinkedToWorkflow && !isPendingLink && boardHasProject);
-                    var linkedLabel = isLinkedToWorkflow ? '<span class="text-[10px] px-1.5 py-0.5 rounded border border-green-500/50 bg-green-500/10 text-green-300 flex-shrink-0">linked</span>' : "";
-                    var pendingLabel = isPendingLink ? '<span class="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/50 bg-amber-500/20 text-amber-200 flex-shrink-0">linking</span>' : "";
-                    var blockedLabel = blockedByMissingProject ? '<span class="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/50 bg-amber-500/20 text-amber-200 flex-shrink-0">no project</span>' : "";
-                    workflowBoardTicketByKey[ticketKey] = { ticket: ticket, lane: lane, selected: selected, board: board };
-                    html += '<button type="button" class="' + workflowBoardTicketRowClasses(isLinkedToWorkflow, isSelected, canDragToWorkflow, blockedByMissingProject, isPendingLink) + '" data-ticket-key="' + esc(ticketKey) + '" data-linked-workflow="' + (isLinkedToWorkflow ? "true" : "false") + '" draggable="' + (canDragToWorkflow ? "true" : "false") + '">';
-                    html += '<div class="flex items-start justify-between gap-2">';
-                    html += '<div class="min-w-0 text-xs text-gray-200 leading-snug break-words">' + esc(title) + '</div>';
-                    html += badge || linkedLabel || pendingLabel || blockedLabel;
-                    html += '</div>';
-                    if (meta) html += '<div class="text-[11px] text-gray-500 mt-0.5">' + esc(meta) + '</div>';
-                    html += '</button>';
-                });
-                html += '</div>';
+            if (window.KanbanTicketUi && window.KanbanTicketUi.compareTicketsForListView) {
+                tickets = tickets.slice().sort(window.KanbanTicketUi.compareTicketsForListView);
             }
-            html += '</div>';
-            html += '</div>';
+            var laneId = lane.id != null ? String(lane.id) : "";
+            var isExpanded = expandedLaneId && laneId === String(expandedLaneId);
+            var section = document.createElement("section");
+            section.className = "kb-ticket-list-section" + (isExpanded ? " kb-ticket-list-section--expanded" : "");
+            section.dataset.laneId = laneId;
+            var showAddAll = boardHasProject && !!currentWorkflowId;
+            var addAllHtml = showAddAll
+                ? '<button type="button" class="wf-lane-add-all-board-tickets" data-lane-id="' + esc(laneId) + '" title="Add all tickets in this column to the workflow queue">Add all</button>'
+                : "";
+            section.innerHTML =
+                '<div class="kb-ticket-list-section-head-row">' +
+                    '<button type="button" class="kb-ticket-list-section-head flex-1 min-w-0" aria-expanded="' + (isExpanded ? "true" : "false") + '">' +
+                        workflowListLaneChevronSvg() +
+                        '<span class="kb-ticket-list-section-title">' + esc(lane.name || "Column") + "</span>" +
+                        '<span class="kb-ticket-list-section-count">' + tickets.length + "</span>" +
+                    "</button>" +
+                    addAllHtml +
+                "</div>";
+            var body = document.createElement("div");
+            body.className = "kb-ticket-list-section-body space-y-1";
+            body.hidden = !isExpanded;
+            if (!tickets.length) {
+                body.innerHTML = '<div class="px-3 py-2 text-xs text-gray-500 italic border border-dashed border-white/10 rounded">No tickets</div>';
+            } else if (ticketUi) {
+                tickets.forEach(function (ticket) {
+                    var row = ticketUi.createTicketListRow(ticket, isLocal, boardData, {
+                        hideWorkflow: true,
+                        hideTransfer: true,
+                    });
+                    bindWorkflowBoardListRow(row, ticket, lane, selected, board);
+                    body.appendChild(row);
+                });
+            } else {
+                body.innerHTML = '<div class="px-3 py-2 text-xs text-gray-500">Ticket list unavailable.</div>';
+            }
+            section.appendChild(body);
+            list.appendChild(section);
         });
-        list.innerHTML = html;
-        list.querySelectorAll(".wf-board-column-toggle").forEach(function (btn) {
-            btn.addEventListener("click", function () {
-                var key = btn.dataset.collapseKey || "";
-                if (!key) return;
-                workflowBoardCollapsedColumns[key] = !workflowBoardCollapsedColumns[key];
-                saveWorkflowBoardCollapsedColumns();
-                var col = btn.closest(".wf-board-column");
-                var body = col ? col.querySelector(".wf-board-column-body") : null;
-                var chev = btn.querySelector(".chevron");
-                var isCollapsed = !!workflowBoardCollapsedColumns[key];
-                if (body) body.classList.toggle("hidden", isCollapsed);
-                if (chev) chev.classList.toggle("open", !isCollapsed);
-            });
+
+        bindWorkflowListLaneAccordion(list, lanes, selected);
+        list.querySelectorAll(".wf-lane-add-all-board-tickets").forEach(function (btn) {
+            var laneId = btn.dataset.laneId || "";
+            btn.disabled = getAddableBoardTicketItems(laneId).length === 0;
         });
-        list.querySelectorAll(".wf-board-ticket-row").forEach(function (btn) {
-            btn.addEventListener("click", function () {
-                selectedWorkflowBoardTicketKey = btn.dataset.ticketKey || "";
-                applyWorkflowBoardTicketSelectionStyles(list);
-            });
-            btn.addEventListener("dblclick", function () {
-                openWorkflowBoardTicket(btn.dataset.ticketKey || "");
-            });
-            btn.addEventListener("dragstart", function (evt) {
-                var item = workflowBoardTicketByKey[btn.dataset.ticketKey || ""];
-                if (!item || !item.ticket || item.ticket.linked_workflow_id) {
-                    evt.preventDefault();
-                    return;
-                }
-                if (!item.selected || !item.selected.default_project_id) {
-                    evt.preventDefault();
-                    snack("Link this board to a project before adding tickets to a workflow", "error");
-                    return;
-                }
-                var isExternal = item.selected.source !== "database";
-                var destinationBoard = isExternal ? workflowDatabaseBoardForProject(item.selected.default_project_id) : null;
-                var payload = {
-                    type: "workflow-board-ticket",
-                    ticket_key: btn.dataset.ticketKey || "",
-                    ticket_id: item.ticket.id,
-                    title: item.ticket.title || item.ticket.name || "Untitled ticket",
-                    description: ticketTextValue(item.ticket.description || item.ticket.desc || ""),
-                    priority: item.ticket.priority || "medium",
-                    complexity: item.ticket.complexity || "",
-                    source: item.selected.source,
-                    external_source: isExternal ? item.selected.source : "",
-                    external_id: isExternal ? String(item.ticket.id || item.ticket.key || item.ticket.external_id || "") : "",
-                    external_url: item.ticket.url || item.ticket.external_url || "",
-                    board_id: item.selected.source === "database" ? item.selected.id : item.selected.local_id,
-                    local_board_id: item.selected.local_id,
-                    destination_board_id: destinationBoard ? destinationBoard.id : null,
-                    default_project_id: item.selected.default_project_id || null
-                };
-                workflowBoardDragPayload = payload;
-                workflowLastDragPoint = null;
-                evt.dataTransfer.effectAllowed = "copyMove";
-                evt.dataTransfer.setData("application/json", JSON.stringify(payload));
-                evt.dataTransfer.setData("text/plain", String(item.ticket.id));
-            });
-            btn.addEventListener("dragend", function () {
-                if (workflowBoardDragPayload && workflowLastDragPoint && workflowDropZoneContainsPoint(workflowLastDragPoint)) {
-                    handleWorkflowTicketDropPayload(workflowBoardDragPayload);
-                }
-                setTimeout(function () {
-                    workflowBoardDragPayload = null;
-                    workflowLastDragPoint = null;
-                }, 250);
-            });
-        });
-        loadBoardActivity({ quiet: true });
+        initWorkflowListRowMarquees(list);
     }
 
     function getSelectedBoardLocalId() {
@@ -1938,462 +2638,6 @@
         if (!select || !select.value) return "";
         var selected = workflowBoardOptions.filter(function (opt) { return opt.value === select.value; })[0];
         return workflowBoardLocalId(selected);
-    }
-
-    function learnedRuleTypeLabel(ruleType) {
-        var value = String(ruleType || "rule").replace(/_/g, " ");
-        return value.charAt(0).toUpperCase() + value.slice(1);
-    }
-
-    function renderBoardActivity(data) {
-        var list = document.getElementById("wf-board-activity-list");
-        var empty = document.getElementById("wf-board-activity-empty");
-        if (!list || !empty) return;
-        data = data || {};
-        var events = Array.isArray(data.events) ? data.events : [];
-        var rules = Array.isArray(data.learned_rules) ? data.learned_rules : [];
-        latestBoardActivity = data;
-        if (!events.length && !rules.length) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "No board activity yet. Run a ticket to populate activity.";
-            return;
-        }
-        empty.classList.add("hidden");
-        var html = "";
-        if (rules.length) {
-            html += '<div class="mb-2 rounded border border-sky-500/20 bg-sky-500/5 px-2 py-1.5 text-[11px] text-sky-200">' +
-                esc(String(rules.length)) + " learned rule" + (rules.length === 1 ? "" : "s") + " on this board" +
-                "</div>";
-        }
-        html += events.slice(0, 10).map(function (event) {
-            var when = event.created_at ? new Date(event.created_at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
-            return '' +
-                '<div class="rounded border border-white/10 bg-[#10183f]/80 px-2 py-1.5">' +
-                    '<div class="flex items-start gap-2">' +
-                        '<span class="mt-0.5 text-[9px] uppercase tracking-wide px-1 py-0.5 rounded border ' + hermesStatusClass(event.status || "event") + '">' + esc(event.status || "event") + '</span>' +
-                        '<div class="min-w-0 flex-1">' +
-                            '<p class="text-[11px] text-gray-200 truncate">' + esc(event.summary || event.event_type || "Event") + '</p>' +
-                            '<p class="text-[10px] text-gray-500 truncate">' + esc(event.event_type || "") + (event.ticket_id ? " · ticket #" + event.ticket_id : "") + '</p>' +
-                        '</div>' +
-                        '<span class="text-[10px] text-gray-500 flex-shrink-0">' + esc(when) + '</span>' +
-                    '</div>' +
-                '</div>';
-        }).join("");
-        list.innerHTML = html;
-    }
-
-    function loadBoardActivity(options) {
-        options = options || {};
-        var boardId = getSelectedBoardLocalId();
-        if (!boardId) {
-            renderBoardActivity(null);
-            var empty = document.getElementById("wf-board-activity-empty");
-            if (empty) {
-                empty.classList.remove("hidden");
-                empty.textContent = "Select a board to view activity.";
-            }
-            return Promise.resolve(null);
-        }
-        return api("GET", "/tickets/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=12&rule_limit=5")
-            .then(function (data) {
-                renderBoardActivity(data);
-                return data;
-            })
-            .catch(function (e) {
-                renderBoardActivity(null);
-                if (!options.quiet) snack(e.message || "Failed to load board activity", "error");
-                return null;
-            });
-    }
-
-    function renderLearnedRules(rules, boardId) {
-        var list = document.getElementById("wf-learned-rules-list");
-        var empty = document.getElementById("wf-learned-rules-empty");
-        var note = document.getElementById("wf-learned-rules-note");
-        if (!list || !empty) return;
-        rules = Array.isArray(rules) ? rules : [];
-        latestLearnedRules = rules;
-        if (!boardId) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "Select a board to view learned rules.";
-            if (note) note.textContent = "Captured from validation failures and IDE iteration on the selected board.";
-            return;
-        }
-        if (!rules.length) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "No learned rules yet for this board.";
-            if (note) note.textContent = "Rules are captured when validation fails or IDE iteration reports back.";
-            return;
-        }
-        empty.classList.add("hidden");
-        if (note) note.textContent = "These rules are injected into validation context for tickets on board #" + boardId + ".";
-        list.innerHTML = rules.map(function (rule) {
-            var enabled = rule.enabled !== false;
-            var evidence = parseInt(rule.evidence_count, 10) || 0;
-            var confidence = Math.round((parseFloat(rule.confidence) || 0) * 100);
-            return '' +
-                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-learned-rule-id="' + esc(rule.id) + '">' +
-                    '<div class="flex items-start gap-3">' +
-                        '<label class="mt-1 flex items-center gap-2 flex-shrink-0">' +
-                            '<input type="checkbox" class="wf-learned-rule-toggle accent-[#f97316]" data-rule-id="' + esc(rule.id) + '"' + (enabled ? " checked" : "") + '>' +
-                            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + esc(learnedRuleTypeLabel(rule.rule_type)) + '</span>' +
-                        '</label>' +
-                        '<div class="min-w-0 flex-1">' +
-                            '<p class="text-sm text-gray-200">' + esc(rule.summary || "") + '</p>' +
-                            '<p class="mt-1 text-[11px] text-gray-500">Evidence: ' + esc(String(evidence)) + (confidence ? " · confidence " + confidence + "%" : "") + '</p>' +
-                        '</div>' +
-                        (boardId ? '<button type="button" class="wf-learned-rule-promote flex-shrink-0 px-2 py-1 rounded border border-white/20 text-[11px] text-gray-300 hover:bg-white/10" data-rule-id="' + esc(rule.id) + '">Promote hint</button>' : '') +
-                    '</div>' +
-                '</div>';
-        }).join("");
-        list.querySelectorAll(".wf-learned-rule-toggle").forEach(function (input) {
-            input.addEventListener("change", function () {
-                var ruleId = input.dataset.ruleId;
-                if (!ruleId || !boardId) return;
-                api("PATCH", "/tickets/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId), {
-                    enabled: !!input.checked
-                }).then(function () {
-                    snack(input.checked ? "Learned rule enabled" : "Learned rule disabled", "success");
-                    loadBoardActivity({ quiet: true });
-                }).catch(function (e) {
-                    input.checked = !input.checked;
-                    snack(e.message || "Failed to update learned rule", "error");
-                });
-            });
-        });
-        list.querySelectorAll(".wf-learned-rule-promote").forEach(function (btn) {
-            btn.addEventListener("click", function () {
-                var ruleId = btn.dataset.ruleId;
-                if (!ruleId || !boardId) return;
-                btn.disabled = true;
-                api("POST", "/tickets/boards/" + encodeURIComponent(boardId) + "/learned-rules/" + encodeURIComponent(ruleId) + "/promote", {
-                    category: "general"
-                }).then(function () {
-                    snack("Learned rule promoted to board hints", "success");
-                    refreshBoardHermesViews({ quiet: true });
-                }).catch(function (e) {
-                    snack(e.message || "Failed to promote learned rule", "error");
-                }).finally(function () { btn.disabled = false; });
-            });
-        });
-    }
-
-    function loadLearnedRules(options) {
-        options = options || {};
-        var boardId = getSelectedBoardLocalId();
-        if (!boardId) {
-            renderLearnedRules([], "");
-            return Promise.resolve([]);
-        }
-        return api("GET", "/tickets/boards/" + encodeURIComponent(boardId) + "/activity?event_limit=1&rule_limit=30")
-            .then(function (data) {
-                var rules = data && Array.isArray(data.learned_rules) ? data.learned_rules : [];
-                renderLearnedRules(rules, boardId);
-                return rules;
-            })
-            .catch(function (e) {
-                renderLearnedRules([], boardId);
-                if (!options.quiet) snack(e.message || "Failed to load learned rules", "error");
-                return [];
-            });
-    }
-
-    function renderVisualBaselineReadiness(readiness, boardId) {
-        var note = document.getElementById("wf-visual-baselines-note");
-        if (!note) return;
-        if (!boardId) {
-            note.textContent = "Reference screens used by UI validation for the selected board.";
-            note.className = "text-xs text-gray-500";
-            return;
-        }
-        readiness = readiness || {};
-        var baselineCount = Number(readiness.baseline_count || 0);
-        var missingCount = Number(readiness.missing_screen_count || 0);
-        if (!baselineCount) {
-            note.textContent = "No visual baselines yet. Save real screenshot paths before relying on baseline checks.";
-            note.className = "text-xs text-amber-300";
-        } else if (readiness.ready) {
-            note.textContent = "Visual baselines ready: all referenced screenshot files exist.";
-            note.className = "text-xs text-emerald-300";
-        } else {
-            note.textContent = "Visual baselines not ready: " + missingCount + " referenced screenshot file" + (missingCount === 1 ? " is" : "s are") + " missing.";
-            note.className = "text-xs text-amber-300";
-        }
-    }
-
-    function renderVisualBaselines(baselines, boardId, readiness) {
-        var list = document.getElementById("wf-visual-baselines-list");
-        var empty = document.getElementById("wf-visual-baselines-empty");
-        var note = document.getElementById("wf-visual-baselines-note");
-        if (!list || !empty) return;
-        baselines = Array.isArray(baselines) ? baselines : [];
-        readiness = readiness || {};
-        var missingByPath = {};
-        (Array.isArray(readiness.missing) ? readiness.missing : []).forEach(function (item) {
-            if (item && item.screenshot_path) missingByPath[item.screenshot_path] = true;
-        });
-        if (!boardId) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "Select a board to view visual baselines.";
-            renderVisualBaselineReadiness(null, "");
-            return;
-        }
-        if (!baselines.length) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "No visual baselines yet for this board.";
-            renderVisualBaselineReadiness(readiness, boardId);
-            return;
-        }
-        empty.classList.add("hidden");
-        renderVisualBaselineReadiness(readiness, boardId);
-        list.innerHTML = baselines.map(function (baseline) {
-            var screens = Array.isArray(baseline.screens) ? baseline.screens : [];
-            var missingScreens = 0;
-            var screenText = screens.map(function (screen) {
-                var missing = screen.screenshot_path && missingByPath[screen.screenshot_path];
-                if (missing) missingScreens += 1;
-                var screenStatus = missing ? "missing" : "ready";
-                var screenLabel = missing ? "Missing reference file" : "Ready for comparison";
-                var screenClass = missing
-                    ? "border-amber-400/30 bg-amber-500/10 text-amber-200"
-                    : "border-emerald-400/30 bg-emerald-500/10 text-emerald-200";
-                return '<span data-visual-baseline-screen-status="' + esc(screenStatus) + '">' +
-                    esc(screen.screen_name || "Screen") +
-                    (screen.screenshot_path ? ' <span class="text-gray-600">·</span> <span class="font-mono break-all">' + esc(screen.screenshot_path) + '</span>' : "") +
-                    ' <span class="ml-1 rounded border ' + screenClass + ' px-1.5 py-0.5 text-[10px] uppercase tracking-wide">' + screenLabel + '</span>' +
-                    '</span>';
-            }).join("<br>");
-            var baselineStatus = screens.length && !missingScreens ? "ready" : "not_ready";
-            var baselineLabel = baselineStatus === "ready" ? "Ready" : "Needs reference files";
-            var baselineClass = baselineStatus === "ready"
-                ? "border-emerald-400/30 bg-emerald-500/10 text-emerald-200"
-                : "border-amber-400/30 bg-amber-500/10 text-amber-200";
-            return '' +
-                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-visual-baseline-id="' + esc(baseline.id) + '" data-visual-baseline-status="' + esc(baselineStatus) + '">' +
-                    '<div class="flex items-start justify-between gap-3">' +
-                        '<div class="min-w-0 flex-1">' +
-                            '<p class="text-sm font-medium text-gray-100">' + esc(baseline.name || "Visual baseline") + '</p>' +
-                            '<p class="mt-1 text-[11px] text-gray-500">' + esc(String(screens.length)) + ' reference screen' + (screens.length === 1 ? "" : "s") + (baseline.version ? " · " + esc(baseline.version) : "") + '</p>' +
-                            (screenText ? '<p class="mt-1 text-[11px] text-gray-400">' + screenText + '</p>' : '') +
-                        '</div>' +
-                        '<div class="flex flex-col items-end gap-1 flex-shrink-0">' +
-                            '<span class="rounded border ' + baselineClass + ' px-1.5 py-0.5 text-[10px] uppercase tracking-wide">' + baselineLabel + '</span>' +
-                            '<span class="text-[10px] uppercase tracking-wide text-gray-500">' + esc(baseline.scope || "global") + '</span>' +
-                        '</div>' +
-                    '</div>' +
-                '</div>';
-        }).join("");
-    }
-
-    function loadVisualBaselines(options) {
-        options = options || {};
-        var boardId = getSelectedBoardLocalId();
-        if (!boardId) {
-            renderVisualBaselines([], "");
-            return Promise.resolve([]);
-        }
-        return api("GET", "/workflows/visual-baselines?board_id=" + encodeURIComponent(boardId))
-            .then(function (data) {
-                var baselines = data && Array.isArray(data.visual_baselines) ? data.visual_baselines : [];
-                return api("GET", "/workflows/visual-baselines/readiness?board_id=" + encodeURIComponent(boardId))
-                    .then(function (readinessData) {
-                        var readiness = readinessData && readinessData.visual_baseline_readiness ? readinessData.visual_baseline_readiness : {};
-                        renderVisualBaselines(baselines, boardId, readiness);
-                        return baselines;
-                    })
-                    .catch(function () {
-                        renderVisualBaselines(baselines, boardId, {});
-                        return baselines;
-                    });
-            })
-            .catch(function (e) {
-                renderVisualBaselines([], boardId);
-                if (!options.quiet) snack(e.message || "Failed to load visual baselines", "error");
-                return [];
-            });
-    }
-
-    function scheduledActionWhenText(schedule) {
-        schedule = schedule || {};
-        if (schedule.kind === "once") return "once at " + (schedule.run_at || "?");
-        if (schedule.kind === "weekdays") return "weekdays at " + (schedule.time || "?");
-        if (schedule.kind === "daily") return "daily at " + (schedule.time || "?");
-        return "weekly at " + (schedule.time || "?");
-    }
-
-    function scheduledActionSummary(action) {
-        action = action || {};
-        if (action.type === "open_app") return "Open " + (action.app_name || "app");
-        if (action.type === "type_text") return "Type text" + (action.press_enter === false ? "" : " and press Enter");
-        if (action.type === "play_recording") return "Play recording " + (action.recording_name || "");
-        if (action.type === "keypress") return "Press " + (action.key || "key");
-        return action.type || "Desktop action";
-    }
-
-    function renderScheduledActions(actions) {
-        var list = document.getElementById("wf-scheduled-actions-list");
-        var empty = document.getElementById("wf-scheduled-actions-empty");
-        var note = document.getElementById("wf-scheduled-actions-note");
-        if (!list || !empty) return;
-        actions = Array.isArray(actions) ? actions : [];
-        if (note) note.textContent = actions.length ? "Queued one-time and recurring desktop actions." : "No scheduled desktop actions are queued.";
-        if (!actions.length) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            empty.textContent = "No scheduled desktop actions queued.";
-            return;
-        }
-        empty.classList.add("hidden");
-        list.innerHTML = actions.map(function (item) {
-            var title = item.title || "Scheduled action";
-            var enabled = item.enabled !== false;
-            var runLog = Array.isArray(item.run_log) && item.run_log.length ? item.run_log[0] : null;
-            var schedule = item.schedule || {};
-            var scheduleKind = schedule.kind === "weekdays" || schedule.kind === "weekly" || schedule.kind === "daily" ? schedule.kind : "daily";
-            var scheduleTime = schedule.time || "09:00";
-            return '' +
-                '<div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-2" data-scheduled-action-title="' + esc(title) + '">' +
-                    '<div class="flex items-start justify-between gap-3">' +
-                        '<div class="min-w-0 flex-1">' +
-                            '<p class="text-sm font-medium text-gray-100">' + esc(title) + '</p>' +
-                            '<p class="mt-1 text-[11px] text-gray-500">' + esc(scheduledActionSummary(item.action)) + ' · ' + esc(scheduledActionWhenText(item.schedule)) + (item.next_run_at ? ' · next ' + esc(item.next_run_at) : '') + '</p>' +
-                            (runLog ? '<p class="mt-1 text-[11px] text-gray-400">Last run: ' + esc(runLog.status || "") + (runLog.result ? ' · ' + esc(runLog.result) : '') + '</p>' : '') +
-                            '<div class="mt-2 flex flex-wrap items-center gap-2">' +
-                                '<select class="wf-scheduled-action-kind rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-scheduled-action-title="' + esc(title) + '">' +
-                                    '<option value="daily"' + (scheduleKind === "daily" ? " selected" : "") + '>Daily</option>' +
-                                    '<option value="weekdays"' + (scheduleKind === "weekdays" ? " selected" : "") + '>Weekdays</option>' +
-                                    '<option value="weekly"' + (scheduleKind === "weekly" ? " selected" : "") + '>Weekly</option>' +
-                                '</select>' +
-                                '<input type="time" class="wf-scheduled-action-time rounded border border-white/20 bg-[#0d1333] px-2 py-1 text-[11px] text-gray-200" data-decisions-datetime-label="Schedule time" data-scheduled-action-title="' + esc(title) + '" value="' + esc(scheduleTime) + '">' +
-                                '<button type="button" class="wf-scheduled-action-reschedule px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-scheduled-action-title="' + esc(title) + '">Reschedule</button>' +
-                            '</div>' +
-                        '</div>' +
-                        '<div class="flex flex-shrink-0 items-center gap-2">' +
-                            '<span class="text-[10px] uppercase tracking-wide ' + (enabled ? 'text-emerald-300' : 'text-gray-500') + '">' + (enabled ? 'active' : 'disabled') + '</span>' +
-                            '<button type="button" class="wf-scheduled-action-toggle px-2 py-1 rounded border border-white/20 text-gray-300 text-[11px] hover:bg-white/10" data-scheduled-action-title="' + esc(title) + '" data-scheduled-action-enabled="' + (enabled ? "true" : "false") + '">' + (enabled ? "Disable" : "Enable") + '</button>' +
-                            '<button type="button" class="wf-scheduled-action-cancel px-2 py-1 rounded border border-red-500/40 text-red-200 text-[11px] hover:bg-red-500/15" data-scheduled-action-title="' + esc(title) + '">Cancel</button>' +
-                        '</div>' +
-                    '</div>' +
-                '</div>';
-        }).join("");
-    }
-
-    function loadScheduledActions(options) {
-        options = options || {};
-        return api("GET", "/workflows/scheduled-actions")
-            .then(function (data) {
-                var actions = data && Array.isArray(data.scheduled_actions) ? data.scheduled_actions : [];
-                renderScheduledActions(actions);
-                return actions;
-            })
-            .catch(function (e) {
-                renderScheduledActions([]);
-                if (!options.quiet) snack(e.message || "Failed to load scheduled actions", "error");
-                return [];
-            });
-    }
-
-    function disableScheduledActionByTitle(title, disable) {
-        title = (title || "").trim();
-        if (!title) return Promise.resolve();
-        return api("PATCH", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title), {
-            enabled: !disable
-        }).then(function () {
-            snack(disable ? "Scheduled action disabled" : "Scheduled action enabled", "success");
-            return loadScheduledActions({ quiet: true });
-        }).catch(function (e) {
-            snack(e.message || "Failed to update scheduled action", "error");
-        });
-    }
-
-    function rescheduleScheduledActionByTitle(title, kind, time) {
-        title = (title || "").trim();
-        kind = (kind || "daily").trim();
-        time = (time || "").trim();
-        if (!title || !time) {
-            snack("Choose a time before rescheduling", "error");
-            return Promise.resolve();
-        }
-        return api("PATCH", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title), {
-            enabled: true,
-            schedule: {
-                kind: kind,
-                time: time
-            }
-        }).then(function () {
-            snack("Scheduled action rescheduled", "success");
-            return loadScheduledActions({ quiet: true });
-        }).catch(function (e) {
-            snack(e.message || "Failed to reschedule scheduled action", "error");
-        });
-    }
-
-    function cancelScheduledActionByTitle(title) {
-        title = (title || "").trim();
-        if (!title) return Promise.resolve();
-        return api("DELETE", "/workflows/scheduled-actions/by-title?title=" + encodeURIComponent(title))
-            .then(function () {
-                snack("Scheduled action cancelled", "success");
-                return loadScheduledActions({ quiet: true });
-            })
-            .catch(function (e) {
-                snack(e.message || "Failed to cancel scheduled action", "error");
-            });
-    }
-
-    function createVisualBaseline() {
-        var boardId = getSelectedBoardLocalId();
-        if (!boardId) {
-            snack("Select a board before saving a visual baseline", "error");
-            return;
-        }
-        var nameEl = document.getElementById("wf-baseline-name");
-        var screenEl = document.getElementById("wf-baseline-screen-name");
-        var pathEl = document.getElementById("wf-baseline-screenshot-path");
-        var notesEl = document.getElementById("wf-baseline-notes");
-        var name = (nameEl && nameEl.value || "").trim();
-        var screenName = (screenEl && screenEl.value || "").trim();
-        var screenshotPath = (pathEl && pathEl.value || "").trim();
-        var notes = (notesEl && notesEl.value || "").trim();
-        if (!name || !screenName || !screenshotPath) {
-            snack("Baseline name, screen, and screenshot path are required", "error");
-            return;
-        }
-        var btn = document.getElementById("wf-save-visual-baseline");
-        if (btn) btn.disabled = true;
-        api("POST", "/workflows/visual-baselines", {
-            name: name,
-            board_id: parseInt(boardId, 10),
-            store_copy: true,
-            screens: [{
-                screen_name: screenName,
-                screenshot_path: screenshotPath,
-                notes: notes
-            }]
-        }).then(function () {
-            snack("Visual baseline saved", "success");
-            if (screenEl) screenEl.value = "";
-            if (pathEl) pathEl.value = "";
-            if (notesEl) notesEl.value = "";
-            loadVisualBaselines({ quiet: true });
-        }).catch(function (e) {
-            snack(e.message || "Failed to save visual baseline", "error");
-        }).finally(function () {
-            if (btn) btn.disabled = false;
-        });
-    }
-
-    function refreshBoardHermesViews(options) {
-        options = options || {};
-        loadBoardActivity(options);
-        loadLearnedRules(options);
-        loadVisualBaselines(options);
-        loadScheduledActions(options);
     }
 
     // Soft refresh — only update step statuses/results without rebuilding DOM
@@ -2588,87 +2832,70 @@
             execution_mode: settings.execution_mode === "parallel" ? "parallel" : DEFAULT_RUN_SETTINGS.execution_mode,
             concurrency_scope: settings.concurrency_scope === "workflow" ? "workflow" : DEFAULT_RUN_SETTINGS.concurrency_scope,
             max_parallel_tickets: Math.max(1, Math.min(12, parseInt(settings.max_parallel_tickets || DEFAULT_RUN_SETTINGS.max_parallel_tickets, 10) || DEFAULT_RUN_SETTINGS.max_parallel_tickets)),
-            branch_per_ticket: settings.branch_per_ticket !== false,
-            max_correction_attempts: Math.max(0, Math.min(5, parseInt(settings.max_correction_attempts || DEFAULT_RUN_SETTINGS.max_correction_attempts, 10) || DEFAULT_RUN_SETTINGS.max_correction_attempts)),
-            auto_dispatch_corrections: settings.auto_dispatch_corrections === true
+            branch_per_ticket: settings.branch_per_ticket !== false
         };
     }
 
     function collectRunSettings() {
         return {
-            execution_mode: (document.getElementById("wf-run-execution-mode") || {}).value || DEFAULT_RUN_SETTINGS.execution_mode,
-            concurrency_scope: (document.getElementById("wf-run-concurrency-scope") || {}).value || DEFAULT_RUN_SETTINGS.concurrency_scope,
-            max_parallel_tickets: Math.max(1, Math.min(12, parseInt((document.getElementById("wf-run-max-parallel") || {}).value || DEFAULT_RUN_SETTINGS.max_parallel_tickets, 10) || DEFAULT_RUN_SETTINGS.max_parallel_tickets)),
-            branch_per_ticket: !!((document.getElementById("wf-run-branch-per-ticket") || {}).checked),
-            max_correction_attempts: Math.max(0, Math.min(5, parseInt((document.getElementById("wf-run-max-corrections") || {}).value || DEFAULT_RUN_SETTINGS.max_correction_attempts, 10) || DEFAULT_RUN_SETTINGS.max_correction_attempts)),
-            auto_dispatch_corrections: !!((document.getElementById("wf-run-auto-corrections") || {}).checked)
+            execution_mode: (document.getElementById("wf-config-run-execution-mode") || {}).value || DEFAULT_RUN_SETTINGS.execution_mode,
+            concurrency_scope: (document.getElementById("wf-config-run-concurrency-scope") || {}).value || DEFAULT_RUN_SETTINGS.concurrency_scope,
+            max_parallel_tickets: Math.max(1, Math.min(12, parseInt((document.getElementById("wf-config-run-max-parallel") || {}).value || DEFAULT_RUN_SETTINGS.max_parallel_tickets, 10) || DEFAULT_RUN_SETTINGS.max_parallel_tickets)),
+            branch_per_ticket: !!((document.getElementById("wf-config-run-branch-per-ticket") || {}).checked)
         };
     }
 
     function renderRunSettings(data) {
         var settings = normalizedRunSettings(data || currentWorkflow || {});
-        var modeEl = document.getElementById("wf-run-execution-mode");
-        var scopeEl = document.getElementById("wf-run-concurrency-scope");
-        var maxEl = document.getElementById("wf-run-max-parallel");
-        var branchEl = document.getElementById("wf-run-branch-per-ticket");
-        var maxCorrectionsEl = document.getElementById("wf-run-max-corrections");
-        var autoCorrectionsEl = document.getElementById("wf-run-auto-corrections");
-        var saveEl = document.getElementById("wf-run-settings-save");
-        var noteEl = document.getElementById("wf-run-settings-lock-note");
-        var panelEl = document.getElementById("wf-run-settings-panel");
+        var modeEl = document.getElementById("wf-config-run-execution-mode");
+        var scopeEl = document.getElementById("wf-config-run-concurrency-scope");
+        var maxEl = document.getElementById("wf-config-run-max-parallel");
+        var branchEl = document.getElementById("wf-config-run-branch-per-ticket");
+        var noteEl = document.getElementById("wf-config-run-lock-note");
+        var panelEl = document.getElementById("wf-config-run-settings-panel");
         if (!modeEl || !scopeEl || !maxEl || !branchEl) return;
         modeEl.value = settings.execution_mode;
         scopeEl.value = settings.concurrency_scope;
         maxEl.value = settings.max_parallel_tickets;
         branchEl.checked = !!settings.branch_per_ticket;
-        if (maxCorrectionsEl) maxCorrectionsEl.value = settings.max_correction_attempts;
-        if (autoCorrectionsEl) autoCorrectionsEl.checked = !!settings.auto_dispatch_corrections;
         var locked = workflowHasActiveRuns();
         if (panelEl) {
             panelEl.classList.toggle("opacity-70", locked);
             panelEl.classList.toggle("border-amber-500/30", locked);
         }
-        document.querySelectorAll(".wf-run-setting").forEach(function (el) { el.disabled = locked; });
-        if (saveEl) saveEl.disabled = locked;
+        document.querySelectorAll(".wf-config-run-setting").forEach(function (el) { el.disabled = locked; });
         if (noteEl) {
             noteEl.textContent = locked ? "Locked while this workflow has active runs." : "Controls how queued tickets are scheduled before a run starts.";
-            noteEl.className = "text-xs " + (locked ? "text-amber-300" : "text-gray-500");
+            noteEl.className = "text-xs mt-0.5 " + (locked ? "text-amber-300" : "text-gray-500");
         }
     }
 
-    function renderHermesSetupSummary() {
-        var el = document.getElementById("wf-hermes-setup-summary");
-        var noteEl = document.getElementById("wf-hermes-setup-note");
-        if (!el) return;
-        el.innerHTML = '<div class="col-span-full rounded border border-white/10 bg-white/5 px-3 py-2 text-xs text-gray-500">Loading execution setup...</div>';
-        api("GET", "/workflows/hermes-setup")
-            .then(function (data) {
-                var readiness = Array.isArray(data.readiness) ? data.readiness : [];
-                var readyCount = readiness.filter(function (item) { return item && item.status === "ready"; }).length;
-                var total = readiness.length || 0;
-                var sources = Array.isArray(data.connected_sources) ? data.connected_sources : [];
-                if (noteEl) {
-                    noteEl.textContent = (total ? readyCount + "/" + total + " ready" : "Execution setup") +
-                        (sources.length ? " · Sources: " + sources.join(", ") : " · No connected source channels detected");
-                }
-                if (!readiness.length) {
-                    el.innerHTML = '<div class="col-span-full rounded border border-white/10 bg-white/5 px-3 py-2 text-xs text-gray-500">No execution setup data yet.</div>';
-                    return;
-                }
-                el.innerHTML = readiness.map(function (item) {
-                    var ready = item.status === "ready";
-                    var cls = ready ? "border-green-500/30 bg-green-500/10 text-green-200" : "border-amber-500/30 bg-amber-500/10 text-amber-200";
-                    return '<div class="rounded border px-3 py-2 ' + cls + '">' +
-                        '<p class="text-xs font-semibold">' + esc(item.label || item.key || "Setup") + '</p>' +
-                        '<p class="mt-1 text-[11px] opacity-80">' + esc(item.detail || (ready ? "Ready" : "Needs setup")) + '</p>' +
-                    '</div>';
-                }).join("");
-            })
-            .catch(function () {
-                el.innerHTML = '<div class="col-span-full rounded border border-red-500/30 bg-red-500/10 px-3 py-2 text-xs text-red-300">Failed to load execution setup.</div>';
-                if (noteEl) noteEl.textContent = "Execution setup could not be loaded.";
+    function refreshWorkflowConfigPanel() {
+        var hint = document.getElementById("wf-config-workflow-hint");
+        var body = document.getElementById("wf-config-workflow-body");
+        if (!hint || !body) return;
+        if (!currentWorkflowId) {
+            hint.classList.remove("hidden");
+            body.classList.add("hidden");
+            return;
+        }
+        hint.classList.add("hidden");
+        body.classList.remove("hidden");
+        renderRunSettings(currentWorkflow);
+        renderContextRules(currentWorkflow || {});
+    }
+
+    function saveWorkflowRunSettings() {
+        if (!currentWorkflowId || workflowHasActiveRuns()) return Promise.resolve();
+        var settings = collectRunSettings();
+        return api("PATCH", "/workflows/" + currentWorkflowId, { run_settings: settings })
+            .then(function () {
+                if (currentWorkflow) currentWorkflow.run_settings = settings;
             });
     }
+
+    window.refreshWorkflowConfigPanel = refreshWorkflowConfigPanel;
+    window.saveWorkflowRunSettings = saveWorkflowRunSettings;
 
     function colorForBoard(boardId, index) {
         var palette = ["#22c55e", "#06b6d4", "#3b82f6", "#8b5cf6", "#ec4899", "#f59e0b", "#ef4444", "#14b8a6"];
@@ -2807,7 +3034,6 @@
                                 snack(workflowFeedbackText(resp, "Run continued"));
                                 loadActiveRuns();
                                 if (currentWorkflowId) loadDetail(currentWorkflowId);
-                                refreshBoardHermesViews({ quiet: true });
                             })
                             .catch(function (e) {
                                 btn.disabled = false;
@@ -3002,55 +3228,27 @@
         })[0] || null;
     }
 
-    function workflowQueueBoardKey(ticket) {
-        if (!ticket) return "";
-        if (ticket.board_id != null && ticket.board_id !== "") return "board:" + String(ticket.board_id);
-        if (ticket.board_name) return "name:" + String(ticket.board_name).toLowerCase();
-        return "";
+    function getSelectedWorkflowBoardOption() {
+        var select = document.getElementById("wf-board-select");
+        if (!select || !select.value) return null;
+        return (workflowBoardOptions || []).filter(function (opt) { return opt.value === select.value; })[0] || null;
     }
 
-    function workflowQueueBoardLabel(ticket) {
-        return (ticket && ticket.board_name) ? ticket.board_name : "Unknown board";
+    function workflowTicketMatchesSelectedBoard(ticket, selected) {
+        if (!ticket) return false;
+        selected = selected || getSelectedWorkflowBoardOption();
+        if (!selected) return true;
+        var localBoardId = workflowBoardLocalId(selected);
+        if (localBoardId && ticket.board_id != null && String(ticket.board_id) === String(localBoardId)) return true;
+        if (selected.name && ticket.board_name && String(ticket.board_name).toLowerCase() === String(selected.name).toLowerCase()) return true;
+        return false;
     }
 
-    function workflowQueueBoardFilters(tickets) {
-        var seen = {};
-        var filters = [];
-        tickets.forEach(function (ticket) {
-            var key = workflowQueueBoardKey(ticket);
-            if (!key || seen[key]) return;
-            seen[key] = true;
-            filters.push({
-                key: key,
-                label: workflowQueueBoardLabel(ticket),
-                project: ticket.linked_project_name || projectNameById(ticket.linked_project_id)
-            });
-        });
-        filters.sort(function (a, b) { return a.label.localeCompare(b.label); });
-        return filters;
-    }
-
-    function renderWorkflowQueueFilters(filters, totalCount, visibleCount) {
-        if (!filters.length) return "";
-        var allActive = workflowQueueBoardFilter === "all";
-        var html = '<div class="mt-2 flex flex-wrap items-center gap-2 border-t border-white/10 pt-2">' +
-            '<button type="button" class="wf-workflow-ticket-filter inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs ' + (allActive ? "bg-[#f97316] text-white" : "bg-white/10 text-gray-300 hover:bg-white/15") + '" data-board-filter="all">' +
-                '<span>All</span>' +
-                '<span class="wf-count-badge ' + (allActive ? "" : "wf-count-badge-muted") + '">' + totalCount + '</span>' +
-            '</button>';
-        filters.forEach(function (filter) {
-            var count = workflowQueueTickets.filter(function (ticket) { return workflowQueueBoardKey(ticket) === filter.key; }).length;
-            var active = workflowQueueBoardFilter === filter.key;
-            html += '<button type="button" class="wf-workflow-ticket-filter inline-flex items-center gap-1.5 px-2.5 py-1 rounded text-xs ' + (active ? "bg-[#f97316] text-white" : "bg-white/10 text-gray-300 hover:bg-white/15") + '" data-board-filter="' + esc(filter.key) + '">' +
-                '<span>' + esc(filter.label) + '</span>' +
-                (filter.project ? '<span class="rounded bg-black/20 px-1.5 py-0.5 text-[10px] opacity-90">' + esc(filter.project) + '</span>' : '') +
-                '<span class="wf-count-badge ' + (active ? "" : "wf-count-badge-muted") + '">' + count + '</span>' +
-            '</button>';
-        });
-        if (visibleCount !== totalCount) {
-            html += '<span class="text-xs text-gray-500 ml-auto">' + visibleCount + ' shown</span>';
-        }
-        return html + '</div>';
+    function workflowQueueTicketsForSelectedBoard(tickets) {
+        tickets = Array.isArray(tickets) ? tickets : [];
+        var selected = getSelectedWorkflowBoardOption();
+        if (!selected) return tickets;
+        return tickets.filter(function (ticket) { return workflowTicketMatchesSelectedBoard(ticket, selected); });
     }
 
     function workflowTicketRouteLabel(ticket) {
@@ -3254,88 +3452,49 @@
         });
     }
 
-    function parseSkillChainInput(raw) {
-        return String(raw || "").split(",").map(function (part) { return part.trim(); }).filter(Boolean);
-    }
-
-    function loadWorkflowSkillsCatalog() {
-        if (workflowSkillsCatalogLoaded) return Promise.resolve(workflowSkillsCatalog);
-        return api("GET", "/workflows/skills?limit=300").then(function (data) {
-            workflowSkillsCatalog = Array.isArray(data && data.skills) ? data.skills : [];
-            workflowSkillsCatalogLoaded = true;
-            renderSkillsCatalogPanel();
-            return workflowSkillsCatalog;
-        }).catch(function () {
-            workflowSkillsCatalog = [];
-            return workflowSkillsCatalog;
-        });
-    }
-
-    function renderSkillsCatalogPanel() {
-        var datalist = document.getElementById("wf-skills-datalist");
-        var panel = document.getElementById("wf-skills-catalog");
-        if (!datalist && !panel) return;
-        if (datalist) {
-            datalist.innerHTML = workflowSkillsCatalog.map(function (skill) {
-                var label = (skill.name || skill.id || "") + " — " + String(skill.description || "").slice(0, 80);
-                return '<option value="' + esc(skill.id || "") + '">' + esc(label) + "</option>";
-            }).join("");
+    function createWorkflowQueueListRow(ticket, queueId) {
+        var run = activeRunByTicketId(ticket.id);
+        var executionSession = activeExecutionSessionByTicketId(ticket.id);
+        var locked = !!(run || executionSession);
+        var canReorder = !locked;
+        var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "Queued");
+        var statusClass = run || executionSession
+            ? (status === "waiting" || status === "queued" ? "bg-amber-500/20 text-amber-200" : "bg-sky-500/20 text-sky-200")
+            : "bg-white/10 text-gray-300";
+        var title = ticket.title || ("Ticket #" + ticket.id);
+        var cleanDesc = stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
+        var badgeOpts = { interactive: true, ticketId: ticket.id, locked: locked };
+        var descHtml = cleanDesc
+            ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + esc(cleanDesc) + "</span></div></div>"
+            : "";
+        var contentClass = "kb-ticket-list-content" + (cleanDesc ? "" : " kb-ticket-list-content--no-desc");
+        var row = document.createElement("div");
+        row.className = "kb-ticket-list-row wf-workflow-ticket-row";
+        row.dataset.ticketId = String(ticket.id);
+        row.innerHTML =
+            '<div class="kb-ticket-list-prefix">' +
+                workflowListDragHandleHtml(canReorder, "Drag to reorder queue") +
+                '<span class="kb-ticket-list-badges wf-workflow-queue-badges">' +
+                    '<span class="wf-queue-position-label" title="Queue position">' + esc(String(queueId) + ".") + "</span>" +
+                    workflowPriorityBadgeHtml(ticket.priority, badgeOpts) +
+                    workflowComplexityBadgeHtml(ticket.complexity, badgeOpts) +
+                "</span>" +
+            "</div>" +
+            '<div class="' + contentClass + '">' +
+                '<span class="kb-ticket-list-title">' + esc(title) + "</span>" +
+                descHtml +
+            "</div>" +
+            '<div class="kb-ticket-list-actions wf-workflow-queue-actions">' +
+                '<span class="inline-flex whitespace-nowrap text-[10px] px-1.5 py-0.5 rounded ' + statusClass + '">' + esc(status) + "</span>" +
+                (!run ? '<button type="button" class="wf-workflow-ticket-run kb-card-action-btn kb-act-agent" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow" aria-label="Run ticket">' + SVG_PLAY + "</button>" : "") +
+                (locked ? "" : '<button type="button" class="wf-workflow-ticket-remove kb-card-action-btn kb-act-delete" data-ticket-id="' + esc(ticket.id) + '" title="Remove from workflow" aria-label="Remove from workflow">' + SVG_TRASH + "</button>") +
+            "</div>";
+        if (canReorder) {
+            attachWorkflowQueueTicketDrag(row);
         }
-        if (panel && workflowSkillsCatalog.length) {
-            panel.classList.remove("hidden");
-            var googleSkills = workflowSkillsCatalog.filter(function (s) { return (s.source || "") === "google/skills"; });
-            var coreSkills = workflowSkillsCatalog.filter(function (s) { return (s.source || "") !== "google/skills"; });
-            panel.innerHTML =
-                "<p class=\"text-gray-300 mb-1\">Bundled skills (" + workflowSkillsCatalog.length + ")</p>" +
-                (googleSkills.length ? "<p class=\"text-[#f97316] mb-1\">Google Cloud (" + googleSkills.length + "): " +
-                    googleSkills.slice(0, 8).map(function (s) { return esc(s.id); }).join(", ") +
-                    (googleSkills.length > 8 ? "…" : "") + "</p>" : "") +
-                "<p class=\"text-gray-500\">Core: " + coreSkills.slice(0, 10).map(function (s) { return esc(s.id); }).join(", ") +
-                    (coreSkills.length > 10 ? "…" : "") + "</p>";
-        }
-    }
-
-    function renderSkillChains(data) {
-        var preEl = document.getElementById("wf-pre-chain");
-        var postEl = document.getElementById("wf-post-chain");
-        var saveEl = document.getElementById("wf-skill-chains-save");
-        if (!preEl || !postEl) return;
-        var pre = Array.isArray(data && data.pre_chain) ? data.pre_chain : [];
-        var post = Array.isArray(data && data.post_chain) ? data.post_chain : [];
-        preEl.value = pre.join(", ");
-        postEl.value = post.join(", ");
-        var locked = workflowHasActiveRuns();
-        preEl.disabled = locked;
-        postEl.disabled = locked;
-        if (saveEl) saveEl.disabled = locked;
-    }
-
-    function saveSkillChains() {
-        if (!currentWorkflowId) return;
-        var preEl = document.getElementById("wf-pre-chain");
-        var postEl = document.getElementById("wf-post-chain");
-        var saveEl = document.getElementById("wf-skill-chains-save");
-        if (saveEl) saveEl.disabled = true;
-        api("PATCH", "/workflows/" + currentWorkflowId, {
-            pre_chain: parseSkillChainInput(preEl ? preEl.value : ""),
-            post_chain: parseSkillChainInput(postEl ? postEl.value : "")
-        }).then(function () {
-            snack("Skill chains saved", "success");
-            if (currentWorkflowId) loadDetail(currentWorkflowId);
-        }).catch(function (e) {
-            snack(e.message || "Failed to save skill chains", "error");
-        }).finally(function () {
-            if (saveEl) saveEl.disabled = workflowHasActiveRuns();
-        });
-    }
-
-    function workflowComplexitySelect(ticket, locked) {
-        var current = normalizeComplexity(ticket && ticket.complexity);
-        return '<select class="wf-workflow-ticket-complexity w-full rounded-md border px-2 py-1.5 text-xs leading-tight focus:border-[#f97316] focus:outline-none disabled:opacity-60" title="Ticket complexity routing" aria-label="Ticket complexity routing" data-ticket-id="' + esc(ticket.id) + '"' + (locked ? " disabled" : "") + '>' +
-            '<option value="low"' + (current === "low" ? " selected" : "") + '>Low</option>' +
-            '<option value="medium"' + (current === "medium" ? " selected" : "") + '>Medium</option>' +
-            '<option value="high"' + (current === "high" ? " selected" : "") + '>High</option>' +
-        '</select>';
+        var ticketUi = ensureWorkflowTicketUi();
+        if (ticketUi && ticketUi.initListRowMarquee) ticketUi.initListRowMarquee(row);
+        return row;
     }
 
     function renderWorkflowTickets(tickets) {
@@ -3347,99 +3506,35 @@
             return (a.workflow_queue_position || 0) - (b.workflow_queue_position || 0) || (a.id || 0) - (b.id || 0);
         });
         if (!tickets.length) {
-            listEl.innerHTML = '<div class="h-full min-h-[300px] flex items-center justify-center text-center text-sm text-gray-500 pointer-events-none">Drop a ticket here to add it to this workflow queue.</div>';
+            listEl.innerHTML = '<div class="wf-workflow-drop-hint h-full min-h-[300px] flex items-center justify-center text-center text-sm text-gray-500 pointer-events-none" data-hint-default="Drop a ticket here to add it to this workflow queue." data-hint-drop="Drop here">Drop a ticket here to add it to this workflow queue.</div>';
             emptyEl.classList.remove("hidden");
             listEl.classList.add("border-dashed");
             bindWorkflowTicketDropZone();
             renderWorkflowCliTab();
             return;
         }
-        var boardFilters = workflowQueueBoardFilters(tickets);
-        if (workflowQueueBoardFilter !== "all" && !boardFilters.some(function (filter) { return filter.key === workflowQueueBoardFilter; })) {
-            workflowQueueBoardFilter = "all";
+        var visibleTickets = workflowQueueTicketsForSelectedBoard(tickets);
+        if (!visibleTickets.length) {
+            listEl.innerHTML = '<div class="wf-workflow-drop-hint h-full min-h-[300px] flex items-center justify-center text-center text-sm text-gray-500 pointer-events-none" data-hint-default="No tickets from this board are in the workflow queue. Drop a ticket from the board list to add one." data-hint-drop="Drop here">No tickets from this board are in the workflow queue. Drop a ticket from the board list to add one.</div>';
+            emptyEl.classList.remove("hidden");
+            listEl.classList.add("border-dashed");
+            bindWorkflowTicketDropZone();
+            renderWorkflowCliTab();
+            return;
         }
-        var visibleTickets = workflowQueueBoardFilter === "all"
-            ? tickets
-            : tickets.filter(function (ticket) { return workflowQueueBoardKey(ticket) === workflowQueueBoardFilter; });
         emptyEl.classList.add("hidden");
         listEl.classList.remove("border-dashed");
-        var rowsHtml = visibleTickets.map(function (ticket, idx) {
+        var listWrap = document.createElement("div");
+        listWrap.className = "wf-workflow-queue-list space-y-1";
+        visibleTickets.forEach(function (ticket, idx) {
             var queueIndex = tickets.findIndex(function (item) { return String(item.id) === String(ticket.id); });
             var queueId = queueIndex >= 0 ? queueIndex + 1 : idx + 1;
-            var run = activeRunByTicketId(ticket.id);
-            var executionSession = activeExecutionSessionByTicketId(ticket.id);
-            var status = run ? (run.status || "running") : (executionSession ? (executionSession.status || "running") : "Queued");
-            var statusColor = run || executionSession
-                ? (status === "waiting" || status === "queued" ? "text-amber-300 bg-amber-600/20" : "text-blue-300 bg-blue-600/20")
-                : "text-gray-300 bg-white/10";
-            var title = ticket.title || ("Ticket #" + ticket.id);
-            var canRun = !run;
-            var canRemove = !run && !executionSession;
-            var dragClass = run || executionSession ? "cursor-default" : "cursor-grab active:cursor-grabbing";
-            var priority = ticket.priority || "medium";
-            var locked = !!(run || executionSession);
-            var routeLabel = workflowTicketRouteLabel(ticket);
-            var boardProject = esc(ticket.board_name || "No board") + (ticket.linked_project_name ? " / " + esc(ticket.linked_project_name) : "");
-            return '<tr class="wf-workflow-ticket-row border-t border-white/10 bg-[#152054]/30 hover:bg-white/5 ' + dragClass + '" draggable="' + (run || executionSession ? "false" : "true") + '" data-ticket-id="' + esc(ticket.id) + '">' +
-                '<td class="px-3 py-3 align-middle text-xs text-gray-400">' +
-                    '<span class="wf-count-badge wf-count-badge-muted">' + queueId + '</span>' +
-                '</td>' +
-                '<td class="px-3 py-3 align-middle min-w-0">' +
-                    '<p class="text-sm text-white font-medium leading-snug whitespace-normal break-words">' + esc(title) + '</p>' +
-                    '<div class="mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-gray-500">' +
-                        '<span class="rounded bg-white/5 px-1.5 py-0.5" title="Board / project">' + boardProject + '</span>' +
-                        '<span class="rounded bg-white/5 px-1.5 py-0.5" title="Priority">' + esc(priority) + '</span>' +
-                        (routeLabel ? '<span class="rounded bg-blue-500/10 px-1.5 py-0.5 text-blue-300" title="' + esc(routeLabel) + '">' + esc(routeLabel) + '</span>' : '') +
-                    '</div>' +
-                '</td>' +
-                '<td class="px-2 py-3 align-middle">' + workflowComplexitySelect(ticket, locked) + '</td>' +
-                '<td class="px-2 py-3 align-middle">' +
-                    '<span class="inline-flex whitespace-nowrap text-xs px-2 py-1 rounded ' + statusColor + '">' + esc(status) + '</span>' +
-                '</td>' +
-                '<td class="px-2 py-3 align-middle text-right">' +
-                    '<div class="inline-flex items-center justify-end gap-3">' +
-                        (canRun ? '<button type="button" class="wf-workflow-ticket-run inline-flex items-center gap-1.5 px-3 py-1.5 rounded bg-[#f97316] text-white text-xs font-medium hover:bg-[#ea580c]" data-ticket-id="' + esc(ticket.id) + '" title="Run ticket through this workflow">' + SVG_PLAY + '<span>Run</span></button>' : '') +
-                        (canRemove ? '<button type="button" class="wf-workflow-ticket-remove inline-flex h-10 w-10 items-center justify-center rounded text-red-400 hover:bg-red-500/20 hover:text-red-300" data-ticket-id="' + esc(ticket.id) + '" title="Remove from workflow" aria-label="Remove from workflow">' + SVG_TRASH + '</button>' : '<span class="inline-flex h-10 w-10 items-center justify-center text-gray-600" title="Locked while running">-</span>') +
-                    '</div>' +
-                '</td>' +
-            '</tr>';
-        }).join("");
-        listEl.innerHTML = '<div class="overflow-auto rounded border border-white/10">' +
-            '<table class="w-full table-fixed text-left">' +
-                '<colgroup>' +
-                    '<col style="width: 3rem;">' +
-                    '<col>' +
-                    '<col style="width: 6.5rem;">' +
-                    '<col style="width: 6.25rem;">' +
-                    '<col style="width: 8.5rem;">' +
-                '</colgroup>' +
-                '<thead class="bg-[#10183f] text-[11px] uppercase tracking-wide text-gray-500">' +
-                    '<tr>' +
-                        '<th class="px-2 py-2 font-medium">QID</th>' +
-                        '<th class="px-3 py-2 font-medium">Ticket</th>' +
-                        '<th class="px-2 py-2 font-medium">Complexity</th>' +
-                        '<th class="px-2 py-2 font-medium">Status</th>' +
-                        '<th class="px-2 py-2 font-medium text-right"></th>' +
-                    '</tr>' +
-                '</thead>' +
-                '<tbody>' + rowsHtml + '</tbody>' +
-            '</table>' +
-        '</div>' +
-        renderWorkflowQueueFilters(boardFilters, tickets.length, visibleTickets.length);
+            listWrap.appendChild(createWorkflowQueueListRow(ticket, queueId));
+        });
+        listEl.innerHTML = "";
+        listEl.appendChild(listWrap);
         bindWorkflowTicketQueueRows(listEl);
-        listEl.querySelectorAll(".wf-workflow-ticket-filter").forEach(function (btn) {
-            btn.addEventListener("click", function () {
-                workflowQueueBoardFilter = btn.dataset.boardFilter || "all";
-                renderWorkflowTickets(workflowQueueTickets);
-            });
-        });
-        listEl.querySelectorAll(".wf-workflow-ticket-complexity").forEach(function (select) {
-            select.addEventListener("click", function (evt) { evt.stopPropagation(); });
-            select.addEventListener("dragstart", function (evt) { evt.preventDefault(); });
-            select.addEventListener("change", function () {
-                updateWorkflowQueueTicketComplexity(select.dataset.ticketId || "", select.value);
-            });
-        });
+        bindWorkflowQueueMetricBadges(listEl);
         bindWorkflowTicketDropZone();
         renderWorkflowCliTab();
     }
@@ -3449,23 +3544,228 @@
         return value === "low" || value === "high" ? value : "medium";
     }
 
-    function updateWorkflowQueueTicketComplexity(ticketId, value) {
+    function refreshWorkflowQueueTicketMetricBadge(ticketId, metric) {
+        var ticket = workflowQueueTickets.filter(function (item) { return String(item.id) === String(ticketId); })[0];
+        if (!ticket) return;
+        var row = document.querySelector('.wf-workflow-ticket-row[data-ticket-id="' + ticketId + '"]');
+        if (!row) return;
+        var badge = row.querySelector('.wf-queue-metric-badge[data-metric="' + metric + '"]');
+        if (!badge) return;
+        var locked = !!(activeRunByTicketId(ticket.id) || activeExecutionSessionByTicketId(ticket.id));
+        var html = metric === "priority"
+            ? workflowPriorityBadgeHtml(ticket.priority, { interactive: true, ticketId: ticket.id, locked: locked })
+            : workflowComplexityBadgeHtml(ticket.complexity, { interactive: true, ticketId: ticket.id, locked: locked });
+        var wrap = document.createElement("div");
+        wrap.innerHTML = html;
+        var nextBadge = wrap.firstChild;
+        if (!nextBadge) return;
+        badge.replaceWith(nextBadge);
+        bindWorkflowQueueMetricBadges(row);
+    }
+
+    function workflowBoardListBadgesHtml(ticket) {
+        return workflowComplexityBadgeHtml(ticket.complexity, {}) + workflowPriorityBadgeHtml(ticket.priority, {});
+    }
+
+    function updateWorkflowBoardRenderStateTicket(ticketId, patch) {
+        var state = workflowBoardRenderState;
+        if (!state || !state.data || !Array.isArray(state.data.lanes)) return;
+        state.data.lanes.forEach(function (lane) {
+            (lane.tickets || []).forEach(function (ticket) {
+                if (String(ticket.id) !== String(ticketId)) return;
+                Object.keys(patch || {}).forEach(function (field) {
+                    ticket[field] = patch[field];
+                });
+            });
+        });
+    }
+
+    function reorderWorkflowBoardTicketRow(ticketKey) {
+        var row = workflowBoardTicketRowForKey(ticketKey);
+        if (!row) return;
+        var body = row.closest(".kb-ticket-list-section-body");
+        if (!body) return;
+        var compare = window.KanbanTicketUi && window.KanbanTicketUi.compareTicketsForListView;
+        if (!compare) return;
+        var rows = Array.prototype.slice.call(body.querySelectorAll(".wf-board-ticket-row"));
+        if (rows.length < 2) return;
+        var entries = rows.map(function (entryRow) {
+            var key = entryRow.dataset.ticketKey || "";
+            var item = workflowBoardTicketByKey[key];
+            return { key: key, row: entryRow, ticket: item && item.ticket };
+        }).filter(function (entry) { return entry.ticket; });
+        entries.sort(function (a, b) { return compare(a.ticket, b.ticket); });
+        entries.forEach(function (entry) { body.appendChild(entry.row); });
+    }
+
+    function syncWorkflowBoardTicketView(ticketId, patch) {
+        patch = patch || {};
+        var fields = Object.keys(patch);
+        if (!fields.length) return;
+        var reorderKeys = {};
+        Object.keys(workflowBoardTicketByKey || {}).forEach(function (ticketKey) {
+            var item = workflowBoardTicketByKey[ticketKey];
+            if (!item || !item.ticket || String(item.ticket.id) !== String(ticketId)) return;
+            fields.forEach(function (field) {
+                item.ticket[field] = patch[field];
+            });
+            var row = workflowBoardTicketRowForKey(ticketKey);
+            if (!row) return;
+            if (patch.title != null) {
+                var titleEl = row.querySelector(".kb-ticket-list-title");
+                if (titleEl) titleEl.textContent = patch.title || "";
+            }
+            if (patch.priority != null || patch.complexity != null) {
+                var badges = row.querySelector(".kb-ticket-list-badges");
+                if (badges) badges.innerHTML = workflowBoardListBadgesHtml(item.ticket);
+            }
+            if (patch.priority != null || patch.complexity != null) {
+                reorderKeys[ticketKey] = true;
+            }
+        });
+        updateWorkflowBoardRenderStateTicket(ticketId, patch);
+        Object.keys(reorderKeys).forEach(function (ticketKey) {
+            reorderWorkflowBoardTicketRow(ticketKey);
+        });
+    }
+
+    function syncWorkflowQueueTicketView(ticketId, patch) {
+        var ticket = workflowQueueTickets.filter(function (item) { return String(item.id) === String(ticketId); })[0];
+        if (!ticket) return false;
+        Object.keys(patch || {}).forEach(function (field) {
+            ticket[field] = patch[field];
+        });
+        if (patch.priority != null) refreshWorkflowQueueTicketMetricBadge(ticketId, "priority");
+        if (patch.complexity != null) refreshWorkflowQueueTicketMetricBadge(ticketId, "complexity");
+        if (patch.title != null) {
+            var row = document.querySelector('.wf-workflow-ticket-row[data-ticket-id="' + ticketId + '"]');
+            if (row) {
+                var titleEl = row.querySelector(".kb-ticket-list-title");
+                if (titleEl) titleEl.textContent = patch.title || "";
+            }
+        }
+        return true;
+    }
+
+    function closeWorkflowQueueMetricMenu() {
+        if (wfQueueMetricMenuEl) wfQueueMetricMenuEl.classList.add("hidden");
+        wfQueueMetricMenuState = null;
+    }
+
+    function workflowQueueMetricMenuOptions(metric) {
+        if (metric === "priority") {
+            return ["low", "medium", "high", "critical"].map(function (value) {
+                return { value: value, label: value };
+            });
+        }
+        return ["low", "medium", "high"].map(function (value) {
+            return { value: value, label: workflowComplexityNumeral(value) };
+        });
+    }
+
+    function ensureWorkflowQueueMetricMenu() {
+        if (wfQueueMetricMenuEl) return wfQueueMetricMenuEl;
+        var html = '<div id="wf-queue-metric-menu" class="hidden fixed z-[10000] min-w-[132px] bg-[#1a1f3a] border border-white/20 rounded-lg shadow-2xl py-1" role="menu"></div>';
+        document.body.insertAdjacentHTML("beforeend", html);
+        wfQueueMetricMenuEl = document.getElementById("wf-queue-metric-menu");
+        wfQueueMetricMenuEl.addEventListener("click", function (evt) { evt.stopPropagation(); });
+        return wfQueueMetricMenuEl;
+    }
+
+    function openWorkflowQueueMetricMenu(badge, evt) {
+        if (!badge) return;
+        var ticketId = badge.dataset.ticketId || "";
+        var metric = badge.dataset.metric || "";
+        if (!ticketId || !metric) return;
+        var ticket = workflowQueueTickets.filter(function (item) { return String(item.id) === String(ticketId); })[0];
+        if (!ticket) return;
+        if (activeRunByTicketId(ticket.id) || activeExecutionSessionByTicketId(ticket.id)) return;
+
+        var menu = ensureWorkflowQueueMetricMenu();
+        var currentValue = metric === "priority"
+            ? normalizeWorkflowPriority(ticket.priority)
+            : normalizeComplexity(ticket.complexity);
+        var title = metric === "priority" ? "Priority" : "Complexity";
+        var options = workflowQueueMetricMenuOptions(metric);
+        menu.innerHTML = '<div class="px-3 py-1.5 text-[10px] uppercase tracking-wide text-gray-500">' + esc(title) + "</div>" +
+            options.map(function (option) {
+                var active = option.value === currentValue;
+                var itemClass = metric === "priority"
+                    ? "kb-pri-" + option.value
+                    : "kb-cx-" + option.value;
+                return '<button type="button" class="wf-queue-metric-menu-item w-full text-left px-3 py-2 text-sm text-gray-200 hover:bg-white/10' + (active ? " is-active" : "") + '" role="menuitemradio" aria-checked="' + (active ? "true" : "false") + '" data-value="' + esc(option.value) + '">' +
+                    '<span class="wf-queue-metric-menu-badge kb-metric-badge ' + itemClass + '">' + esc(option.label) + "</span>" +
+                    (active ? '<span class="wf-queue-metric-menu-check" aria-hidden="true">✓</span>' : "") +
+                "</button>";
+            }).join("");
+        menu.querySelectorAll(".wf-queue-metric-menu-item").forEach(function (btn) {
+            btn.addEventListener("click", function (clickEvt) {
+                clickEvt.preventDefault();
+                clickEvt.stopPropagation();
+                var value = btn.dataset.value || "";
+                closeWorkflowQueueMetricMenu();
+                updateWorkflowQueueTicketMetric(ticketId, metric, value);
+            });
+        });
+
+        wfQueueMetricMenuState = { ticketId: ticketId, metric: metric };
+        menu.classList.remove("hidden");
+        var rect = badge.getBoundingClientRect();
+        var left = rect.left;
+        var top = rect.bottom + 4;
+        menu.style.left = left + "px";
+        menu.style.top = top + "px";
+        var menuRect = menu.getBoundingClientRect();
+        if (menuRect.right > window.innerWidth - 8) left = Math.max(8, window.innerWidth - menuRect.width - 8);
+        if (menuRect.bottom > window.innerHeight - 8) top = Math.max(8, rect.top - menuRect.height - 4);
+        menu.style.left = left + "px";
+        menu.style.top = top + "px";
+    }
+
+    function updateWorkflowQueueTicketMetric(ticketId, metric, value) {
         var ticket = workflowQueueTickets.filter(function (item) { return String(item.id) === String(ticketId); })[0];
         if (!ticket || !ticket.id) return;
-        var next = normalizeComplexity(value);
-        if (normalizeComplexity(ticket.complexity) === next) return;
-        api("PUT", "/tickets/tickets/" + encodeURIComponent(ticket.id), { complexity: next })
+        var payload = {};
+        var next;
+        if (metric === "priority") {
+            next = normalizeWorkflowPriority(value);
+            if (normalizeWorkflowPriority(ticket.priority) === next) return;
+            payload.priority = next;
+        } else {
+            next = normalizeComplexity(value);
+            if (normalizeComplexity(ticket.complexity) === next) return;
+            payload.complexity = next;
+        }
+        api("PUT", "/tickets/tickets/" + encodeURIComponent(ticket.id), payload)
             .then(function () {
-                ticket.complexity = next;
-                snack("Ticket complexity updated");
-                loadWorkflowTicketQueue();
-                var boardSelect = document.getElementById("wf-board-select");
-                if (boardSelect && boardSelect.value) loadWorkflowBoardTickets(boardSelect.value);
+                var patch = metric === "priority" ? { priority: next } : { complexity: next };
+                if (metric === "priority") ticket.priority = next;
+                else ticket.complexity = next;
+                refreshWorkflowQueueTicketMetricBadge(ticket.id, metric);
+                syncWorkflowBoardTicketView(ticket.id, patch);
             })
             .catch(function (e) {
-                snack(e.message || "Failed to update ticket complexity", "error");
+                snack(e.message || ("Failed to update ticket " + metric), "error");
                 renderWorkflowTickets(workflowQueueTickets);
             });
+    }
+
+    function bindWorkflowQueueMetricBadges(root) {
+        (root || document).querySelectorAll(".wf-queue-metric-badge").forEach(function (badge) {
+            if (badge.dataset.metricBound === "1") return;
+            badge.dataset.metricBound = "1";
+            badge.addEventListener("click", function (evt) {
+                evt.preventDefault();
+                evt.stopPropagation();
+                if (wfQueueMetricMenuState &&
+                    wfQueueMetricMenuState.ticketId === (badge.dataset.ticketId || "") &&
+                    wfQueueMetricMenuState.metric === (badge.dataset.metric || "")) {
+                    closeWorkflowQueueMetricMenu();
+                    return;
+                }
+                openWorkflowQueueMetricMenu(badge, evt);
+            });
+        });
     }
 
     function workflowCliTicketById(ticketId) {
@@ -3693,61 +3993,66 @@
             loadWorkflowTicketQueue();
             loadActiveRuns();
             loadWorkflowExecutionSessions();
-            refreshBoardHermesViews({ quiet: true });
         }).catch(function (e) {
             snack(workflowErrorText(e, "Failed to start ticket run"), "error");
             buttons.forEach(function (btn) { btn.disabled = false; btn.textContent = "Run"; });
         });
     }
 
-    function assignTicketToCurrentWorkflow(ticketId, payload) {
-        if (!currentWorkflowId || !ticketId) return;
+    function assignTicketToCurrentWorkflow(ticketId, payload, options) {
+        options = options || {};
+        if (!currentWorkflowId || !ticketId) return Promise.resolve({ status: "skipped" });
         var alreadyQueued = workflowQueueTickets.some(function (ticket) { return String(ticket.id) === String(ticketId); });
         if (alreadyQueued) {
-            snack("Ticket is already in this workflow queue");
-            return;
+            if (!options.silent) snack("Ticket is already in this workflow queue");
+            return Promise.resolve({ status: "skipped" });
         }
         var linkKey = "database:" + String(ticketId);
         if (workflowPendingTicketLinks[linkKey]) {
-            snack("Ticket is already being linked");
-            return;
+            if (!options.silent) snack("Ticket is already being linked");
+            return Promise.resolve({ status: "skipped" });
         }
         workflowPendingTicketLinks[linkKey] = true;
         markWorkflowBoardTicketPending(payload);
-        api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId), {
+        return api("PUT", "/tickets/tickets/" + encodeURIComponent(ticketId), {
             linked_workflow_id: parseInt(currentWorkflowId, 10),
             workflow_queue_position: workflowQueueTickets.length
         }).then(function () {
             delete workflowPendingTicketLinks[linkKey];
-            snack("Ticket added to workflow queue");
-            loadWorkflowTicketQueue();
+            rememberWorkflowBoardTicketSource(ticketId, payload);
+            if (!options.silent) snack("Ticket added to workflow queue");
+            if (payload && payload.ticket_key) applyWorkflowBoardTicketLinkedState(payload.ticket_key, payload);
+            return fetchWorkflowQueueTicketRecord(ticketId);
+        }).then(function (ticket) {
+            if (ticket) appendWorkflowQueueTicket(ticket);
             loadActiveRuns();
-            var selectedBoard = document.getElementById("wf-board-select");
-            if (selectedBoard && selectedBoard.value) loadWorkflowBoardTickets(selectedBoard.value);
+            return { status: "added" };
         }).catch(function (e) {
-            snack(e.message || "Failed to add ticket to workflow", "error");
+            if (!options.silent) snack(e.message || "Failed to add ticket to workflow", "error");
             delete workflowPendingTicketLinks[linkKey];
+            return { status: "failed" };
         });
     }
 
-    function copyExternalTicketToCurrentWorkflow(payload) {
-        if (!currentWorkflowId || !payload) return;
+    function copyExternalTicketToCurrentWorkflow(payload, options) {
+        options = options || {};
+        if (!currentWorkflowId || !payload) return Promise.resolve({ status: "skipped" });
         var destinationBoard = payload.destination_board_id
             ? null
             : workflowDatabaseBoardForProject(payload.default_project_id);
         var boardId = payload.destination_board_id || (destinationBoard && destinationBoard.id) || payload.local_board_id || payload.board_id;
         if (!boardId) {
-            snack("Link this Jira/Trello board's project to a local board before adding tickets to a workflow", "error");
-            return;
+            if (!options.silent) snack("Link this Jira/Trello board's project to a local board before adding tickets to a workflow", "error");
+            return Promise.resolve({ status: "failed" });
         }
         var linkKey = workflowPayloadLinkKey(payload);
         if (linkKey && (workflowPendingTicketLinks[linkKey] || workflowLinkedExternalTicketKeys[linkKey])) {
-            snack("Ticket is already linked to a workflow");
-            return;
+            if (!options.silent) snack("Ticket is already linked to a workflow");
+            return Promise.resolve({ status: "skipped" });
         }
         if (linkKey) workflowPendingTicketLinks[linkKey] = true;
         markWorkflowBoardTicketPending(payload);
-        api("POST", "/tickets/tickets/copy-external-to-board", {
+        return api("POST", "/tickets/tickets/copy-external-to-board", {
             board_id: parseInt(boardId, 10),
             title: payload.title || "Untitled ticket",
             description: payload.description || "",
@@ -3758,24 +4063,84 @@
             external_url: payload.external_url || payload.url || "",
             linked_project_id: payload.default_project_id || null,
             linked_workflow_id: parseInt(currentWorkflowId, 10)
-        }).then(function () {
-            if (linkKey) workflowLinkedExternalTicketKeys[linkKey] = true;
+        }).then(function (result) {
             if (linkKey) delete workflowPendingTicketLinks[linkKey];
-            snack("Ticket copied into workflow queue");
-            loadWorkflowTicketQueue();
+            var newId = result && result.id;
+            rememberWorkflowBoardTicketSource(newId, payload);
+            if (!options.silent) snack("Ticket copied into workflow queue");
+            if (payload && payload.ticket_key) applyWorkflowBoardTicketLinkedState(payload.ticket_key, payload);
+            if (!newId) return { status: "failed" };
+            return fetchWorkflowQueueTicketRecord(newId);
+        }).then(function (ticket) {
+            if (!ticket || ticket.status) return ticket;
+            appendWorkflowQueueTicket(ticket);
             loadActiveRuns();
-            var selectedBoard = document.getElementById("wf-board-select");
-            if (selectedBoard && selectedBoard.value) loadWorkflowBoardTickets(selectedBoard.value);
+            return { status: "added" };
         }).catch(function (e) {
-            snack(e.message || "Failed to copy ticket into workflow", "error");
+            if (!options.silent) snack(e.message || "Failed to copy ticket into workflow", "error");
             if (linkKey) delete workflowPendingTicketLinks[linkKey];
+            return { status: "failed" };
         });
+    }
+
+    function addAllBoardTicketsToWorkflow(laneId) {
+        if (!currentWorkflowId) {
+            snack("Select a workflow first", "error");
+            return;
+        }
+        var selected = getSelectedWorkflowBoardOption();
+        if (!selected || !selected.default_project_id) {
+            snack("Click the gear icon next to the board dropdown to link this board to a project", "error");
+            return;
+        }
+        var items = getAddableBoardTicketItems(laneId);
+        if (!items.length) {
+            snack("No tickets available to add to this workflow");
+            return;
+        }
+        var buttons = document.querySelectorAll(".wf-lane-add-all-board-tickets");
+        buttons.forEach(function (btn) { btn.disabled = true; });
+        var added = 0;
+        var failed = 0;
+
+        function finish() {
+            buttons.forEach(function (btn) { btn.disabled = false; });
+            if (failed && !added) {
+                snack("Failed to add tickets to workflow queue", "error");
+                return;
+            }
+            if (!added) {
+                snack("No tickets were added to this workflow");
+                return;
+            }
+            snack(added + " ticket" + (added === 1 ? "" : "s") + " added to workflow queue");
+        }
+
+        function processNext(index) {
+            if (index >= items.length) {
+                finish();
+                return;
+            }
+            var item = items[index];
+            var promise = item.selected.source !== "database"
+                ? copyExternalTicketToCurrentWorkflow(item.payload, { silent: true })
+                : assignTicketToCurrentWorkflow(item.ticket.id, item.payload, { silent: true });
+            promise.then(function (result) {
+                if (result && result.status === "added") added += 1;
+                else if (result && result.status === "failed") failed += 1;
+                processNext(index + 1);
+            });
+        }
+
+        processNext(0);
     }
 
     function handleWorkflowTicketDropPayload(payloadOrId) {
         if (!payloadOrId) return;
         if (typeof payloadOrId === "string" || typeof payloadOrId === "number") {
-            assignTicketToCurrentWorkflow(payloadOrId);
+            if (isLocalDatabaseTicketId(payloadOrId)) {
+                assignTicketToCurrentWorkflow(payloadOrId);
+            }
             return;
         }
         if (payloadOrId.type === "workflow-board-ticket") {
@@ -3788,10 +4153,12 @@
                 snack("Ticket is already linked to a workflow");
                 return;
             }
-            if (payloadOrId.source && payloadOrId.source !== "database") {
+            if (isExternalWorkflowBoardPayload(payloadOrId)) {
                 copyExternalTicketToCurrentWorkflow(payloadOrId);
-            } else if (payloadOrId.ticket_id) {
+            } else if (isLocalDatabaseTicketId(payloadOrId.ticket_id)) {
                 assignTicketToCurrentWorkflow(payloadOrId.ticket_id, payloadOrId);
+            } else {
+                snack("Could not add this ticket to the workflow", "error");
             }
         }
     }
@@ -3800,7 +4167,6 @@
         if (!currentWorkflowId) return;
         var ids = workflowQueueTickets.map(function (t) { return t.id; }).filter(Boolean);
         api("PUT", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/reorder", { ticket_ids: ids })
-            .then(function () { loadWorkflowTicketQueue(); })
             .catch(function (e) { snack(e.message || "Failed to save ticket order", "error"); });
     }
 
@@ -3823,16 +4189,20 @@
     function workflowTicketPayloadFromDrop(evt) {
         if (workflowBoardDragPayload) return workflowBoardDragPayload;
         if (!evt.dataTransfer) return null;
-        var raw = evt.dataTransfer.getData("application/json") || "";
+        var raw = evt.dataTransfer.getData("application/x-workflow-board-ticket")
+            || evt.dataTransfer.getData("application/json")
+            || "";
         if (raw) {
             try {
                 var payload = JSON.parse(raw);
-                if (payload && payload.type === "workflow-board-ticket" && payload.ticket_id) {
+                if (payload && payload.type === "workflow-board-ticket") {
                     return payload;
                 }
             } catch (e) {}
         }
-        return evt.dataTransfer.getData("text/plain") || null;
+        var plain = evt.dataTransfer.getData("text/plain") || "";
+        if (isLocalDatabaseTicketId(plain)) return plain;
+        return null;
     }
 
     function markWorkflowBoardTicketPending(payload) {
@@ -3842,11 +4212,7 @@
         var row = document.querySelector('.wf-board-ticket-row[data-ticket-key="' + escapedKey + '"]');
         if (!row) return;
         row.setAttribute("draggable", "false");
-        row.className = workflowBoardTicketRowClasses(false, false, false, false, true);
-        var badgeWrap = row.querySelector(".flex.items-start.justify-between");
-        if (badgeWrap && badgeWrap.children.length > 1) {
-            badgeWrap.children[1].outerHTML = '<span class="text-[10px] px-1.5 py-0.5 rounded border border-amber-500/50 bg-amber-500/20 text-amber-200 flex-shrink-0">linking</span>';
-        }
+        row.classList.add("wf-board-ticket-pending");
     }
 
     function workflowDropZoneContainsPoint(evt) {
@@ -3865,15 +4231,6 @@
 
     function bindWorkflowTicketQueueRows(listEl) {
         listEl.querySelectorAll(".wf-workflow-ticket-row").forEach(function (row) {
-            row.addEventListener("dragstart", function (evt) {
-                if (row.getAttribute("draggable") === "false") {
-                    evt.preventDefault();
-                    return;
-                }
-                workflowQueueDragTicketId = row.dataset.ticketId || "";
-                evt.dataTransfer.effectAllowed = "move";
-                evt.dataTransfer.setData("text/plain", workflowQueueDragTicketId);
-            });
             row.addEventListener("dragend", function () {
                 workflowQueueDragTicketId = null;
                 listEl.querySelectorAll(".wf-workflow-ticket-row").forEach(function (r) {
@@ -3915,9 +4272,11 @@
                     api("DELETE", "/tickets/workflows/" + encodeURIComponent(currentWorkflowId) + "/tickets/" + encodeURIComponent(ticketId))
                         .then(function () {
                             snack("Ticket removed from workflow queue");
-                            loadWorkflowTicketQueue();
-                            var selectedBoard = document.getElementById("wf-board-select");
-                            if (selectedBoard && selectedBoard.value) loadWorkflowBoardTickets(selectedBoard.value);
+                            workflowQueueTickets = workflowQueueTickets.filter(function (item) {
+                                return String(item.id) !== String(ticketId);
+                            });
+                            renderWorkflowTickets(workflowQueueTickets);
+                            restoreWorkflowBoardTicketAfterQueueRemove(ticketId, "");
                         })
                         .catch(function (e) { snack(e.message || "Failed to remove ticket", "error"); });
                 });
@@ -3934,12 +4293,45 @@
         });
     }
 
+    function ensureWorkflowDropOverlay(list) {
+        if (!list) return;
+        list.classList.add("wf-workflow-ticket-drop-zone");
+        if (list.querySelector(".wf-workflow-drop-overlay")) return;
+        var overlay = document.createElement("div");
+        overlay.className = "wf-workflow-drop-overlay";
+        overlay.innerHTML = '<span class="wf-workflow-drop-overlay-label">Drop here</span>';
+        list.appendChild(overlay);
+    }
+
+    function setWorkflowTicketDropTargetActive(active) {
+        var list = document.getElementById("wf-workflow-tickets-list");
+        if (list) {
+            list.classList.toggle("is-drop-target", !!active);
+            var hint = list.querySelector(".wf-workflow-drop-hint");
+            if (hint) {
+                var dropText = hint.getAttribute("data-hint-drop") || "Drop here";
+                var defaultText = hint.getAttribute("data-hint-default") || hint.textContent;
+                hint.textContent = active ? dropText : defaultText;
+                hint.classList.toggle("is-drop-active", !!active);
+            }
+        }
+    }
+
+    function dragHasBoardTicket(evt) {
+        if (workflowBoardDragPayload) return true;
+        if (!evt || !evt.dataTransfer) return false;
+        var types = Array.prototype.slice.call(evt.dataTransfer.types || []);
+        return types.indexOf("application/x-workflow-board-ticket") !== -1 ||
+            types.indexOf("application/json") !== -1;
+    }
+
     function bindWorkflowTicketDropZone() {
         var tab = document.getElementById("wf-tab-tickets");
         var list = document.getElementById("wf-workflow-tickets-list");
         var empty = document.getElementById("wf-workflow-tickets-empty");
         var targets = [tab, list, empty].filter(Boolean);
         if (!targets.length) return;
+        ensureWorkflowDropOverlay(list);
 
         function dragHasTicket(evt) {
             if (workflowQueueDragTicketId || workflowBoardDragPayload) return true;
@@ -3949,12 +4341,12 @@
         }
 
         function setDropActive(active) {
-            [tab, list].filter(Boolean).forEach(function (el) {
-                el.classList.toggle("ring-1", active);
-                el.classList.toggle("ring-[#f97316]/50", active);
-                el.classList.toggle("bg-[#f97316]/5", active);
-                el.classList.toggle("rounded", active);
-            });
+            setWorkflowTicketDropTargetActive(active && !!workflowBoardDragPayload);
+        }
+
+        function resetDropTarget() {
+            workflowDropZoneHoverDepth = 0;
+            setDropActive(false);
         }
 
         targets.forEach(function (target) {
@@ -3964,24 +4356,32 @@
                 if (!dragHasTicket(evt)) return;
                 rememberWorkflowDragPoint(evt);
                 evt.preventDefault();
-                setDropActive(true);
+                if (dragHasBoardTicket(evt)) {
+                    workflowDropZoneHoverDepth += 1;
+                    setDropActive(true);
+                }
             }, true);
             target.addEventListener("dragover", function (evt) {
                 if (!dragHasTicket(evt)) return;
                 rememberWorkflowDragPoint(evt);
+                positionWorkflowBoardDragGhost(evt);
                 evt.preventDefault();
-                if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
-                setDropActive(true);
+                if (evt.dataTransfer) {
+                    evt.dataTransfer.dropEffect = workflowQueueDragTicketId ? "move" : "copy";
+                }
+                if (dragHasBoardTicket(evt)) setDropActive(true);
             }, true);
             target.addEventListener("dragleave", function (evt) {
-                if (tab && tab.contains(evt.relatedTarget)) return;
-                setDropActive(false);
+                if (!dragHasBoardTicket(evt)) return;
+                workflowDropZoneHoverDepth = Math.max(0, workflowDropZoneHoverDepth - 1);
+                if (workflowDropZoneHoverDepth === 0) setDropActive(false);
             }, true);
             target.addEventListener("drop", function (evt) {
                 rememberWorkflowDragPoint(evt);
                 evt.preventDefault();
                 evt.stopPropagation();
-                setDropActive(false);
+                resetDropTarget();
+                removeWorkflowBoardDragGhost();
                 if (workflowQueueDragTicketId) return;
                 handleWorkflowTicketDropPayload(workflowTicketPayloadFromDrop(evt));
                 workflowBoardDragPayload = null;
@@ -3991,26 +4391,42 @@
 
         if (!workflowDropDocumentBound) {
             workflowDropDocumentBound = true;
+            document.addEventListener("drag", function (evt) {
+                if (!workflowBoardDragPayload) return;
+                positionWorkflowBoardDragGhost(evt);
+            }, true);
             document.addEventListener("dragover", function (evt) {
-                if (!dragHasTicket(evt) || !workflowDropZoneContainsPoint(evt)) return;
+                if (!dragHasTicket(evt)) return;
+                if (workflowBoardDragPayload) positionWorkflowBoardDragGhost(evt);
+                if (!workflowDropZoneContainsPoint(evt)) {
+                    if (workflowDropZoneHoverDepth === 0) setDropActive(false);
+                    return;
+                }
                 rememberWorkflowDragPoint(evt);
                 evt.preventDefault();
-                if (evt.dataTransfer) evt.dataTransfer.dropEffect = "move";
-                setDropActive(true);
+                if (evt.dataTransfer) {
+                    evt.dataTransfer.dropEffect = workflowQueueDragTicketId ? "move" : "copy";
+                }
+                if (dragHasBoardTicket(evt)) {
+                    workflowDropZoneHoverDepth = Math.max(workflowDropZoneHoverDepth, 1);
+                    setDropActive(true);
+                }
             }, true);
             document.addEventListener("drop", function (evt) {
                 if (!dragHasTicket(evt) || !workflowDropZoneContainsPoint(evt)) return;
                 rememberWorkflowDragPoint(evt);
                 evt.preventDefault();
                 evt.stopPropagation();
-                setDropActive(false);
+                resetDropTarget();
+                removeWorkflowBoardDragGhost();
                 if (workflowQueueDragTicketId) return;
                 handleWorkflowTicketDropPayload(workflowTicketPayloadFromDrop(evt));
                 workflowBoardDragPayload = null;
                 workflowLastDragPoint = null;
             }, true);
             document.addEventListener("dragend", function () {
-                setDropActive(false);
+                resetDropTarget();
+                removeWorkflowBoardDragGhost();
             }, true);
         }
     }
@@ -5042,7 +5458,6 @@
                             snack(workflowFeedbackText(resp, "Run continued"));
                             startPolling();
                             loadDetail(currentWorkflowId);
-                            refreshBoardHermesViews({ quiet: true });
                         })
                         .catch(function (e) { snack(workflowErrorText(e, "Failed to continue"), "error"); });
                 }
@@ -5207,72 +5622,8 @@
             });
     }
 
-    function renderCorrections(corrections) {
-        var list = document.getElementById("wf-corrections-list");
-        var empty = document.getElementById("wf-corrections-empty");
-        if (!list || !empty) return;
-        corrections = Array.isArray(corrections) ? corrections : [];
-        if (!corrections.length) {
-            list.innerHTML = "";
-            empty.classList.remove("hidden");
-            return;
-        }
-        empty.classList.add("hidden");
-        list.innerHTML = corrections.map(function (attempt) {
-            var status = attempt.status || "queued";
-            var dispatch = attempt.dispatch_result || {};
-            var autoLabel = dispatch.auto_dispatch ? "Auto-dispatched" : "Queued";
-            var statusClass = status === "dispatched" ? "text-blue-300 border-blue-500/30 bg-blue-500/10" :
-                status === "completed" ? "text-green-300 border-green-500/30 bg-green-500/10" :
-                "text-amber-300 border-amber-500/30 bg-amber-500/10";
-            var packet = attempt.correction_packet || {};
-            var failed = packet.failed_validation || {};
-            var expected = failed.expected || "";
-            var observed = failed.observed || "";
-            return '' +
-                '<div class="rounded border border-white/10 bg-[#152054]/50 px-3 py-2" data-correction-id="' + esc(attempt.id) + '">' +
-                    '<div class="flex flex-wrap items-center gap-2">' +
-                        '<span class="text-xs text-gray-500">#' + esc(attempt.id) + '</span>' +
-                        '<span class="inline-flex items-center rounded border px-1.5 py-0.5 text-[11px] ' + statusClass + '">' + esc(status) + '</span>' +
-                        '<span class="text-xs text-gray-300">' + esc(autoLabel) + '</span>' +
-                        (attempt.run_id ? '<span class="text-xs text-gray-500">Run #' + esc(attempt.run_id) + '</span>' : '') +
-                        (attempt.step_id ? '<span class="text-xs text-gray-500">Step #' + esc(attempt.step_id) + '</span>' : '') +
-                        (attempt.attempt_number ? '<span class="text-xs text-gray-500">Attempt ' + esc(attempt.attempt_number) + '</span>' : '') +
-                    '</div>' +
-                    '<div class="mt-1 text-[11px] text-gray-400">' +
-                        '<span class="text-gray-500">' + esc(failed.validation_type || "validation") + '</span>' +
-                        (expected ? ' Expected: ' + esc(expected) : '') +
-                        (observed ? ' Observed: ' + esc(observed) : '') +
-                    '</div>' +
-                '</div>';
-        }).join("");
-    }
-
-    function loadWorkflowCorrections(options) {
-        options = options || {};
-        if (!currentWorkflowId) {
-            renderCorrections([]);
-            return Promise.resolve([]);
-        }
-        var filter = document.getElementById("wf-corrections-status-filter");
-        var status = filter && filter.value ? filter.value : "";
-        var endpoint = "/workflows/" + currentWorkflowId + "/corrections";
-        var query = endpoint + "?limit=50";
-        if (status) query += "&status=" + encodeURIComponent(status);
-        return api("GET", query)
-            .then(function (items) {
-                renderCorrections(items || []);
-                return items || [];
-            })
-            .catch(function (e) {
-                if (!options.quiet) snack(e.message || "Failed to load corrections", "error");
-                renderCorrections([]);
-                return [];
-            });
-    }
-
     function switchRunsSubtab(tab) {
-        workflowRunsSubtab = tab === "recent" || tab === "sessions" || tab === "timeline" || tab === "corrections" ? tab : "active";
+        workflowRunsSubtab = tab === "recent" || tab === "sessions" || tab === "timeline" ? tab : "active";
         document.querySelectorAll(".wf-runs-subtab").forEach(function (btn) {
             var active = (btn.dataset.runsTab || "active") === workflowRunsSubtab;
             btn.classList.toggle("text-white", active);
@@ -5285,7 +5636,6 @@
         var pane = document.getElementById("wf-runs-pane-" + workflowRunsSubtab);
         if (pane) pane.classList.remove("hidden");
         if (workflowRunsSubtab === "timeline") loadHermesTimeline({ quiet: true });
-        if (workflowRunsSubtab === "corrections") loadWorkflowCorrections({ quiet: true });
         if (workflowRunsSubtab === "recent") loadWorkflowRunHistory({ quiet: true });
     }
 
@@ -5470,8 +5820,8 @@
 
     // ── Agent Context tab ──
     function renderContextRules(data) {
-        var listEl = document.getElementById("wf-context-items-list");
-        var statusEl = document.getElementById("wf-context-save-status");
+        var listEl = document.getElementById("wf-config-context-items-list");
+        var statusEl = document.getElementById("wf-config-context-save-status");
         if (!listEl) return;
         var items = Array.isArray(data.context_items) ? data.context_items : [];
         if (!items.length) {
@@ -5518,6 +5868,7 @@
                     }).then(function () {
                         if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
                         loadDetail(currentWorkflowId);
+                        refreshWorkflowConfigPanel();
                     }).catch(function () {
                         if (statusEl) statusEl.textContent = "Save failed";
                     });
@@ -5536,6 +5887,7 @@
                                 .then(function () {
                                     if (statusEl) { statusEl.textContent = "Deleted"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
                                     loadDetail(currentWorkflowId);
+                                    refreshWorkflowConfigPanel();
                                 })
                                 .catch(function () {
                                     if (statusEl) statusEl.textContent = "Delete failed";
@@ -5555,7 +5907,6 @@
         document.querySelectorAll(".wf-tab-content").forEach(function (el) { el.classList.add("hidden"); });
         var target = document.getElementById("wf-tab-" + tab);
         if (target) target.classList.remove("hidden");
-        if (tab === "context") loadLearnedRules({ quiet: true });
     }
 
     // ── Presets ──
@@ -5638,7 +5989,10 @@
 
     // ── Event bindings ──
     function init() {
-        document.addEventListener("click", function () { closeWorkflowContextMenu(); });
+        document.addEventListener("click", function () {
+            closeWorkflowContextMenu();
+            closeWorkflowQueueMetricMenu();
+        });
         document.addEventListener("click", function (evt) {
             var btn = evt.target && evt.target.closest ? evt.target.closest(".wf-ui-feedback-btn") : null;
             if (!btn) return;
@@ -5647,38 +6001,25 @@
             submitUiTasteFeedback(btn);
         });
         document.addEventListener("keydown", function (evt) {
-            if (evt.key === "Escape") closeWorkflowContextMenu();
-            if (evt.defaultPrevented) return;
-            if (document.getElementById("decisions-confirm-modal")) return;
-            if (isTypingTarget(evt.target)) return;
-            if (evt.key === "ArrowLeft" || evt.key === "ArrowRight") {
-                var list = document.getElementById("wf-list");
-                var insideList = list && evt.target && list.contains(evt.target);
-                if (insideList) {
-                    evt.preventDefault();
-                    var rows = Array.prototype.slice.call(list.querySelectorAll("[data-id]"));
-                    if (!rows.length) return;
-                    var active = evt.target.closest ? evt.target.closest("[data-id]") : null;
-                    var idx = rows.indexOf(active);
-                    if (idx < 0 && currentWorkflowId != null) {
-                        idx = rows.findIndex(function(row) { return String(row.dataset.id) === String(currentWorkflowId); });
-                    }
-                    if (idx < 0) idx = evt.key === "ArrowRight" ? -1 : 0;
-                    var next = rows[Math.max(0, Math.min(rows.length - 1, idx + (evt.key === "ArrowRight" ? 1 : -1)))];
-                    if (next) {
-                        next.focus();
-                        selectWorkflow(parseInt(next.dataset.id, 10));
-                    }
-                    return;
-                }
-            }
-            if (!currentWorkflowId) return;
-            // Delete selected workflow with Delete/Backspace hotkey.
-            if (evt.key === "Delete" || evt.key === "Backspace") {
-                evt.preventDefault();
-                deleteWorkflowById(currentWorkflowId);
+            if (evt.key === "Escape") {
+                closeWorkflowContextMenu();
+                closeWorkflowQueueMetricMenu();
             }
         });
+        if (window.DecisionsListKeyboard) {
+            window.DecisionsListKeyboard.bind({
+                listEl: "wf-list",
+                namespace: "workflows",
+                rowSelector: "[data-id]",
+                axis: "horizontal",
+                selectOnNavigate: true,
+                getRowId: function(row) { return parseInt(row.dataset.id, 10); },
+                getSelectedId: function() { return currentWorkflowId; },
+                onSelect: function(id) { selectWorkflow(id); },
+                onDelete: function(id) { deleteWorkflowById(id); },
+                pageGuard: function() { return !!document.getElementById("wf-list"); },
+            });
+        }
 
         function closeWorkflowCreateModal() {
             var modal = document.getElementById("wf-create-modal");
@@ -5755,34 +6096,6 @@
                 loadWorkflowExecutionSessions();
             });
         }
-        var runSettingsSave = document.getElementById("wf-run-settings-save");
-        if (runSettingsSave) {
-            runSettingsSave.addEventListener("click", function () {
-                if (!currentWorkflowId || workflowHasActiveRuns()) {
-                    renderRunSettings(currentWorkflow);
-                    return;
-                }
-                var settings = collectRunSettings();
-                runSettingsSave.disabled = true;
-                api("PATCH", "/workflows/" + currentWorkflowId, { run_settings: settings })
-                    .then(function () {
-                        if (currentWorkflow) currentWorkflow.run_settings = settings;
-                        snack("Run settings saved");
-                        renderRunSettings(currentWorkflow);
-                    })
-                    .catch(function (e) { snack(e.message || "Failed to save run settings", "error"); })
-                    .finally(function () { renderRunSettings(currentWorkflow); });
-            });
-        }
-
-        var refreshWorkflowTickets = document.getElementById("wf-refresh-workflow-tickets");
-        if (refreshWorkflowTickets) {
-            refreshWorkflowTickets.addEventListener("click", function () {
-                loadWorkflowTicketQueue();
-                loadActiveRuns();
-                loadWorkflowExecutionSessions();
-            });
-        }
         var workflowCliRefresh = document.getElementById("wf-cli-refresh");
         if (workflowCliRefresh) {
             workflowCliRefresh.addEventListener("click", function () {
@@ -5802,19 +6115,6 @@
         if (hermesRefresh) {
             hermesRefresh.addEventListener("click", function () {
                 loadHermesTimeline();
-                refreshBoardHermesViews({ quiet: true });
-            });
-        }
-        var correctionsRefresh = document.getElementById("wf-refresh-corrections");
-        if (correctionsRefresh) {
-            correctionsRefresh.addEventListener("click", function () {
-                loadWorkflowCorrections();
-            });
-        }
-        var correctionsStatusFilter = document.getElementById("wf-corrections-status-filter");
-        if (correctionsStatusFilter) {
-            correctionsStatusFilter.addEventListener("change", function () {
-                loadWorkflowCorrections();
             });
         }
         var hermesSetupBtn = document.getElementById("wf-open-hermes-setup");
@@ -5841,66 +6141,18 @@
         if (workflowBoardSelect) {
             workflowBoardSelect.addEventListener("change", function () {
                 if (workflowBoardSelect.value) loadWorkflowBoardTickets(workflowBoardSelect.value);
-                refreshBoardHermesViews({ quiet: true });
+                renderWorkflowTickets(workflowQueueTickets);
             });
         }
-        var refreshBoardActivityBtn = document.getElementById("wf-refresh-board-activity");
-        if (refreshBoardActivityBtn) {
-            refreshBoardActivityBtn.addEventListener("click", function () {
-                refreshBoardHermesViews();
+        var boardTicketList = document.getElementById("wf-board-ticket-list");
+        if (boardTicketList) {
+            boardTicketList.addEventListener("click", function (evt) {
+                var addAllBtn = evt.target.closest(".wf-lane-add-all-board-tickets");
+                if (!addAllBtn) return;
+                evt.preventDefault();
+                evt.stopPropagation();
+                addAllBoardTicketsToWorkflow(addAllBtn.dataset.laneId || "");
             });
-        }
-        var refreshLearnedRulesBtn = document.getElementById("wf-refresh-learned-rules");
-        if (refreshLearnedRulesBtn) {
-            refreshLearnedRulesBtn.addEventListener("click", function () {
-                refreshBoardHermesViews();
-            });
-        }
-        var refreshScheduledActionsBtn = document.getElementById("wf-refresh-scheduled-actions");
-        if (refreshScheduledActionsBtn) {
-            refreshScheduledActionsBtn.addEventListener("click", function () {
-                loadScheduledActions();
-            });
-        }
-        var scheduledActionsList = document.getElementById("wf-scheduled-actions-list");
-        if (scheduledActionsList) {
-            scheduledActionsList.addEventListener("click", function (evt) {
-                var toggle = evt.target.closest(".wf-scheduled-action-toggle");
-                if (toggle) {
-                    disableScheduledActionByTitle(toggle.dataset.scheduledActionTitle || "", toggle.dataset.scheduledActionEnabled === "true");
-                    return;
-                }
-                var cancel = evt.target.closest(".wf-scheduled-action-cancel");
-                if (cancel) {
-                    cancelScheduledActionByTitle(cancel.dataset.scheduledActionTitle || "");
-                    return;
-                }
-                var reschedule = evt.target.closest(".wf-scheduled-action-reschedule");
-                if (reschedule) {
-                    var card = reschedule.closest("[data-scheduled-action-title]");
-                    var kindEl = card ? card.querySelector(".wf-scheduled-action-kind") : null;
-                    var timeEl = card ? card.querySelector(".wf-scheduled-action-time") : null;
-                    rescheduleScheduledActionByTitle(
-                        reschedule.dataset.scheduledActionTitle || "",
-                        kindEl ? kindEl.value : "daily",
-                        timeEl ? timeEl.value : ""
-                    );
-                }
-            });
-        }
-        var refreshVisualBaselinesBtn = document.getElementById("wf-refresh-visual-baselines");
-        if (refreshVisualBaselinesBtn) {
-            refreshVisualBaselinesBtn.addEventListener("click", function () {
-                loadVisualBaselines();
-            });
-        }
-        var saveVisualBaselineBtn = document.getElementById("wf-save-visual-baseline");
-        if (saveVisualBaselineBtn) {
-            saveVisualBaselineBtn.addEventListener("click", createVisualBaseline);
-        }
-        var skillChainsSaveBtn = document.getElementById("wf-skill-chains-save");
-        if (skillChainsSaveBtn) {
-            skillChainsSaveBtn.addEventListener("click", saveSkillChains);
         }
         var workflowBoardEdit = document.getElementById("wf-edit-board-link");
         if (workflowBoardEdit) {
@@ -5930,9 +6182,8 @@
         if (ticketSave) {
             ticketSave.addEventListener("click", function () {
                 var state = workflowTicketModalState;
-                var item = state && state.ticket ? state : workflowBoardTicketByKey[selectedWorkflowBoardTicketKey];
-                var ticket = item && item.ticket ? item.ticket : null;
-                var selected = item && item.context && item.context.selected ? item.context.selected : item && item.selected ? item.selected : {};
+                var ticket = state && state.ticket ? state.ticket : null;
+                var selected = state && state.context && state.context.selected ? state.context.selected : {};
                 if (!ticket || !ticket.id || !state || !state.isLocal) return;
                 var payload = {
                     title: document.getElementById("kb-modal-ticket-title").value.trim(),
@@ -5948,8 +6199,17 @@
                     .then(function () {
                         snack("Ticket saved");
                         closeWorkflowTicketModal();
-                        loadWorkflowTicketQueue();
-                        if (selected && selected.value) loadWorkflowBoardTickets(selected.value);
+                        var viewPatch = {
+                            title: payload.title,
+                            priority: payload.priority,
+                            complexity: payload.complexity
+                        };
+                        if (!syncWorkflowQueueTicketView(ticket.id, viewPatch)) {
+                            loadWorkflowTicketQueue();
+                        } else {
+                            renderWorkflowCliTab();
+                        }
+                        syncWorkflowBoardTicketView(ticket.id, viewPatch);
                     })
                     .catch(function (e) { snack(e.message || "Failed to save ticket", "error"); });
             });
@@ -6079,11 +6339,11 @@
             });
         });
 
-        var addContextItemBtn = document.getElementById("wf-add-context-item-btn");
+        var addContextItemBtn = document.getElementById("wf-config-add-context-item-btn");
         if (addContextItemBtn) {
             addContextItemBtn.addEventListener("click", function () {
                 if (!currentWorkflowId) return;
-                var statusEl = document.getElementById("wf-context-save-status");
+                var statusEl = document.getElementById("wf-config-context-save-status");
                 if (statusEl) statusEl.textContent = "Saving...";
                 api("POST", "/workflows/" + currentWorkflowId + "/context-items", {
                     title: "Context Rule",
@@ -6092,52 +6352,16 @@
                 }).then(function () {
                     if (statusEl) { statusEl.textContent = "Saved"; setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500); }
                     loadDetail(currentWorkflowId);
+                    refreshWorkflowConfigPanel();
                 }).catch(function () {
                     if (statusEl) statusEl.textContent = "Save failed";
                 });
             });
         }
 
-        function saveWorkflowName() {
-            if (!currentWorkflowId) return;
-            var nameEl = document.getElementById("wf-detail-name");
-            var statusEl = document.getElementById("wf-name-save-status");
-            var nextName = (nameEl && nameEl.value ? nameEl.value.trim() : "") || "Untitled Workflow";
-            if (statusEl) statusEl.textContent = "Saving...";
-            api("PATCH", "/workflows/" + currentWorkflowId, { name: nextName })
-                .then(function () {
-                    if (currentWorkflow) currentWorkflow.name = nextName;
-                    if (nameEl) nameEl.value = nextName;
-                    if (statusEl) {
-                        statusEl.textContent = "Saved";
-                        setTimeout(function () { if (statusEl) statusEl.textContent = ""; }, 1500);
-                    }
-                    loadList();
-                })
-                .catch(function (e) {
-                    if (statusEl) statusEl.textContent = "Failed";
-                    snack(e.message || "Failed to save workflow name", "error");
-                });
-        }
-
         var saveNameBtn = document.getElementById("wf-save-name-btn");
         if (saveNameBtn) {
             saveNameBtn.addEventListener("click", saveWorkflowName);
-        }
-        var detailNameEl = document.getElementById("wf-detail-name");
-        if (detailNameEl) {
-            detailNameEl.addEventListener("keydown", function (evt) {
-                if (evt.key === "Enter") {
-                    evt.preventDefault();
-                    saveWorkflowName();
-                    detailNameEl.blur();
-                }
-                if (evt.key === "Escape" && currentWorkflow) {
-                    evt.preventDefault();
-                    detailNameEl.value = currentWorkflow.name || "";
-                    detailNameEl.blur();
-                }
-            });
         }
 
         // Delete workflow
@@ -6313,19 +6537,125 @@
             });
         }
 
+        bindWorkflowSplitResizer();
+
         loadList();
-        loadWorkflowBoardCollapsedColumns();
         loadWorkflowBoards();
-        loadWorkflowSkillsCatalog();
         checkPresetsExist();
         connectWebSocket();
         // Start version polling as initial fallback until WebSocket connects
         startVersionPolling();
     }
 
+    function bindWorkflowSplitResizer() {
+        var layout = document.getElementById("wf-split-layout");
+        var resizer = document.getElementById("wf-split-resizer");
+        if (!layout || !resizer) return;
+
+        var storageKey = "wf_split_left_pct";
+        var minPanePx = 280;
+
+        function loadPct() {
+            try {
+                var saved = parseFloat(localStorage.getItem(storageKey));
+                if (isFinite(saved) && saved >= 18 && saved <= 82) return saved;
+            } catch (e) {}
+            return 50;
+        }
+
+        function paneLimits() {
+            var rect = layout.getBoundingClientRect();
+            var resizerWidth = resizer.offsetWidth || 10;
+            var available = Math.max(0, rect.width - resizerWidth);
+            if (!available) return { minPct: 18, maxPct: 82 };
+            var minPct = (minPanePx / available) * 100;
+            var maxPct = 100 - minPct;
+            return {
+                minPct: Math.max(18, minPct),
+                maxPct: Math.min(82, maxPct)
+            };
+        }
+
+        function applyPct(pct, persist) {
+            var limits = paneLimits();
+            pct = Math.max(limits.minPct, Math.min(limits.maxPct, pct));
+            layout.style.setProperty("--wf-split-left-width", pct + "%");
+            if (persist !== false) {
+                try { localStorage.setItem(storageKey, String(Math.round(pct * 10) / 10)); } catch (e) {}
+            }
+            return pct;
+        }
+
+        applyPct(loadPct(), false);
+
+        var dragging = false;
+
+        function pctFromClientX(clientX) {
+            var rect = layout.getBoundingClientRect();
+            var resizerWidth = resizer.offsetWidth || 10;
+            var available = rect.width - resizerWidth;
+            if (available <= 0) return loadPct();
+            var leftWidth = clientX - rect.left;
+            return (leftWidth / available) * 100;
+        }
+
+        function onPointerMove(evt) {
+            if (!dragging) return;
+            applyPct(pctFromClientX(evt.clientX));
+        }
+
+        function stopDrag() {
+            if (!dragging) return;
+            dragging = false;
+            resizer.classList.remove("is-dragging");
+            document.body.classList.remove("wf-split-dragging");
+            window.removeEventListener("pointermove", onPointerMove);
+            window.removeEventListener("pointerup", stopDrag);
+            window.removeEventListener("pointercancel", stopDrag);
+        }
+
+        resizer.addEventListener("pointerdown", function (evt) {
+            if (evt.button !== 0) return;
+            evt.preventDefault();
+            dragging = true;
+            resizer.classList.add("is-dragging");
+            document.body.classList.add("wf-split-dragging");
+            if (resizer.setPointerCapture) resizer.setPointerCapture(evt.pointerId);
+            window.addEventListener("pointermove", onPointerMove);
+            window.addEventListener("pointerup", stopDrag);
+            window.addEventListener("pointercancel", stopDrag);
+        });
+
+        resizer.addEventListener("dblclick", function () {
+            applyPct(50);
+        });
+
+        resizer.addEventListener("keydown", function (evt) {
+            var step = evt.shiftKey ? 5 : 2;
+            var current = loadPct();
+            if (evt.key === "ArrowLeft") {
+                evt.preventDefault();
+                applyPct(current - step);
+            } else if (evt.key === "ArrowRight") {
+                evt.preventDefault();
+                applyPct(current + step);
+            } else if (evt.key === "Home") {
+                evt.preventDefault();
+                applyPct(paneLimits().minPct);
+            } else if (evt.key === "End") {
+                evt.preventDefault();
+                applyPct(paneLimits().maxPct);
+            }
+        });
+
+        window.addEventListener("resize", function () {
+            applyPct(loadPct(), false);
+        });
+    }
+
     if (document.readyState === "loading") {
         document.addEventListener("DOMContentLoaded", init);
     } else {
-        init();
+        setTimeout(init, 0);
     }
 })();

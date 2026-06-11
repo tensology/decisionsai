@@ -12,7 +12,11 @@ def test_project_details_does_not_surface_implementation_routing_block():
     assert 'id="detail-coding-backend"' not in html
     assert 'id="codex-sync-panel"' not in html
     assert "Implementation routing" not in html
-    assert "Context items &amp; files" in html
+    assert "Context items" not in html
+    assert 'id="detail-board"' in html
+    assert 'id="detail-triggers-wrap"' in html
+    assert 'id="detail-description"' in html
+    assert html.index('id="detail-board"') < html.index('id="detail-description"')
 
 
 def test_project_js_does_not_save_project_coding_backend_from_details():
@@ -21,6 +25,8 @@ def test_project_js_does_not_save_project_coding_backend_from_details():
     assert 'loadCodexSync(project.id)' not in js
     assert 'coding_backend: (document.getElementById("detail-coding-backend")' not in js
     assert 'terminal-backend-select' in js
+    assert "openContextItemModal" not in js
+    assert "uploadProjectFiles" not in js
 
 
 def test_project_routes_expose_codex_sync_api():

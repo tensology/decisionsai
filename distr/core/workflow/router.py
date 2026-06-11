@@ -472,56 +472,8 @@ class StepRouter:
         correction_packet: dict[str, Any],
         run_data: dict[str, Any],
     ) -> Dict[str, Any] | None:
-        """Re-run the failed step when auto-dispatch corrections is enabled."""
-        if verified_passed or not correction_attempt_id:
-            return None
-        try:
-            from distr.core.workflow.dispatcher import _workflow_run_settings
-            from distr.core.hermes import (
-                count_correction_attempts,
-                get_hermes_role_model,
-                mark_correction_dispatched,
-            )
-
-            settings = _workflow_run_settings(run.workflow)
-            if not settings.get("auto_dispatch_corrections"):
-                return None
-            max_attempts = int(settings.get("max_correction_attempts") or 1)
-            attempt_count = count_correction_attempts(run_id=run_id, step_id=step.id)
-            if attempt_count > max_attempts:
-                return None
-
-            correction_provider, correction_model = get_hermes_role_model("correction")
-            target_backend = correction_provider or correction_packet.get("target_backend") or ""
-            target_model = correction_model or correction_packet.get("target_model") or ""
-            mark_correction_dispatched(
-                correction_attempt_id,
-                dispatch_result={
-                    "auto_dispatch": True,
-                    "attempt_count": attempt_count,
-                    "max_attempts": max_attempts,
-                    "target_backend": target_backend,
-                    "target_model": target_model,
-                },
-            )
-            run_data["pending_correction"] = {
-                "step_id": step.id,
-                "correction_attempt_id": correction_attempt_id,
-                "packet": correction_packet,
-                "target_backend": target_backend,
-                "target_model": target_model,
-            }
-            step.status = "pending"
-            step.result = (step.result or "") + "\n\n[Auto-correction dispatched]"
-            run.status = "running"
-            return {
-                "action": "correction_retry",
-                "step_id": step.id,
-                "correction_attempt_id": correction_attempt_id,
-            }
-        except Exception:
-            logger.debug("Could not auto-dispatch correction", exc_info=True)
-            return None
+        """Auto-dispatch corrections were removed from workflow run policy."""
+        return None
 
     # ── Internal: determine next step ───────────────────────────────
 

@@ -160,12 +160,25 @@
         '</div>';
     }
 
+    function renderPopoverBody(input, state) {
+        var type = inputType(input);
+        var calendarHtml = type !== "time" ? buildCalendar(input, state) : "";
+        var timeHtml = type !== "date" ? buildTime(input, state) : "";
+        if (type === "datetime-local") {
+            return '<div class="decisions-datetime-body is-datetime">' +
+                '<div class="decisions-datetime-calendar-pane">' + calendarHtml + "</div>" +
+                '<div class="decisions-datetime-time-pane">' + timeHtml + "</div>" +
+                "</div>";
+        }
+        return calendarHtml + timeHtml;
+    }
+
     function renderPopover(input, popover, state) {
         var type = inputType(input);
         var selected = parseDate(input.value);
         state.viewDate = state.viewDate || selected || new Date();
-        popover.innerHTML = (type !== "time" ? buildCalendar(input, state) : "") +
-            (type !== "date" ? buildTime(input, state) : "") +
+        popover.classList.toggle("is-datetime", type === "datetime-local");
+        popover.innerHTML = renderPopoverBody(input, state) +
             '<div class="decisions-datetime-actions">' +
                 '<button type="button" class="decisions-datetime-action" data-action="today">' + (type === "time" ? "Now" : "Today") + '</button>' +
                 '<button type="button" class="decisions-datetime-action" data-action="clear">Clear</button>' +
@@ -250,9 +263,13 @@
             event.stopPropagation();
         });
         shell.appendChild(popover);
+        renderPopover(input, popover, state);
         var rect = popover.getBoundingClientRect();
         if (rect.right > window.innerWidth - 12) popover.setAttribute("data-align", "right");
-        renderPopover(input, popover, state);
+        else popover.removeAttribute("data-align");
+        rect = popover.getBoundingClientRect();
+        if (rect.bottom > window.innerHeight - 12) popover.setAttribute("data-open", "above");
+        else popover.removeAttribute("data-open");
         trigger.setAttribute("aria-expanded", "true");
         active = { input: input, trigger: trigger, popover: popover };
     }

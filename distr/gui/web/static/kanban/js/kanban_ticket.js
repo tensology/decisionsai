@@ -217,6 +217,7 @@
                 actionButtonHtml({
                     keyClass: "kb-act-workflow",
                     tooltip: "Send to Workflow",
+                    hidden: opts.hideWorkflow,
                     iconSvg: '<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="6" cy="12" r="2"/><circle cx="18" cy="6" r="2"/><circle cx="18" cy="18" r="2"/><path d="M8 12h5"/><path d="M13 12l3-4"/><path d="M13 12l3 4"/></svg>',
                 }),
                 actionButtonHtml({
@@ -651,7 +652,8 @@
                 "</svg></span>";
         }
 
-        function createTicketListRow(ticket, isLocal, boardData) {
+        function createTicketListRow(ticket, isLocal, boardData, listOpts) {
+            listOpts = listOpts || {};
             boardData = boardData || deps.getCurrentBoardData() || {};
             var currentBoard = deps.getCurrentBoard();
             var row = document.createElement("div");
@@ -661,7 +663,7 @@
             var canDrag = isLocal || extDnD;
             var hasProject = !!(ticket.linked_project_id || boardData.default_project_id);
             var canDelete = isLocal;
-            var canTransfer = !isLocal;
+            var canTransfer = !listOpts.hideTransfer && !isLocal;
             var cleanDesc = deps.stripHtml(ticket.description || "").replace(/\s+/g, " ").trim();
             var descHtml = cleanDesc
                 ? '<div class="kb-ticket-list-desc" tabindex="0"><div class="kb-ticket-list-desc-track"><span>' + deps.esc(cleanDesc) + "</span></div></div>"
@@ -672,6 +674,7 @@
                 hasProject: hasProject,
                 canTransfer: canTransfer,
                 canDelete: canDelete,
+                hideWorkflow: !!listOpts.hideWorkflow,
             });
             row.innerHTML =
                 '<div class="kb-ticket-list-prefix">' +

@@ -104,6 +104,7 @@ def _parse_openrouter_model(model: dict) -> dict | None:
     return {
         'id': model_id,
         'name': display_name,
+        'context_window': int(context_length or 0),
         'is_free': is_free,
         'supports_tools': supports_tools,
         'input_modalities': input_modalities,

@@ -4,7 +4,7 @@
     height: calc(100vh - 4rem);
     display: flex;
     flex-direction: column;
-    padding: 1.5rem 1.5rem 2rem;
+    padding: 1rem 1.5rem;
     box-sizing: border-box;
     overflow: hidden;
     background: #0d1642;
@@ -172,12 +172,6 @@
 
 /* Reserve space for rename/delete so title never bleeds over icons */
 .chat-item-actions {
-    display: flex;
-    gap: 4px;
-    flex-shrink: 0;
-    align-items: center;
-    width: 52px;
-    min-width: 52px;
     opacity: 0.55;
     pointer-events: auto;
     transition: opacity 0.15s ease;
@@ -189,19 +183,10 @@
     opacity: 1;
 }
 
-.chat-item-btn {
-    background: none;
-    border: none;
-    color: #8e8ea0;
+.chat-item-rename-btn,
+.chat-item-delete-btn {
     cursor: pointer;
-    padding: 4px;
-    border-radius: 4px;
-    transition: background-color 0.2s;
-}
-
-.chat-item-btn:hover {
-    background-color: rgba(255, 255, 255, 0.1);
-    color: #ececf1;
+    background: transparent;
 }
 
 /* Chat item context menu (right-click: View, Load, Delete) */
@@ -1639,6 +1624,11 @@
     flex-shrink: 0;
 }
 
+.chat-shell .input-container.view-only {
+    background: rgba(249, 115, 22, 0.15);
+    border-top-color: rgba(249, 115, 22, 0.30);
+}
+
 .chat-shell .input-wrapper {
     max-width: 768px;
     margin: 0 auto;
@@ -1650,6 +1640,11 @@
     border-radius: 12px;
     padding: 12px;
     transition: border-color 0.2s;
+}
+
+.chat-shell .input-container.view-only .input-wrapper {
+    background-color: rgba(16, 25, 71, 0.62);
+    border-color: rgba(249, 115, 22, 0.28);
 }
 
 .input-wrapper:focus-within {
@@ -1674,8 +1669,40 @@
     outline: none;
 }
 
+.message-input:disabled {
+    cursor: not-allowed;
+    opacity: 0.68;
+}
+
 .message-input::placeholder {
     color: #8e8ea0;
+}
+
+.input-load-button {
+    align-items: center;
+    justify-content: center;
+    min-width: 64px;
+    min-height: 36px;
+    padding: 0 16px;
+    border: 0;
+    border-radius: 8px;
+    background: #f97316;
+    color: #fff;
+    font-size: 13px;
+    font-weight: 700;
+    cursor: pointer;
+    flex-shrink: 0;
+    box-shadow: 0 8px 20px rgba(249, 115, 22, 0.26);
+}
+
+.input-load-button:hover:not(:disabled) {
+    background: #fb923c;
+}
+
+.input-load-button:disabled {
+    cursor: not-allowed;
+    opacity: 0.55;
+    box-shadow: none;
 }
 
 .speaker-toggle {
@@ -1771,6 +1798,21 @@
     flex-shrink: 0;
 }
 
+.chat-shell .chat-settings-header.view-only {
+    background: rgba(255, 255, 255, 0.025);
+}
+
+.chat-settings-header.view-only .chat-header-select,
+.chat-settings-header.view-only .header-icon-btn,
+.chat-settings-header.view-only .context-ring {
+    opacity: 0.45;
+    filter: grayscale(0.25);
+}
+
+.chat-settings-header.view-only .chat-settings-title {
+    color: rgba(236, 236, 241, 0.72);
+}
+
 .chat-settings-header-row {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
@@ -1837,7 +1879,11 @@
     gap: 6px;
     min-width: 0;
     flex: 0 1 auto;
-    max-width: 240px;
+    max-width: 280px;
+}
+
+#headerVoiceGroup {
+    max-width: 380px;
 }
 
 .chat-header-control-label {
@@ -1861,14 +1907,19 @@
     padding: 6px 26px 6px 8px;
     flex: 0 1 auto;
     width: auto;
-    min-width: 84px;
-    max-width: 124px;
+    min-width: 96px;
+    max-width: 148px;
     cursor: pointer;
     overflow: hidden;
     text-overflow: ellipsis;
     background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23ececf1' stroke-width='2'%3E%3Cpath d='M6 9l6 6 6-6'/%3E%3C/svg%3E");
     background-repeat: no-repeat;
     background-position: right 6px center;
+}
+
+#headerVoiceGroup .chat-header-select {
+    min-width: 108px;
+    max-width: 176px;
 }
 
 .chat-header-select:hover {

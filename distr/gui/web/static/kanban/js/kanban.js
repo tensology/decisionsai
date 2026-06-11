@@ -538,6 +538,7 @@
         if (!e || e.key !== "Delete") return false;
         if (e.shiftKey || e.ctrlKey || e.metaKey || e.altKey) return false;
         if (isKeyboardEditingTarget(e.target)) return false;
+        if (document.getElementById("decisions-confirm-modal")) return false;
         if (isAnyKanbanModalOpen()) return false;
         if (isMessagesPanelVisible()) return false;
         var boardView = document.getElementById("kb-board-view");
@@ -1008,7 +1009,7 @@
                     e.preventDefault();
                     selectBoard(boardRow.dataset.boardSource || "database", boardRow.dataset.boardId, boardRow.dataset.boardUrl || "");
                 } else if (e.key === "Delete") {
-                    if (isAnyKanbanModalOpen()) return;
+                    if (document.getElementById("decisions-confirm-modal") || isAnyKanbanModalOpen()) return;
                     if ((boardRow.dataset.boardSource || "database") !== "database") return;
                     e.preventDefault();
                     confirmDeleteLocalBoardById(boardRow.dataset.boardId);

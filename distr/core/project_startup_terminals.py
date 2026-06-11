@@ -63,6 +63,8 @@ def _load_project(project_id: int) -> Optional[dict]:
             "name": (project.name or "Project").strip() or "Project",
             "folder_location": (project.folder_location or "").strip(),
             "startup_instructions": project.startup_instructions or "",
+            "kanban_board_id": project.kanban_board_id,
+            "start_time_tracker": bool(getattr(project, "start_time_tracker", True)),
         }
 
 
@@ -211,6 +213,18 @@ def start_project_startup_terminals(
         canonical,
         resolved_commands,
     )
+    if started > 0 and project.get("start_time_tracker", True):
+        try:
+            from distr.core.db import get_session
+            from distr.core.db.projects import Project
+            from distr.core.services import schedule_blocks as schedule_service
+
+            with get_session() as session:
+                db_project = session.query(Project).filter(Project.id == project_id).first()
+                if db_project:
+                    schedule_service.start_project_time_tracker(session, db_project)
+        except Exception as exc:
+            logger.warning("Project time tracker start skipped: %s", exc)
     speak = _build_start_speak_message(project["name"], started, failed)
     message = speak
     if diagnostics:

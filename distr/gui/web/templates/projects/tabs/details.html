@@ -1,75 +1,39 @@
 <div id="tab-details" class="project-tab-pane flex h-full min-h-0 flex-1 flex-col gap-4">
     <div class="flex-shrink-0 space-y-4">
-    <div class="flex gap-4">
-        <div class="flex-1 min-w-0">
-            <label class="block text-sm text-gray-400 mb-1">Name</label>
-            <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+        <div class="flex gap-4">
+            <div class="flex-1 min-w-0">
+                <label class="block text-sm text-gray-400 mb-1">Name</label>
+                <input type="text" id="detail-name" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+            </div>
+            <div class="flex-1 min-w-0">
+                <label class="block text-sm text-gray-400 mb-1">Folder location</label>
+                <div class="flex gap-2">
+                    <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
+                    <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
+                </div>
+            </div>
         </div>
-        <div class="flex-1 min-w-0">
-            <label class="block text-sm text-gray-400 mb-1">Folder location</label>
-            <div class="flex gap-2">
-                <input type="text" id="detail-folder" readonly class="flex-1 min-w-0 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none cursor-default" placeholder="/path/to/project">
-                <button type="button" id="folder-browse" class="flex-shrink-0 px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10 text-sm">Browse…</button>
+        <div class="flex gap-4">
+            <div class="flex-1 min-w-0">
+                <label class="block text-sm text-gray-400 mb-1">Board</label>
+                <div class="flex items-center gap-2">
+                    <select id="detail-board" class="min-w-0 flex-1 px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
+                        <option value="">None</option>
+                    </select>
+                    <a id="detail-board-goto" href="#" class="hidden flex-shrink-0 px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium no-underline whitespace-nowrap">Go to board</a>
+                </div>
+            </div>
+            <div class="flex-1 min-w-0">
+                <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
+                <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300 relative">
+                    <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
+                    <input type="text" id="detail-triggers-input" style="border: 1px solid transparent; background: #152054; color: white; padding: 8px 12px; border-radius: 4px;" class="w-48 text-sm placeholder-gray-400 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
+                </div>
             </div>
         </div>
     </div>
-    <div class="flex gap-4">
-        <div class="flex-1 min-w-0">
-            <label class="block text-sm text-gray-400 mb-1">Description</label>
-            <input type="text" id="detail-description" class="w-full h-[42px] px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-        </div>
-        <div class="flex-1 min-w-0">
-            <label class="block text-sm text-gray-400 mb-1">Trigger words</label>
-            <div id="detail-triggers-wrap" class="flex flex-wrap gap-2 items-center p-2 min-h-[42px] bg-[#152054] border border-white/20 rounded text-sm text-gray-300 relative">
-                <div id="trigger-badges-flex" class="flex flex-wrap gap-2"></div>
-                <input type="text" id="detail-triggers-input" style="border: 1px solid transparent; background: #152054; color: white; padding: 8px 12px; border-radius: 4px;" class="w-48 text-sm placeholder-gray-400 focus:border-[#f97316] focus:outline-none" placeholder="Type a word..." autocomplete="off">
-            </div>
-        </div>
-    </div>
-    <div class="border-t border-white/20 pt-4">
-        <label class="block text-sm text-gray-400 mb-2">Board</label>
-        <div class="flex gap-4 flex-wrap">
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-xs text-gray-500 mb-1">Provider</label>
-                <select id="detail-provider" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                    <option value="">None</option>
-                </select>
-            </div>
-            <div class="flex-1 min-w-[180px]">
-                <label class="block text-xs text-gray-500 mb-1">Board</label>
-                <select id="detail-board" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none">
-                    <option value="">None</option>
-                </select>
-            </div>
-        </div>
-        <p id="board-hint" class="text-xs text-gray-500 mt-1">Connect Trello or Jira in Settings → Advanced to see boards.</p>
-        <div id="kanban-board-section" class="mt-3">
-            <label class="block text-sm text-gray-400 mb-2">Ticket Board</label>
-            <div id="kanban-board-actions" class="flex items-center gap-3">
-                <span id="kanban-board-status" class="text-sm text-gray-500">Checking...</span>
-            </div>
-        </div>
-    </div>
-    </div>
-    <div class="flex min-h-0 flex-1 flex-col gap-2 border-t border-white/20 pt-3">
-        <div class="flex flex-shrink-0 items-center justify-between">
-            <label class="block text-sm text-gray-400">Context items &amp; files</label>
-            <div class="flex gap-2">
-                <button type="button" id="context-item-add" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Add Context Item</button>
-                <button type="button" id="file-upload-btn" class="px-3 py-1.5 text-sm rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Upload file</button>
-                <input type="file" id="file-upload-input" class="hidden" multiple>
-            </div>
-        </div>
-        <p class="mb-0 flex-shrink-0 text-xs text-gray-500">Context items: text chunks. Files: upload PDFs, docs, etc. as project context.</p>
-        <div id="detail-items-table" class="flex min-h-0 flex-1 flex-col overflow-hidden rounded border border-white/20">
-            <div class="min-h-0 flex-1 overflow-y-auto">
-                <table class="w-full text-sm">
-                    <thead class="sticky top-0 z-10 bg-[#152054] text-left shadow-[0_1px_0_rgba(255,255,255,0.08)]">
-                        <tr><th class="px-3 py-2 text-gray-400 font-medium">Type</th><th class="px-3 py-2 text-gray-400 font-medium">Title / Name</th><th class="px-3 py-2 text-gray-400 font-medium">Description / Preview</th><th class="px-3 py-2 text-gray-400 font-medium">Path</th><th class="px-3 py-2 text-gray-400 font-medium w-28">Actions</th></tr>
-                    </thead>
-                    <tbody id="detail-items-body" class="text-gray-300"></tbody>
-                </table>
-            </div>
-        </div>
+    <div class="flex min-h-0 flex-1 flex-col">
+        <label class="block flex-shrink-0 text-sm text-gray-400 mb-1">Description</label>
+        <textarea id="detail-description" class="min-h-0 flex-1 w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white focus:border-[#f97316] focus:outline-none resize-none"></textarea>
     </div>
 </div>

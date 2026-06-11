@@ -57,8 +57,6 @@ DEFAULT_RUN_SETTINGS = {
     "concurrency_scope": "project",
     "max_parallel_tickets": 3,
     "branch_per_ticket": True,
-    "max_correction_attempts": 1,
-    "auto_dispatch_corrections": False,
 }
 
 
@@ -78,11 +76,6 @@ def _workflow_run_settings(wf: AutoWorkflow) -> Dict[str, Any]:
     except Exception:
         settings["max_parallel_tickets"] = 3
     settings["branch_per_ticket"] = bool(settings.get("branch_per_ticket"))
-    try:
-        settings["max_correction_attempts"] = max(0, min(5, int(settings.get("max_correction_attempts") or 1)))
-    except Exception:
-        settings["max_correction_attempts"] = 1
-    settings["auto_dispatch_corrections"] = bool(settings.get("auto_dispatch_corrections"))
     return settings
 
 
@@ -356,72 +349,8 @@ def _maybe_auto_dispatch_terminal_ui_correction(
     packet: Dict[str, Any],
     run_data: Dict[str, Any],
 ) -> Dict[str, Any] | None:
-    """Prepare a failed terminal UI validation for immediate correction retry."""
-    snapshot = _terminal_ui_correction_snapshot(packet)
-    if not snapshot:
-        return None
-    try:
-        from distr.core.db.hermes import HermesCorrectionAttempt
-        from distr.core.hermes import (
-            count_correction_attempts,
-            get_hermes_role_model,
-            mark_correction_dispatched,
-        )
-
-        settings = _workflow_run_settings(run.workflow)
-        if not settings.get("auto_dispatch_corrections"):
-            return None
-        step_id = int(getattr(run, "current_step_id", None) or 0)
-        if not step_id:
-            return None
-        max_attempts = int(settings.get("max_correction_attempts") or 1)
-        attempt_count = count_correction_attempts(run_id=int(run.id), step_id=step_id)
-        if attempt_count > max_attempts:
-            return None
-        attempt_id = int(snapshot.get("correction_attempt_id"))
-        attempt = (
-            db.query(HermesCorrectionAttempt)
-            .filter(HermesCorrectionAttempt.id == attempt_id)
-            .first()
-        )
-        if not attempt:
-            return None
-        try:
-            correction_packet = json.loads(attempt.correction_packet or "{}") or {}
-        except Exception:
-            correction_packet = {}
-        correction_provider, correction_model = get_hermes_role_model("correction")
-        target_backend = correction_provider or correction_packet.get("target_backend") or ""
-        target_model = correction_model or correction_packet.get("target_model") or ""
-        mark_correction_dispatched(
-            attempt_id,
-            dispatch_result={
-                "auto_dispatch": True,
-                "terminal_ui_quality_gate": True,
-                "attempt_count": attempt_count,
-                "max_attempts": max_attempts,
-                "target_backend": target_backend,
-                "target_model": target_model,
-            },
-        )
-        run_data["pending_correction"] = {
-            "step_id": step_id,
-            "correction_attempt_id": attempt_id,
-            "packet": correction_packet,
-            "target_backend": target_backend,
-            "target_model": target_model,
-        }
-        step = db.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
-        if step:
-            step.status = "pending"
-            step.result = (step.result or "") + "\n\n[Auto-correction dispatched]"
-        return {
-            "step_id": step_id,
-            "correction_attempt_id": attempt_id,
-        }
-    except Exception:
-        logger.debug("Could not auto-dispatch terminal UI correction", exc_info=True)
-        return None
+    """Auto-dispatch corrections were removed; terminal UI failures stay on the run record."""
+    return None
 _isolated_step_lock = threading.Lock()
 _isolated_steps_in_progress: set[int] = set()
 

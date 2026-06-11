@@ -56,7 +56,16 @@ _MODEL_PREFIX_WINDOWS: tuple[tuple[str, int], ...] = (
 
 
 def _normalize_model_id(model_name: Optional[str]) -> str:
-    return (model_name or "").strip().lower()
+    model = (model_name or "").strip().lower()
+    if "/" in model:
+        # OpenRouter IDs are usually provider/model-id. Keep matching against the
+        # concrete model family so static windows still apply.
+        model = model.rsplit("/", 1)[-1].strip()
+    model = (
+        model.replace("claude-3.7-", "claude-3-7-")
+        .replace("claude-3.5-", "claude-3-5-")
+    )
+    return model
 
 
 def _model_matches_prefix(model: str, prefix: str) -> bool:
@@ -110,6 +119,16 @@ def _from_static_table(model: str) -> Optional[int]:
     return None
 
 
+def _is_plausible_context_window(window: int, static_window: Optional[int]) -> bool:
+    if window <= 0:
+        return False
+    if window < 4_096:
+        return False
+    if static_window and window < min(static_window, 16_000):
+        return False
+    return True
+
+
 def _provider_default(provider: Optional[str]) -> int:
     key = (provider or "").strip().lower()
     if key in {"openai", "openrouter"}:
@@ -134,11 +153,11 @@ def context_window_for_model(
     if not model:
         return _provider_default(provider)
 
+    from_static = _from_static_table(model)
     from_recs = _from_recommendations(model)
-    if from_recs:
+    if from_recs and _is_plausible_context_window(from_recs, from_static):
         return from_recs
 
-    from_static = _from_static_table(model)
     if from_static:
         return from_static
 

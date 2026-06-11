@@ -49,7 +49,37 @@ def test_automation_hub_is_plain_crud_scheduler_surface():
     html = (ROOT / "distr/gui/web/templates/automations/automations.html").read_text(encoding="utf-8")
     js = (ROOT / "distr/gui/web/static/automations/js/automations.js").read_text(encoding="utf-8")
 
-    assert "automation-search" in html
+    assert "automation-view-list" in html
+    assert "automation-view-calendar" in html
+    assert 'id="automation-calendar-panel"' in html
+    assert html.index('id="automation-calendar-panel"') > html.index('id="automation-detail"')
+    assert "setMainView" in js
+    assert "renderMainWorkspace" in js
+    assert "monthGridDayCount" in js
+    assert "automation-cal-weekdays" in html
+    assert "automation-cal-month-shell" in html
+    assert "automation-cal-week-timegrid" in html
+    assert 'id="automation-cal-mode-day"' in html
+    assert "renderWeekCalendar" in js
+    assert "renderDayCalendar" in js
+    assert "weekTimedEventsForDay" in js
+    assert "buildSouthAfricanHolidayMap" in js
+    assert "is-holiday" in html
+    blocks_js = (ROOT / "distr/gui/web/static/automations/js/calendar_blocks.js").read_text(encoding="utf-8")
+    assert "AutomationCalendarBlocks" in blocks_js
+    assert "setDateTimeField" in blocks_js
+    assert "DecisionsDateTime.refreshInput" in blocks_js
+    assert "persistBlockTimes" in blocks_js
+    assert "reloadScheduleBlocks" in blocks_js
+    assert "ensureGridInteractions" in blocks_js
+    assert "sched-block-modal" in html
+    assert "sched-block-context-menu" in html
+    assert "sched-block-options-btn" in html
+    assert "sched-block-action-naturalize" in html
+    assert "uniformRowHeight" in blocks_js
+    assert "openBlockContextMenu" in blocks_js
+    assert "calendar_blocks.js" in html
+    assert "automation-search" not in html
     assert "automation-empty" in html
     assert "automation-detail" in html
     assert "w-80 flex-shrink-0 flex flex-col gap-4" in html

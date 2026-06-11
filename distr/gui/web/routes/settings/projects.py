@@ -960,8 +960,10 @@ def register_routes(router, templates):
                     "coding_backend_model": project.coding_backend_model or "",
                     "board_id": project.board_id or "",
                     "board_name": project.board_name or "",
+                    "kanban_board_id": project.kanban_board_id,
                     "additional_trigger_words": project.additional_trigger_words or "[]",
                     "startup_instructions": project.startup_instructions or "",
+                    "start_time_tracker": bool(getattr(project, "start_time_tracker", True)),
                     "context_items": [{"id": c.id, "title": c.title or "", "content": c.content or ""} for c in context_items],
                     "files": [{"id": f.id, "filename": f.filename or "", "description": f.description or "", "file_path": f.file_path or ""} for f in files],
                 })
@@ -1219,18 +1221,23 @@ def register_routes(router, templates):
                     project.additional_trigger_words = payload.additional_trigger_words
                 if payload.startup_instructions is not None:
                     project.startup_instructions = payload.startup_instructions
+                if payload.start_time_tracker is not None:
+                    project.start_time_tracker = bool(payload.start_time_tracker)
                 if payload.coding_backend is not None:
                     from distr.core.project_cli_backends import normalize_backend_id
 
                     project.coding_backend = normalize_backend_id(payload.coding_backend)
                 if payload.coding_backend_model is not None:
                     project.coding_backend_model = (payload.coding_backend_model or "").strip()
-                if payload.provider is not None:
+                fields_set = getattr(payload, "model_fields_set", getattr(payload, "__fields_set__", set()))
+                if "provider" in fields_set:
                     project.provider = payload.provider
-                if payload.board_id is not None:
+                if "board_id" in fields_set:
                     project.board_id = payload.board_id
-                if payload.board_name is not None:
+                if "board_name" in fields_set:
                     project.board_name = payload.board_name
+                if "kanban_board_id" in fields_set:
+                    project.kanban_board_id = payload.kanban_board_id or None
                 session.commit()
                 return JSONResponse({"success": True})
         except HTTPException:

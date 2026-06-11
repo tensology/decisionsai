@@ -49,6 +49,18 @@
     background: rgba(255,255,255,0.06);
 }
 .wf-workflow-tab:focus-visible { outline: 2px solid rgba(249,115,22,0.55); outline-offset: -2px; }
+.wf-workflow-tab-rename {
+    width: 8.5rem;
+    max-width: 100%;
+    padding: 0.15rem 0.4rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(249,115,22,0.55);
+    background: #152054;
+    color: #fff;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+}
+#wf-detail-footer { min-height: 3.25rem; }
 .wf-workflow-tabbar-actions { border-left: 1px solid rgba(255,255,255,0.12); }
 .wf-config-btn-spinner { display: none; }
 .wf-config-btn-loading { pointer-events: none; opacity: 0.85; }
@@ -68,47 +80,453 @@
 .kb-modal-action-btn:hover { background: rgba(255,255,255,0.08); }
 .wf-wa-media-preview-btn { cursor: pointer; }
 .wf-wa-media-preview-btn:hover { border-color: rgba(249,115,22,0.55); background: rgba(249,115,22,0.08); }
-.wf-workflow-ticket-complexity {
-    min-height: 2.25rem;
-    color-scheme: dark;
-    background-color: #0d1333 !important;
-    color: #ffffff !important;
-    border-color: rgba(249,115,22,0.45) !important;
-    font-size: 0.8125rem;
-    font-weight: 600;
-}
-.wf-workflow-ticket-complexity option {
-    background-color: #0d1333;
-    color: #ffffff;
-}
-.wf-count-badge {
+/* Ticket board list view (shared with Ticket Boards page) */
+.wf-ticket-list-surface .kb-metric-badge {
     display: inline-flex;
-    height: 1.5rem;
-    min-width: 1.5rem;
     align-items: center;
     justify-content: center;
-    border-radius: 9999px;
-    border: 1px solid rgba(255,255,255,0.22);
-    background: #0d1333;
-    color: #fff;
-    padding: 0 0.45rem;
-    font-size: 0.6875rem;
+    min-width: 1.55rem;
+    height: 1.25rem;
+    padding: 0 0.35rem;
+    border-radius: 0.25rem;
+    border: 1px solid transparent;
+    box-sizing: border-box;
+    font-size: 10px;
     font-weight: 700;
     line-height: 1;
+    white-space: nowrap;
 }
-.wf-count-badge-muted {
-    border-color: rgba(255,255,255,0.14);
-    background: rgba(255,255,255,0.08);
+.wf-ticket-list-surface .kb-pri-critical { background: #dc2626; border-color: #991b1b; color: #ffffff; }
+.wf-ticket-list-surface .kb-pri-high { background: #ea580c; border-color: #c2410c; color: #ffffff; }
+.wf-ticket-list-surface .kb-pri-medium { background: #ca8a04; border-color: #a16207; color: #ffffff; }
+.wf-ticket-list-surface .kb-pri-low { background: #16a34a; border-color: #15803d; color: #ffffff; }
+.wf-ticket-list-surface .kb-cx-low { background: #1e40af; border-color: #1e3a8a; color: #eff6ff; }
+.wf-ticket-list-surface .kb-cx-medium { background: #92400e; border-color: #78350f; color: #fff7ed; }
+.wf-ticket-list-surface .kb-cx-high { background: #800020; border-color: #5c0018; color: #ffe4e8; }
+.wf-ticket-list-surface .kb-ticket-list-section { margin-bottom: 4px; }
+.wf-ticket-list-surface .kb-ticket-list-section-head-row {
+    display: flex;
+    align-items: stretch;
+    gap: 8px;
+    margin-bottom: 4px;
+    padding: 0 4px 6px;
+    border-bottom: 1px solid rgba(255,255,255,0.1);
+}
+.wf-ticket-list-surface .kb-ticket-list-section-head-row .kb-ticket-list-section-head {
+    margin-bottom: 0;
+    padding: 6px 0;
+    border-bottom: none;
+}
+.wf-ticket-list-surface .wf-lane-add-all-board-tickets {
+    flex-shrink: 0;
+    align-self: center;
+    padding: 0.35rem 0.65rem;
+    border-radius: 0.375rem;
+    border: 1px solid #ea580c;
+    background: #f97316;
+    color: #ffffff;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 1.2;
+    white-space: nowrap;
+}
+.wf-ticket-list-surface .wf-lane-add-all-board-tickets:hover:not(:disabled) {
+    background: #fb923c;
+    border-color: #f97316;
+    color: #ffffff;
+}
+.wf-ticket-list-surface .wf-lane-add-all-board-tickets:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+.wf-ticket-list-surface.wf-board-ticket-list--blocked .kb-ticket-list-section-body,
+.wf-ticket-list-surface.wf-board-ticket-list--blocked .kb-ticket-list-row {
+    opacity: 0.45;
+    pointer-events: none;
+}
+.wf-ticket-list-surface .kb-ticket-list-section-head {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    margin: 0;
+    padding: 6px 4px;
+    border: none;
+    border-radius: 0;
+    background: transparent;
+    color: #e5e7eb;
+    cursor: pointer;
+    text-align: left;
+}
+.wf-ticket-list-surface .kb-ticket-list-section-head:hover { color: #ffffff; background: rgba(255,255,255,0.04); }
+.wf-ticket-list-surface .kb-ticket-list-chevron {
+    flex-shrink: 0;
+    color: #9ca3af;
+    transition: transform 0.15s ease;
+}
+.wf-ticket-list-surface .kb-ticket-list-section--expanded .kb-ticket-list-chevron { transform: rotate(90deg); color: #e5e7eb; }
+.wf-ticket-list-surface .kb-ticket-list-section-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wf-ticket-list-surface .kb-ticket-list-section-count {
+    flex-shrink: 0;
+    font-size: 11px;
+    color: #6b7280;
+}
+.wf-ticket-list-surface .kb-ticket-list-section-body { padding-top: 2px; padding-bottom: 4px; }
+.wf-ticket-list-surface .kb-ticket-list-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 34px;
+    padding: 6px 10px;
+    background: #1a1f3a;
+    border: 1px solid rgba(255,255,255,0.1);
+    border-radius: 6px;
+    cursor: pointer;
+}
+.wf-ticket-list-surface .kb-ticket-list-row:hover { border-color: color-mix(in srgb, #f97316 60%, transparent); }
+.wf-ticket-list-surface .kb-ticket-list-row.dragging {
+    opacity: 0.35;
+    border-style: dashed;
+    border-color: rgba(249, 115, 22, 0.45);
+}
+.wf-ticket-list-surface .kb-ticket-list-row[draggable="true"] {
+    cursor: grab;
+}
+.wf-ticket-list-surface .kb-ticket-list-row[draggable="true"]:active,
+.wf-ticket-list-surface .kb-ticket-list-row.dragging {
+    cursor: grabbing;
+}
+.wf-board-ticket-drag-ghost {
+    opacity: 0.92 !important;
+    box-shadow: 0 14px 32px rgba(0, 0, 0, 0.55);
+    border-color: rgba(249, 115, 22, 0.75) !important;
+    background: #1a1f3a !important;
+    transform: rotate(-1deg);
+    z-index: 99999;
+    pointer-events: none;
+}
+.wf-board-ticket-drag-ghost-floating {
+    position: fixed;
+    top: 0;
+    left: 0;
+    margin: 0;
+    cursor: grabbing;
+}
+.wf-workflow-ticket-drop-zone {
+    position: relative;
+    transition: border-color 0.15s ease, background-color 0.15s ease, box-shadow 0.15s ease;
+}
+.wf-workflow-ticket-drop-zone.is-drop-target {
+    border-color: rgba(249, 115, 22, 0.85) !important;
+    background: rgba(249, 115, 22, 0.08) !important;
+    box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.35);
+}
+.wf-workflow-drop-hint.is-drop-active {
+    color: #fdba74 !important;
+    font-weight: 500;
+}
+.wf-workflow-drop-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    align-items: center;
+    justify-content: center;
+    pointer-events: none;
+    z-index: 6;
+    border-radius: inherit;
+    background: rgba(249, 115, 22, 0.05);
+}
+.wf-workflow-ticket-drop-zone.is-drop-target .wf-workflow-drop-overlay {
+    display: flex;
+}
+.wf-workflow-ticket-drop-zone.is-drop-target:has(.wf-workflow-drop-hint) .wf-workflow-drop-overlay {
+    display: none;
+}
+.wf-workflow-drop-overlay-label {
+    padding: 0.5rem 1rem;
+    border-radius: 0.375rem;
+    border: 1px dashed rgba(249, 115, 22, 0.7);
+    background: rgba(26, 31, 58, 0.94);
+    color: #fdba74;
+    font-size: 0.875rem;
+    font-weight: 600;
+    letter-spacing: 0.01em;
+}
+.wf-ticket-list-surface .kb-ticket-list-prefix {
+    flex: 0 0 108px;
+    width: 108px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+.wf-ticket-list-surface .kb-ticket-list-drag-handle {
+    flex: 0 0 14px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 14px;
+    color: #6b7280;
+    cursor: grab;
+    touch-action: none;
+}
+.wf-ticket-list-surface .kb-ticket-list-drag-handle--static {
+    flex: 0 0 14px;
+    width: 14px;
+    cursor: default;
+    visibility: hidden;
+}
+.wf-ticket-list-surface .kb-ticket-list-badges {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 4px;
+}
+.wf-ticket-list-surface .kb-ticket-list-badges .kb-metric-badge.kb-complexity-numeral {
+    flex: 0 0 1.45rem;
+    min-width: 1.45rem;
+    width: 1.45rem;
+    padding: 0;
+}
+.wf-ticket-list-surface .kb-ticket-list-badges .kb-metric-badge:not(.kb-complexity-numeral) {
+    flex: 1 1 auto;
+    min-width: 0;
+    max-width: 3.4rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wf-ticket-list-surface .kb-ticket-list-content {
+    flex: 1 1 auto;
+    min-width: 0;
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    column-gap: 10px;
+    align-items: center;
+    overflow: hidden;
+}
+.wf-ticket-list-surface .kb-ticket-list-content--no-desc { grid-template-columns: auto; }
+.wf-ticket-list-surface .kb-ticket-list-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: #ffffff;
+    line-height: 1.35;
+    white-space: nowrap;
+    min-width: 0;
+    max-width: 100%;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.wf-ticket-list-surface .kb-ticket-list-badges .kb-metric-badge { height: 1.1rem; font-size: 9px; }
+.wf-ticket-list-surface .kb-ticket-list-desc {
+    min-width: 0;
+    overflow: hidden;
+    font-size: 12px;
+    line-height: 1.3;
+    color: #9ca3af;
+}
+.wf-ticket-list-surface .kb-ticket-list-desc-track {
+    display: inline-flex;
+    align-items: center;
+    gap: 2rem;
+    white-space: nowrap;
+}
+.wf-ticket-list-surface .kb-ticket-list-desc--marquee .kb-ticket-list-desc-track {
+    animation: wfListDescMarquee var(--kb-marquee-duration, 12s) linear infinite;
+}
+.wf-ticket-list-surface .kb-ticket-list-desc--marquee:hover .kb-ticket-list-desc-track,
+.wf-ticket-list-surface .kb-ticket-list-desc--marquee:focus-within .kb-ticket-list-desc-track {
+    animation-play-state: paused;
+}
+@keyframes wfListDescMarquee {
+    0% { transform: translateX(0); }
+    100% { transform: translateX(-50%); }
+}
+.wf-ticket-list-surface .kb-ticket-list-actions {
+    flex: 0 0 auto;
+    display: inline-flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    margin-left: auto;
+}
+.wf-ticket-list-surface .kb-card-action-tip { position: relative; display: inline-flex; }
+.wf-ticket-list-surface .kb-card-action-btn {
+    position: relative;
+    color: #ffffff;
+    opacity: 1;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 5px;
+    border-radius: 5px;
+    border: 1px solid rgba(255,255,255,0.22);
+    font-size: 10px;
+    font-weight: 600;
+    line-height: 1;
+    white-space: nowrap;
+}
+.wf-ticket-list-surface .kb-card-action-btn:hover { color: #ffffff; filter: brightness(1.08); }
+.wf-ticket-list-surface .kb-act-copy { background: rgba(59,130,246,0.28); }
+.wf-ticket-list-surface .kb-act-agent { background: rgba(249,115,22,0.32); border-color: rgba(249,115,22,0.55); }
+.wf-ticket-list-surface .kb-act-workflow { background: rgba(14,165,233,0.30); }
+.wf-ticket-list-surface .kb-act-transfer { background: rgba(34,197,94,0.28); }
+.wf-ticket-list-surface .kb-act-delete { background: rgba(239,68,68,0.28); }
+.wf-ticket-list-surface .kb-card-action-btn svg { width: 12px; height: 12px; }
+.wf-ticket-list-surface .kb-ticket-list-row.wf-board-ticket-linked {
+    border-color: rgba(34, 197, 94, 0.5);
+    background: rgba(34, 197, 94, 0.08);
+}
+.wf-ticket-list-surface .kb-ticket-list-row.wf-board-ticket-pending {
+    opacity: 0.8;
+    cursor: wait;
+}
+.wf-workflow-queue-list .kb-ticket-list-prefix {
+    flex: 0 0 148px;
+    width: 148px;
+}
+.wf-workflow-queue-list .wf-workflow-queue-badges {
+    gap: 5px;
+}
+.wf-workflow-queue-list .wf-queue-position-label {
+    flex: 0 0 auto;
+    min-width: 1.1rem;
+    font-size: 0.75rem;
+    font-weight: 600;
     color: #d1d5db;
+    line-height: 1;
+}
+.wf-workflow-queue-list .kb-ticket-list-badges .kb-metric-badge:not(.kb-complexity-numeral) {
+    flex: 0 0 auto;
+    min-width: 2.35rem;
+    max-width: none;
+    padding: 0 0.35rem;
+}
+.wf-workflow-queue-list .kb-ticket-list-badges .kb-metric-badge.kb-complexity-numeral {
+    flex: 0 0 1.65rem;
+    min-width: 1.65rem;
+    width: 1.65rem;
+}
+.wf-workflow-queue-list .wf-queue-metric-badge {
+    cursor: pointer;
+    border: none;
+    font: inherit;
+}
+.wf-workflow-queue-list .wf-queue-metric-badge:hover:not(:disabled) {
+    filter: brightness(1.08);
+}
+#wf-queue-metric-menu .wf-queue-metric-menu-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+}
+#wf-queue-metric-menu .wf-queue-metric-menu-item.is-active {
+    background: rgba(249, 115, 22, 0.12);
+}
+#wf-queue-metric-menu .wf-queue-metric-menu-badge {
+    min-width: 2.5rem;
+    text-transform: capitalize;
+}
+#wf-queue-metric-menu .wf-queue-metric-menu-check {
+    color: #f97316;
+    font-size: 0.75rem;
+    font-weight: 700;
+}
+.wf-workflow-queue-list .kb-ticket-list-content {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 2px;
+    grid-template-columns: none;
+}
+.wf-workflow-queue-actions {
+    flex-wrap: nowrap;
+    justify-content: flex-end;
+    max-width: 8.5rem;
+}
+.wf-split-layout {
+    display: flex;
+    align-items: stretch;
+    min-height: 0;
+    min-width: 0;
+}
+.wf-split-pane-left {
+    flex: 0 0 auto;
+    width: var(--wf-split-left-width, 50%);
+    min-width: 17.5rem;
+    max-width: calc(100% - 17.5rem - 0.625rem);
+}
+.wf-split-pane-right {
+    flex: 1 1 0;
+    min-width: 17.5rem;
+}
+.wf-split-resizer {
+    flex: 0 0 0.625rem;
+    margin: 0 0.125rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: col-resize;
+    touch-action: none;
+    user-select: none;
+    border-radius: 0.375rem;
+    align-self: stretch;
+}
+.wf-split-resizer:hover,
+.wf-split-resizer.is-dragging,
+.wf-split-resizer:focus-visible {
+    background: rgba(249, 115, 22, 0.08);
+}
+.wf-split-resizer-grip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    width: 0.5rem;
+    height: 2.75rem;
+    border-radius: 9999px;
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    background: rgba(255, 255, 255, 0.06);
+    transition: border-color 0.15s, background-color 0.15s;
+}
+.wf-split-resizer:hover .wf-split-resizer-grip,
+.wf-split-resizer.is-dragging .wf-split-resizer-grip,
+.wf-split-resizer:focus-visible .wf-split-resizer-grip {
+    border-color: rgba(249, 115, 22, 0.55);
+    background: rgba(249, 115, 22, 0.12);
+}
+.wf-split-resizer-grip span {
+    display: block;
+    width: 2px;
+    height: 2px;
+    border-radius: 9999px;
+    background: rgba(255, 255, 255, 0.45);
+}
+body.wf-split-dragging {
+    cursor: col-resize !important;
+    user-select: none !important;
+}
+body.wf-split-dragging * {
+    cursor: col-resize !important;
 }
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full px-6 py-8">
-    <div class="flex gap-6 h-[calc(100vh-140px)]">
+<div class="w-full px-6 py-4 h-[calc(100vh-4rem)]">
+    <div id="wf-split-layout" class="wf-split-layout h-full min-h-0">
         <!-- Left panel: board tickets -->
-        <div class="w-80 flex-shrink-0 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
+        <div id="wf-split-left" class="wf-board-panel wf-split-pane-left min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
             <div class="mb-3">
                 <p class="text-xs uppercase tracking-wide text-gray-500 mb-1">Board Tickets</p>
                 <div class="flex items-center gap-2">
@@ -123,23 +541,17 @@
                     </button>
                 </div>
             </div>
-            <div id="wf-board-ticket-list" class="flex-1 overflow-y-auto space-y-3 min-h-0">
+            <div id="wf-board-ticket-list" class="wf-ticket-list-surface flex-1 overflow-y-auto min-h-0 space-y-1">
                 <p class="text-sm text-gray-500">Select a board to view tickets.</p>
             </div>
-            <div id="wf-board-activity-panel" class="flex-shrink-0 mt-3 pt-3 border-t border-white/10 min-h-0">
-                <div class="mb-2 flex items-center justify-between gap-2">
-                    <div>
-                        <p class="text-xs uppercase tracking-wide text-gray-500">Board activity</p>
-                        <p class="text-[11px] text-gray-600">Run events and learned rules for the selected board.</p>
-                    </div>
-                    <button type="button" id="wf-refresh-board-activity" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                </div>
-                <div id="wf-board-activity-list" class="max-h-44 overflow-y-auto space-y-1.5"></div>
-                <p id="wf-board-activity-empty" class="text-xs text-gray-500">Select a board to view activity.</p>
-            </div>
+        </div>
+        <div id="wf-split-resizer" class="wf-split-resizer" role="separator" aria-orientation="vertical" aria-label="Resize board tickets and workflow panels" tabindex="0" title="Drag to resize panels">
+            <span class="wf-split-resizer-grip" aria-hidden="true">
+                <span></span><span></span><span></span><span></span><span></span>
+            </span>
         </div>
         <!-- Workflow workspace: tabs + editor -->
-        <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col min-h-0">
+        <div id="wf-split-right" class="wf-split-pane-right min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col min-h-0">
             <div class="wf-workflow-tabbar flex items-stretch flex-shrink-0 border-b border-white/20">
                 <div id="wf-list" class="flex-1 min-w-0 flex items-stretch overflow-x-auto" role="tablist" aria-label="Workflows"></div>
                 <div class="wf-workflow-tabbar-actions flex-shrink-0 flex items-center gap-0.5 px-1">
@@ -148,7 +560,7 @@
                             <path stroke-linecap="round" stroke-linejoin="round" d="M12 4v16m8-8H4" />
                         </svg>
                     </button>
-                    <button type="button" id="wf-menu-btn" title="Edit configurations" aria-label="Edit configurations" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
+                    <button type="button" id="wf-menu-btn" title="Workflow configuration" aria-label="Workflow configuration" class="flex-shrink-0 px-2 py-1.5 rounded text-gray-400 hover:bg-white/10 hover:text-white">
                         <svg xmlns="http://www.w3.org/2000/svg" class="wf-config-btn-icon w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2" aria-hidden="true">
                             <path stroke-linecap="round" stroke-linejoin="round" d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.066 2.573c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.573 1.066c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.066-2.573c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
                             <path stroke-linecap="round" stroke-linejoin="round" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
@@ -163,174 +575,17 @@
             <div class="flex-1 min-w-0 flex flex-col min-h-0 overflow-hidden">
             <div id="wf-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
                 <p class="text-gray-300 text-base font-medium max-w-md mb-2">Select a workflow.</p>
-                <p class="text-gray-400 text-sm max-w-md mb-4">View its queued tickets, runs, and execution rules.</p>
+                <p class="text-gray-400 text-sm max-w-md mb-4">View its queued tickets and runs.</p>
             </div>
             <div id="wf-detail" class="hidden flex-1 flex flex-col min-h-0">
-                <!-- Header -->
-                <div class="border-b border-white/20 px-6 py-3 flex items-center justify-between gap-2">
-                    <div class="flex items-center gap-2 min-w-0 flex-1 pr-3">
-                        <input type="text" id="wf-detail-name" class="bg-transparent text-lg font-semibold text-white border border-transparent rounded px-2 py-1 focus:border-[#f97316] focus:bg-[#152054] focus:outline-none w-full min-w-0" value="" aria-label="Workflow name">
-                        <button type="button" id="wf-save-name-btn" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10 hover:text-white" title="Save workflow name">Save</button>
-                        <span id="wf-name-save-status" class="text-xs text-gray-500 min-w-[44px]"></span>
-                    </div>
-                    <div class="flex items-center gap-2 flex-shrink-0">
-                        <div id="wf-board-consumers" class="hidden items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5"></div>
-                        <button type="button" id="wf-delete-btn" class="px-2 py-1 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
-                    </div>
-                </div>
                 <!-- Tabs -->
                 <div class="border-b border-white/20 px-6 flex gap-1">
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white active" data-tab="tickets">Tickets</button>
                     <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="runs">Runs</button>
-                    <button type="button" class="wf-tab tab-btn px-3 py-2 text-sm text-gray-400 hover:text-white" data-tab="context">Rules</button>
                 </div>
                 <!-- Tab content -->
                 <div class="flex-1 min-h-0 flex flex-col">
                     <div class="flex-1 min-h-0 overflow-y-auto p-6">
-                    <!-- Context & Rules tab -->
-                    <div id="wf-tab-context" class="wf-tab-content hidden space-y-3">
-                        <div class="rounded border border-white/10 bg-[#10183f]/70 px-3 py-1.5 text-xs text-gray-400">
-                            <span class="font-semibold text-white">Execution rules</span>
-                            <span class="mx-1 text-gray-600">/</span>
-                            The agent uses these rules, the ticket complexity, and the linked project to choose the executor path.
-                        </div>
-                        <div id="wf-run-settings-panel" class="rounded border border-white/10 bg-[#152054]/40 p-3">
-                            <div class="mb-2 flex items-center justify-between gap-3">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Run policy</p>
-                                    <p id="wf-run-settings-lock-note" class="text-xs text-gray-500">Controls how queued tickets are scheduled before a run starts.</p>
-                                </div>
-                                <button type="button" id="wf-run-settings-save" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-2">
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Ticket execution</span>
-                                    <select id="wf-run-execution-mode" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
-                                        <option value="sequential">One at a time</option>
-                                        <option value="parallel">Async batch</option>
-                                    </select>
-                                </label>
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Concurrency scope</span>
-                                    <select id="wf-run-concurrency-scope" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
-                                        <option value="workflow">One run for this workflow</option>
-                                        <option value="project">One at a time per project</option>
-                                    </select>
-                                </label>
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Async ticket limit</span>
-                                    <input id="wf-run-max-parallel" type="number" min="1" max="12" value="3" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
-                                </label>
-                                <label class="flex h-full min-h-[3.4rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">
-                                    <input id="wf-run-branch-per-ticket" type="checkbox" class="wf-run-setting accent-[#f97316]">
-                                    <span class="text-xs text-gray-200">Create branch per ticket</span>
-                                </label>
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Correction attempts</span>
-                                    <input id="wf-run-max-corrections" type="number" min="0" max="5" value="1" class="wf-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">
-                                </label>
-                                <label class="flex h-full min-h-[3.4rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">
-                                    <input id="wf-run-auto-corrections" type="checkbox" class="wf-run-setting accent-[#f97316]">
-                                    <span class="text-xs text-gray-200">Auto-dispatch corrections</span>
-                                </label>
-                            </div>
-                        </div>
-                        <div class="w-full">
-                            <div class="flex items-center justify-between gap-3 mb-2">
-                                <p class="text-xs text-gray-500">Agent context rules, quality standards, and learned feedback used by this workflow.</p>
-                                <button type="button" id="wf-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>
-                            </div>
-                            <div class="rounded border border-white/10 overflow-hidden">
-                                <table class="w-full table-fixed text-sm">
-                                    <colgroup>
-                                        <col>
-                                        <col style="width: 9rem;">
-                                    </colgroup>
-                                    <thead class="bg-[#0d1333] border-b border-white/10">
-                                        <tr>
-                                            <th class="text-left text-xs font-medium text-gray-400 px-3 py-2">Rule</th>
-                                            <th class="w-36 text-right text-xs font-medium text-gray-400 px-3 py-2">Actions</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="wf-context-items-list" class="divide-y divide-white/10"></tbody>
-                                </table>
-                            </div>
-                            <p id="wf-context-save-status" class="text-xs text-gray-500 mt-2"></p>
-                        </div>
-                        <div id="wf-skill-chains-panel" class="w-full rounded border border-white/10 bg-[#152054]/40 p-3">
-                            <div class="flex items-center justify-between gap-3 mb-2">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Skill chains</p>
-                                    <p class="text-xs text-gray-500">Skills pushed to the harness before and after workflow runs.</p>
-                                </div>
-                                <button type="button" id="wf-skill-chains-save" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save</button>
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Pre-chain (comma-separated skill ids)</span>
-                                    <input id="wf-pre-chain" type="text" list="wf-skills-datalist" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="ceo-scope-review, pre-flight-review">
-                                </label>
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Post-chain (comma-separated skill ids)</span>
-                                    <input id="wf-post-chain" type="text" list="wf-skills-datalist" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="session-retro">
-                                </label>
-                            </div>
-                            <datalist id="wf-skills-datalist"></datalist>
-                            <div id="wf-skills-catalog" class="mt-3 max-h-40 overflow-y-auto rounded border border-white/10 bg-[#0d1333]/60 p-2 text-xs text-gray-400 hidden"></div>
-                            <p id="wf-skills-catalog-note" class="mt-2 text-[11px] text-gray-500">Matching skills transfer from ticket text; pre-chain skills push before each harness run. Browse the full library in Settings → Advanced.</p>
-                        </div>
-                        <div id="wf-learned-rules-panel" class="w-full">
-                            <div class="flex items-center justify-between gap-3 mb-2">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Board learned rules</p>
-                                    <p id="wf-learned-rules-note" class="text-xs text-gray-500">Captured from validation failures and IDE iteration on the selected board.</p>
-                                </div>
-                                <button type="button" id="wf-refresh-learned-rules" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                            </div>
-                            <div id="wf-learned-rules-list" class="space-y-2"></div>
-                            <p id="wf-learned-rules-empty" class="text-sm text-gray-500">Select a board to view learned rules.</p>
-                        </div>
-                        <div id="wf-scheduled-actions-panel" class="w-full">
-                            <div class="flex items-center justify-between gap-3 mb-2">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Scheduled actions</p>
-                                    <p id="wf-scheduled-actions-note" class="text-xs text-gray-500">Queued one-time and recurring desktop actions.</p>
-                                </div>
-                                <button type="button" id="wf-refresh-scheduled-actions" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                            </div>
-                            <div id="wf-scheduled-actions-list" class="space-y-2"></div>
-                            <p id="wf-scheduled-actions-empty" class="text-sm text-gray-500">No scheduled desktop actions loaded.</p>
-                        </div>
-                        <div id="wf-visual-baselines-panel" class="w-full">
-                            <div class="flex items-center justify-between gap-3 mb-2">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Visual baselines</p>
-                                    <p id="wf-visual-baselines-note" class="text-xs text-gray-500">Reference screens used by UI validation for the selected board.</p>
-                                </div>
-                                <button type="button" id="wf-refresh-visual-baselines" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                            </div>
-                            <div class="grid grid-cols-1 md:grid-cols-4 gap-2 mb-3">
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Baseline</span>
-                                    <input id="wf-baseline-name" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Gold Admin">
-                                </label>
-                                <label class="space-y-1">
-                                    <span class="text-xs text-gray-400">Screen</span>
-                                    <input id="wf-baseline-screen-name" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Dashboard">
-                                </label>
-                                <label class="space-y-1 md:col-span-2">
-                                    <span class="text-xs text-gray-400">Screenshot path</span>
-                                    <input id="wf-baseline-screenshot-path" type="text" class="w-full px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="/path/to/reference.png">
-                                </label>
-                            </div>
-                            <div class="mb-3 flex items-center justify-between gap-3">
-                                <input id="wf-baseline-notes" type="text" class="flex-1 px-3 py-2 bg-[#0d1333] border border-white/20 rounded text-white text-sm" placeholder="Notes about layout, hierarchy, or flow">
-                                <button type="button" id="wf-save-visual-baseline" class="px-3 py-2 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c] disabled:opacity-40 disabled:cursor-not-allowed">Save baseline</button>
-                            </div>
-                            <div id="wf-visual-baselines-list" class="space-y-2"></div>
-                            <p id="wf-visual-baselines-empty" class="text-sm text-gray-500">Select a board to view visual baselines.</p>
-                        </div>
-                    </div>
                     <!-- Runs tab -->
                     <div id="wf-tab-runs" class="wf-tab-content hidden">
                         <div class="mb-4 flex items-center justify-between gap-3 border-b border-white/10">
@@ -338,7 +593,6 @@
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-white border-b-2 border-[#f97316]" data-runs-tab="active">Active</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="sessions">Executor</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="timeline">Events</button>
-                                <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="corrections">Corrections</button>
                                 <button type="button" class="wf-runs-subtab px-3 py-2 text-sm text-gray-400 border-b-2 border-transparent hover:text-white" data-runs-tab="recent">History</button>
                             </div>
                         </div>
@@ -386,25 +640,6 @@
                             <div id="wf-hermes-events-list" class="space-y-2"></div>
                             <p id="wf-hermes-events-empty" class="text-sm text-gray-500">No run events yet. Start a ticket run to populate the timeline.</p>
                         </div>
-                        <div id="wf-runs-pane-corrections" class="wf-runs-pane hidden">
-                            <div class="mb-3 flex items-center justify-between gap-3">
-                                <div>
-                                    <p class="text-sm font-semibold text-white">Correction history</p>
-                                    <p class="text-xs text-gray-500">Queued and dispatched retries created from failed validation gates.</p>
-                                </div>
-                                <div class="flex items-center gap-2">
-                                    <select id="wf-corrections-status-filter" class="px-2 py-1 bg-[#152054] border border-white/20 rounded text-white text-xs">
-                                        <option value="">All corrections</option>
-                                        <option value="queued">Queued</option>
-                                        <option value="dispatched">Dispatched</option>
-                                        <option value="completed">Completed</option>
-                                    </select>
-                                    <button type="button" id="wf-refresh-corrections" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                                </div>
-                            </div>
-                            <div id="wf-corrections-list" class="space-y-2"></div>
-                            <p id="wf-corrections-empty" class="text-sm text-gray-500">No correction attempts yet.</p>
-                        </div>
                         <div id="wf-runs-pane-recent" class="wf-runs-pane hidden">
                             <div class="mb-2 flex items-center justify-between gap-3">
                                 <div>
@@ -419,18 +654,17 @@
                     </div>
                     <!-- Tickets tab -->
                     <div id="wf-tab-tickets" class="wf-tab-content h-full flex flex-col min-h-[420px]">
-                        <div class="mb-3 rounded border border-white/10 bg-[#10183f]/70 px-3 py-2 text-xs text-gray-400">
-                            <span class="font-semibold text-white">Run path</span>
-                            <span class="mx-1 text-gray-600">/</span>
-                            Queue ticket -> agent chooses route -> executor works -> validation checks -> result is reported.
-                        </div>
-                        <div class="flex items-center justify-between mb-3">
-                            <p class="text-xs text-gray-400">Workflow ticket queue</p>
-                            <button type="button" id="wf-refresh-workflow-tickets" class="px-2 py-1 rounded border border-white/20 text-gray-300 text-xs hover:bg-white/10">Refresh</button>
-                        </div>
-                        <div id="wf-workflow-tickets-list" class="flex-1 min-h-[320px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
+                        <div id="wf-workflow-tickets-list" class="wf-ticket-list-surface wf-workflow-ticket-drop-zone flex-1 min-h-[320px] rounded border border-dashed border-white/10 p-2 transition-colors"></div>
                         <p id="wf-workflow-tickets-empty" class="hidden"></p>
                     </div>
+                    </div>
+                    <div id="wf-detail-footer" class="border-t border-white/20 px-6 py-3 flex items-center justify-between gap-3 flex-shrink-0 bg-[#1a1f3a]">
+                        <div id="wf-board-consumers" class="hidden items-center gap-1 px-2 py-1 rounded border border-white/15 bg-white/5"></div>
+                        <div class="flex items-center gap-2 ml-auto">
+                            <span id="wf-name-save-status" class="text-xs text-gray-500 min-w-[44px] text-right"></span>
+                            <button type="button" id="wf-save-name-btn" class="px-3 py-1.5 rounded border border-white/20 text-gray-200 text-xs hover:bg-white/10 hover:text-white" title="Save workflow name">Save</button>
+                            <button type="button" id="wf-delete-btn" class="px-3 py-1.5 rounded border border-red-500/50 text-red-400 text-xs hover:bg-red-500/20">Delete</button>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -709,49 +943,52 @@
 {% endblock %}
 
 {% block extra_scripts %}
+<script src="/tickets/static/js/kanban_ticket.js"></script>
 <script src="/workflows/static/js/workflows.js"></script>
 <script>
 (function() {
     var modalHtml = [
         '<div id="sr-llm-modal" class="fixed inset-0 z-[10000] hidden items-center justify-center bg-black/60">',
-        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-4 w-full max-w-2xl max-h-[86vh] overflow-y-auto shadow-2xl">',
+        '<div class="bg-[#1a1f3a] border border-[#565869] rounded-xl p-4 w-full max-w-3xl max-h-[86vh] overflow-y-auto shadow-2xl">',
         '<div class="flex items-center justify-between mb-3">',
-        '<h3 class="text-white font-semibold text-lg">Execution setup</h3>',
+        '<h3 class="text-white font-semibold text-lg">Workflow configuration</h3>',
         '<button id="sr-llm-close" class="text-gray-400 hover:text-white text-xl leading-none">&times;</button>',
         '</div>',
-        '<div id="hermes-readiness-strip" class="mb-3 rounded border border-white/10 bg-[#10183f] px-3 py-2 text-xs text-gray-400">Execution readiness loading...</div>',
-        '<div class="mb-4 border-b border-white/10 pb-2">',
-        '<h4 class="text-sm font-semibold text-white">Ticket complexity routing</h4>',
-        '<p class="text-xs text-gray-500 mb-3">Ticket complexity chooses the implementation agent and model. Codex routes can set intelligence (reasoning effort) and speed (service tier).</p>',
-        '<div class="space-y-2">',
-        ['low', 'medium', 'high'].map(function(level) {
-            var label = level.charAt(0).toUpperCase() + level.slice(1);
-            return '<div class="wf-cli-route-block space-y-1" data-level="' + level + '">' +
-                '<div class="grid gap-2 items-center" style="grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 1fr) auto;">' +
-                '<label class="text-xs text-gray-400 font-medium">' + label + '</label>' +
-                '<select id="wf-cli-' + level + '-backend" class="wf-cli-backend px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
-                    '<option value="pi">Pi</option><option value="cursor">Cursor CLI</option><option value="codex">Codex CLI</option><option value="claude_code">Claude Code</option>' +
-                '</select>' +
-                '<select id="wf-cli-' + level + '-model" class="wf-cli-model px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs focus:border-[#f97316] focus:outline-none" style="background-color:#152054;color:#fff;color-scheme:dark;" data-level="' + level + '">' +
-                    '<option value="auto">Auto</option>' +
-                '</select>' +
-                '<button type="button" id="wf-cli-' + level + '-codex-cog" class="wf-cli-codex-cog inline-flex h-8 w-8 items-center justify-center rounded border border-white/20 text-gray-400 hover:text-white hover:bg-white/10 disabled:opacity-30 disabled:cursor-not-allowed" data-level="' + level + '" title="Codex CLI preferences (intelligence &amp; speed)" aria-label="Codex CLI preferences">&#9881;</button>' +
-                '</div>' +
-                '<div id="wf-cli-' + level + '-codex-prefs" class="hidden ml-[7.75rem] grid grid-cols-2 gap-2 rounded border border-white/10 bg-[#10183f] p-2">' +
-                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Intelligence</span>' +
-                    '<select id="wf-cli-' + level + '-codex-intelligence" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
-                        '<option value="">Default</option><option value="low">Low</option><option value="medium">Medium</option><option value="high">High</option><option value="xhigh">Extra high</option>' +
-                    '</select></label>' +
-                    '<label class="space-y-1"><span class="text-[11px] text-gray-400">Speed</span>' +
-                    '<select id="wf-cli-' + level + '-codex-speed" class="w-full px-2 py-1.5 bg-[#152054] border border-white/20 rounded text-white text-xs" data-level="' + level + '">' +
-                        '<option value="">Default</option><option value="flex">Flex</option><option value="fast">Fast</option>' +
-                    '</select></label>' +
-                    '<p class="col-span-2 text-[10px] text-gray-500">Codex CLI only — passed as model_reasoning_effort and service_tier when this complexity route runs.</p>' +
-                '</div>' +
-            '</div>';
-        }).join(''),
+        '<div id="wf-config-workflow-panel" class="mb-4 space-y-4">',
+        '<p id="wf-config-workflow-hint" class="hidden text-xs text-amber-300 rounded border border-amber-500/30 bg-amber-500/10 px-3 py-2">Select a workflow to edit run policy and agent context rules.</p>',
+        '<div id="wf-config-workflow-body" class="space-y-4">',
+        '<div id="wf-config-run-settings-panel" class="rounded border border-white/10 bg-[#152054]/40 p-3">',
+        '<div class="mb-3">',
+        '<p class="text-sm font-semibold text-white">Run policy</p>',
+        '<p id="wf-config-run-lock-note" class="text-xs text-gray-500 mt-0.5">Controls how queued tickets are scheduled before a run starts.</p>',
         '</div>',
+        '<div class="grid grid-cols-1 sm:grid-cols-2 gap-3">',
+        '<label class="space-y-1"><span class="text-xs text-gray-400">Ticket execution</span>',
+        '<select id="wf-config-run-execution-mode" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">',
+        '<option value="sequential">One at a time</option><option value="parallel">Async batch</option></select></label>',
+        '<label class="space-y-1"><span class="text-xs text-gray-400">Concurrency scope</span>',
+        '<select id="wf-config-run-concurrency-scope" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs">',
+        '<option value="workflow">One run for this workflow</option><option value="project">One at a time per project</option></select></label>',
+        '<label class="space-y-1"><span class="text-xs text-gray-400">Async ticket limit</span>',
+        '<input id="wf-config-run-max-parallel" type="number" min="1" max="12" value="3" class="wf-config-run-setting w-full px-2 py-1.5 bg-[#0d1333] border border-white/20 rounded text-white text-xs"></label>',
+        '<label class="flex min-h-[2.75rem] items-center gap-2 rounded border border-white/10 bg-[#0d1333]/70 px-3 py-2">',
+        '<input id="wf-config-run-branch-per-ticket" type="checkbox" class="wf-config-run-setting accent-[#f97316]">',
+        '<span class="text-xs text-gray-200">Create branch per ticket</span></label>',
+        '</div></div>',
+        '<div class="rounded border border-white/10 bg-[#152054]/40 p-3">',
+        '<div class="flex items-center justify-between gap-3 mb-2">',
+        '<div><p class="text-sm font-semibold text-white">Agent context rules</p>',
+        '<p class="text-xs text-gray-500 mt-0.5">Rules the agent follows for this workflow.</p></div>',
+        '<button type="button" id="wf-config-add-context-item-btn" class="px-3 py-1.5 rounded bg-[#f97316] text-white text-xs hover:bg-[#ea580c]">Add rule</button>',
         '</div>',
+        '<div class="rounded border border-white/10 overflow-hidden">',
+        '<table class="w-full table-fixed text-sm"><colgroup><col><col style="width:9rem;"></colgroup>',
+        '<thead class="bg-[#0d1333] border-b border-white/10"><tr>',
+        '<th class="text-left text-xs font-medium text-gray-400 px-3 py-2">Rule</th>',
+        '<th class="text-right text-xs font-medium text-gray-400 px-3 py-2">Actions</th>',
+        '</tr></thead><tbody id="wf-config-context-items-list" class="divide-y divide-white/10"></tbody></table>',
+        '</div><p id="wf-config-context-save-status" class="text-xs text-gray-500 mt-2"></p></div>',
+        '</div></div>',
         '<div class="flex gap-2 justify-end">',
         '<button id="sr-llm-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 text-sm hover:bg-white/10">Cancel</button>',
         '<button id="sr-llm-save" class="px-4 py-2 rounded bg-[#f97316] text-white text-sm font-medium hover:bg-[#ea580c]">Save</button>',
@@ -762,182 +999,18 @@
     document.body.insertAdjacentHTML('beforeend', modalHtml);
 
     var modal = document.getElementById('sr-llm-modal');
-    var readinessEl = document.getElementById('hermes-readiness-strip');
-    var routeDefaults = {
-        low: { backend: 'cursor', model: 'auto' },
-        medium: { backend: 'codex', model: 'auto' },
-        high: { backend: 'codex', model: 'gpt-5.3-codex' }
-    };
-
-    function routeModelLabel(model) {
-        if (!model) return '';
-        if (typeof model === 'string') return model;
-        var name = model.name || model.id || model.model || '';
-        return name;
-    }
-
-    function routeModelValue(model) {
-        if (!model) return '';
-        if (typeof model === 'string') return model;
-        return model.id || model.model || model.name || '';
-    }
-
-    function updateCodexPrefVisibility(level) {
-        var backend = document.getElementById('wf-cli-' + level + '-backend');
-        var cog = document.getElementById('wf-cli-' + level + '-codex-cog');
-        var panel = document.getElementById('wf-cli-' + level + '-codex-prefs');
-        var isCodex = backend && backend.value === 'codex';
-        if (cog) cog.disabled = !isCodex;
-        if (!isCodex && panel) panel.classList.add('hidden');
-    }
-
-    function toggleCodexPrefPanel(level) {
-        var backend = document.getElementById('wf-cli-' + level + '-backend');
-        var panel = document.getElementById('wf-cli-' + level + '-codex-prefs');
-        if (!panel || !backend || backend.value !== 'codex') return;
-        panel.classList.toggle('hidden');
-    }
-
-    function loadRouteModels(level, backendId, selectedModel) {
-        var select = document.getElementById('wf-cli-' + level + '-model');
-        if (!select) return;
-        var current = selectedModel || routeDefaults[level].model || 'auto';
-        select.disabled = true;
-        select.innerHTML = '';
-        var loadingOpt = document.createElement('option');
-        loadingOpt.value = current;
-        loadingOpt.textContent = 'Loading...';
-        select.appendChild(loadingOpt);
-        fetch('/api/projects/cli-models?backend_id=' + encodeURIComponent(backendId || 'codex'))
-            .then(function(r) { return r.json(); })
-            .then(function(data) {
-                var models = Array.isArray(data.models) ? data.models : [];
-                var seen = {};
-                select.innerHTML = '';
-                function append(value, label) {
-                    value = value || 'auto';
-                    if (seen[value]) return;
-                    seen[value] = true;
-                    var opt = document.createElement('option');
-                    opt.value = value;
-                    opt.textContent = label || value;
-                    select.appendChild(opt);
-                }
-                append('auto', 'Auto');
-                models.forEach(function(model) {
-                    var value = routeModelValue(model);
-                    if (!value) return;
-                    append(value, routeModelLabel(model));
-                });
-                if (current && !seen[current]) append(current, current);
-                select.value = current || 'auto';
-                select.disabled = false;
-                updateCodexPrefVisibility(level);
-            })
-            .catch(function() {
-                select.innerHTML = '';
-                var opt = document.createElement('option');
-                opt.value = current;
-                opt.textContent = current;
-                select.appendChild(opt);
-                select.disabled = false;
-                updateCodexPrefVisibility(level);
-            });
-    }
-
-    function renderReadiness(items, counts, sources) {
-        if (!readinessEl) return;
-        var list = Array.isArray(items) ? items : [];
-        var ready = list.filter(function(item) { return item && item.status === 'ready'; }).length;
-        var total = list.length;
-        var blocked = list.filter(function(item) { return item && item.status === 'blocked'; }).length;
-        var needs = list.filter(function(item) { return item && item.status && item.status !== 'ready' && item.status !== 'blocked'; }).length;
-        var readyItems = list.filter(function(item) { return item && item.status === 'ready'; }).slice(0, 3).map(function(item) { return item.label; });
-        var problemItems = list.filter(function(item) { return item && item.status !== 'ready'; }).slice(0, 2).map(function(item) { return item.label; });
-        var statusText = total ? ready + '/' + total + ' ready' : 'ready';
-        var detail = problemItems.length ? 'Needs setup: ' + problemItems.join(', ') : readyItems.join(' · ');
-        var sourcesText = (sources && sources.length) ? 'Sources: ' + sources.join(', ') : 'Sources: none';
-        var cls = blocked ? 'border-red-500/30 bg-red-500/10 text-red-200' : (needs ? 'border-amber-500/30 bg-amber-500/10 text-amber-200' : 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200');
-        readinessEl.className = 'mb-3 rounded border px-3 py-2 text-xs ' + cls;
-        readinessEl.innerHTML = '<div class="flex flex-wrap items-center gap-x-3 gap-y-1">' +
-            '<span class="font-semibold text-white">Execution readiness</span>' +
-            '<span>' + statusText + '</span>' +
-            (detail ? '<span class="text-current opacity-80">' + detail + '</span>' : '') +
-            '<span class="ml-auto text-current opacity-70">' + sourcesText + '</span>' +
-        '</div>';
-        if (counts) {
-            readinessEl.innerHTML += '<div class="mt-1 text-[11px] opacity-70">Ledger: ' + ((counts && counts.events) || 0) + ' events · ' + ((counts && counts.validations) || 0) + ' validations · ' + ((counts && counts.corrections) || 0) + ' corrections</div>';
-        }
-    }
-
     var configBtn = document.getElementById('wf-menu-btn');
-    var executionSetupLoadToken = 0;
-
-    function setExecutionSetupLoading(loading) {
-        if (!configBtn) return;
-        configBtn.disabled = !!loading;
-        configBtn.classList.toggle('wf-config-btn-loading', !!loading);
-        configBtn.setAttribute('aria-busy', loading ? 'true' : 'false');
-    }
 
     function openModal() {
-        if (configBtn && configBtn.disabled) return;
-        var loadToken = ++executionSetupLoadToken;
-        setExecutionSetupLoading(true);
-        Promise.all([
-            fetch('/api/workflows/hermes-setup').then(function(r) { return r.json(); }),
-            fetch('/api/llms').then(function(r) { return r.json(); }).catch(function() { return {}; })
-        ])
-            .then(function(results) {
-                if (loadToken !== executionSetupLoadToken) return;
-                var data = results[0] || {};
-                var llm = results[1] || {};
-                renderReadiness(data.readiness || [], data.counts || {}, data.connected_sources || []);
-                ['low', 'medium', 'high'].forEach(function(level) {
-                    var backend = document.getElementById('wf-cli-' + level + '-backend');
-                    var model = document.getElementById('wf-cli-' + level + '-model');
-                    var route = (data.routing && data.routing[level]) || {};
-                    var backendValue = route.backend || llm['project_cli_' + level + '_backend'] || routeDefaults[level].backend;
-                    var modelValue = route.model || llm['project_cli_' + level + '_model'] || routeDefaults[level].model;
-                    if (backend) backend.value = backendValue;
-                    if (model) model.value = modelValue;
-                    var intelligence = document.getElementById('wf-cli-' + level + '-codex-intelligence');
-                    var speed = document.getElementById('wf-cli-' + level + '-codex-speed');
-                    if (intelligence) intelligence.value = route.codex_intelligence || '';
-                    if (speed) speed.value = route.codex_speed || '';
-                    loadRouteModels(level, backendValue, modelValue);
-                    updateCodexPrefVisibility(level);
-                    var prefsPanel = document.getElementById('wf-cli-' + level + '-codex-prefs');
-                    if (prefsPanel) prefsPanel.classList.add('hidden');
-                });
-                modal.classList.remove('hidden');
-                modal.classList.add('flex');
-            })
-            .catch(function() {
-                if (loadToken !== executionSetupLoadToken) return;
-                if (window.DecisionsAPI && window.DecisionsAPI.snackbar) {
-                    window.DecisionsAPI.snackbar('Failed to load execution setup', 'error');
-                }
-            })
-            .finally(function() {
-                if (loadToken !== executionSetupLoadToken) return;
-                setExecutionSetupLoading(false);
-            });
+        modal.classList.remove('hidden');
+        modal.classList.add('flex');
+        if (typeof window.refreshWorkflowConfigPanel === 'function') {
+            window.refreshWorkflowConfigPanel();
+        }
     }
 
     function closeModal() { modal.classList.add('hidden'); modal.classList.remove('flex'); }
 
-    document.querySelectorAll('.wf-cli-backend').forEach(function(select) {
-        select.addEventListener('change', function() {
-            loadRouteModels(select.dataset.level, select.value, 'auto');
-            updateCodexPrefVisibility(select.dataset.level);
-        });
-    });
-    document.querySelectorAll('.wf-cli-codex-cog').forEach(function(btn) {
-        btn.addEventListener('click', function() {
-            toggleCodexPrefPanel(btn.dataset.level);
-        });
-    });
     window.openWorkflowExecutionSetup = openModal;
     var legacySetupBtn = document.getElementById('wf-sr-llm-btn');
     if (legacySetupBtn) legacySetupBtn.addEventListener('click', openModal);
@@ -946,30 +1019,14 @@
     modal.addEventListener('click', function(e) { if (e.target === modal) closeModal(); });
 
     document.getElementById('sr-llm-save').addEventListener('click', function() {
-        var routing = {};
-        ['low', 'medium', 'high'].forEach(function(level) {
-            var backend = document.getElementById('wf-cli-' + level + '-backend');
-            var model = document.getElementById('wf-cli-' + level + '-model');
-            var intelligence = document.getElementById('wf-cli-' + level + '-codex-intelligence');
-            var speed = document.getElementById('wf-cli-' + level + '-codex-speed');
-            var row = {
-                backend: (backend && backend.value) || routeDefaults[level].backend,
-                model: (model && model.value) || routeDefaults[level].model
-            };
-            if (row.backend === 'codex') {
-                row.codex_intelligence = (intelligence && intelligence.value) || '';
-                row.codex_speed = (speed && speed.value) || '';
-            }
-            routing[level] = row;
-        });
-        fetch('/api/workflows/hermes-setup', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ enabled: true, routing: routing })
-        }).then(function(r) { return r.json(); })
-        .then(function() {
+        var savePromise = typeof window.saveWorkflowRunSettings === 'function'
+            ? window.saveWorkflowRunSettings()
+            : Promise.resolve();
+        savePromise.then(function() {
             closeModal();
-            window.DecisionsAPI && window.DecisionsAPI.snackbar('Execution setup saved', 'success');
+            window.DecisionsAPI && window.DecisionsAPI.snackbar('Workflow configuration saved', 'success');
+        }).catch(function() {
+            window.DecisionsAPI && window.DecisionsAPI.snackbar('Failed to save configuration', 'error');
         });
     });
 })();

@@ -823,6 +823,14 @@ def create_app() -> FastAPI:
     except Exception as e:
         logger.error("Failed to load Automation routes: %s", e, exc_info=True)
 
+    try:
+        from distr.gui.web.routes.schedule_blocks import create_routes as create_schedule_block_routes
+        schedule_block_router = create_schedule_block_routes()
+        app.include_router(schedule_block_router, prefix="/api", tags=["schedule_blocks"])
+        logger.info("Schedule block API routes mounted at /api")
+    except Exception as e:
+        logger.error("Failed to load Schedule block routes: %s", e, exc_info=True)
+
     @app.get("/docs/", response_class=HTMLResponse)
     async def docs_page(request: Request):
         return page_templates.TemplateResponse(request, "docs/docs.html", _template_context(request, "/docs"))

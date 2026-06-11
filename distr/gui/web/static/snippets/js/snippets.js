@@ -4,6 +4,7 @@
  */
 (function() {
   var snippets = [];
+  var currentSnippetId = null;
   var apiFetch = window.DecisionsAPI.fetch;
 
   function esc(value) {
@@ -170,6 +171,7 @@
           hotkeyBtn.classList.toggle("is-empty", !hotkeyBtn.getAttribute("data-hotkey"));
         });
       }
+      row.addEventListener("focusin", function() { currentSnippetId = id; });
       if (saveBtn) saveBtn.addEventListener("click", function() { saveSnippet(row, id); });
       if (deleteBtn) deleteBtn.addEventListener("click", function() { deleteSnippet(id); });
     });
@@ -244,39 +246,21 @@
     });
   }
 
-  function isTypingTarget(target) {
-    if (!target) return false;
-    var tag = (target.tagName || "").toLowerCase();
-    return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
-  }
-
-  function focusSnippetRowByOffset(offset) {
-    var rows = Array.prototype.slice.call(document.querySelectorAll("#snippets-list .snippet-row"));
-    if (!rows.length) return;
-    var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".snippet-row") : null;
-    var idx = rows.indexOf(active);
-    if (idx < 0) idx = offset > 0 ? -1 : 0;
-    var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
-    if (next) next.focus();
-  }
-
   function bindSnippetListKeyboard() {
-    var root = document.getElementById("snippets-list");
-    if (!root || root.dataset.keyboardBound === "1") return;
-    root.dataset.keyboardBound = "1";
-    root.addEventListener("keydown", function(e) {
-      if (isTypingTarget(e.target)) return;
-      if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-        e.preventDefault();
-        focusSnippetRowByOffset(e.key === "ArrowDown" ? 1 : -1);
-      } else if (e.key === "Delete") {
-        var row = e.target && e.target.closest ? e.target.closest(".snippet-row") : null;
-        var id = row ? parseInt(row.getAttribute("data-id"), 10) : null;
-        if (id) {
-          e.preventDefault();
-          deleteSnippet(id);
-        }
-      }
+    if (!window.DecisionsListKeyboard) return;
+    window.DecisionsListKeyboard.bind({
+      listEl: "snippets-list",
+      namespace: "snippets",
+      rowSelector: ".snippet-row",
+      getRowId: function(row) { return parseInt(row.getAttribute("data-id"), 10); },
+      getSelectedId: function() { return currentSnippetId; },
+      onEnter: function(id, row) {
+        var textEl = row.querySelector(".snippet-text");
+        if (textEl) textEl.focus();
+      },
+      onDelete: function(id) { deleteSnippet(id); },
+      pageGuard: function() { return !!document.getElementById("snippets-list"); },
+      ignoreEnterFrom: ".snippet-hotkey.capturing",
     });
   }
 

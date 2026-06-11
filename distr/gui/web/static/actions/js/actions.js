@@ -88,42 +88,17 @@
         return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
     }
 
-    function focusActionRowByOffset(offset) {
-        var rows = Array.prototype.slice.call(document.querySelectorAll("#actions-list .action-item-wrapper"));
-        if (!rows.length) return;
-        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".action-item-wrapper") : null;
-        var idx = rows.indexOf(active);
-        if (idx < 0 && currentActionId != null) {
-            idx = rows.findIndex(function(row) { return String(row.getAttribute("data-id")) === String(currentActionId); });
-        }
-        if (idx < 0) idx = offset > 0 ? -1 : 0;
-        var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
-        if (next) next.focus();
-    }
-
     function bindActionListKeyboard() {
-        var listEl = document.getElementById("actions-list");
-        if (!listEl || listEl.dataset.keyboardBound === "1") return;
-        listEl.dataset.keyboardBound = "1";
-        listEl.addEventListener("keydown", function(e) {
-            if (isTypingTarget(e.target)) return;
-            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                e.preventDefault();
-                focusActionRowByOffset(e.key === "ArrowDown" ? 1 : -1);
-            } else if (e.key === "Enter") {
-                var row = e.target && e.target.closest ? e.target.closest(".action-item-wrapper") : null;
-                if (row) {
-                    e.preventDefault();
-                    selectAction(parseInt(row.getAttribute("data-id"), 10));
-                }
-            } else if (e.key === "Delete") {
-                var delRow = e.target && e.target.closest ? e.target.closest(".action-item-wrapper") : null;
-                var id = delRow ? parseInt(delRow.getAttribute("data-id"), 10) : currentActionId;
-                if (id) {
-                    e.preventDefault();
-                    deleteActionFromList(id);
-                }
-            }
+        if (!window.DecisionsListKeyboard) return;
+        window.DecisionsListKeyboard.bind({
+            listEl: "actions-list",
+            namespace: "actions",
+            rowSelector: ".action-item-wrapper",
+            getRowId: function(row) { return parseInt(row.getAttribute("data-id"), 10); },
+            getSelectedId: function() { return currentActionId; },
+            onSelect: function(id) { selectAction(id); },
+            onDelete: function(id) { deleteActionFromList(id); },
+            pageGuard: function() { return !!document.getElementById("actions-list"); },
         });
     }
 

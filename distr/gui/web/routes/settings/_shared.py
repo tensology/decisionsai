@@ -372,6 +372,8 @@ class ProjectUpdate(BaseModel):
     provider: Optional[str] = None
     board_id: Optional[str] = None
     board_name: Optional[str] = None
+    kanban_board_id: Optional[int] = None
+    start_time_tracker: Optional[bool] = None
 
 
 class ContextItemCreate(BaseModel):

@@ -405,7 +405,7 @@ def test_complete_run_queues_correction_for_failed_visual_baseline_validation(tm
     assert "visual baseline" in correction_packets[0]["failed_validation"]["correction_hint"].lower()
 
 
-def test_complete_run_auto_dispatches_failed_visual_baseline_correction_when_enabled(tmp_path):
+def test_complete_run_does_not_auto_dispatch_failed_visual_baseline_correction(tmp_path):
     from distr.core.db.hermes import (
         HermesCorrectionAttempt,
         HermesVisualBaselineScreen,
@@ -485,10 +485,8 @@ def test_complete_run_auto_dispatches_failed_visual_baseline_correction_when_ena
         attempt_statuses = [row.status for row in attempts]
         dispatch_results = [json.loads(row.dispatch_result or "{}") for row in attempts]
 
-    assert run_status == "running"
-    assert completed_at is None
-    assert run_data["pending_correction"]["step_id"] == ids["step_id"]
-    assert run_data["pending_correction"]["correction_attempt_id"] == attempt_ids[0]
-    assert attempt_statuses == ["dispatched"]
-    assert dispatch_results[0]["auto_dispatch"] is True
-    dispatch.assert_called_once_with(ids["step_id"], ids["run_id"])
+    assert run_status == "failed"
+    assert completed_at is not None
+    assert "pending_correction" not in run_data
+    assert attempt_statuses == ["queued"]
+    dispatch.assert_not_called()

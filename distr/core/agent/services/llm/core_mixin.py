@@ -518,10 +518,15 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
         Shared across all providers.
         """
         from distr.core.agent.services.llm.fast_action_detector import detect_fast_action, ActionType
+        from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
+        if getattr(self, "_bypass_fast_actions_for_turn", False):
+            return None
         if not self._messages:
             return None
         last_message = self._messages[-1].get("content", "")
         if not isinstance(last_message, str):
+            return None
+        if should_bypass_fast_action_detection(last_message):
             return None
         if last_message in self._processed_fast_actions:
             return None
@@ -1312,6 +1317,11 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 except Exception as e:
                     logger.warning("Could not verify chat provider: %s", e)
 
+        from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
+
+        self._bypass_fast_actions_for_turn = bool(
+            skip_user_persist or should_bypass_fast_action_detection(text)
+        )
         self._ensure_user_message_persisted(text, skip=skip_user_persist)
 
         # Handle vision input
@@ -1526,14 +1536,18 @@ class LLMSharedMixin(SelfReflectionMixin, VoiceDictationMixin, FastActionMixin, 
                 return
 
             # Fast action detection
+            from distr.core.agent.services.llm.bulk_instruction import should_bypass_fast_action_detection
             has_clipboard_context = any(
                 'CLIPBOARD CONTENT:' in msg.get('content', '')
                 for msg in self._messages[-5:] if msg.get('role') == 'tool'
             )
-            fast_action = detect_fast_action(text, has_clipboard_context)
+            fast_action = None
+            if not should_bypass_fast_action_detection(text):
+                fast_action = detect_fast_action(text, has_clipboard_context)
 
             can_execute_directly = (
-                fast_action.confidence >= 0.9
+                fast_action is not None
+                and fast_action.confidence >= 0.9
                 and fast_action.action_type != ActionType.CONVERSATIONAL
                 and (fast_action.action_type != ActionType.UNKNOWN or fast_action.tool_name)
             )

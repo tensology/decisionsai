@@ -438,6 +438,7 @@ def _chat_header_stats_payload(
     return {
         "title": root_chat.title or "New Chat",
         "context_stats": context_stats,
+        "compact_checkpoint": compact_checkpoint,
         "title_auto": {
             "manual": bool(title_auto.get("manual")),
             "last_refresh_message_count": int(title_auto.get("last_refresh_message_count") or 0),
@@ -1337,6 +1338,7 @@ def create_routes(templates_dir: Path, base_path: str = "") -> APIRouter:
                         "updated": bool(new_title),
                         "title": payload["title"],
                         "context_stats": payload["context_stats"],
+                        "compact_checkpoint": payload["compact_checkpoint"],
                         "title_auto": payload["title_auto"],
                     }
                 )

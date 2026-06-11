@@ -222,6 +222,34 @@
     scrollbar-gutter: stable;
 }
 
+/* One command line = one terminal row (lined-paper textarea) */
+.startup-instructions-input {
+    --startup-line-height: 22px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
+    font-size: 12px;
+    line-height: var(--startup-line-height);
+    padding: calc(var(--startup-line-height) / 2) 12px;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    border-radius: 0.25rem;
+    background-color: #152054;
+    background-image: repeating-linear-gradient(
+        to bottom,
+        transparent 0,
+        transparent calc(var(--startup-line-height) - 1px),
+        rgba(255, 255, 255, 0.1) calc(var(--startup-line-height) - 1px),
+        rgba(255, 255, 255, 0.1) var(--startup-line-height)
+    );
+    background-attachment: local;
+    background-origin: content-box;
+    background-clip: content-box;
+}
+
+#startup-actions-row .startup-time-tracker-label {
+    margin-left: auto;
+    padding-left: 4rem;
+    min-width: min(100%, 18rem);
+}
+
 /* Startup Terminal Grid */
 #startup-terminal-grid {
     display: grid;
@@ -383,7 +411,7 @@
     <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
         <!-- Empty state -->
         <div id="projects-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
-            <p class="text-gray-400 text-sm max-w-md mb-6">Projects help you organize context and files for your work. Each project can have multiple context items (text blocks) and linked files. Use trigger words to quickly reference projects in conversations.</p>
+            <p class="text-gray-400 text-sm max-w-md mb-6">Projects link a folder, board, and trigger words so the agent knows what you are working on.</p>
             <button type="button" id="project-create-big" class="px-8 py-4 rounded bg-[#f97316] text-white hover:bg-[#ea580c] font-medium">+ Create New Project</button>
         </div>
 
@@ -441,27 +469,6 @@
     </div>
 </div>
 
-<!-- Context item modal (Add / Edit) -->
-<div id="context-item-modal" class="fixed inset-0 bg-black/60 flex items-center justify-center z-50 hidden" role="dialog" aria-modal="true">
-    <div class="bg-[#1a1f3a] border border-white/20 rounded-lg p-6 w-full max-w-2xl max-h-[90vh] flex flex-col shadow-xl" id="context-item-dialog">
-        <h3 id="context-item-modal-title" class="text-lg font-semibold text-white mb-4">Add Context Item</h3>
-        <input type="hidden" id="context-item-id" value="">
-        <div class="space-y-3 flex-1 min-h-0 flex flex-col">
-            <div>
-                <label class="block text-sm text-gray-400 mb-1">Title</label>
-                <input type="text" id="context-item-title" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none" placeholder="Enter context item title...">
-            </div>
-            <div class="flex-1 min-h-0 flex flex-col">
-                <label class="block text-sm text-gray-400 mb-1">Content</label>
-                <textarea id="context-item-content" rows="12" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none resize-y flex-1 min-h-[200px]" placeholder="Enter content..."></textarea>
-            </div>
-        </div>
-        <div class="flex justify-end gap-2 mt-4 pt-4 border-t border-white/20">
-            <button type="button" id="context-item-cancel" class="px-4 py-2 rounded border border-white/20 text-gray-300 hover:bg-white/10">Cancel</button>
-            <button type="button" id="context-item-save" class="px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c]">Save</button>
-        </div>
-    </div>
-</div>
 <!-- Expanded terminal modal -->
 <div id="terminal-expand-modal" class="hidden">
     <div id="terminal-expand-inner">

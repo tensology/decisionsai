@@ -63,6 +63,7 @@ const inputContainer = document.getElementById('inputContainer');
 const messageInput = document.getElementById('messageInput');
 const sendButton = document.getElementById('sendButton');
 const speakerToggle = document.getElementById('speakerToggle');
+const inputLoadButton = document.getElementById('inputLoadButton');
 let ttsEnabled = true;
 let transcriptionStatusTimer = null;
 /** Updates the clock in the live STT preview row every second (same styling as message timestamps). */
@@ -103,12 +104,13 @@ const headerLlmModel = document.getElementById('headerLlmModel');
 const headerVoiceProvider = document.getElementById('headerVoiceProvider');
 const headerVoiceModel = document.getElementById('headerVoiceModel');
 const headerSettingsStatus = document.getElementById('headerSettingsStatus');
+const contextRing = document.getElementById('contextRing');
 
 let _headerSettingsSyncing = false;
 let _headerOptionsReady = false;
 let _headerSettingsSaveTimer = null;
 let _autoCompactInFlight = false;
-let _lastAutoCompactChatId = null;
+let _lastAutoCompactKey = null;
 let _headerStatsTimer = null;
 
 // TTS Player (bottom of sidebar)
@@ -357,7 +359,8 @@ document.addEventListener('DOMContentLoaded', () => {
             const chatId = parseInt(idParam, 10);
             const fromCreate = params.get('from_create') === '1';
             if (!isNaN(chatId)) {
-                await loadChat(chatId, { skipLoadInAgent: fromCreate });
+                if (fromCreate) await loadChat(chatId, { skipLoadInAgent: true });
+                else await selectChat(chatId);
             }
         } else if (data && data.chats && data.chats.length === 0) {
             // Show empty state so user can select provider/model/voice before first chat
@@ -365,7 +368,7 @@ document.addEventListener('DOMContentLoaded', () => {
         } else if (data && data.last_chat_id != null && data.chats && data.chats.length) {
             const lastId = Number(data.last_chat_id);
             if (!isNaN(lastId) && data.chats.some(c => c.id === lastId)) {
-                await loadChat(lastId);
+                await selectChat(lastId);
             }
         }
         syncKanbanSourceChatContext();
@@ -461,11 +464,8 @@ function setupEventListeners() {
     // Modal should only close via Cancel, Close button, or Escape — NOT on overlay click
     // (removed: newChatModal background click handler)
 
-    // Header Load button + Load bar button (view → load, matches native chat.py)
-    const headerLoadBtn = document.getElementById('headerLoadButton');
-    if (headerLoadBtn) headerLoadBtn.addEventListener('click', () => { if (currentChatId) loadChat(currentChatId); });
-    const loadBarBtn = document.getElementById('loadChatBarButton');
-    if (loadBarBtn) loadBarBtn.addEventListener('click', () => { if (currentChatId) loadChat(currentChatId); });
+    // Single view → load action, placed beside the composer.
+    if (inputLoadButton) inputLoadButton.addEventListener('click', () => { if (currentChatId) loadChat(currentChatId); });
 
     // Chat context menu: close on click outside
     if (chatContextMenu) {
@@ -528,7 +528,8 @@ function handleInputChange() {
     messageInput.style.height = messageInput.scrollHeight + 'px';
     
     // Enable/disable send button
-    sendButton.disabled = !messageInput.value.trim() || isStreaming;
+    const canReply = currentChatId == null || loadedChatId === currentChatId;
+    sendButton.disabled = !canReply || !messageInput.value.trim() || isStreaming;
 }
 
 function getChatWsUrl() {
@@ -653,7 +654,7 @@ function startChatWebSocket(force) {
                                 provider: data.provider || '-',
                                 model_name: data.model_name || '-',
                                 voice_provider: data.voice_provider,
-                                voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
+                                voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
                             });
                             scrollToBottom();
                             syncRenderedMessageCountFromDom();
@@ -672,7 +673,7 @@ function startChatWebSocket(force) {
                             provider: data.provider || '-',
                             model_name: data.model_name || '-',
                             voice_provider: data.voice_provider,
-                            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
+                            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
                         });
                         scrollToBottom();
                     }).catch(() => {});
@@ -963,7 +964,7 @@ function handleChatEventStreamFinished(msg) {
                     provider: data.provider || '-',
                     model_name: data.model_name || '-',
                     voice_provider: data.voice_provider,
-                    voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
+                    voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
                 });
                 scrollToBottom();
             }
@@ -982,9 +983,11 @@ function handleChatEventStreamFinished(msg) {
     scheduleRefreshChatHeaderStats({ checkTitle: true });
     // Reset input state in case the message came from voice/PTT (not web sendMessage)
     isStreaming = false;
-    messageInput.disabled = false;
-    messageInput.placeholder = 'Send message...';
-    sendButton.disabled = !messageInput.value.trim();
+    const isLoadedView = loadedChatId === currentChatId;
+    messageInput.disabled = !isLoadedView;
+    messageInput.placeholder = isLoadedView ? 'Send message...' : 'Load this chat to reply...';
+    sendButton.disabled = !isLoadedView || !messageInput.value.trim();
+    setViewOnlyChrome(!isLoadedView);
     setSendButtonStreaming(false);
 }
 
@@ -1388,7 +1391,7 @@ function createChatItem(chat) {
     const div = document.createElement('div');
     div.className = 'chat-item';
     div.setAttribute('data-chat-id', String(chat.id));
-    div.setAttribute('title', 'Click to load. Double-click to focus message input.');
+    div.setAttribute('title', 'Click to view. Use Load to make it active in the agent.');
     div.setAttribute('tabindex', '0');
     div.setAttribute('role', 'option');
     div.setAttribute('aria-selected', chat.id === currentChatId ? 'true' : 'false');
@@ -1402,36 +1405,31 @@ function createChatItem(chat) {
             <span class="chat-item-title">${escapeHtml(chat.title)}</span>
         </span>
         <span class="chat-item-agent-badge" style="display: none;" title="Loaded in voice agent">In agent</span>
-        <div class="chat-item-actions">
-            <button type="button" class="chat-item-btn chat-item-rename-btn" data-chat-id="${chat.id}" title="Rename" aria-label="Rename chat">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"></path>
-                    <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"></path>
-                </svg>
+        <div class="chat-item-actions flex items-center gap-1 flex-shrink-0">
+            <button type="button" class="chat-item-rename-btn p-1.5 rounded text-gray-300 hover:bg-white/10 inline-flex flex-shrink-0" data-chat-id="${chat.id}" title="Rename" aria-label="Rename chat">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z"/></svg>
             </button>
-            <button type="button" class="chat-item-btn chat-item-delete-btn" data-chat-id="${chat.id}" title="Delete" aria-label="Delete chat">
-                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-                    <path d="M3 6h18M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                </svg>
+            <button type="button" class="chat-item-delete-btn p-1.5 rounded text-gray-400 hover:text-red-400 hover:bg-red-500/20 flex-shrink-0" data-chat-id="${chat.id}" title="Delete" aria-label="Delete chat">
+                <svg class="w-4 h-4 flex-shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"/></svg>
             </button>
         </div>
     `;
     
     let clickTimer = null;
     div.addEventListener('click', (e) => {
-        if (e.target.closest('.chat-item-btn')) return;
+        if (e.target.closest('.chat-item-rename-btn, .chat-item-delete-btn')) return;
         clearTimeout(clickTimer);
         clickTimer = setTimeout(() => {
             clickTimer = null;
-            loadChat(chat.id);
+            selectChat(chat.id);
         }, 220);
     });
     div.addEventListener('dblclick', (e) => {
-        if (e.target.closest('.chat-item-btn')) return;
+        if (e.target.closest('.chat-item-rename-btn, .chat-item-delete-btn')) return;
         e.preventDefault();
         clearTimeout(clickTimer);
         clickTimer = null;
-        loadChat(chat.id).then(() => focusMessageInput());
+        selectChat(chat.id).then(() => focusMessageInput());
     });
     div.addEventListener('contextmenu', (e) => {
         e.preventDefault();
@@ -1457,29 +1455,18 @@ function createChatItem(chat) {
 }
 
 function bindChatListKeyboard() {
-    if (!chatList || chatList.dataset.keyboardBound === '1') return;
-    chatList.dataset.keyboardBound = '1';
-    chatList.addEventListener('keydown', (e) => {
-        if (e.target && e.target.closest && e.target.closest('input, textarea, select, [contenteditable="true"]')) return;
-        const row = e.target && e.target.closest ? e.target.closest('.chat-item') : null;
-        if (!row) return;
-        if (document.getElementById('decisions-confirm-modal')) return;
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            const rows = Array.from(chatList.querySelectorAll('.chat-item'));
-            const idx = rows.indexOf(row);
-            const next = rows[Math.max(0, Math.min(rows.length - 1, idx + (e.key === 'ArrowDown' ? 1 : -1)))];
-            if (next) {
-                next.focus();
-                loadChat(parseInt(next.getAttribute('data-chat-id'), 10));
-            }
-        } else if (e.key === 'Enter') {
-            e.preventDefault();
-            focusMessageInput();
-        } else if (e.key === 'Delete') {
-            e.preventDefault();
-            deleteChat(parseInt(row.getAttribute('data-chat-id'), 10));
-        }
+    if (!chatList || !window.DecisionsListKeyboard) return;
+    window.DecisionsListKeyboard.bind({
+        listEl: chatList,
+        namespace: 'chat',
+        rowSelector: '.chat-item',
+        getRowId: (row) => parseInt(row.getAttribute('data-chat-id'), 10),
+        getSelectedId: () => currentChatId,
+        selectOnNavigate: true,
+        onSelect: (id) => { selectChat(id); },
+        onEnter: () => { focusMessageInput(); },
+        onDelete: (id) => { deleteChat(id); },
+        pageGuard: () => !!chatList,
     });
 }
 bindChatListKeyboard();
@@ -1563,7 +1550,7 @@ async function selectChat(chatId) {
             provider: data.provider || '-',
             model_name: data.model_name || '-',
             voice_provider: data.voice_provider,
-            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
+            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
         });
         showChatView(loadedChatId === chatId);
         updateLoadButtonVisibility();
@@ -1577,7 +1564,7 @@ async function selectChat(chatId) {
     }
 }
 
-// Load Chat: select + load into agent (hot-swap LLM/voice/history). Called on double click or Load button.
+// Load Chat: select + load into agent (hot-swap LLM/voice/history). Called only by explicit Load actions.
 // Options: { skipLoadInAgent: true } - skip POST load-in-agent (use when chat was just created and agent already has it)
 async function loadChat(chatId, options = {}) {
     // Abort any in-flight stream from a previous chat so its poll doesn't stomp this one
@@ -1607,7 +1594,7 @@ async function loadChat(chatId, options = {}) {
             provider: data.provider || '-',
             model_name: data.model_name || '-',
             voice_provider: data.voice_provider,
-            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats
+            voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint
         });
         showChatView(true);
         updateLoadButtonVisibility();
@@ -1675,23 +1662,44 @@ function showChatView(isLoaded) {
     emptyState.style.display = 'none';
     chatMessages.style.display = 'flex';
     if (chatSettingsHeader) chatSettingsHeader.style.display = 'flex';
-    inputContainer.style.display = isLoaded ? 'block' : 'none';
-    const loadBar = document.getElementById('loadChatBar');
-    if (loadBar) loadBar.style.display = isLoaded ? 'none' : 'flex';
-    // Always re-enable the input when showing a chat — it may still be disabled
-    // from the initial 'Loading...' state set before DOMContentLoaded completes.
+    inputContainer.style.display = 'block';
+    setViewOnlyChrome(!isLoaded);
+    // Keep the composer visible for viewed chats, but only the loaded chat can receive replies.
     if (!isStreaming) {
-        messageInput.disabled = false;
-        if (messageInput.placeholder === 'Loading...') messageInput.placeholder = 'Send message...';
-        sendButton.disabled = !messageInput.value.trim();
+        messageInput.disabled = !isLoaded;
+        messageInput.placeholder = isLoaded ? 'Send message...' : 'Load this chat to reply...';
+        sendButton.disabled = !isLoaded || !messageInput.value.trim();
     }
 }
 
 function updateLoadButtonVisibility() {
-    const headerLoadBtn = document.getElementById('headerLoadButton');
-    if (!headerLoadBtn) return;
     const show = currentChatId != null && loadedChatId !== currentChatId;
-    headerLoadBtn.style.display = show ? 'inline-flex' : 'none';
+    if (inputLoadButton) {
+        inputLoadButton.style.display = show ? 'inline-flex' : 'none';
+        inputLoadButton.disabled = !show;
+    }
+    setViewOnlyChrome(show);
+}
+
+function setViewOnlyChrome(isViewOnly) {
+    if (chatSettingsHeader) chatSettingsHeader.classList.toggle('view-only', Boolean(isViewOnly));
+    if (inputContainer) inputContainer.classList.toggle('view-only', Boolean(isViewOnly));
+    const headerControls = [
+        headerLlmProvider,
+        headerLlmModel,
+        headerVoiceProvider,
+        headerVoiceModel,
+        configureChatButton,
+        compactChatButton,
+        forkChatButton,
+        contextRing
+    ];
+    headerControls.forEach(el => { if (el) el.disabled = Boolean(isViewOnly); });
+    if (speakerToggle) speakerToggle.disabled = Boolean(isViewOnly);
+    if (inputLoadButton) {
+        inputLoadButton.style.display = isViewOnly && currentChatId != null ? 'inline-flex' : 'none';
+        inputLoadButton.disabled = !isViewOnly || currentChatId == null;
+    }
 }
 
 function showEmptyState() {
@@ -1700,12 +1708,10 @@ function showEmptyState() {
     chatMessages.style.display = 'none';
     chatSettingsHeader.style.display = 'none';
     inputContainer.style.display = 'block';
-    const loadBar = document.getElementById('loadChatBar');
-    if (loadBar) loadBar.style.display = 'none';
-    const headerLoadBtn = document.getElementById('headerLoadButton');
-    if (headerLoadBtn) headerLoadBtn.style.display = 'none';
+    setViewOnlyChrome(false);
     // Ensure input is usable (may have been disabled during a stream)
     messageInput.disabled = false;
+    messageInput.placeholder = 'Send message...';
     sendButton.disabled = !messageInput.value.trim();
     isStreaming = false;
     setSendButtonStreaming(false);
@@ -2900,7 +2906,7 @@ async function pollUntilAgentResponse(abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                         scrollToBottom();
                     }
                     return;
@@ -2908,12 +2914,12 @@ async function pollUntilAgentResponse(abortSignal) {
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                 scrollToBottom();
             }
         }, pollMs);
@@ -2928,7 +2934,7 @@ async function pollUntilAgentResponse(abortSignal) {
                 const msgs = (d.messages || []);
                 if (msgs.some(m => m.role === 'assistant')) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats });
+                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
                 }
             }
@@ -2993,7 +2999,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                     finish();
                     if (currentChatId === myChatId) {
                         syncRenderedMessageCountFromDom();
-                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                        updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                         scrollToBottom();
                     }
                     return;
@@ -3001,12 +3007,12 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 finish();
                 if (currentChatId === myChatId) {
                     renderMessages(messages, false);
-                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                    updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                     scrollToBottom();
                 }
             } else if (has_new && streamingChatId !== myChatId && currentChatId === myChatId) {
                 renderMessages(messages, false);
-                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats });
+                updateChatSettingsDisplay({ title: data.title || 'New Chat', provider: data.provider || '-', model_name: data.model_name || '-', voice_provider: data.voice_provider, voice_model: data.voice_model, voice_model_display: data.voice_model_display, context_stats: data.context_stats, compact_checkpoint: data.compact_checkpoint });
                 scrollToBottom();
             }
         }, pollMs);
@@ -3021,7 +3027,7 @@ async function sendToAgentAndPoll(message, abortSignal) {
                 const msgs = (d.messages || []);
                 if (msgs.some(m => m.role === 'assistant')) {
                     renderMessages(msgs, false);
-                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats });
+                    updateChatSettingsDisplay({ title: d.title || 'New Chat', provider: d.provider || '-', model_name: d.model_name || '-', voice_provider: d.voice_provider, voice_model: d.voice_model, voice_model_display: d.voice_model_display, context_stats: d.context_stats, compact_checkpoint: d.compact_checkpoint });
                     scrollToBottom();
                 }
             }
@@ -3127,7 +3133,7 @@ async function deleteChat(chatId) {
             const nextId = (fallbackChatId != null && remainingIds.includes(fallbackChatId))
                 ? fallbackChatId
                 : data.chats[0].id;
-            await loadChat(nextId);
+            await selectChat(nextId);
         } else {
             showEmptyState();
             await saveLastChatId(null);
@@ -3842,6 +3848,7 @@ async function syncHeaderSelectorsFromSettings(settings) {
         }
     } finally {
         _headerSettingsSyncing = false;
+        setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
     }
 }
 
@@ -3906,7 +3913,8 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
             voice_provider: refreshed.voice_provider,
             voice_model: refreshed.voice_model,
             voice_model_display: refreshed.voice_model_display,
-            context_stats: refreshed.context_stats
+            context_stats: refreshed.context_stats,
+            compact_checkpoint: refreshed.compact_checkpoint
         });
         if (fromModal) hideChatConfigModal();
         else setHeaderSaveStatus('Saved', '');
@@ -3920,6 +3928,7 @@ async function persistChatSettingsPatch(body, { fromModal = false } = {}) {
         return null;
     } finally {
         selects.forEach(el => { if (el) el.disabled = false; });
+        setViewOnlyChrome(currentChatId != null && loadedChatId !== currentChatId);
         if (fromModal && chatConfigSave) chatConfigSave.disabled = false;
     }
 }
@@ -3946,7 +3955,10 @@ async function maybeAutoCompactChat(settings) {
     const chatId = currentChatId;
     if (!chatId || loadedChatId !== chatId || isStreaming || _autoCompactInFlight) return;
     if (percent < threshold) return;
-    if (_lastAutoCompactChatId === chatId && percent < 95) return;
+    const checkpointRowId = settings?.compact_checkpoint?.chat_row_id || 'none';
+    const messageCount = Number(stats.message_count || 0);
+    const autoCompactKey = `${chatId}:${checkpointRowId}:${messageCount}`;
+    if (_lastAutoCompactKey === autoCompactKey) return;
     _autoCompactInFlight = true;
     try {
         const response = await fetch(`${API_BASE}/chats/${chatId}/compact`, {
@@ -3960,7 +3972,7 @@ async function maybeAutoCompactChat(settings) {
         });
         const data = await response.json().catch(() => ({}));
         if (!response.ok) throw new Error(data.detail || data.error || 'Auto-compact failed');
-        _lastAutoCompactChatId = chatId;
+        _lastAutoCompactKey = autoCompactKey;
         if (currentChatId === chatId) {
             await selectChat(chatId);
             if (loadedChatId === chatId) loadedChatId = chatId;
@@ -4048,6 +4060,7 @@ function applyHeaderStatsPayload(data) {
     if (currentChatSettings) {
         currentChatSettings.title = title;
         if (data.context_stats) currentChatSettings.context_stats = data.context_stats;
+        if (data.compact_checkpoint !== undefined) currentChatSettings.compact_checkpoint = data.compact_checkpoint;
         if (data.title_auto) currentChatSettings.title_auto = data.title_auto;
     }
     const titleEl = document.getElementById('chatTitle');
@@ -4118,6 +4131,7 @@ function updateChatSettingsDisplay(settings) {
     applyHeaderStatsPayload({
         title: settings.title || 'New Chat',
         context_stats: settings.context_stats,
+        compact_checkpoint: settings.compact_checkpoint,
         title_auto: settings.title_auto
     });
 

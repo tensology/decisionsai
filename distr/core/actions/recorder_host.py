@@ -414,15 +414,12 @@ class ActionRecorderHost(QObject):
                         # Always prompt for confirmation/name on stop recording so the
                         # user can keep or update the action name immediately.
                         self.waiting_for_action_name_id = action_id
+                        # Naming TTS runs only after the user confirms a name
+                        # (_on_set_action_name) or cancels (cancel_recorded_action).
+                        # Do not speak here: emit() is synchronous and the confirmation
+                        # dialog blocks until the user chooses, so any TTS after emit
+                        # would play after cancel as well.
                         signal_manager.waiting_for_action_name.emit(action_id)
-                        if title:
-                            speak_text_directly_event_queue(
-                                f"Recording saved. Current name is {title}. Confirm or provide a new name."
-                            )
-                        else:
-                            speak_text_directly_event_queue(
-                                "Recording saved. What would you like to name this action?"
-                            )
             except Exception as e:
                 logger.error(f"Error after stop recording: {e}", exc_info=True)
                 self.waiting_for_action_name_id = None
@@ -585,6 +582,10 @@ class ActionRecorderHost(QObject):
                 from distr.gui.web.workflow_events import increment_workflow_updated
 
                 increment_workflow_updated()
+            except Exception:
+                pass
+            try:
+                signal_manager.interrupt_tts.emit()
             except Exception:
                 pass
             speak_text_directly_event_queue("Action cancelled.")

@@ -42,7 +42,19 @@ def test_cancel_recorded_action_deletes_action_and_recording(tmp_path):
     assert not recording_path.exists()
     assert host.waiting_for_action_name_id is None
     signal_mock.action_recording_cancelled.emit.assert_called_once_with(42)
+    signal_mock.interrupt_tts.emit.assert_called_once()
     speak_mock.assert_called_once_with("Action cancelled.")
+
+
+def test_stop_recording_does_not_speak_naming_prompt_after_waiting_dialog():
+    """Naming TTS must not run after the blocking name dialog returns."""
+    from pathlib import Path
+
+    source = Path("distr/core/actions/recorder_host.py").read_text(encoding="utf-8")
+    emit_idx = source.index("signal_manager.waiting_for_action_name.emit(action_id)")
+    after_emit = source[emit_idx:emit_idx + 500]
+    assert "speak_text_directly_event_queue" not in after_emit
+    assert "Confirm or provide a new name" not in after_emit
 
 
 def test_cancel_recorded_action_missing_action_returns_false():

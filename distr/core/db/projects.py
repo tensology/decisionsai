@@ -17,6 +17,7 @@ class Project(Base):
     board_id = Column(String, nullable=True)  # Board ID from provider
     board_name = Column(String, nullable=True)  # Board name for display
     kanban_board_id = Column(Integer, nullable=True)  # FK to kanban_boards.id for local database boards
+    start_time_tracker = Column(Boolean, default=True)  # Start schedule timer when startup terminals launch
     coding_backend = Column(String, nullable=False, default="pi")  # Project coding CLI backend
     coding_backend_model = Column(String, nullable=True)  # Optional per-project model/alias for the selected CLI backend
 

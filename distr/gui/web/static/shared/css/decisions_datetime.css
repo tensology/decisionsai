@@ -103,6 +103,46 @@
     right: 0;
 }
 
+.decisions-datetime-popover[data-open="above"] {
+    top: auto;
+    bottom: calc(100% + 8px);
+}
+
+.decisions-datetime-popover.is-datetime {
+    width: min(460px, calc(100vw - 28px));
+}
+
+.decisions-datetime-body.is-datetime {
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+}
+
+.decisions-datetime-calendar-pane {
+    flex: 1 1 auto;
+    min-width: 0;
+}
+
+.decisions-datetime-time-pane {
+    flex: 0 0 128px;
+    display: flex;
+    flex-direction: column;
+}
+
+.decisions-datetime-body.is-datetime .decisions-datetime-time {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+    flex: 1 1 auto;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+}
+
+.decisions-datetime-body.is-datetime .decisions-datetime-scroll {
+    max-height: 252px;
+}
+
 .decisions-datetime-head {
     display: flex;
     align-items: center;

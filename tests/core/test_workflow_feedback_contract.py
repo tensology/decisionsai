@@ -51,8 +51,6 @@ def test_workflow_js_exposes_ui_taste_feedback_controls():
     assert "save_as_visual_baseline" in js
     assert "visual_baseline_name" in js
     assert "baseline_screen_name" in js
-    assert "visual_baseline_readiness" in js
-    assert "if (saveAsBaseline && data.visual_baseline_readiness)" in js
     assert 'data-ui-feedback-label="spacing_off"' in js
     assert 'data-ui-feedback-label="flow_bad"' in js
     assert 'data-ui-feedback-label="hierarchy_unclear"' in js
@@ -60,51 +58,6 @@ def test_workflow_js_exposes_ui_taste_feedback_controls():
     assert 'data-ui-feedback-label="too_many_clicks"' in js
     assert 'data-testid="wf-ui-taste-controls"' in js
     assert '"/workflows/" + workflowId + "/runs/" + runId + "/ui-feedback"' in js
-
-
-def test_workflow_ui_exposes_visual_baseline_management():
-    html = (ROOT / "distr/gui/web/templates/workflows/workflows.html").read_text(encoding="utf-8")
-    js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
-
-    assert 'id="wf-visual-baselines-panel"' in html
-    assert 'id="wf-baseline-name"' in html
-    assert 'id="wf-baseline-screen-name"' in html
-    assert 'id="wf-baseline-screenshot-path"' in html
-    assert 'id="wf-save-visual-baseline"' in html
-    assert "function loadVisualBaselines" in js
-    assert "function renderVisualBaselineReadiness" in js
-    assert "function createVisualBaseline" in js
-    assert '"/workflows/visual-baselines?board_id="' in js
-    assert '"/workflows/visual-baselines/readiness?board_id="' in js
-    assert "visual_baseline_readiness" in js
-    assert "data-visual-baseline-status" in js
-    assert "data-visual-baseline-screen-status" in js
-    assert "Ready for comparison" in js
-    assert "Missing reference file" in js
-    assert "store_copy: true" in js
-    assert '"/workflows/visual-baselines"' in js
-
-
-def test_workflow_ui_exposes_scheduled_action_queue_management():
-    html = (ROOT / "distr/gui/web/templates/workflows/workflows.html").read_text(encoding="utf-8")
-    js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
-
-    assert 'id="wf-scheduled-actions-panel"' in html
-    assert 'id="wf-scheduled-actions-list"' in html
-    assert 'id="wf-scheduled-actions-empty"' in html
-    assert 'id="wf-refresh-scheduled-actions"' in html
-    assert "function loadScheduledActions" in js
-    assert "function renderScheduledActions" in js
-    assert "function disableScheduledActionByTitle" in js
-    assert "function cancelScheduledActionByTitle" in js
-    assert "function rescheduleScheduledActionByTitle" in js
-    assert '"/workflows/scheduled-actions"' in js
-    assert '"/workflows/scheduled-actions/by-title?title="' in js
-    assert 'data-scheduled-action-title' in js
-    assert 'wf-scheduled-action-kind' in js
-    assert 'wf-scheduled-action-time' in js
-    assert 'wf-scheduled-action-reschedule' in js
-    assert "schedule: {" in js
 
 
 def test_workflow_step_editor_exposes_visual_baseline_config():
@@ -119,29 +72,38 @@ def test_workflow_step_editor_exposes_visual_baseline_config():
     assert "visual_diff_threshold" in js
 
 
-def test_workflow_run_evidence_exposes_ui_correction_status():
-    js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
-
-    assert "function renderCorrectionStatus" in js
-    assert 'data-testid="wf-run-correction-status"' in js
-    assert "Correction queued" in js
-    assert "Correction auto-dispatched" in js
-    assert "correction_attempt_id" in js
-    assert "dispatch_result" in js
-    assert "terminal_ui_quality_gate" in js
-
-
-def test_workflow_runs_tab_exposes_correction_history_panel():
+def test_workflow_config_modal_exposes_run_policy_and_context_rules():
     html = (ROOT / "distr/gui/web/templates/workflows/workflows.html").read_text(encoding="utf-8")
     js = (ROOT / "distr/gui/web/static/workflows/js/workflows.js").read_text(encoding="utf-8")
 
-    assert 'data-runs-tab="corrections"' in html
-    assert 'id="wf-runs-pane-corrections"' in html
-    assert 'id="wf-corrections-status-filter"' in html
-    assert 'id="wf-corrections-list"' in html
-    assert 'id="wf-corrections-empty"' in html
-    assert "function renderCorrections" in js
-    assert "function loadWorkflowCorrections" in js
-    assert '"/workflows/" + currentWorkflowId + "/corrections"' in js
-    assert "wf-corrections-status-filter" in js
-    assert "workflowRunsSubtab === \"corrections\"" in js
+    assert "Workflow configuration" in html
+    assert 'id="wf-config-run-execution-mode"' in html
+    assert 'id="wf-config-run-concurrency-scope"' in html
+    assert 'id="wf-config-run-max-parallel"' in html
+    assert 'id="wf-config-run-branch-per-ticket"' in html
+    assert 'id="wf-config-context-items-list"' in html
+    assert 'id="wf-config-add-context-item-btn"' in html
+    assert "function refreshWorkflowConfigPanel" in js
+    assert "function saveWorkflowRunSettings" in js
+    assert "function renderContextRules" in js
+    assert "hermes-readiness-strip" not in html
+    assert "Ticket complexity routing" not in html
+    assert "function workflowExecRouteHtml" in js
+    assert "function saveWorkflowExecRouting" in js
+    assert 'data-tab="execution"' in js
+    assert "wf-board-hermes-routing-mode" not in js
+    assert "max_correction_attempts" not in js
+    assert "auto_dispatch_corrections" not in js
+    assert "function renderCorrectionStatus" not in js
+    assert 'data-runs-tab="corrections"' not in html
+    assert 'id="wf-tab-context"' not in html
+    assert 'data-tab="context"' not in html
+    assert "Bundled skills" not in js
+    assert "function renderSkillChains" not in js
+    assert "function loadLearnedRules" not in js
+    assert "function loadScheduledActions" not in js
+    assert "function loadVisualBaselines" not in js
+    assert 'id="wf-skills-catalog"' not in html
+    assert 'id="wf-learned-rules-list"' not in html
+    assert 'id="wf-scheduled-actions-panel"' not in html
+    assert 'id="wf-visual-baselines-panel"' not in html

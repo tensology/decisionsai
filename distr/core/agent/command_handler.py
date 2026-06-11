@@ -1368,7 +1368,7 @@ def _cmd_current_chat_changed(session, params):
     # 7. Update ChatManagerCore (bookkeeping — no listeners trigger swaps)
     # ---------------------------------------------------------------
     if session.chat_manager:
-        session.chat_manager.set_current_chat(chat_id)
+        session.chat_manager.set_current_chat(chat_id, force_reload=True)
 
     # ---------------------------------------------------------------
     # 8. Load chat history into LLM

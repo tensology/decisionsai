@@ -30,6 +30,15 @@ def open_workflow_execution_setup(page):
     page.locator("#sr-llm-modal").wait_for(state="visible", timeout=5000)
 
 
+def open_workflow_board_execution_tab(page):
+    page.locator("#wf-board-select").wait_for(state="visible", timeout=5000)
+    page.wait_for_timeout(300)
+    page.locator("#wf-edit-board-link").click()
+    page.locator("#wf-board-edit-modal").wait_for(state="visible", timeout=5000)
+    page.locator('.wf-board-edit-tab[data-tab="execution"]').click()
+    page.wait_for_timeout(300)
+
+
 @pytest.fixture(scope="module")
 def browser_context(browser):
     """Shared context with console & network logging."""
@@ -283,12 +292,6 @@ class TestWorkflowsDetailPanel:
         steps_content = page.locator("#wf-tab-steps")
         assert steps_content.is_hidden(), "Steps tab still visible after switching away"
 
-        # Switch to Agent Context tab
-        page.locator(".wf-tab[data-tab='context']").click()
-        page.wait_for_timeout(500)
-        context_content = page.locator("#wf-tab-context")
-        assert not context_content.is_hidden(), "Context tab content not visible"
-
         # Switch to Runs tab
         page.locator(".wf-tab[data-tab='runs']").click()
         page.wait_for_timeout(500)
@@ -485,9 +488,9 @@ class TestWorkflowsCreateAndDelete:
         detail = page.locator("#wf-detail")
         assert not detail.is_hidden(), "Detail panel not visible after create"
 
-        # Detail name should reflect
-        detail_name = page.locator("#wf-detail-name")
-        assert detail_name.input_value() == "PW Test Workflow", f"Workflow name mismatch: {detail_name.input_value()}"
+        # Active workflow tab should reflect the created name
+        active_tab = page.locator(".wf-workflow-tab.active")
+        assert active_tab.inner_text().strip() == "PW Test Workflow", f"Workflow name mismatch: {active_tab.inner_text()}"
 
         print(f"\n✅ Workflow 'PW Test Workflow' created")
         print_diagnostics(cl, nl, "CREATE WORKFLOW")
@@ -816,19 +819,17 @@ class TestWorkflowsHeaderActions:
         except Exception:
             pytest.skip("No workflows for LLM modal test")
 
-        open_workflow_execution_setup(page)
+        open_workflow_board_execution_tab(page)
 
-        modal = page.locator("#sr-llm-modal")
-        assert modal.is_visible(), "LLM settings modal not visible after click"
+        modal = page.locator("#wf-board-edit-modal")
+        assert modal.is_visible(), "Board edit modal not visible after click"
 
-        backend = page.locator("#wf-cli-low-backend")
-        assert backend.is_visible(), "Execution routing controls not visible in setup modal"
+        backend = page.locator("#wf-board-exec-low-backend")
+        assert backend.is_visible(), "Execution routing controls not visible in board edit modal"
 
-        # Close modal
-        close_btn = page.locator("#sr-llm-close")
-        close_btn.click()
+        modal.locator(".wf-board-edit-close").first.click()
         page.wait_for_timeout(300)
-        assert not modal.is_visible(), "LLM modal still visible after close"
+        assert not modal.is_visible(), "Board edit modal still visible after close"
 
         print_diagnostics(cl, nl, "LLM MODAL")
         page.close()

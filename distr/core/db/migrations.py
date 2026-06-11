@@ -2197,3 +2197,23 @@ def run_migrations():
         logger.info("Ensured Hermes learned rules tables exist")
     except Exception as e:
         logger.debug(f"Hermes learned rules migration: {e}")
+
+    try:
+        with engine.connect() as conn:
+            result = conn.execute(text("SELECT name FROM sqlite_master WHERE type='table' AND name='projects'"))
+            if result.fetchone():
+                existing = {row[1] for row in conn.execute(text("PRAGMA table_info(projects)"))}
+                if "start_time_tracker" not in existing:
+                    conn.execute(text("ALTER TABLE projects ADD COLUMN start_time_tracker BOOLEAN DEFAULT 1"))
+                    conn.commit()
+                    logger.info("Added start_time_tracker column to projects table")
+    except Exception as e:
+        logger.debug(f"Project start_time_tracker migration: {e}")
+
+    try:
+        from distr.core.db import schedule_blocks as _schedule_blocks  # noqa: F401
+
+        Base.metadata.create_all(engine)
+        logger.info("Ensured schedule_blocks table exists")
+    except Exception as e:
+        logger.debug(f"schedule_blocks migration: {e}")

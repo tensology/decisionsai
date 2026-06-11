@@ -67,25 +67,780 @@
     width: 5.5rem;
     min-width: 5.5rem;
 }
+.automation-left-view-btn {
+    flex: 1;
+    padding: 0.5rem 0.75rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: transparent;
+    color: #9ca3af;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+}
+.automation-left-view-btn:hover { color: #fff; border-color: rgba(249, 115, 22, 0.45); }
+.automation-left-view-btn.is-active {
+    color: #fff;
+    border-color: #f97316;
+    background: rgba(249, 115, 22, 0.12);
+}
+.automation-cal-help {
+    flex-shrink: 0;
+    margin-top: 0.75rem;
+    padding-top: 0.75rem;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    display: flex;
+    align-items: flex-start;
+    gap: 0.875rem;
+}
+.automation-cal-help-icon {
+    flex-shrink: 0;
+    width: 2rem;
+    height: 2rem;
+    margin-top: 0.05rem;
+    color: #60a5fa;
+}
+.automation-cal-help-text {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 0.75rem;
+    line-height: 1.45;
+    color: #9ca3af;
+}
+.automation-cal-mode-btn {
+    padding: 0.25rem 0.625rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    background: transparent;
+    color: #9ca3af;
+    font-size: 0.75rem;
+}
+.automation-cal-mode-btn.is-active {
+    color: #fff;
+    border-color: #f97316;
+    background: rgba(249, 115, 22, 0.12);
+}
+.automation-cal-zoom-tools {
+    display: inline-flex;
+    align-items: center;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 0.375rem;
+    overflow: hidden;
+    background: rgba(16, 24, 63, 0.35);
+}
+.automation-cal-zoom-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border: 0;
+    background: transparent;
+    color: #d1d5db;
+    font-size: 1rem;
+    line-height: 1;
+    cursor: pointer;
+}
+.automation-cal-zoom-btn:hover {
+    background: rgba(255, 255, 255, 0.08);
+    color: #fff;
+}
+.automation-cal-zoom-label {
+    min-width: 3rem;
+    padding: 0 0.375rem;
+    font-size: 0.75rem;
+    font-weight: 500;
+    color: #9ca3af;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+}
+.automation-cal-nav-btn {
+    width: 1.75rem;
+    height: 1.75rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    color: #d1d5db;
+    background: transparent;
+    line-height: 1;
+}
+.automation-cal-nav-btn:hover { background: rgba(255, 255, 255, 0.08); color: #fff; }
+.automation-cal-month-shell {
+    display: flex;
+    flex-direction: column;
+    gap: 0.375rem;
+    flex: 1;
+    min-height: 0;
+}
+.automation-cal-weekdays {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    gap: 0.375rem;
+    flex-shrink: 0;
+}
+.automation-cal-month-grid {
+    display: grid;
+    grid-template-columns: repeat(7, minmax(0, 1fr));
+    grid-template-rows: repeat(var(--cal-month-rows, 5), minmax(4.5rem, 1fr));
+    gap: 0.375rem;
+    flex: 1 1 auto;
+    min-height: 0;
+    height: 100%;
+    align-items: stretch;
+    align-content: stretch;
+}
+.automation-cal-weekday {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+    text-align: center;
+    padding-bottom: 0.125rem;
+}
+.automation-cal-day {
+    min-height: 0;
+    height: 100%;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 0.375rem;
+    background: rgba(16, 24, 63, 0.35);
+    padding: 0.25rem;
+    vertical-align: top;
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    box-sizing: border-box;
+}
+.automation-cal-day-stack {
+    display: flex;
+    flex-direction: column;
+    gap: 0.125rem;
+    flex: 1 1 auto;
+    min-height: 0;
+    overflow-x: hidden;
+    overflow-y: auto;
+}
+.automation-cal-day.is-outside { opacity: 0.45; }
+.automation-cal-day.is-today { border-color: rgba(249, 115, 22, 0.55); }
+.automation-cal-day-head {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-end;
+    gap: 0.375rem;
+    min-width: 0;
+    flex-shrink: 0;
+}
+.automation-cal-day-num {
+    font-size: 0.6875rem;
+    color: #9ca3af;
+    flex: 0 0 auto;
+    font-weight: 600;
+}
+.automation-cal-event,
+.sched-block-month {
+    display: flex;
+    flex-direction: row;
+    align-items: center;
+    gap: 0.25rem;
+    width: 100%;
+    height: 1.25rem;
+    min-height: 1.25rem;
+    max-height: 1.25rem;
+    flex: 0 0 1.25rem;
+    box-sizing: border-box;
+    overflow: hidden;
+    min-width: 0;
+}
+.automation-cal-event {
+    text-align: left;
+    border: 1px solid rgba(249, 115, 22, 0.35);
+    border-radius: 0.1875rem;
+    background: rgba(249, 115, 22, 0.18);
+    color: #fdba74;
+    font-size: 0.5625rem;
+    line-height: 1.1;
+    padding: 0 0.25rem;
+    cursor: pointer;
+}
+.automation-cal-event:hover { background: rgba(249, 115, 22, 0.28); color: #fff; }
+.automation-cal-event-title,
+.sched-block-month-title {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-weight: 600;
+}
+.automation-cal-event-time,
+.sched-block-month-time {
+    flex: 0 0 auto;
+    margin-left: auto;
+    font-size: 0.5rem;
+    font-weight: 500;
+    opacity: 0.82;
+    white-space: nowrap;
+    font-variant-numeric: tabular-nums;
+}
+.automation-cal-more {
+    font-size: 0.625rem;
+    color: #6b7280;
+    margin-top: 0.125rem;
+}
+.automation-cal-week-timegrid {
+    border: 1px solid rgba(255, 255, 255, 0.14);
+    border-radius: 0.5rem;
+    overflow: auto;
+    min-height: 0;
+    flex: 1;
+    background: rgba(12, 18, 48, 0.55);
+}
+.automation-cal-week-timegrid-inner {
+    min-width: 52rem;
+}
+.automation-cal-week-timegrid-inner.is-day-view {
+    min-width: 18rem;
+}
+.automation-cal-week-header {
+    display: grid;
+    grid-template-columns: 3.5rem repeat(7, minmax(0, 1fr));
+    position: sticky;
+    top: 0;
+    z-index: 25;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.12);
+    background: #1a1f3a;
+    box-shadow: 0 1px 0 rgba(0, 0, 0, 0.35);
+}
+.automation-cal-week-header.is-cols-1 {
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+.automation-cal-week-header-time {
+    position: sticky;
+    left: 0;
+    z-index: 2;
+    padding: 0.5rem 0.375rem;
+    font-size: 0.625rem;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #6b7280;
+    background: #1a1f3a;
+}
+.automation-cal-week-header-day {
+    padding: 0.5rem 0.625rem;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    background: #1a1f3a;
+}
+.automation-cal-week-header-day.is-weekend {
+    background: #121833;
+}
+.automation-cal-week-header-day.is-holiday {
+    background: #1a3328;
+}
+.automation-cal-week-header-day.is-today {
+    background: #352418;
+}
+.automation-cal-week-header-weekday {
+    font-size: 0.625rem;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #9ca3af;
+}
+.automation-cal-week-header-day.is-today .automation-cal-week-header-weekday {
+    color: #fdba74;
+}
+.automation-cal-week-header-date-row {
+    display: flex;
+    align-items: baseline;
+    justify-content: flex-start;
+    gap: 0.375rem;
+    margin-top: 0.125rem;
+    min-width: 0;
+}
+.automation-cal-week-header-date {
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: #f3f4f6;
+    flex: 0 0 auto;
+}
+.automation-cal-week-header-holiday {
+    font-size: 0.5625rem;
+    color: #86efac;
+    line-height: 1.2;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.automation-cal-week-body-grid {
+    display: grid;
+    grid-template-columns: 3.5rem repeat(7, minmax(0, 1fr));
+}
+.automation-cal-week-body-grid.is-cols-1 {
+    grid-template-columns: 3.5rem minmax(0, 1fr);
+}
+.automation-cal-week-time-gutter {
+    position: sticky;
+    left: 0;
+    z-index: 10;
+    border-right: 1px solid rgba(255, 255, 255, 0.1);
+    background: #151d45;
+}
+.automation-cal-week-time-label {
+    padding: 0 0.375rem;
+    font-size: 0.6875rem;
+    color: #9ca3af;
+    line-height: 1;
+    box-sizing: border-box;
+}
+.automation-cal-week-time-label span {
+    display: block;
+    padding-top: 0.25rem;
+}
+.automation-cal-week-day-col {
+    position: relative;
+    border-left: 1px solid rgba(255, 255, 255, 0.1);
+    background: #151d45;
+}
+.automation-cal-week-day-col.is-weekend {
+    background: #0f1428;
+}
+.automation-cal-week-day-col.is-holiday {
+    background: linear-gradient(0deg, rgba(74, 222, 128, 0.16), rgba(74, 222, 128, 0.16)), #151d45;
+}
+.automation-cal-week-day-col.is-weekend.is-holiday {
+    background: linear-gradient(0deg, rgba(74, 222, 128, 0.14), rgba(74, 222, 128, 0.14)), #0f1428;
+}
+.automation-cal-week-day-col.is-today {
+    box-shadow: inset 0 0 0 1px rgba(249, 115, 22, 0.35);
+}
+.automation-cal-day.is-weekend {
+    background: rgba(8, 12, 32, 0.65);
+}
+.automation-cal-day.is-holiday {
+    background: linear-gradient(0deg, rgba(74, 222, 128, 0.14), rgba(74, 222, 128, 0.14)), rgba(16, 24, 63, 0.35);
+}
+.automation-cal-day-holiday {
+    font-size: 0.5625rem;
+    color: #86efac;
+    line-height: 1.2;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    text-align: right;
+}
+.automation-cal-week-day-col .relative {
+    cursor: crosshair;
+}
+.automation-cal-week-slot {
+    box-sizing: border-box;
+    border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+.automation-cal-week-slot:hover {
+    background: rgba(59, 130, 246, 0.08);
+}
+.automation-cal-week-slot.is-hour {
+    border-top-color: rgba(255, 255, 255, 0.12);
+}
+.automation-cal-week-now-line {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 2px;
+    background: #f97316;
+    pointer-events: none;
+    z-index: 1;
+}
+.automation-cal-week-block {
+    position: absolute;
+    left: 2px;
+    width: calc(100% - 4px);
+    right: auto;
+    border: 0;
+    border-radius: 0.25rem;
+    background: rgba(249, 115, 22, 0.22);
+    color: #ffedd5;
+    font-size: 0.625rem;
+    line-height: 1.2;
+    padding: 0.125rem 0.25rem;
+    text-align: left;
+    cursor: pointer;
+    overflow: hidden;
+    z-index: 2;
+}
+.automation-cal-week-block.is-compact {
+    background: rgba(249, 115, 22, 0.14);
+    color: #fdba74;
+}
+.automation-cal-week-block:hover {
+    background: rgba(249, 115, 22, 0.34);
+    color: #fff;
+}
+.automation-cal-week-block-time {
+    display: block;
+    font-size: 0.5625rem;
+    color: rgba(255, 237, 213, 0.85);
+    margin-bottom: 0.0625rem;
+}
+.automation-cal-week-block.is-compact .automation-cal-week-block-time {
+    color: #fdba74;
+}
+.automation-cal-week-block-title {
+    display: block;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sched-block {
+    position: absolute;
+    left: 2px;
+    width: calc(100% - 4px);
+    right: auto;
+    display: flex;
+    flex-direction: column;
+    border-radius: 0.25rem;
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    font-size: 0.6875rem;
+    line-height: 1.25;
+    padding: 0.25rem 0.375rem 0.3125rem;
+    text-align: left;
+    cursor: grab;
+    overflow: hidden;
+    z-index: 4;
+}
+.sched-block.is-moving,
+.sched-block.is-resizing { opacity: 0.45; }
+.sched-block:active { cursor: grabbing; }
+.sched-block-header {
+    position: relative;
+    z-index: 1;
+    flex-shrink: 0;
+    min-width: 0;
+    padding-right: 0.125rem;
+}
+.sched-block-title {
+    display: block;
+    font-weight: 600;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sched-block-meta {
+    display: block;
+    margin-top: 0.0625rem;
+    font-size: 0.5625rem;
+    font-weight: 500;
+    opacity: 0.82;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.sched-block-time {
+    display: block;
+    margin-top: auto;
+    position: relative;
+    z-index: 1;
+    font-size: 0.5625rem;
+    font-weight: 500;
+    opacity: 0.82;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.sched-block-duration {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 0.1875rem;
+    background: var(--sched-block-duration-bg, rgba(17, 24, 39, 0.08));
+    color: var(--sched-block-duration-color, #111827);
+    padding: 0.125rem 0.375rem;
+    font-size: 0.5625rem;
+    font-weight: 700;
+    pointer-events: none;
+    white-space: nowrap;
+    max-width: calc(100% - 0.75rem);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    z-index: 2;
+}
+.sched-block.is-compact .sched-block-duration,
+.sched-block.is-compact .sched-block-time,
+.sched-block.is-compact .sched-block-meta { display: none; }
+.sched-block.is-medium .sched-block-time,
+.sched-block.is-medium .sched-block-meta { display: none; }
+.sched-block-context-menu {
+    position: fixed;
+    z-index: 70;
+    min-width: 11rem;
+    border-radius: 0.5rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: #1a1f3a;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+    padding: 0.25rem 0;
+}
+.sched-block-context-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    color: #e5e7eb;
+    background: transparent;
+    border: 0;
+}
+.sched-block-context-item:hover { background: rgba(255, 255, 255, 0.08); }
+.sched-block-context-item.is-danger { color: #fca5a5; }
+.sched-block-modal-actions {
+    position: relative;
+}
+.sched-block-actions-menu {
+    position: absolute;
+    right: 0;
+    top: calc(100% + 0.375rem);
+    z-index: 20;
+    min-width: 11rem;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: #1a1f3a;
+    box-shadow: 0 10px 24px rgba(0, 0, 0, 0.4);
+    padding: 0.25rem 0;
+}
+.sched-block-action-item {
+    display: block;
+    width: 100%;
+    text-align: left;
+    padding: 0.5rem 0.75rem;
+    font-size: 0.8125rem;
+    color: #e5e7eb;
+    background: transparent;
+    border: 0;
+}
+.sched-block-action-item:hover { background: rgba(255, 255, 255, 0.08); }
+.sched-block-action-item.is-danger { color: #fca5a5; }
+.sched-interaction-preview {
+    position: absolute;
+    left: 4px;
+    right: 4px;
+    border-radius: 0.25rem;
+    pointer-events: none;
+    z-index: 6;
+    overflow: hidden;
+    padding: 0.125rem 0.25rem;
+    font-size: 0.5625rem;
+    font-weight: 600;
+}
+.sched-drag-preview {
+    background: rgba(96, 165, 250, 0.45);
+    border: 1px solid rgba(96, 165, 250, 0.95);
+    color: #eff6ff;
+}
+.sched-move-preview {
+    background: rgba(129, 140, 248, 0.45);
+    border: 1px solid rgba(129, 140, 248, 0.95);
+    color: #eef2ff;
+}
+.sched-resize-preview {
+    background: rgba(59, 130, 246, 0.4);
+    border: 1px solid rgba(59, 130, 246, 0.95);
+    color: #dbeafe;
+}
+.sched-preview-duration {
+    position: absolute;
+    left: 50%;
+    top: 50%;
+    transform: translate(-50%, -50%);
+    border-radius: 0.125rem;
+    background: rgba(0, 0, 0, 0.28);
+    padding: 0.0625rem 0.25rem;
+    white-space: nowrap;
+}
+.sched-preview-time {
+    display: block;
+    opacity: 0.9;
+    margin-top: 0.125rem;
+}
+.sched-day-hours {
+    margin-top: 0.125rem;
+    font-size: 0.6875rem;
+    font-weight: 600;
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+}
+.sched-month-day-hours {
+    margin-top: 0.125rem;
+    font-size: 0.5625rem;
+    font-weight: 600;
+    color: #93c5fd;
+    font-variant-numeric: tabular-nums;
+}
+body.sched-calendar-interacting {
+    user-select: none;
+    cursor: crosshair;
+}
+.sched-block-resize-handle {
+    position: absolute;
+    left: 0;
+    right: 0;
+    height: 8px;
+    cursor: ns-resize;
+    z-index: 2;
+    background: transparent;
+}
+.sched-block:hover .sched-block-resize-handle,
+.sched-block.is-resizing .sched-block-resize-handle {
+    background: var(--sched-block-handle-bg, rgba(17, 24, 39, 0.12));
+}
+.sched-block-resize-handle.is-top { top: 0; }
+.sched-block-resize-handle:not(.is-top) { bottom: 0; }
+body.sched-calendar-interacting .sched-block-resize-handle {
+    background: var(--sched-block-handle-bg, rgba(17, 24, 39, 0.12));
+}
+.sched-block-month {
+    border-radius: 0.1875rem;
+    background: #ffffff;
+    color: #111827;
+    border: 1px solid #d1d5db;
+    box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08);
+    font-size: 0.5625rem;
+    line-height: 1.1;
+    padding: 0 0.25rem;
+    text-align: left;
+    cursor: pointer;
+}
+.sched-block-timer-btn.is-running { border-color: #22c55e; color: #bbf7d0; }
+#sched-block-modal .sched-block-field { margin-bottom: 0.75rem; }
+.kb-custom-select { position: relative; width: 100%; min-width: 0; }
+.kb-custom-select-native {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
+}
+.kb-custom-select-trigger {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    min-width: 0;
+    padding: 0.5rem 0.625rem;
+    border-radius: 0.25rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: #152054;
+    color: #ffffff;
+    font-size: 0.875rem;
+    line-height: 1.25rem;
+    text-align: left;
+    cursor: pointer;
+}
+.kb-custom-select-trigger:hover { border-color: rgba(255, 255, 255, 0.35); }
+.kb-custom-select-trigger:focus { outline: none; border-color: #f97316; }
+.kb-custom-select-trigger.is-placeholder .kb-custom-select-label { color: #9ca3af; }
+.kb-custom-select-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-custom-select-chevron {
+    flex-shrink: 0;
+    color: #9ca3af;
+    font-size: 0.85rem;
+    line-height: 1;
+}
+.kb-custom-select-menu {
+    position: absolute;
+    left: 0;
+    right: 0;
+    top: calc(100% + 4px);
+    z-index: 40;
+    max-height: 240px;
+    overflow-y: auto;
+    border-radius: 0.375rem;
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    background: #1a1f3a;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.45);
+    padding: 0.25rem;
+}
+.kb-custom-select-option {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    width: 100%;
+    padding: 0.45rem 0.5rem;
+    border: 0;
+    border-radius: 0.25rem;
+    background: transparent;
+    color: #e5e7eb;
+    font-size: 0.8125rem;
+    text-align: left;
+    cursor: pointer;
+}
+.kb-custom-select-option:hover,
+.kb-custom-select-option.is-selected {
+    background: rgba(249, 115, 22, 0.14);
+    color: #ffffff;
+}
+.kb-custom-select-option-label {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.kb-custom-select-color-swatch {
+    flex-shrink: 0;
+    width: 0.75rem;
+    height: 0.75rem;
+    border-radius: 0.1875rem;
+    border: 1px solid rgba(255, 255, 255, 0.25);
+    background: #ffffff;
+}
+.kb-custom-select-color-swatch.is-empty {
+    background: #ffffff;
+    border-color: rgba(255, 255, 255, 0.35);
+}
+.kb-custom-select-group-label {
+    padding: 0.375rem 0.5rem 0.125rem;
+    font-size: 0.625rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: #9ca3af;
+}
 </style>
 {% endblock %}
 
 {% block content %}
-<div class="w-full px-6 py-8 flex gap-6 h-[calc(100vh-4rem)]">
-    <!-- Left panel: search + automation list + Add -->
+<div class="w-full px-6 py-4 flex gap-6 h-[calc(100vh-4rem)]">
+    <!-- Left panel: view toggle + automation list + Add -->
     <div class="w-80 flex-shrink-0 flex flex-col gap-4">
         <div class="bg-[#1a1f3a] rounded-lg border border-white/20 p-4">
-            <input type="text" id="automation-search" placeholder="Search automations..." class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white placeholder-gray-500 focus:border-[#f97316] focus:outline-none text-sm">
+            <div class="flex gap-2" role="tablist" aria-label="Automation main views">
+                <button type="button" id="automation-view-list" class="automation-left-view-btn is-active" role="tab" aria-selected="true">Automations</button>
+                <button type="button" id="automation-view-calendar" class="automation-left-view-btn" role="tab" aria-selected="false">Calendar</button>
+            </div>
         </div>
         <div class="flex-1 bg-[#1a1f3a] rounded-lg border border-white/20 p-4 min-h-0 flex flex-col">
-            <div id="automation-list" class="flex-1 overflow-y-auto space-y-2">
+            <div id="automation-list" class="flex-1 overflow-y-auto space-y-2 min-h-0">
                 <p class="text-sm text-gray-400">Loading automations...</p>
             </div>
-            <button type="button" id="automation-new" class="mt-4 w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium">+ Add Automation</button>
+            <button type="button" id="automation-new" class="mt-4 w-full px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium flex-shrink-0">+ Add Automation</button>
         </div>
     </div>
 
-    <!-- Right panel: empty state or detail form -->
+    <!-- Right panel: automation editor or schedule calendar -->
     <div class="flex-1 min-w-0 bg-[#1a1f3a] rounded-lg border border-white/20 overflow-hidden flex flex-col">
         <div id="automation-empty" class="flex-1 flex flex-col items-center justify-center p-12 text-center">
             <p class="text-gray-400 text-sm max-w-md mb-2">Quick, repeatable actions and schedules live here.</p>
@@ -170,11 +925,103 @@
                 </div>
             </div>
         </form>
+
+        <div id="automation-calendar-panel" class="hidden flex-1 min-h-0 flex flex-col p-6">
+            <div class="flex items-center justify-between gap-3 mb-4 flex-shrink-0">
+                <div>
+                    <h2 class="text-lg font-semibold text-white">Schedule calendar</h2>
+                </div>
+                <div class="flex items-center gap-2 flex-wrap justify-end">
+                    <div class="hidden sm:flex flex-col items-end mr-1">
+                        <span id="sched-block-hours-total-label" class="text-[10px] uppercase tracking-wide text-gray-500">Week total</span>
+                        <span id="sched-block-hours-total-value" class="text-sm font-semibold text-white tabular-nums">00:00:00</span>
+                    </div>
+                    <span id="sched-block-timer-elapsed" class="hidden text-sm font-semibold tabular-nums text-emerald-300 min-w-[4.5rem] text-right">00:00:00</span>
+                    <span id="sched-block-timer-label" class="text-xs text-gray-500 hidden md:inline">Timer stopped</span>
+                    <button type="button" id="sched-block-timer-btn" class="automation-cal-mode-btn sched-block-timer-btn">Start</button>
+                    <label class="automation-cal-mode-btn flex items-center gap-2 cursor-pointer">
+                        <input type="checkbox" id="sched-block-snap" checked class="accent-[#f97316]">
+                        <span>Snap 15m</span>
+                    </label>
+                    <button type="button" id="automation-cal-prev" class="automation-cal-nav-btn" aria-label="Previous period">&lsaquo;</button>
+                    <p id="automation-cal-title" class="text-sm font-medium text-white text-center min-w-[10rem]">Calendar</p>
+                    <button type="button" id="automation-cal-next" class="automation-cal-nav-btn" aria-label="Next period">&rsaquo;</button>
+                </div>
+            </div>
+            <div class="flex items-center justify-between gap-3 mb-4 flex-shrink-0">
+                <div class="flex gap-1">
+                    <button type="button" id="automation-cal-mode-month" class="automation-cal-mode-btn is-active">Month</button>
+                    <button type="button" id="automation-cal-mode-week" class="automation-cal-mode-btn">Week</button>
+                    <button type="button" id="automation-cal-mode-day" class="automation-cal-mode-btn">Day</button>
+                </div>
+                <div id="automation-cal-zoom-tools" class="automation-cal-zoom-tools hidden">
+                    <button type="button" id="automation-cal-zoom-out" class="automation-cal-zoom-btn" aria-label="Zoom out">−</button>
+                    <span id="automation-cal-zoom-label" class="automation-cal-zoom-label">100%</span>
+                    <button type="button" id="automation-cal-zoom-in" class="automation-cal-zoom-btn" aria-label="Zoom in">+</button>
+                </div>
+            </div>
+            <div id="automation-calendar" class="flex-1 min-h-0 flex flex-col overflow-hidden"></div>
+            <div class="automation-cal-help" aria-live="polite">
+                <svg class="automation-cal-help-icon" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" aria-hidden="true">
+                    <path stroke-linecap="round" stroke-linejoin="round" d="m11.25 11.25.041-.02a.75.75 0 0 1 1.063.852l-.708 2.836a.75.75 0 0 0 1.063.853l.041-.021M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0Zm-9-3.75h.008v.008H12V8.25Z" />
+                </svg>
+                <p id="automation-cal-help" class="automation-cal-help-text"></p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="sched-block-context-menu" class="sched-block-context-menu hidden" role="menu" aria-label="Time block actions">
+    <button type="button" class="sched-block-context-item" data-action="edit" role="menuitem">Edit</button>
+    <button type="button" class="sched-block-context-item" data-action="naturalize" role="menuitem">Naturalize time</button>
+    <button type="button" class="sched-block-context-item is-danger" data-action="delete" role="menuitem">Delete</button>
+</div>
+
+<div id="sched-block-modal" class="hidden fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+    <div class="w-full max-w-lg rounded-lg border border-white/20 bg-[#1a1f3a] p-5 shadow-xl">
+        <div class="flex items-center justify-between gap-3 mb-4">
+            <h3 id="sched-block-modal-title" class="text-lg font-semibold text-white">New time block</h3>
+            <div class="sched-block-modal-actions">
+                <button type="button" id="sched-block-options-btn" class="hidden px-2.5 py-1.5 rounded border border-white/20 text-gray-200 text-sm hover:bg-white/10" aria-expanded="false" aria-haspopup="menu" title="More actions">Options</button>
+                <div id="sched-block-actions-menu" class="sched-block-actions-menu hidden" role="menu" aria-label="Time block options">
+                    <button type="button" id="sched-block-action-naturalize" class="sched-block-action-item" role="menuitem">Naturalize time</button>
+                    <button type="button" id="sched-block-action-delete" class="sched-block-action-item is-danger" role="menuitem">Delete</button>
+                </div>
+            </div>
+        </div>
+        <div class="sched-block-field">
+            <label class="block text-sm text-gray-400 mb-1">Title</label>
+            <input id="sched-block-title" type="text" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white">
+        </div>
+        <div class="grid grid-cols-2 gap-3 sched-block-field">
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">Start</label>
+                <input id="sched-block-start" type="datetime-local" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white">
+            </div>
+            <div>
+                <label class="block text-sm text-gray-400 mb-1">End</label>
+                <input id="sched-block-end" type="datetime-local" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white">
+            </div>
+        </div>
+        <div class="sched-block-field">
+            <label class="block text-sm text-gray-400 mb-1">Board</label>
+            <select id="sched-block-board"></select>
+        </div>
+        <div class="sched-block-field">
+            <label class="block text-sm text-gray-400 mb-1">Ticket</label>
+            <select id="sched-block-ticket" class="w-full px-3 py-2 bg-[#152054] border border-white/20 rounded text-white"></select>
+        </div>
+        <div class="flex flex-wrap gap-2 justify-end mt-4">
+            <button type="button" id="sched-block-cancel" class="px-3 py-2 rounded border border-white/20 text-gray-300 text-sm">Cancel</button>
+            <button type="button" id="sched-block-save" class="px-3 py-2 rounded bg-[#f97316] text-white text-sm font-medium">Save</button>
+        </div>
     </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script src="/static/shared/js/api.js"></script>
+<script src="/tickets/static/js/kanban_custom_select.js"></script>
+<script src="/automations/static/js/calendar_blocks.js"></script>
 <script src="/automations/static/js/automations.js"></script>
 {% endblock %}

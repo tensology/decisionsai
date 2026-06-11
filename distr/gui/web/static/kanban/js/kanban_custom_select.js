@@ -39,6 +39,10 @@
         trigger.setAttribute("aria-haspopup", "listbox");
         trigger.setAttribute("aria-expanded", "false");
 
+        var swatchSpan = document.createElement("span");
+        swatchSpan.className = "kb-custom-select-color-swatch is-empty";
+        swatchSpan.setAttribute("aria-hidden", "true");
+
         var labelSpan = document.createElement("span");
         labelSpan.className = "kb-custom-select-label";
 
@@ -47,6 +51,7 @@
         chevron.setAttribute("aria-hidden", "true");
         chevron.textContent = "\u25BE";
 
+        trigger.appendChild(swatchSpan);
         trigger.appendChild(labelSpan);
         trigger.appendChild(chevron);
 
@@ -59,6 +64,7 @@
 
         var api = {
             _linkedValues: {},
+            _colorValues: opts.colorValues || {},
             _closeMenu: function() {
                 menu.classList.add("hidden");
                 trigger.setAttribute("aria-expanded", "false");
@@ -74,8 +80,35 @@
                 api._linkedValues = linkedMap || {};
                 buildMenu();
             },
+            setColorValues: function(colorMap) {
+                api._colorValues = colorMap || {};
+                buildMenu();
+            },
             refresh: buildMenu,
         };
+
+        function normalizeColor(value) {
+            var raw = String(value || "").trim();
+            if (!raw) return "";
+            if (!raw.startsWith("#")) raw = "#" + raw;
+            if (!/^#[0-9a-fA-F]{3,8}$/.test(raw)) return "";
+            if (raw.length === 4) {
+                return "#" + raw[1] + raw[1] + raw[2] + raw[2] + raw[3] + raw[3];
+            }
+            return raw.slice(0, 7);
+        }
+
+        function applySwatch(el, value) {
+            if (!el) return;
+            var color = normalizeColor(api._colorValues[value]);
+            if (color) {
+                el.classList.remove("is-empty");
+                el.style.backgroundColor = color;
+            } else {
+                el.classList.add("is-empty");
+                el.style.backgroundColor = "#ffffff";
+            }
+        }
 
         function selectedLabel() {
             var opt = nativeSelect.options[nativeSelect.selectedIndex];
@@ -87,41 +120,66 @@
             var text = selectedLabel();
             labelSpan.textContent = text || (opts.placeholder || "Select...");
             trigger.classList.toggle("is-placeholder", !nativeSelect.value);
+            applySwatch(swatchSpan, nativeSelect.value);
+        }
+
+        function appendMenuOption(opt, selectedValue) {
+            var value = String(opt.value || "");
+            if (!value) return;
+
+            var item = document.createElement("button");
+            item.type = "button";
+            item.className = "kb-custom-select-option" + (value === selectedValue ? " is-selected" : "");
+            item.setAttribute("role", "option");
+            item.setAttribute("aria-selected", value === selectedValue ? "true" : "false");
+
+            var text = document.createElement("span");
+            text.className = "kb-custom-select-option-label";
+            text.textContent = stripLeadingBullet(opt.textContent) || (opts.emptyLabel || "None");
+
+            var swatch = document.createElement("span");
+            swatch.className = "kb-custom-select-color-swatch";
+            swatch.setAttribute("aria-hidden", "true");
+            applySwatch(swatch, value);
+            item.appendChild(swatch);
+            item.appendChild(text);
+
+            if (api._linkedValues[value]) {
+                var dot = document.createElement("span");
+                dot.className = "kb-custom-select-linked-dot";
+                dot.setAttribute("aria-label", "Linked to this board");
+                item.appendChild(dot);
+            }
+
+            item.addEventListener("click", function(e) {
+                e.preventDefault();
+                e.stopPropagation();
+                nativeSelect.value = value;
+                nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
+                buildMenu();
+                api._closeMenu();
+            });
+            menu.appendChild(item);
         }
 
         function buildMenu() {
             menu.innerHTML = "";
             var selected = String(nativeSelect.value || "");
-            Array.prototype.forEach.call(nativeSelect.options, function(opt) {
-                var value = String(opt.value || "");
-                var item = document.createElement("button");
-                item.type = "button";
-                item.className = "kb-custom-select-option" + (value === selected ? " is-selected" : "");
-                item.setAttribute("role", "option");
-                item.setAttribute("aria-selected", value === selected ? "true" : "false");
-
-                var text = document.createElement("span");
-                text.className = "kb-custom-select-option-label";
-                text.textContent = stripLeadingBullet(opt.textContent) || (opts.emptyLabel || "None");
-
-                item.appendChild(text);
-
-                if (api._linkedValues[value]) {
-                    var dot = document.createElement("span");
-                    dot.className = "kb-custom-select-linked-dot";
-                    dot.setAttribute("aria-label", "Linked to this board");
-                    item.appendChild(dot);
+            Array.prototype.forEach.call(nativeSelect.childNodes, function(node) {
+                var tag = String(node.tagName || node.nodeName || "").toUpperCase();
+                if (tag === "OPTGROUP") {
+                    var heading = document.createElement("div");
+                    heading.className = "kb-custom-select-group-label";
+                    heading.textContent = node.label || "";
+                    menu.appendChild(heading);
+                    Array.prototype.forEach.call(node.children || [], function(opt) {
+                        if (String(opt.tagName || opt.nodeName || "").toUpperCase() === "OPTION") {
+                            appendMenuOption(opt, selected);
+                        }
+                    });
+                    return;
                 }
-
-                item.addEventListener("click", function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    nativeSelect.value = value;
-                    nativeSelect.dispatchEvent(new Event("change", { bubbles: true }));
-                    buildMenu();
-                    api._closeMenu();
-                });
-                menu.appendChild(item);
+                if (tag === "OPTION") appendMenuOption(node, selected);
             });
             updateTriggerLabel();
         }

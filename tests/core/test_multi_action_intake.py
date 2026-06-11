@@ -1,7 +1,10 @@
 from distr.core.agent.services.llm.bulk_instruction import (
     augment_bulk_instruction,
     profile_bulk_instruction,
+    should_bypass_fast_action_detection,
 )
+from distr.core.agent.services.llm.fast_action_detector import ActionType, detect_fast_action
+from distr.core.automation_orchestrator import automation_prompt
 
 
 def test_bulk_instruction_profile_detects_large_multi_action_request():
@@ -32,6 +35,46 @@ def test_short_single_action_request_is_not_augmented():
     text = "Open Chrome."
 
     assert augment_bulk_instruction(text) == text
+
+
+def test_automation_run_action_instruction_bypasses_fast_action_detection():
+    automation = {"name": "Morning macro", "instruction": "run action fuzzy"}
+    prompt = augment_bulk_instruction(automation_prompt(automation), source="automation")
+
+    assert should_bypass_fast_action_detection(prompt)
+
+    class _StubMixin:
+        _messages = [{"role": "user", "content": prompt}]
+        _processed_fast_actions = set()
+        _bypass_fast_actions_for_turn = False
+
+        def _check_fast_actions(self):
+            from distr.core.agent.services.llm.core_mixin import LLMSharedMixin
+
+            return LLMSharedMixin._check_fast_actions(self)
+
+    assert _StubMixin()._check_fast_actions() is None
+
+
+def test_direct_run_action_still_detects_fast_action():
+    text = "run action fuzzy"
+
+    assert not should_bypass_fast_action_detection(text)
+    detected = detect_fast_action(text)
+    assert detected.action_type == ActionType.ACTION_PLAY
+    assert detected.tool_args.get("action_name") == "fuzzy"
+
+
+def test_multi_action_packets_are_not_re_augmented():
+    text = (
+        'say "Hello"\n'
+        "the move the mouse to the center of the screen on screen 1.\n"
+        "the move the mouse to the center of the screen on screen 2."
+    )
+    wrapped = augment_bulk_instruction(text, source="automation")
+
+    assert wrapped.startswith("[Multi-Action Intake]")
+    assert augment_bulk_instruction(wrapped, source="chat") == wrapped
 
 
 def test_short_ordered_desktop_actions_are_augmented():

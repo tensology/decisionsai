@@ -84,42 +84,17 @@
         return !!(target.isContentEditable || tag === "input" || tag === "textarea" || tag === "select");
     }
 
-    function focusProjectRowByOffset(offset) {
-        var rows = Array.prototype.slice.call(document.querySelectorAll("#projects-list .project-item-wrapper"));
-        if (!rows.length) return;
-        var active = document.activeElement && document.activeElement.closest ? document.activeElement.closest(".project-item-wrapper") : null;
-        var idx = rows.indexOf(active);
-        if (idx < 0 && currentProjectId != null) {
-            idx = rows.findIndex(function(row) { return String(row.getAttribute("data-id")) === String(currentProjectId); });
-        }
-        if (idx < 0) idx = offset > 0 ? -1 : 0;
-        var next = rows[Math.max(0, Math.min(rows.length - 1, idx + offset))];
-        if (next) next.focus();
-    }
-
     function bindProjectListKeyboard() {
-        var listEl = document.getElementById("projects-list");
-        if (!listEl || listEl.dataset.keyboardBound === "1") return;
-        listEl.dataset.keyboardBound = "1";
-        listEl.addEventListener("keydown", function(e) {
-            if (isTypingTarget(e.target)) return;
-            if (e.key === "ArrowDown" || e.key === "ArrowUp") {
-                e.preventDefault();
-                focusProjectRowByOffset(e.key === "ArrowDown" ? 1 : -1);
-            } else if (e.key === "Enter") {
-                var row = e.target && e.target.closest ? e.target.closest(".project-item-wrapper") : null;
-                if (row) {
-                    e.preventDefault();
-                    selectProject(parseInt(row.getAttribute("data-id"), 10));
-                }
-            } else if (e.key === "Delete") {
-                var delRow = e.target && e.target.closest ? e.target.closest(".project-item-wrapper") : null;
-                var id = delRow ? parseInt(delRow.getAttribute("data-id"), 10) : currentProjectId;
-                if (id) {
-                    e.preventDefault();
-                    deleteProjectFromList(id);
-                }
-            }
+        if (!window.DecisionsListKeyboard) return;
+        window.DecisionsListKeyboard.bind({
+            listEl: "projects-list",
+            namespace: "projects",
+            rowSelector: ".project-item-wrapper",
+            getRowId: function(row) { return parseInt(row.getAttribute("data-id"), 10); },
+            getSelectedId: function() { return currentProjectId; },
+            onSelect: function(id) { selectProject(id); },
+            onDelete: function(id) { deleteProjectFromList(id); },
+            pageGuard: function() { return !!document.getElementById("projects-list"); },
         });
     }
 
@@ -220,51 +195,14 @@
         renderTriggerBadges(words || []);
         var triggersInput = document.getElementById("detail-triggers-input");
         if (triggersInput) triggersInput.value = "";
-        document.getElementById("detail-provider").value = project.provider || "";
         document.getElementById("detail-startup").value = project.startup_instructions || "";
+        var startTracker = document.getElementById("detail-start-time-tracker");
+        if (startTracker) startTracker.checked = project.start_time_tracker !== false;
         var terminalBackendSel = document.getElementById("terminal-backend-select");
         if (terminalBackendSel) terminalBackendSel.value = project.coding_backend || "pi";
         loadProjectCliBackends(project.id, project.coding_backend || "pi");
         loadCliModels(project.coding_backend || "pi");
-        loadBoardProvidersAndSelect(project.provider || "", project.board_id || "", project.board_name || "");
-        loadKanbanBoardStatus();
-
-        var tbody = document.getElementById("detail-items-body");
-        var rows = [];
-        (project.context_items || []).forEach(function(c) {
-            var preview = (c.content || "").length > 80 ? (c.content || "").substring(0, 80) + "..." : (c.content || "");
-            rows.push("<tr class=\"border-t border-white/10\"><td class=\"px-3 py-2\">Context</td><td class=\"px-3 py-2\">" + escapeAttr(c.title) + "</td><td class=\"px-3 py-2 text-gray-500\">" + escapeAttr(preview) + "</td><td class=\"px-3 py-2\">�</td><td class=\"px-3 py-2 flex gap-1\"><button type=\"button\" class=\"context-edit p-1.5 rounded border border-white/20 text-gray-300 hover:bg-white/10 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Edit\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z\"/></svg></button><button type=\"button\" class=\"context-remove p-1.5 rounded border border-red-500/50 text-red-400 hover:bg-red-500/20 inline-flex\" data-id=\"" + c.id + "\" aria-label=\"Remove\"><svg class=\"w-4 h-4\" fill=\"none\" stroke=\"currentColor\" viewBox=\"0 0 24 24\"><path stroke-linecap=\"round\" stroke-linejoin=\"round\" stroke-width=\"2\" d=\"M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16\"/></svg></button></td></tr>");
-        });
-        (project.files || []).forEach(function(f) {
-            rows.push("<tr class=\"border-t border-white/10\"><td class=\"px-3 py-2\">File</td><td class=\"px-3 py-2\">" + escapeAttr(f.filename) + "</td><td class=\"px-3 py-2 text-gray-500\">" + escapeAttr(f.description || "") + "</td><td class=\"px-3 py-2\"><button type=\"button\" class=\"file-open-finder px-2 py-1 text-xs rounded border border-white/20 text-gray-300 hover:bg-white/10\" data-id=\"" + f.id + "\">Open in Finder</button></td><td class=\"px-3 py-2\"><button type=\"button\" class=\"file-remove px-2 py-1 text-xs rounded border border-red-500/50 text-red-400 hover:bg-red-500/20\" data-id=\"" + f.id + "\">Remove</button></td></tr>");
-        });
-        tbody.innerHTML = rows.length ? rows.join("") : "<tr><td colspan=\"5\" class=\"px-3 py-4 text-gray-500 text-center\">No context items or files. Add a context item or upload a file.</td></tr>";
-
-        tbody.querySelectorAll(".context-edit").forEach(function(btn) {
-            btn.addEventListener("click", function() {
-                var id = parseInt(btn.getAttribute("data-id"), 10);
-                var item = (project.context_items || []).filter(function(c) { return c.id === id; })[0];
-                if (item) openContextItemModal(item);
-            });
-        });
-        tbody.querySelectorAll(".context-remove").forEach(function(btn) {
-            btn.addEventListener("click", function() {
-                var id = parseInt(btn.getAttribute("data-id"), 10);
-                removeContextItem(id);
-            });
-        });
-        tbody.querySelectorAll(".file-remove").forEach(function(btn) {
-            btn.addEventListener("click", function() {
-                var id = parseInt(btn.getAttribute("data-id"), 10);
-                removeProjectFile(id);
-            });
-        });
-        tbody.querySelectorAll(".file-open-finder").forEach(function(btn) {
-            btn.addEventListener("click", function() {
-                var id = parseInt(btn.getAttribute("data-id"), 10);
-                openProjectFileFolder(id);
-            });
-        });
+        loadProjectBoardSelect(project);
 
         var useBtn = document.getElementById("project-use");
         if (useBtn) {
@@ -379,87 +317,157 @@
         }
     }
 
-    function loadBoardProvidersAndSelect(providerValue, boardId, boardName) {
-        var providerSel = document.getElementById("detail-provider");
-        var boardSel = document.getElementById("detail-board");
-        if (!providerSel || !boardSel) return;
-        providerValue = (providerValue || "").toString().trim();
-        boardId = (boardId || "").toString().trim();
-        boardName = (boardName || "").toString().trim();
-        fetch("/api/projects/board-providers")
-            .then(function(r) { return r.ok ? r.json() : { providers: [] }; })
-            .catch(function() { return { providers: [] }; })
-            .then(function(data) {
-                var opts = [{ id: "", name: "None" }].concat(data.providers || []);
-                providerSel.innerHTML = opts.map(function(p) { return "<option value=\"" + escapeAttr(String(p.id)) + "\">" + escapeAttr(p.name) + "</option>"; }).join("");
-                providerSel.value = opts.some(function(p) { return String(p.id) === providerValue; }) ? providerValue : "";
-                return providerSel.value ? fetch("/api/projects/boards?provider=" + encodeURIComponent(providerSel.value)).then(function(r) { return r.ok ? r.json() : { boards: [] }; }).catch(function() { return { boards: [] }; }) : { boards: [] };
-            })
-            .then(function(data) {
-                var boards = (data && data.boards) ? data.boards : [];
-                var boardOpts = [{ id: "", name: "None" }].concat(boards);
-                boardSel.innerHTML = boardOpts.map(function(b) { return "<option value=\"" + escapeAttr(String(b.id)) + "\">" + escapeAttr(b.name || "") + "</option>"; }).join("");
-                var wantId = boardId;
-                var found = wantId && boardOpts.some(function(b) { return String(b.id) === String(wantId); });
-                if (found) {
-                    selectBoardOption(boardSel, wantId);
-                } else if (wantId && boardName) {
-                    boardSel.innerHTML = "<option value=\"\">None</option><option value=\"" + escapeAttr(wantId) + "\">" + escapeAttr(boardName) + "</option>";
-                    selectBoardOption(boardSel, wantId);
-                } else {
-                    boardSel.value = "";
-                }
-                boardSel.disabled = false;
-                updateKanbanVisibility();
-            });
+    var projectBoardOptions = [];
+
+    function projectBoardSelectedValue(project) {
+        if (!project) return "";
+        if (project.kanban_board_id) return "local:" + String(project.kanban_board_id);
+        var provider = (project.provider || "").toString().trim();
+        var boardId = (project.board_id || "").toString().trim();
+        if (provider && boardId) return provider + ":" + boardId;
+        return "";
     }
 
-    function selectBoardOption(boardSel, boardId) {
-        if (!boardSel || boardId == null || boardId === "") return;
-        var want = String(boardId);
-        for (var i = 0; i < boardSel.options.length; i++) {
-            if (String(boardSel.options[i].value) === want) {
-                boardSel.selectedIndex = i;
+    function renderProjectBoardSelectHtml() {
+        var groups = [
+            { key: "local", label: "Local", match: function(opt) { return opt.source === "local"; } },
+            { key: "trello", label: "Trello", match: function(opt) { return opt.source === "trello"; } },
+            { key: "jira", label: "Jira", match: function(opt) { return opt.source === "jira"; } }
+        ];
+        var html = '<option value="">None</option>';
+        groups.forEach(function(group) {
+            var items = projectBoardOptions.filter(group.match);
+            if (!items.length) return;
+            html += '<optgroup label="' + escapeAttr(group.label) + '">';
+            html += items.map(function(opt) {
+                return '<option value="' + escapeAttr(opt.value) + '">' + escapeAttr(opt.label) + "</option>";
+            }).join("");
+            html += "</optgroup>";
+        });
+        return html;
+    }
+
+    function loadProjectBoardSelect(project) {
+        var boardSel = document.getElementById("detail-board");
+        if (!boardSel) return;
+        boardSel.disabled = true;
+        boardSel.innerHTML = '<option value="">Loading boards...</option>';
+        Promise.all([
+            fetch("/api/tickets/boards").then(function(r) { return r.ok ? r.json() : []; }).catch(function() { return []; }),
+            fetch("/api/tickets/external-boards").then(function(r) { return r.ok ? r.json() : { trello: [], jira: [] }; }).catch(function() { return { trello: [], jira: [] }; })
+        ]).then(function(results) {
+            var boards = Array.isArray(results[0]) ? results[0] : [];
+            var external = results[1] || {};
+            projectBoardOptions = [];
+            boards.filter(function(b) { return b.source === "database"; }).forEach(function(b) {
+                projectBoardOptions.push({
+                    source: "local",
+                    label: b.name || ("Board " + b.id),
+                    value: "local:" + b.id
+                });
+            });
+            (external.trello || []).forEach(function(b) {
+                projectBoardOptions.push({
+                    source: "trello",
+                    label: b.name || String(b.id || ""),
+                    value: "trello:" + b.id
+                });
+            });
+            (external.jira || []).forEach(function(b) {
+                projectBoardOptions.push({
+                    source: "jira",
+                    label: b.name || String(b.id || ""),
+                    value: "jira:" + b.id
+                });
+            });
+            boardSel.innerHTML = renderProjectBoardSelectHtml();
+            var want = projectBoardSelectedValue(project);
+            var finishSelection = function() {
+                if (want && !projectBoardOptions.some(function(opt) { return opt.value === want; })) {
+                    var fallbackLabel = (project.board_name || "").trim() || want.split(":").slice(1).join(":");
+                    var source = want.split(":")[0];
+                    if (source === "local" || source === "trello" || source === "jira") {
+                        projectBoardOptions.push({ source: source, label: fallbackLabel, value: want });
+                        boardSel.innerHTML = renderProjectBoardSelectHtml();
+                    }
+                }
+                boardSel.value = want && Array.from(boardSel.options).some(function(opt) { return opt.value === want; }) ? want : "";
+                boardSel.disabled = false;
+                updateProjectBoardGoto();
+            };
+            if (!want && project && project.id) {
+                fetch("/api/projects/" + project.id + "/kanban-board")
+                    .then(function(r) { return r.ok ? r.json() : { board: null }; })
+                    .catch(function() { return { board: null }; })
+                    .then(function(data) {
+                        if (data.board && data.board.id) {
+                            want = "local:" + String(data.board.id);
+                        }
+                        finishSelection();
+                    });
                 return;
             }
+            finishSelection();
+        });
+    }
+
+    function parseProjectBoardValue(value) {
+        var raw = (value || "").trim();
+        if (!raw) {
+            return { provider: null, board_id: null, board_name: null, kanban_board_id: null };
         }
-        boardSel.value = want;
+        var parts = raw.split(":");
+        var source = parts[0];
+        var id = parts.slice(1).join(":");
+        var boardSel = document.getElementById("detail-board");
+        var boardName = null;
+        if (boardSel && boardSel.selectedIndex >= 0) {
+            boardName = (boardSel.options[boardSel.selectedIndex].textContent || "").trim() || null;
+        }
+        if (source === "local") {
+            return {
+                provider: null,
+                board_id: null,
+                board_name: boardName,
+                kanban_board_id: parseInt(id, 10) || null
+            };
+        }
+        if (source === "trello" || source === "jira") {
+            return {
+                provider: source,
+                board_id: id || null,
+                board_name: boardName,
+                kanban_board_id: null
+            };
+        }
+        return { provider: null, board_id: null, board_name: null, kanban_board_id: null };
     }
 
-    function updateKanbanVisibility() {
-        var providerSel = document.getElementById("detail-provider");
+    function updateProjectBoardGoto() {
+        var gotoEl = document.getElementById("detail-board-goto");
         var boardSel = document.getElementById("detail-board");
-        var kanbanSection = document.getElementById("kanban-board-section");
-        if (!kanbanSection) return;
-        var hasExternalBoard = providerSel && providerSel.value && boardSel && boardSel.value;
-        kanbanSection.classList.toggle("hidden", !!hasExternalBoard);
-    }
-
-    function onBoardProviderChange() {
-        var providerSel = document.getElementById("detail-provider");
-        var boardSel = document.getElementById("detail-board");
-        if (!providerSel || !boardSel) return;
-        var p = (providerSel.value || "").trim();
-        if (!p) {
-            boardSel.innerHTML = "<option value=\"\">None</option>";
-            boardSel.value = "";
-            boardSel.disabled = false;
-            updateKanbanVisibility();
+        if (!gotoEl || !boardSel) return;
+        var raw = (boardSel.value || "").trim();
+        if (!raw) {
+            gotoEl.classList.add("hidden");
+            gotoEl.href = "#";
             return;
         }
-        boardSel.disabled = true;
-        boardSel.innerHTML = "<option value=\"\">Loading boards�</option>";
-        boardSel.value = "";
-        fetch("/api/projects/boards?provider=" + encodeURIComponent(p))
-            .then(function(r) { return r.ok ? r.json() : { boards: [] }; })
-            .catch(function() { return { boards: [] }; })
-            .then(function(data) {
-                var boards = data.boards || [];
-                boardSel.innerHTML = "<option value=\"\">None</option>" + boards.map(function(b) { return "<option value=\"" + escapeAttr(String(b.id)) + "\">" + escapeAttr(b.name || "") + "</option>"; }).join("");
-                boardSel.value = "";
-                boardSel.disabled = false;
-                updateKanbanVisibility();
-            });
+        var parts = raw.split(":");
+        var source = parts[0];
+        var id = parts.slice(1).join(":");
+        var href = "/tickets/";
+        if (source === "local") {
+            href += "?board_id=" + encodeURIComponent(id);
+        } else if (source === "trello" || source === "jira") {
+            href += "?source=" + encodeURIComponent(source) + "&board_id=" + encodeURIComponent(id);
+        } else {
+            gotoEl.classList.add("hidden");
+            gotoEl.href = "#";
+            return;
+        }
+        gotoEl.href = href;
+        gotoEl.classList.remove("hidden");
     }
 
     function renderTriggerBadges(words) {
@@ -525,17 +533,18 @@
     function saveProject() {
         if (!currentProjectId) return;
         var boardSel = document.getElementById("detail-board");
-        var boardId = boardSel ? (boardSel.value || "").trim() || null : null;
-        var boardName = boardSel && boardSel.options[boardSel.selectedIndex] ? (boardSel.options[boardSel.selectedIndex].textContent || "").trim() || null : null;
+        var boardFields = parseProjectBoardValue(boardSel ? boardSel.value : "");
         var payload = {
             name: (document.getElementById("detail-name").value || "").trim() || "New Project",
             description: (document.getElementById("detail-description").value || "").trim(),
             folder_location: (document.getElementById("detail-folder").value || "").trim(),
             additional_trigger_words: JSON.stringify(getTriggerWordsArray()),
             startup_instructions: (document.getElementById("detail-startup").value || "").trim(),
-            provider: (document.getElementById("detail-provider").value || "").trim() || null,
-            board_id: boardId,
-            board_name: boardName
+            start_time_tracker: !!(document.getElementById("detail-start-time-tracker") && document.getElementById("detail-start-time-tracker").checked),
+            provider: boardFields.provider,
+            board_id: boardFields.board_id,
+            board_name: boardFields.board_name,
+            kanban_board_id: boardFields.kanban_board_id
         };
         var modelSel = document.getElementById("terminal-model-select");
         if (modelSel && (modelSel.value || "").trim()) {
@@ -793,151 +802,6 @@
             .catch(function() { showSnackbar("Could not open folder picker", "error"); });
     }
 
-    function openContextItemModal(item) {
-        var modal = document.getElementById("context-item-modal");
-        var titleEl = document.getElementById("context-item-modal-title");
-        var idEl = document.getElementById("context-item-id");
-        var titleInput = document.getElementById("context-item-title");
-        var contentInput = document.getElementById("context-item-content");
-        if (!modal || !titleEl || !idEl || !titleInput || !contentInput) return;
-        if (item) {
-            titleEl.textContent = "Edit Context Item";
-            idEl.value = String(item.id);
-            titleInput.value = item.title || "";
-            contentInput.value = item.content || "";
-        } else {
-            titleEl.textContent = "Add Context Item";
-            idEl.value = "";
-            titleInput.value = "";
-            contentInput.value = "";
-        }
-        modal.classList.remove("hidden");
-    }
-
-    function closeContextItemModal() {
-        var modal = document.getElementById("context-item-modal");
-        if (modal) modal.classList.add("hidden");
-    }
-
-    function saveContextItem() {
-        if (!currentProjectId) return;
-        var idEl = document.getElementById("context-item-id");
-        var titleInput = document.getElementById("context-item-title");
-        var contentInput = document.getElementById("context-item-content");
-        var itemId = (idEl && idEl.value) ? idEl.value.trim() : "";
-        var title = (titleInput && titleInput.value) ? titleInput.value.trim() : "";
-        var content = (contentInput && contentInput.value) ? contentInput.value.trim() : "";
-        if (!title) {
-            alert("Title is required.");
-            return;
-        }
-        if (!content) {
-            alert("Content is required.");
-            return;
-        }
-        var url, method, body;
-        if (itemId) {
-            url = "/api/projects/" + currentProjectId + "/context-items/" + itemId;
-            method = "PUT";
-            body = JSON.stringify({ title: title, content: content });
-        } else {
-            url = "/api/projects/" + currentProjectId + "/context-items";
-            method = "POST";
-            body = JSON.stringify({ title: title, content: content });
-        }
-        fetch(url, { method: method, headers: { "Content-Type": "application/json" }, body: body })
-            .then(function(r) {
-                if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Save failed"); });
-                return r.ok ? {} : r.json();
-            })
-            .then(function() {
-                closeContextItemModal();
-                selectProject(currentProjectId);
-            })
-            .catch(function(e) {
-                alert(e.message || "Failed to save context item");
-            });
-    }
-
-    function removeContextItem(id) {
-        if (!currentProjectId || !id) return;
-        window.DecisionsAPI.confirm({
-            title: "Remove context item",
-            message: "Remove this context item?",
-            confirmLabel: "Remove",
-            danger: true,
-            onConfirm: function() {
-                fetch("/api/projects/" + currentProjectId + "/context-items/" + id, { method: "DELETE" })
-                    .then(function(r) {
-                        if (r.ok) {
-                            selectProject(currentProjectId);
-                        } else {
-                            return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
-                        }
-                    })
-                    .catch(function(e) {
-                        alert(e.message || "Failed to remove context item");
-                    });
-            }
-        });
-    }
-
-    function openProjectFileFolder(id) {
-        if (!currentProjectId || !id) return;
-        fetch("/api/projects/" + currentProjectId + "/files/" + id + "/open-folder", { method: "POST" })
-            .then(function(r) {
-                if (!r.ok) return r.json().then(function(e) { throw new Error(e.detail || "Failed"); });
-            })
-            .catch(function(e) { showSnackbar(e.message || "Could not open folder", "error"); });
-    }
-
-    function removeProjectFile(id) {
-        if (!currentProjectId || !id) return;
-        window.DecisionsAPI.confirm({
-            title: "Remove project file",
-            message: "Remove this file from the project?",
-            confirmLabel: "Remove",
-            danger: true,
-            onConfirm: function() {
-                fetch("/api/projects/" + currentProjectId + "/files/" + id, { method: "DELETE" })
-                    .then(function(r) {
-                        if (r.ok) {
-                            selectProject(currentProjectId);
-                            showSnackbar("File removed", "success");
-                        } else {
-                            return r.json().then(function(e) { throw new Error(e.detail || "Remove failed"); });
-                        }
-                    })
-                    .catch(function(e) {
-                        showSnackbar(e.message || "Failed to remove file", "error");
-                    });
-            }
-        });
-    }
-
-    function uploadProjectFiles(files) {
-        if (!currentProjectId || !files || !files.length) return;
-        var done = 0;
-        var errs = [];
-        function next(i) {
-            if (i >= files.length) {
-                selectProject(currentProjectId);
-                if (errs.length) showSnackbar("Uploaded " + (files.length - errs.length) + "; " + errs.length + " failed", "error");
-                else showSnackbar("File(s) uploaded", "success");
-                return;
-            }
-            var form = new FormData();
-            form.append("file", files[i]);
-            fetch("/api/projects/" + currentProjectId + "/files", { method: "POST", body: form })
-                .then(function(r) {
-                    if (!r.ok) return r.json().then(function(e) { errs.push(e.detail || "Failed"); });
-                })
-                .catch(function() { errs.push("Network error"); })
-                .then(function() { next(i + 1); });
-        }
-        next(0);
-    }
-
     function browseFolder() {
         var input = document.getElementById("detail-folder");
         if (!input) return;
@@ -954,60 +818,6 @@
                 }
             })
             .catch(function() { alert("Could not open folder picker."); });
-    }
-
-    function loadKanbanBoardStatus() {
-        if (!currentProjectId) return;
-        var statusEl = document.getElementById("kanban-board-status");
-        var actionsEl = document.getElementById("kanban-board-actions");
-        if (!statusEl || !actionsEl) return;
-        statusEl.textContent = "Checking...";
-        // Remove any existing buttons
-        var oldBtn = actionsEl.querySelector("button, a");
-        while (oldBtn) { oldBtn.remove(); oldBtn = actionsEl.querySelector("button, a"); }
-
-        fetch("/api/projects/" + currentProjectId + "/kanban-board")
-            .then(function(r) { return r.ok ? r.json() : { board: null }; })
-            .catch(function() { return { board: null }; })
-            .then(function(data) {
-                if (data.board) {
-                    statusEl.textContent = "Board: " + data.board.name;
-                    var link = document.createElement("a");
-                    link.href = "/tickets/?board_id=" + data.board.id;
-                    link.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium no-underline";
-                    link.textContent = "Go To Board";
-                    actionsEl.appendChild(link);
-                } else {
-                    statusEl.textContent = "No ticket board for this project.";
-                    var btn = document.createElement("button");
-                    btn.type = "button";
-                    btn.className = "px-4 py-2 rounded bg-[#f97316] text-white hover:bg-[#ea580c] text-sm font-medium";
-                    btn.textContent = "Create Board";
-                    btn.addEventListener("click", createKanbanBoard);
-                    actionsEl.appendChild(btn);
-                }
-            });
-    }
-
-    function createKanbanBoard() {
-        if (!currentProjectId) return;
-        var statusEl = document.getElementById("kanban-board-status");
-        if (statusEl) statusEl.textContent = "Creating...";
-        fetch("/api/projects/" + currentProjectId + "/kanban-board", { method: "POST" })
-            .then(function(r) { return r.ok ? r.json() : null; })
-            .then(function(data) {
-                if (data && data.board) {
-                    showSnackbar("Board '" + data.board.name + "' " + (data.created ? "created" : "linked"), "success");
-                    loadKanbanBoardStatus();
-                } else {
-                    showSnackbar("Failed to create board", "error");
-                    if (statusEl) statusEl.textContent = "Error creating board.";
-                }
-            })
-            .catch(function() {
-                showSnackbar("Failed to create board", "error");
-                if (statusEl) statusEl.textContent = "Error creating board.";
-            });
     }
 
     function init() {
@@ -1080,11 +890,8 @@
         document.getElementById("startup-start-btn")?.addEventListener("click", startStartupTerminals);
         document.getElementById("startup-terminate-all-btn")?.addEventListener("click", terminateAllStartupTerminals);
 
-        var detailProvider = document.getElementById("detail-provider");
-        if (detailProvider) detailProvider.addEventListener("change", onBoardProviderChange);
-
         var detailBoard = document.getElementById("detail-board");
-        if (detailBoard) detailBoard.addEventListener("change", updateKanbanVisibility);
+        if (detailBoard) detailBoard.addEventListener("change", updateProjectBoardGoto);
 
         var codingBackend = document.getElementById("detail-coding-backend");
         if (codingBackend) codingBackend.addEventListener("change", setProjectCodingBackend);
@@ -1118,31 +925,6 @@
                 }
             });
         });
-
-        var contextAddBtn = document.getElementById("context-item-add");
-        if (contextAddBtn) contextAddBtn.addEventListener("click", function() {
-            if (!currentProjectId) return;
-            openContextItemModal(null);
-        });
-        var fileUploadBtn = document.getElementById("file-upload-btn");
-        var fileUploadInput = document.getElementById("file-upload-input");
-        if (fileUploadBtn && fileUploadInput) {
-            fileUploadBtn.addEventListener("click", function() {
-                if (!currentProjectId) return;
-                fileUploadInput.click();
-            });
-            fileUploadInput.addEventListener("change", function() {
-                var files = this.files;
-                if (files && files.length) {
-                    uploadProjectFiles(Array.prototype.slice.call(files));
-                    this.value = "";
-                }
-            });
-        }
-        var contextSaveBtn = document.getElementById("context-item-save");
-        if (contextSaveBtn) contextSaveBtn.addEventListener("click", saveContextItem);
-        var contextCancelBtn = document.getElementById("context-item-cancel");
-        if (contextCancelBtn) contextCancelBtn.addEventListener("click", closeContextItemModal);
 
         // Terminal tab
         var terminalRestartBtn = document.getElementById("terminal-restart");

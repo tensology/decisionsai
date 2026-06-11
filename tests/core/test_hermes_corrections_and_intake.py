@@ -85,21 +85,14 @@ def test_emit_channel_intake_event_persists(tmp_path):
             assert row.ticket_id == 42
 
 
-def test_maybe_auto_dispatch_correction_marks_attempt_dispatched(tmp_path):
+def test_maybe_auto_dispatch_correction_is_disabled(tmp_path):
     factory = _make_factory(tmp_path)
 
     def get_session():
         return _session_ctx(factory)
 
     with get_session() as session:
-        wf = AutoWorkflow(
-            name="Dispatch WF",
-            status="active",
-            run_settings=json.dumps({
-                "auto_dispatch_corrections": True,
-                "max_correction_attempts": 2,
-            }),
-        )
+        wf = AutoWorkflow(name="Dispatch WF", status="active", run_settings="{}")
         session.add(wf)
         session.flush()
         step = AutoWorkflowStep(
@@ -114,58 +107,25 @@ def test_maybe_auto_dispatch_correction_marks_attempt_dispatched(tmp_path):
         run = AutoWorkflowRun(workflow_id=wf.id, status="running", run_data="{}")
         session.add(run)
         session.flush()
-        from distr.core.db.hermes import HermesValidationRecord
-
-        validation = HermesValidationRecord(
-            workflow_id=wf.id,
-            run_id=run.id,
-            step_id=step.id,
-            verdict="fail",
-        )
-        session.add(validation)
-        session.flush()
-        attempt = HermesCorrectionAttempt(
-            validation_record_id=validation.id,
-            workflow_id=wf.id,
-            run_id=run.id,
-            step_id=step.id,
-            status="queued",
-            attempt_number=1,
-            correction_packet="{}",
-        )
-        session.add(attempt)
-        session.flush()
-        wf_id, step_id, run_id, attempt_id = wf.id, step.id, run.id, attempt.id
+        step_id, run_id = step.id, run.id
 
     router = StepRouter()
     run_data: dict = {}
-    with patch("distr.core.workflow.router.get_session", get_session), patch(
-        "distr.core.hermes.get_session", get_session
-    ), patch("distr.core.hermes.is_hermes_enabled", return_value=True), patch(
-        "distr.core.settings.load_settings_from_db",
-        return_value={"hermes_correction_provider": "codex", "hermes_correction_model": "auto"},
-    ):
-        with get_session() as session:
-            step = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
-            run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
-            decision = router._maybe_auto_dispatch_correction(
-                session,
-                run=run,
-                step=step,
-                run_id=run_id,
-                verified_passed=False,
-                correction_attempt_id=attempt_id,
-                correction_packet={"instruction": "Correct the work"},
-                run_data=run_data,
-            )
-        assert decision is not None
-        assert decision["action"] == "correction_retry"
-        assert run_data["pending_correction"]["correction_attempt_id"] == attempt_id
-        with get_session() as session:
-            row = session.query(HermesCorrectionAttempt).filter(
-                HermesCorrectionAttempt.id == attempt_id
-            ).first()
-            assert row.status == "dispatched"
+    with get_session() as session:
+        step = session.query(AutoWorkflowStep).filter(AutoWorkflowStep.id == step_id).first()
+        run = session.query(AutoWorkflowRun).filter(AutoWorkflowRun.id == run_id).first()
+        decision = router._maybe_auto_dispatch_correction(
+            session,
+            run=run,
+            step=step,
+            run_id=run_id,
+            verified_passed=False,
+            correction_attempt_id=99,
+            correction_packet={"instruction": "Correct the work"},
+            run_data=run_data,
+        )
+    assert decision is None
+    assert "pending_correction" not in run_data
 
 
 def test_hermes_disabled_skips_emit(tmp_path, monkeypatch):
